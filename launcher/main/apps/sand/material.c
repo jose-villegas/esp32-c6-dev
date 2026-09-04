@@ -872,24 +872,40 @@ const reaction_t reactions[MATERIAL_MAX] = {
 
     [MAT_DIRT] =
         {
-            /* Dirt's variant is MOISTURE, 0 dry to 15 saturated. It soaks up
-         * any liquid it touches - `soaks_to` is left at zero, so what it
+            /* Dirt's variant is MOISTURE while it is wet, 1 up to
+         * SOIL_MOISTURE_MAX, and a dry TONE once it is not (see
+         * material.h's own comment on the state split). It soaks up any
+         * liquid it touches - `soaks_to` is left at zero, so what it
          * absorbs raises its own variant rather than turning it into
          * something else - and dries back out slowly.
          *
-         * Drying at a twelfth of the soaking rate means a watered patch
+         * Drying at a thirtieth of the soaking rate means a watered patch
          * stays useful for a while and does not stay useful forever, which
          * is what makes watering a thing you do rather than a thing you
-         * did once. */
+         * did once.
+         *
+         * The rate is also what paces dirt's SHADING, and that is why it
+         * moved from 5 to 2. Moisture is per-cell and percolation lays it
+         * out as a gradient down a pile, so a damp bank is shaded by its
+         * own wetness; a bone-dry one falls back on its dry tone alone -
+         * still a real gradient now (SOIL_DRY_TONES of them, assigned by
+         * how wet the drying front still was nearby when each cell
+         * crossed to zero - see soil_dry_out() in sand_reactions.c), where
+         * it used to be one of only two flat values. At 5 a saturated
+         * bank was flat again in about 360 steps, roughly eight seconds -
+         * the gradient was a thing you watched disappear. At 2 it is
+         * around 900, and the handover to the dry tones happens slowly
+         * enough to read as soil drying out. */
             .soaks = 60,
-            .dries = 5,
+            .dries = 2,
 
             .dissolvable = 200, /* the same as sand: it is mostly sand */
 
-            /* SMELTING. Dirt's variant is fully spent - a tone bit plus
-         * SOIL_MOISTURE_BITS of moisture - so there is nowhere to bank a
-         * `heat_ramp` the way glass and stone do; this has to be a
-         * memoryless roll, like sand into glass. See
+            /* SMELTING. Dirt's variant is fully spent whichever state it
+         * is in - a dry tone or a moisture level, never both at once
+         * (material.h's own comment on the state split) - so there is
+         * nowhere to bank a `heat_ramp` the way glass and stone do; this
+         * has to be a memoryless roll, like sand into glass. See
          * docs/Sand/Metal-Smelting-Plan.md for the design this row
          * follows.
          *
@@ -1290,46 +1306,49 @@ const reaction_t reactions[MATERIAL_MAX] = {
  * Wood loses its grain to this, the same trade stone made for temperature,
  * and gets it back the same way - see material_colours(), which speckles
  * unlit wood from the cell's position. */
-/* Dirt's colour at a given MOISTURE. Wet soil really is darker than dry,
- * so the direction is not a choice - and it means a watered patch shows as
- * a dark stain rather than as a number only the plants can see. */
-#define DIRT_DRY          0x9A7B52
-#define DIRT_WET          0x3A2A18
-#define DIRT_RGB(v)       LERP(DIRT_DRY, DIRT_WET, v)
-
-/* One tone of soil: the dry and wet ends shifted together, so a bank shows
- * its strata whether it is parched or sodden. Tone 0 is the darker.
+/* Dirt's colour across the WHOLE nibble - one monotone luminance ramp,
+ * bone-dry-palest at variant 0 through saturated-darkest at variant
+ * SOIL_DRY_TONES - 1 + SOIL_MOISTURE_MAX (14). Wet soil really is darker
+ * than dry, so the direction is not a choice - and it means a watered
+ * patch shows as a dark stain rather than as a number only the plants can
+ * see.
  *
- * Pushed apart from 3/2, on the report that the difference between two
- * poured banks was barely visible. It was 42 points of luminance; it is
- * now 60. Soil has one bit of tone against sand's twelve shades, so this
- * pair is the entire visual difference between one pour and the next, and
- * it has to carry alone what a whole band carries for sand.
- *
- * 4/3 is the LIMIT, and the limit is not taste. Wet soil has to read
- * darker than dry soil whichever tones are involved, or watering stops
- * being legible - a watered patch is meant to show as a dark stain. Push
- * to 5/4 and saturated light-tone soil comes out at luminance 100 against
- * bone-dry dark-tone soil at 85, so a well-watered bank looks drier than
- * a parched one. At 4/3 the two just clear each other, 86 against 93.
- * Seven points is not much headroom; anything that moves DIRT_DRY or
- * DIRT_WET needs to re-check it. */
-#define SOIL_TONE_LO(rgb) LERP((rgb), 0x000000, 4)
-#define SOIL_TONE_HI(rgb) LERP((rgb), 0xFFFFFF, 3)
+ * ONE ramp over the whole range, where this used to be TWO - a tone's
+ * worth of dry/wet pair, repeated at each of soil's (then) two tones,
+ * each pair independently shifted off the same DIRT_DRY/DIRT_WET ends
+ * (SOIL_TONE_LO/HI, since removed). That shape is what a carried tone
+ * needs when it has to coexist with an independent moisture level on
+ * every cell, and it came with a real limit: wet soil has to stay darker
+ * than dry soil whichever tone was involved, which capped how far the two
+ * tones could be pushed apart - 7 points of luminance, "all the headroom
+ * there is" (and tested as test_the_two_soil_tones_are_different_colours).
+ * Reading the nibble by STATE instead (material.h's own comment) removes
+ * the limit outright: dry and wet no longer share the same sixteen slots,
+ * so there is nothing left for a tone to clear against a moisture level -
+ * variant 0 only has to be paler than variant 1, not paler than every wet
+ * variant at every other tone too. */
+#define DIRT_DRY 0x9A7B52
+#define DIRT_WET 0x3A2A18
 
-#define SOIL_END(t, rgb)  ((t) ? SOIL_TONE_HI(rgb) : SOIL_TONE_LO(rgb))
-
-/* Eight steps of wetness at one tone, which is half of dirt's palette
- * block; the other half is the same thing at the other tone. */
-#define SOIL_RAMP(t)                                                                                                   \
-    GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET), 0)),                                                    \
-        GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET), 2)),                                                \
-        GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET), 4)),                                                \
-        GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET), 6)),                                                \
-        GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET), 9)),                                                \
-        GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET), 11)),                                               \
-        GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET), 13)),                                               \
-        GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET), 15))
+/* Fifteen steps, variant 0 (bone dry) through variant 14 (moisture
+ * SOIL_MOISTURE_MAX), spread across the full DIRT_DRY to DIRT_WET range;
+ * variant 15 repeats variant 14's colour rather than extrapolating past
+ * it - see this block's own top comment and material.h's SOIL_DRY_TONES
+ * comment for why 15 is unused at all. Spelled out by hand, the same
+ * style SAND_DUNE_RAMP above uses for a band that fifteen does not evenly
+ * divide: `i * 15 / 14` truncates to `i` itself for every i below 14, so
+ * this is the identity ramp up to that point and then one deliberate jump
+ * to the far end. */
+#define SOIL_SHADES                                                                                                   \
+    GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 0)), GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 1)),                                       \
+        GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 2)), GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 3)),                                   \
+        GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 4)), GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 5)),                                   \
+        GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 6)), GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 7)),                                   \
+        GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 8)), GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 9)),                                   \
+        GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 10)), GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 11)),                                 \
+        GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 12)), GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 13)),                                 \
+        GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 15)), /* variant 14: saturated */                                            \
+        GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 15))  /* variant 15: unused - same as 14 */
 
 #define WOOD_UNLIT   0x5A3D24
 #define WOOD_CHAR    0x2A0A00
@@ -1554,19 +1573,19 @@ static const gfx_color_t palette[256] = {
                                     * into, and the transformation lands
                                     * without a visible seam */
     [MAT_DIRT * MATERIAL_VARIANTS] =
-        /* dirt - TWO wetness ramps, one per carried tone, because the variant
-     * is a tone in the top bit and moisture in the low three (see
-     * SOIL_MOISTURE_BITS). Dry dusty tan at 0 through to dark damp earth
-     * at 7, twice. Wet soil really is darker than dry, so the direction is
-     * not a choice - and it means a watered patch reads as a dark stain
-     * rather than being a number only the plants can see.
+        /* dirt - ONE ramp over the whole nibble, dry tones then moisture
+     * levels, because the variant is read by STATE rather than split by
+     * bit position (see material.h's own comment, and SOIL_SHADES above
+     * for the colour side of it). Dusty tan at its palest through to dark
+     * damp earth at its most saturated, strictly darkening the whole way,
+     * so the number and the colour agree at every single value instead of
+     * only within two independent halves of it.
      *
-     * The two tones are what the grain used to be, moved from the renderer
-     * into the cell. They are a little further apart than stone's speckle:
-     * soil is the least uniform thing on the board, and the variation is
-     * most of what says so. */
-    SOIL_RAMP(0),
-    SOIL_RAMP(1),
+     * Soil is the least uniform thing on the board, and the shading is
+     * most of what says so - it just says it with a state's worth of
+     * range now (moisture where there is any, a tone drawn from the pour
+     * and from the drying front otherwise) instead of one carried bit. */
+    SOIL_SHADES,
     [MAT_SNOW * MATERIAL_VARIANTS] = SHADES(0xC6D8E4, 0xFFFFFF), /* snow  - a powder, so a shade ramp
                                     * again, and a narrow one: cold blue
                                     * white to plain white. Deliberately

@@ -3765,6 +3765,48 @@ static void test_pouring_stone_never_arms_the_reactions_pass(void)
     }
 }
 
+/* A DRY BOARD WITH SAND ON IT HAS TO LET THE MOISTURE PASS GO.
+ *
+ * Sand soaks but does not dry, so its variant is a SHADE, not a wetness -
+ * and step_one_soaking_cell() reads CELL_MOISTURE() off every cell it
+ * runs on, sand included. Soil's dry tones put real values in the low
+ * half of the nibble, so that read only returns zero for a shade below
+ * SOIL_DRY_TONES: a grain shaded any higher reported moisture it never
+ * had, the pass kept setting FOUND_MOISTURE, and may_have_moisture -
+ * which only ever CLEARS from that flag, never sets from it - could
+ * never go back down once any water had armed it.
+ *
+ * Same justification for touching the field directly as
+ * test_pouring_stone_never_arms_the_reactions_pass above: the only
+ * symptom is a full-board pass that never switches off again, which
+ * costs frame time on device and changes no simulation output at all,
+ * so there is nothing behavioural to assert on instead.
+ *
+ * The shade is set explicitly rather than poured, because the pour band
+ * decides which shades a brushful gets and this needs the specific half
+ * of the range that used to lie. */
+static void test_sand_alone_lets_the_moisture_pass_switch_off_again(void)
+{
+    fixture();
+    sand_clear(&s);
+
+    for (uint8_t shade = 0; shade < SAND_DUNE_SHADES; shade++) {
+        sand_clear(&s);
+        sand_set(&s, W / 2, H - 1, CELL_MAKE(MAT_SAND, shade));
+
+        /* Whatever armed it is gone - a puddle that has since dried, or
+         * the soil it was watering taken off the board. */
+        s.may_have_moisture = true;
+        sand_step(&s, 0, 1000, 0);
+
+        char why[128];
+        snprintf(why, sizeof why,
+                 "a lone sand grain at shade %u kept the moisture pass "
+                 "armed - its shade is being read as wetness", shade);
+        TEST_ASSERT_FALSE_MESSAGE(s.may_have_moisture, why);
+    }
+}
+
 static void test_placing_fire_arms_both_gas_and_fire_passes(void)
 {
     fixture();
@@ -11309,19 +11351,24 @@ static void test_dirt_takes_on_moisture_and_dries_out_again(void)
         "makes a patch fertile for good");
 }
 
-/* Freshly drawn dirt is dry, and freshly made dirt is barely wet.
+/* Freshly drawn dirt is dry, and freshly poured dirt is banded the way a
+ * freshly poured grain of sand is - see random_cell() (sand.c).
  *
- * The variant is moisture, so a random shade would hand the player soil
- * that arrives already watered - the fourth meaning this variant can carry
- * and the fourth time a random shade would have been wrong. */
+ * A brushful is centred on ONE pour band with the same +/-1 jitter sand's
+ * own shade uses, so it is NOT expected to use every one of
+ * SOIL_DRY_TONES - that was only ever true of the old two-tone encoding,
+ * where "one tone" and "the whole dry range" were the same statement. It
+ * only has to be more than a single flat fill, which is the flatness
+ * eight tones exist to fix. */
 static void test_new_dirt_starts_dry_in_a_random_tone(void)
 {
     fixture();
     sand_clear(&s);
     sand_spawn(&s, W / 2, H / 2, 2, MAT_DIRT);
 
-    int seen[SOIL_TONES];
+    bool seen[SOIL_DRY_TONES];
     memset(seen, 0, sizeof seen);
+    int distinct = 0;
 
     for (int y = 0; y < H; y++) {
         for (int x = 0; x < W; x++) {
@@ -11330,78 +11377,307 @@ static void test_new_dirt_starts_dry_in_a_random_tone(void)
                 continue;
             }
             TEST_ASSERT_EQUAL_INT_MESSAGE(0, CELL_MOISTURE(c),
-                "painted dirt must arrive bone dry - the low bits of its "
-                "variant are moisture, and soil that arrives watered is "
-                "fertile ground for free");
-            seen[CELL_SOIL_TONE(c)] = 1;
+                "painted dirt must arrive bone dry - variant 0..7 is a dry "
+                "tone and variant 8 and up is moisture (material.h), and "
+                "soil that arrives already wet is fertile ground for "
+                "free");
+            const uint8_t tone = CELL_SOIL_TONE(c);
+            TEST_ASSERT_TRUE_MESSAGE(tone < SOIL_DRY_TONES,
+                "a freshly poured cell's tone must stay inside the dry "
+                "range - anything at or past SOIL_DRY_TONES would alias a "
+                "moisture level instead of a tone");
+            if (!seen[tone]) {
+                seen[tone] = true;
+                distinct++;
+            }
         }
     }
 
-    /* The other half of the variant is a carried tone, and unlike the
-     * moisture it IS random - it is what makes a poured bank keep the
-     * pattern it was poured with instead of sliding under a texture
-     * pinned to the screen. */
-    for (int t = 0; t < SOIL_TONES; t++) {
-        TEST_ASSERT_TRUE_MESSAGE(seen[t],
-            "a brushful of dirt must use every tone - one tone is a flat "
-            "fill, which is what the screen-space grain was there to hide");
-    }
+    TEST_ASSERT_TRUE_MESSAGE(distinct > 1,
+        "a brushful of dirt must show more than one tone - a single flat "
+        "fill is exactly the flatness this many tones exist to avoid");
 }
 
-
-/* Soil's tone is CARRIED, and wetting it must not repaint it.
+/* And a SECOND pour, once the pour clock has moved on, must land on a
+ * different band - a bank built from several pours shows its layers, the
+ * same way build_layered_dune_scene()'s sand does.
  *
- * This is the whole reason the tone is in the cell rather than hashed from
- * screen position: it has to travel with the grain, so a poured bank keeps
- * the pattern it was poured with and the strata show the shape of the
- * pile. A tone that got recomputed - from position, or from the moisture,
- * or clobbered by a soak that wrote the whole variant - would put the
- * texture back on the screen where it started.
- *
- * The moisture assert is half the test: without it, code that never
- * touched the variant at all would pass. */
-static void test_soil_keeps_its_tone_through_wetting_and_drying(void)
+ * The pour clock is jumped directly (sand_t's own `pour_phase` field,
+ * reached the same way this file already reaches into sand_priv.h for
+ * ring_dir()/cover_mask() - see this file's own top comment) rather than
+ * run forward through 64 real steps of physics: what is under test is the
+ * band bookkeeping in random_cell() (sand.c), not whether a pile settles
+ * in a grid this small, and running real steps would let scatter carry
+ * grains sideways across the very columns this test tells apart. */
+static void test_consecutive_dirt_pours_land_on_different_bands(void)
 {
     fixture();
     sand_clear(&s);
-    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
 
-    uint8_t tone[W];
-    for (int x = 0; x < W; x++) {
-        tone[x] = (uint8_t)(x % SOIL_TONES);
-        sand_set(&s, x, H - 1, STONE);
-        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, tone[x], 0));
-        sand_set(&s, x, H - 3, CELL_MAKE(MAT_WATER, MASS_MAX));
-    }
-
-    int ever_wet = 0;
-    for (int i = 0; i < 600; i++) {
-        sand_step(&s, 0, 1000, 0);
-        for (int x = 0; x < W; x++) {
-            const cell_t c = sand_at(&s, x, H - 2);
-            if (CELL_MATERIAL(c) != MAT_DIRT) {
-                continue;
+    sand_spawn(&s, 1, H / 2, 1, MAT_DIRT);
+    int first_tone = -1;
+    for (int y = 0; y < H && first_tone < 0; y++) {
+        for (int x = 0; x < W / 2 && first_tone < 0; x++) {
+            const cell_t c = sand_at(&s, x, y);
+            if (CELL_MATERIAL(c) == MAT_DIRT) {
+                first_tone = CELL_SOIL_TONE(c);
             }
-            if (CELL_MOISTURE(c) != 0) {
-                ever_wet = 1;
-            }
-            TEST_ASSERT_EQUAL_INT_MESSAGE(tone[x], CELL_SOIL_TONE(c),
-                "soil must keep the tone it was laid down with, however "
-                "wet it gets - a tone that is recomputed or overwritten is "
-                "a texture pinned to the screen again");
         }
     }
-    TEST_ASSERT_TRUE_MESSAGE(ever_wet,
-        "the soil has to have actually got wet, or this passes on soil "
-        "nothing ever happened to");
+
+    /* One tick of POUR_BAND_SHIFT (sand.c, not exposed here - duplicated
+     * by value with this comment tying the two together, the same
+     * discipline MATERIAL_LIQUID_DEPTH_BAND's own comment (material.h)
+     * asks of any two constants that have to agree). */
+    s.pour_phase = 1u << 6;
+
+    sand_spawn(&s, 6, H / 2, 1, MAT_DIRT);
+    int second_tone = -1;
+    for (int y = 0; y < H && second_tone < 0; y++) {
+        for (int x = W / 2; x < W && second_tone < 0; x++) {
+            const cell_t c = sand_at(&s, x, y);
+            if (CELL_MATERIAL(c) == MAT_DIRT) {
+                second_tone = CELL_SOIL_TONE(c);
+            }
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(first_tone >= 0 && second_tone >= 0,
+        "both pours must have landed something to compare");
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(first_tone, second_tone,
+        "a pour once the band has moved on must land on a different tone "
+        "- two pours that always agreed would mean the band never moves "
+        "at all");
 }
 
-/* And the two tones have to LOOK different.
+/* A dry tone travels with the grain exactly the way a sand shade does -
+ * see test_a_grain_keeps_its_shade_as_it_falls, whose pattern this
+ * repeats for dirt. */
+static void test_a_dry_dirt_grain_keeps_its_tone_as_it_falls(void)
+{
+    fixture();
+    const cell_t grain = CELL_SOIL(MAT_DIRT, 5, 0);
+    sand_set(&s, 3, 0, grain);
+
+    for (int i = 0; i < 3; i++) {
+        sand_step(&s, 0, 1, 0);
+    }
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(grain, sand_at(&s, 3, 3),
+        "a dry tone must travel with the grain, or a falling pile of dirt "
+        "shimmers the way a falling pile of sand used to");
+}
+
+/* WETTING DISCARDS THE TONE, AND DRYING PICKS A FRESH ONE.
  *
- * Everything above is bookkeeping if the palette paints them the same, and
- * nothing else would notice - the whole point of the bit is visual. Checked
- * at every wetness, because the ramps are built per tone and a mistake in
- * one end of one of them would otherwise hide. */
+ * A wet cell carries no tone of its own (material.h's own comment on
+ * soil's state split), so there is nothing of an old tone left to come
+ * back once a cell dries out again - it is reassigned from scratch by
+ * soil_dry_out() (sand_reactions.c), biased by whatever is still wet
+ * nearby. Painted at tone 5, then wetted, then dried back out again with
+ * nothing else on the board to bias from (stone on every side but the
+ * top, which stays empty), it must land back on tone 0 - landing on tone
+ * 5 again would mean the original tone had survived a round trip through
+ * being wet that it has no way to survive honestly. */
+static void test_soil_loses_its_tone_across_a_wetting_and_gets_a_fresh_one_drying(void)
+{
+    fixture();
+    sand_clear(&s);
+
+    const int x = W / 2, y = H / 2;
+    sand_set(&s, x - 1, y, STONE);
+    sand_set(&s, x + 1, y, STONE);
+    sand_set(&s, x, y + 1, STONE);
+    sand_set(&s, x, y, CELL_SOIL(MAT_DIRT, 5, SOIL_MOISTURE_MAX));
+
+    int still_wet = 1;
+    for (int i = 0; i < 4000 && still_wet; i++) {
+        sand_step(&s, 0, 1000, 0);
+        still_wet = CELL_MOISTURE(sand_at(&s, x, y)) != 0;
+    }
+    TEST_ASSERT_FALSE_MESSAGE(still_wet,
+        "an isolated cell with nowhere to hand its moisture off to must "
+        "still dry out on its own, through ambient decay alone");
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, CELL_SOIL_TONE(sand_at(&s, x, y)),
+        "with no neighbour left to bias from, a cell drying out must land "
+        "on tone 0, not the tone - 5 - it was originally painted with");
+}
+
+/* THE DRYING-FRONT IMPRINT: a donor cell that empties itself by handing
+ * its very last unit of moisture to a drier neighbour dries out biased by
+ * THAT neighbour, not bone pale - see soil_dry_out()'s own comment
+ * (sand_reactions.c). This is what makes a pile that dried top-down
+ * legible as having dried top-down: pale where nothing was left to give
+ * to, darker wherever a cell was still watering something the moment it
+ * ran out.
+ *
+ * Four independent columns, spaced two apart so a diagonal percolation
+ * attempt from one never reaches another (the gap between them is left
+ * EMPTY, and step_one_soaking_cell()'s percolation scan skips an empty
+ * candidate outright) - not because the mechanism is unreliable, but
+ * because WHICH of percolation or plain ambient decay fires first on any
+ * one column is still a roll (percolation is by far the likelier of the
+ * two here, but this only needs to see the hand-off happen once to prove
+ * it is wired in at all, and four independent rolls make that as close
+ * to certain as a test should ask for). */
+static void test_soil_dries_biased_by_the_neighbour_it_just_watered(void)
+{
+    fixture();
+    sand_clear(&s);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    for (int x = 0; x < W; x += 2) {
+        sand_set(&s, x, H - 3, CELL_SOIL(MAT_DIRT, 5, 1));   /* about to run dry */
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 5, 0));   /* dry, room for water */
+    }
+
+    bool done[W];
+    memset(done, 0, sizeof done);
+    bool saw_any_dry = false, saw_biased_dry = false;
+
+    for (int i = 0; i < 4000; i++) {
+        sand_step(&s, 0, 1000, 0);
+        for (int x = 0; x < W; x += 2) {
+            if (done[x]) {
+                continue;
+            }
+            const cell_t donor = sand_at(&s, x, H - 3);
+            if (CELL_MATERIAL(donor) != MAT_DIRT || CELL_MOISTURE(donor) != 0) {
+                continue;
+            }
+            done[x] = true;
+            saw_any_dry = true;
+            const uint8_t sink_m = CELL_MOISTURE(sand_at(&s, x, H - 2));
+            if (sink_m != 0 && CELL_SOIL_TONE(donor) == sink_m) {
+                saw_biased_dry = true;
+            }
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(saw_any_dry,
+        "at least one donor must actually dry out within the budget, or "
+        "this proves nothing");
+    TEST_ASSERT_TRUE_MESSAGE(saw_biased_dry,
+        "at least one donor drying at the exact moment it hands its last "
+        "unit of moisture to a drier neighbour must carry that "
+        "neighbour's resulting moisture as its own dry tone - always "
+        "landing on tone 0 regardless of what it just watered would mean "
+        "the imprint was never wired in");
+}
+
+/* A WHOLE BANK, watered and then left to dry, must not come back flat.
+ *
+ * The narrow test above proves the imprint is wired into one hand-off.
+ * This one asks the question the feature actually exists to answer, on
+ * the scene that produced the complaint: pour a bank, soak it, take the
+ * water away, wait until the last cell is bone dry, and see whether what
+ * is left has any structure in it at all.
+ *
+ * It starts every cell at the SAME tone deliberately. Any spread at the
+ * end is therefore the drying itself talking, not the pour band it was
+ * laid down with - the two are separate sources of tone and this test is
+ * only about the second. */
+#define DRY_BANK_W 16
+#define DRY_BANK_H 14
+
+static void test_a_watered_bank_does_not_dry_back_to_one_flat_tone(void)
+{
+    static uint8_t grid[DRY_BANK_W * DRY_BANK_H];
+    sand_t t;
+    sand_init(&t, grid, DRY_BANK_W, DRY_BANK_H, 12345u);
+    sand_clear(&t);
+    sand_set_soak(&t, SAND_SOAK_PER_MATERIAL);
+
+    for (int x = 0; x < DRY_BANK_W; x++) {
+        sand_set(&t, x, DRY_BANK_H - 1, STONE);
+        for (int y = DRY_BANK_H - 6; y < DRY_BANK_H - 1; y++) {
+            sand_set(&t, x, y, CELL_SOIL(MAT_DIRT, 0, 0));
+        }
+        for (int y = DRY_BANK_H - 9; y < DRY_BANK_H - 6; y++) {
+            sand_set(&t, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+        }
+    }
+
+    for (int i = 0; i < 3000; i++) {
+        sand_step(&t, 0, 1000, 0);
+    }
+    for (int y = 0; y < DRY_BANK_H; y++) {
+        for (int x = 0; x < DRY_BANK_W; x++) {
+            if (CELL_MATERIAL(sand_at(&t, x, y)) == MAT_WATER) {
+                sand_set(&t, x, y, 0);
+            }
+        }
+    }
+
+    bool wet = true;
+    for (int i = 0; i < 40000 && wet; i++) {
+        sand_step(&t, 0, 1000, 0);
+        wet = false;
+        for (int y = 0; y < DRY_BANK_H && !wet; y++) {
+            for (int x = 0; x < DRY_BANK_W; x++) {
+                const cell_t c = sand_at(&t, x, y);
+                if (CELL_MATERIAL(c) == MAT_DIRT && CELL_MOISTURE(c) != 0) {
+                    wet = true;
+                    break;
+                }
+            }
+        }
+    }
+    TEST_ASSERT_FALSE_MESSAGE(wet,
+        "the bank has to actually finish drying inside the budget, or "
+        "everything below this is measuring a half-dry pile");
+
+    int hist[SOIL_DRY_TONES];
+    memset(hist, 0, sizeof hist);
+    int total = 0;
+    for (int y = 0; y < DRY_BANK_H; y++) {
+        for (int x = 0; x < DRY_BANK_W; x++) {
+            const cell_t c = sand_at(&t, x, y);
+            if (CELL_MATERIAL(c) == MAT_DIRT) {
+                hist[CELL_SOIL_TONE(c)]++;
+                total++;
+            }
+        }
+    }
+
+    int distinct = 0, commonest = 0;
+    for (int i = 0; i < SOIL_DRY_TONES; i++) {
+        if (hist[i] != 0) {
+            distinct++;
+        }
+        if (hist[i] > commonest) {
+            commonest = hist[i];
+        }
+    }
+
+    char why[192];
+    snprintf(why, sizeof why,
+             "%d cells, %d distinct tones, commonest holds %d "
+             "(%d/%d/%d/%d/%d/%d/%d/%d)",
+             total, distinct, commonest, hist[0], hist[1], hist[2],
+             hist[3], hist[4], hist[5], hist[6], hist[7]);
+    /* THREE tones and no tone holding half the bank. Measured on this
+     * scene it comes out 27/25/24/3/1/0/0/0 across 80 cells - the top of
+     * the bank dries first with nothing wet left beside it and lands
+     * pale, while the cells under it dry while still passing water down
+     * and carry that with them.
+     *
+     * The top of the range stays empty here and that is not a fault: a
+     * cell only ever empties from a single level, handing it to a
+     * neighbour that then holds one more than it did, so reaching tone 6
+     * or 7 needs soil that was ALREADY damp to hand to - deep in a much
+     * bigger pile, or a root pulling through wet ground. Asserting the
+     * whole range would be asserting a scene this test does not build.
+     *
+     * The floor is set where a regression would actually land: lose the
+     * imprint and every cell dries through the unbiased path onto tone 0,
+     * which is one distinct tone holding all eighty. */
+    TEST_ASSERT_TRUE_MESSAGE(distinct >= 3 && commonest * 2 < total, why);
+}
+
 /* Rec.601 luminance of a panel colour, 0-255.
  *
  * The palette stores GFX_RGB, which is RGB565 with the bytes swapped for
@@ -11418,49 +11694,43 @@ static int panel_luminance(gfx_color_t c)
     return (int)((299u * r + 587u * g + 114u * b) / 1000u);
 }
 
-static void test_the_two_soil_tones_are_different_colours(void)
+/* ONE MONOTONE RAMP, not two independently-shifted tones that each had to
+ * clear the other.
+ *
+ * Soil's whole nibble is read by STATE now - a dry tone below
+ * SOIL_DRY_TONES, a moisture level from there up (material.h's own
+ * comment) - so the constraint that used to bound how far apart two
+ * tones could be pushed no longer applies: this used to be
+ * test_the_two_soil_tones_are_different_colours, asserting "the wettest
+ * soil of the pale tone must still be darker than the driest soil of the
+ * dark one", which cleared by only seven points of luminance, "all the
+ * headroom there is". Reading by state removes the constraint outright -
+ * there is only one ramp left to be monotone, not two to keep from
+ * overlapping - and replaces it with something stronger: EVERY variant
+ * must be darker than the one before it, the whole way from bone dry to
+ * saturated. */
+static void test_soil_is_one_monotone_luminance_ramp(void)
 {
     const gfx_color_t *pal = material_palette();
+    const int top = SOIL_DRY_TONES - 1 + SOIL_MOISTURE_MAX;
 
-    for (unsigned m = 0; m <= SOIL_MOISTURE_MAX; m++) {
-        const cell_t lo = CELL_SOIL(MAT_DIRT, 0, m);
-        const cell_t hi = CELL_SOIL(MAT_DIRT, 1, m);
+    int prev_lum = 256; /* brighter than anything panel_luminance() can return */
+    for (int v = 0; v <= top; v++) {
+        const int lum = panel_luminance(pal[CELL_MAKE(MAT_DIRT, (uint8_t)v)]);
         char why[96];
-        snprintf(why, sizeof why, "soil tones at moisture %u", m);
-        TEST_ASSERT_TRUE_MESSAGE(pal[lo] != pal[hi], why);
+        snprintf(why, sizeof why,
+            "soil variant %d must be strictly darker than variant %d", v, v - 1);
+        TEST_ASSERT_TRUE_MESSAGE(lum < prev_lum, why);
+        prev_lum = lum;
     }
 
-    /* And wetness still has to read, or the stain a watering leaves is
-     * invisible and the tone has eaten the ramp it was added beside. */
-    TEST_ASSERT_TRUE_MESSAGE(
-        pal[CELL_SOIL(MAT_DIRT, 0, 0)] !=
-        pal[CELL_SOIL(MAT_DIRT, 0, SOIL_MOISTURE_MAX)],
-        "dry soil and saturated soil of the SAME tone must differ - the "
-        "wetness ramp is how a watered patch shows at all");
-
-    /* And it has to read the RIGHT WAY ROUND across both tones at once,
-     * which is the tighter constraint and the one that decided how far
-     * apart the tones could go.
-     *
-     * The two tones were pushed apart because one poured bank against the
-     * next was barely visible - soil has a single bit of tone, so that
-     * pair carries alone what a whole twelve-shade band carries for sand.
-     * But push it too far and the ramps overlap: saturated LIGHT-tone soil
-     * comes out lighter than bone-dry DARK-tone soil, and a well-watered
-     * bank looks drier than a parched one. Measured, that happens at 5/4;
-     * 4/3 clears it by about seven points of luminance, which is all the
-     * headroom there is. Anything that moves DIRT_DRY, DIRT_WET or the
-     * SOIL_TONE_LO/HI shifts has to come back through here. */
-    {
-        const gfx_color_t wettest_pale =
-            pal[CELL_SOIL(MAT_DIRT, SOIL_TONES - 1, SOIL_MOISTURE_MAX)];
-        const gfx_color_t driest_dark = pal[CELL_SOIL(MAT_DIRT, 0, 0)];
-        TEST_ASSERT_TRUE_MESSAGE(
-            panel_luminance(wettest_pale) < panel_luminance(driest_dark),
-            "the wettest soil of the PALE tone must still be darker than "
-            "the driest soil of the dark one - otherwise watering a bank "
-            "can make it look drier, and the stain stops meaning wet");
-    }
+    /* Variant top+1 (15, unused) degrades to the saturated end rather
+     * than rendering whatever an unrelated garbage colour a corrupt low
+     * nibble would otherwise land on. */
+    TEST_ASSERT_EQUAL_MESSAGE(pal[CELL_MAKE(MAT_DIRT, (uint8_t)top)],
+        pal[CELL_MAKE(MAT_DIRT, (uint8_t)(top + 1))],
+        "the unused top variant must degrade to the same colour as the "
+        "saturated end, not an unrelated garbage colour");
 }
 
 
@@ -15327,28 +15597,23 @@ static void test_a_moving_grain_keeps_the_shade_it_was_poured_with(void)
 }
 
 
-/* Sand that turns to soil hands its SHADE on as the soil's tone.
+/* Sand that turns to soil arrives WET, and a wet cell carries no tone of
+ * its own (material.h's own comment on soil's state split) - so the
+ * grain's shade, which used to become the new soil's tone, now simply
+ * has nowhere to go. That is the trade this re-encoding makes: soil got
+ * its dry tones back by giving up an independent tone while wet, and wet
+ * soil's own variation is the moisture gradient percolation lays down
+ * instead of a carried tone - see step_one_soaking_cell()'s own comment
+ * on its soaks_to branch (sand_reactions.c).
  *
- * This is what carries a poured pattern across the one reaction that
- * destroys the material holding it. Rain on a dune does not just wet it,
- * it converts it - and if the new soil picked its own tone, everything
- * the sand remembered about how it was poured would go with the grain.
- *
- * It matters more than it used to. Poured shades are laid down in bands
- * now, so what the sand remembers is which pour it came from, and this
- * derivation is why three layers of sand are still three layers after
- * they have been rained into soil. Measured on a three-pour pile: the
- * first pour's core comes out one tone and the later shells the other.
- *
- * The collapse is real and worth stating rather than discovering: twelve
- * dune shades map onto two soil tones, so about a third of consecutive
- * layer boundaries land on the same tone and stop being visible once
- * wet. That is soil having one bit to spend, not the derivation being
- * wrong - and the alternative mappings are worse. Taking the LOW bit of
- * the shade instead alternates perfectly on paper and falls apart in
- * practice, because a pour is a band plus or minus one and that jitter
- * splits a single pour across both tones. */
-static void test_wet_sand_becomes_soil_in_the_tone_its_shade_implies(void)
+ * What survives instead is simpler: whichever end of the dune band a
+ * grain came from, it converts to the SAME moisture - the one unit
+ * `soaks` just took - because the shade plays no part in the conversion
+ * at all any more. This used to be
+ * test_wet_sand_becomes_soil_in_the_tone_its_shade_implies, pinning the
+ * derivation that carried a shade across into a tone; there is no
+ * derivation left to pin. */
+static void test_wet_sand_becomes_soil_wet_with_no_tone_of_its_own(void)
 {
     const uint8_t dark_shade = 1;                       /* low half  */
     const uint8_t pale_shade = SAND_DUNE_SHADES - 1;    /* high half */
@@ -15381,19 +15646,16 @@ static void test_wet_sand_becomes_soil_in_the_tone_its_shade_implies(void)
     TEST_ASSERT_EQUAL_MESSAGE(MAT_DIRT, CELL_MATERIAL(from_pale),
         "and so must the pale one");
 
-    TEST_ASSERT_EQUAL_MESSAGE(dark_shade >> SOIL_MOISTURE_BITS,
-        CELL_SOIL_TONE(from_dark),
-        "soil made from a grain must take the tone that grain's SHADE "
-        "implies - the pattern a dune was poured with has to survive being "
-        "rained into soil, or the layers wash out the moment it gets wet");
-    TEST_ASSERT_EQUAL_MESSAGE(pale_shade >> SOIL_MOISTURE_BITS,
-        CELL_SOIL_TONE(from_pale),
-        "and a grain from the other end of the band must come out the "
-        "other tone, or the derivation is carrying nothing at all");
-    TEST_ASSERT_TRUE_MESSAGE(
-        CELL_SOIL_TONE(from_dark) != CELL_SOIL_TONE(from_pale),
-        "which between them means two grains from opposite ends of the "
-        "dune band must not become the same soil");
+    TEST_ASSERT_TRUE_MESSAGE(CELL_MOISTURE(from_dark) != 0,
+        "soil made from a soaking grain must arrive WET, not dry with a "
+        "tone borrowed from the grain's own shade");
+    TEST_ASSERT_TRUE_MESSAGE(CELL_MOISTURE(from_pale) != 0,
+        "and so must the pale one");
+    TEST_ASSERT_EQUAL_MESSAGE(CELL_VARIANT(from_dark), CELL_VARIANT(from_pale),
+        "with no tone left to carry over, two grains from opposite ends "
+        "of the dune band must land on the exact same soil variant once "
+        "both have soaked - shade no longer has anything to say about "
+        "it");
 }
 
 /* Every material has a colour, and every extended material has one too.
@@ -22228,12 +22490,13 @@ static void test_the_boiler_scene_keeps_boiling_across_the_window(void)
  * path at all. Sand slowly BECOMES dirt (material.c's MAT_SAND row:
  * `.soaks = 8, .soaks_to = MAT_DIRT`) while the dirt it becomes goes on
  * drinking, far faster (MAT_DIRT: `.soaks = 60`) and only slowly gives that
- * moisture back up (`.dries = 5`, a twelfth of its own soak rate). Dirt has
- * nowhere else to put what it absorbs - its variant nibble IS the moisture
- * level (material.h's CELL_MOISTURE()/SOIL_MOISTURE_MAX, 0 dry to 7
- * saturated) - so this scene's own composition keeps changing while it
- * runs: the sand/dirt split at the end is not the split it was poured
- * with.
+ * moisture back up (`.dries = 2`, a thirtieth of its own soak rate). A wet
+ * dirt cell's variant IS the moisture level while it is wet (material.h's
+ * CELL_MOISTURE()/SOIL_MOISTURE_MAX, 0 dry to 7 saturated; the same nibble
+ * reads as a dry TONE once it is not, which is what pays for the shading
+ * this scene never looks at) - so this scene's own composition keeps
+ * changing while it runs: the sand/dirt split at the end is not the split
+ * it was poured with.
  *
  * REACTION DISPATCH UNDER SUSTAINED LOAD is the thing this scene exists to
  * measure, not just liquid movement, and getting that to actually happen
@@ -22247,11 +22510,16 @@ static void test_the_boiler_scene_keeps_boiling_across_the_window(void)
  * KIND_LIQUID - and the very first reactions pass clears it straight back
  * off, since nothing wet is touching anything that soaks. Nothing in
  * plain liquid movement ever re-arms it after that. Dirt is what breaks
- * the silence: a soil cell holding any moisture keeps re-arming the flag
+ * the silence: a soil cell holding any MOISTURE keeps re-arming the flag
  * on every write that touches it (sand_priv.h: `r->dries != 0 &&
- * CELL_VARIANT(cell) != 0`), so once this scene is wet, the reactions
+ * CELL_MOISTURE(cell) != 0`), so once this scene is wet, the reactions
  * pass keeps running every step for as long as any dirt anywhere is damp
- * - which, measured, is the whole window below.
+ * - which, measured, is the whole window below. CELL_MOISTURE(), not the
+ * raw variant this comment used to name: a DRY cell's variant is a tone,
+ * and testing the whole nibble latched this for seven of every eight dry
+ * cells for good, whether or not anything on the board was ever wet -
+ * fixed alongside the re-encoding that gave dry soil those eight tones in
+ * the first place (see material.h's own comment on soil's state split).
  *
  * EQUAL, AND MIXED DOWN TO ONE CELL. Sand and dirt are painted as a
  * single-cell checkerboard - material = (x + y) & 1 - rather than as two
@@ -26034,6 +26302,7 @@ void run_sand_suite(void)
     RUN_TEST(test_fire_burning_out_marks_its_row_dirty);
     RUN_TEST(test_fire_spreads_through_a_connected_pocket_in_one_step);
     RUN_TEST(test_pouring_stone_never_arms_the_reactions_pass);
+    RUN_TEST(test_sand_alone_lets_the_moisture_pass_switch_off_again);
     RUN_TEST(test_placing_fire_arms_both_gas_and_fire_passes);
 
     RUN_TEST(test_wood_does_not_catch_instantly);
@@ -26087,8 +26356,12 @@ void run_sand_suite(void)
     RUN_TEST(test_wet_sand_becomes_dirt_and_spends_the_water);
     RUN_TEST(test_dirt_takes_on_moisture_and_dries_out_again);
     RUN_TEST(test_new_dirt_starts_dry_in_a_random_tone);
-    RUN_TEST(test_soil_keeps_its_tone_through_wetting_and_drying);
-    RUN_TEST(test_the_two_soil_tones_are_different_colours);
+    RUN_TEST(test_consecutive_dirt_pours_land_on_different_bands);
+    RUN_TEST(test_a_dry_dirt_grain_keeps_its_tone_as_it_falls);
+    RUN_TEST(test_soil_loses_its_tone_across_a_wetting_and_gets_a_fresh_one_drying);
+    RUN_TEST(test_soil_dries_biased_by_the_neighbour_it_just_watered);
+    RUN_TEST(test_a_watered_bank_does_not_dry_back_to_one_flat_tone);
+    RUN_TEST(test_soil_is_one_monotone_luminance_ramp);
     RUN_TEST(test_soaking_is_off_unless_asked_for);
     RUN_TEST(test_only_water_wets_what_it_touches);
     RUN_TEST(test_the_grain_hash_does_not_stripe);
@@ -26096,7 +26369,7 @@ void run_sand_suite(void)
     RUN_TEST(test_steam_melts_ice_and_plain_gas_does_not);
     RUN_TEST(test_two_pours_apart_in_time_lay_down_different_shades);
     RUN_TEST(test_a_moving_grain_keeps_the_shade_it_was_poured_with);
-    RUN_TEST(test_wet_sand_becomes_soil_in_the_tone_its_shade_implies);
+    RUN_TEST(test_wet_sand_becomes_soil_wet_with_no_tone_of_its_own);
     RUN_TEST(test_a_root_darkens_as_more_root_grows_around_it);
     RUN_TEST(test_root_neighbours_are_counted_across_three_rows);
     RUN_TEST(test_the_right_extended_materials_are_grained);

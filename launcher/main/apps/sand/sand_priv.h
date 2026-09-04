@@ -617,9 +617,15 @@ static inline void latch_content_flags(sand_t *s, cell_t cell)
     }
     /* Wet, or something to get wet from. A liquid arms it because that is
      * when a soaker has anything to do; a cell already holding moisture
-     * arms it because drying has to outlive the puddle. */
+     * arms it because drying has to outlive the puddle.
+     *
+     * CELL_MOISTURE(), not the raw variant - a dry cell's variant is a
+     * TONE (material.h's own comment on soil's state split), and testing
+     * the whole nibble latched this for SOIL_DRY_TONES - 1 of every
+     * SOIL_DRY_TONES dry cells for good, arming the soak/dry pass forever
+     * on soil that was never wet at all. */
     if (mat->kind == KIND_LIQUID ||
-        (r->dries != 0 && CELL_VARIANT(cell) != 0)) {
+        (r->dries != 0 && CELL_MOISTURE(cell) != 0)) {
         s->may_have_moisture = true;
     }
 }

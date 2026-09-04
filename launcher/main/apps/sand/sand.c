@@ -41,8 +41,11 @@
  * shade along. Walking the band one shade at a time put consecutive
  * pours two shades apart - about twenty points of luminance, which is
  * a layer you have to look for. Five is coprime with both 12 (sand's
- * dune band) and 16 (snow's), so it still visits every shade before
- * repeating, it just does not visit them in order. */
+ * dune band), 16 (snow's) and 8 (dirt's dry tones, SOIL_DRY_TONES), so
+ * it still visits every shade before repeating, it just does not visit
+ * them in order. Any span this stride has to serve belongs in that list:
+ * a span sharing a factor with 5 would quietly stop reaching some of its
+ * shades at all. */
 #define POUR_BAND_STRIDE 5u
 
 /* `band` is where in the shade band this pour is centred, worked out
@@ -80,29 +83,31 @@ static cell_t random_cell(sand_t *s, material_id_t material, int band)
     if (reactions[material].burn_decay != 0) {
         return CELL_MAKE(material, 0);
     }
-    /* A material that dries has MOISTURE in its variant - but only in the
-     * low three bits of it. The top bit is a carried tone, and that one
-     * IS random, which is the whole point: it is what makes a poured bank
-     * of soil keep the pattern it was poured with instead of sliding
-     * under a texture pinned to the screen.
+    /* A material that dries has MOISTURE in its variant - except for a
+     * FRESH cell, which has no moisture yet and picks a dry TONE instead
+     * (material.h's own comment on the state split explains why the two
+     * are different halves of the same nibble rather than a bit each).
+     * Fresh soil that arrived already watered would hand the player
+     * fertile ground for free, so a spawned cell is always dry; the
+     * randomness goes entirely into which of the SOIL_DRY_TONES shades it
+     * starts out as.
      *
-     * So this is the one variant that is part random shade and part
-     * something else, and the two halves have to be picked separately:
-     * random tone, bone-dry moisture. Fresh soil that arrived already
-     * watered would hand the player fertile ground for free. */
+     * That is exactly the shade branch below, run over a narrower span -
+     * MATERIAL_SHADE_SPAN(MAT_DIRT) is SOIL_DRY_TONES, not
+     * MATERIAL_VARIANTS, so `band` already arrives pre-folded into the
+     * dry range and needs no further masking here. Centred on the band
+     * with the same +/-1 jitter sand's own shade uses, so a brushful of
+     * dirt is mostly one tone and a pile built from several pours shows
+     * its layers - the language dry soil never had anything but drab
+     * uniformity to speak before this, and now speaks the way a dune
+     * always could. */
     if (reactions[material].dries != 0) {
-        /* Banded by the moment it was poured, exactly as a shade is
-         * below. Soil has only two tones, so a band IS a tone and
-         * consecutive pours simply alternate - which is the whole of
-         * what two tones can do, and enough to lay down a line. The
-         * draw is kept so a bank is not perfectly uniform. */
-        /* An eighth of grains take the other tone rather than a quarter.
-         * With two tones a "speckle" IS the neighbouring band bleeding in,
-         * so the jitter that keeps sand looking like grains is the same
-         * thing that washes a soil layer out - and soil has one bit to
-         * lose, where sand has twelve shades to spare. */
-        const unsigned tone =
-            ((unsigned)band + rng_below(&s->rng, 8) / 7u) % SOIL_TONES;
+        int tone = band + (int)rng_below(&s->rng, 3) - 1;
+        if (tone < 0) {
+            tone = 0;
+        } else if (tone >= SOIL_DRY_TONES) {
+            tone = SOIL_DRY_TONES - 1;
+        }
         return CELL_SOIL(material, (uint8_t)tone, 0);
     }
     /* Not the whole range: sand keeps its top four shades for cullet, so

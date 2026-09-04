@@ -453,6 +453,12 @@ static inline bool emit_into_empty_neighbor(sand_t* s, int x, int y, int w, int 
 static inline __attribute__((always_inline)) bool try_heat_transform_given(sand_t* s, int nx, int ny, int w, int h,
                                                                            size_t at, cell_t n);
 
+/* Defined below, beside step_one_soaking_cell() and the rest of the soil
+ * moisture machinery - try_heat_transform_given()'s wet-earth branch drives
+ * moisture to zero exactly the way that machinery does, and needs the same
+ * dry-tone handling, not a copy of it. */
+static inline cell_t soil_set_moisture(cell_t c, uint8_t new_moisture, uint8_t nearby_moisture);
+
 /* How many consecutive successful dry smelts share one flaw/no-flaw
  * decision - see reaction_t.flaw_to's own comment (material.h) for what
  * this exists to fix, and try_heat_transform()'s SMELT FLAW comment below
@@ -608,21 +614,21 @@ try_heat_transform_given(sand_t* s, int nx, int ny, int w, int h, size_t at, cel
         return false;
     }
 
-    /* WET EARTH FIRST. Dirt can never carry a heat_ramp - its variant is
-     * already fully spent on a carried tone plus SOIL_MOISTURE_BITS of
-     * moisture (material.h's own comment on SOIL_MOISTURE_BITS) - so a
-     * roll that reached this far has nowhere to bank progress. But wet
-     * earth should not smelt as though it were dry, and the drying is the
-     * part worth watching: spend this SAME successful roll driving one
-     * level of moisture off as steam, instead of converting the cell
-     * outright.
+    /* WET EARTH FIRST. Dirt can never carry a heat_ramp - its variant
+     * already means something else, a dry tone or a moisture level
+     * depending on which state the cell is in (material.h's own comment
+     * on soil's state split) - so a roll that reached this far has
+     * nowhere to bank progress. But wet earth should not smelt as though
+     * it were dry, and the drying is the part worth watching: spend this
+     * SAME successful roll driving one level of moisture off as steam,
+     * instead of converting the cell outright.
      *
-     * `dries != 0` is already the canonical "this variant is moisture"
-     * marker - see the MOISTURE SPREADS block above in this file, which
-     * relies on exactly the same test. Sand soaks but does not dry, so
-     * sand -> glass is untouched by this branch without a new field.
-     * CELL_MOISTURE() rather than the raw variant matters too: dirt packs
-     * a carried TONE into the top bit, and a dry cell with a nonzero tone
+     * `dries != 0` is already the canonical "this variant can mean
+     * moisture" marker - see the MOISTURE SPREADS block above in this
+     * file, which relies on exactly the same test. Sand soaks but does
+     * not dry, so sand -> glass is untouched by this branch without a new
+     * field. CELL_MOISTURE() rather than the raw variant matters too: a
+     * dry cell's variant is a TONE, and a dry cell with a nonzero tone
      * must not read as wet.
      *
      * Sits after the roll, on a path that has already succeeded, so it
@@ -664,7 +670,11 @@ try_heat_transform_given(sand_t* s, int nx, int ny, int w, int h, size_t at, cel
             place_reacted(s, nx, ny, at, (material_id_t)r->spoils_to);
             return true;
         }
-        s->cells[at] = CELL_WITH_MOISTURE(n, CELL_MOISTURE(n) - 1);
+        /* No neighbour to bias from - the heat came from whatever is
+         * burning, not from a wetter cell of soil, so a cell driven bone
+         * dry by fire has nothing nearby to leave an imprint of. See
+         * soil_set_moisture()'s own comment for what 0 means here. */
+        s->cells[at] = soil_set_moisture(n, (uint8_t)(CELL_MOISTURE(n) - 1), 0);
         mark_rows(s, ny, ny);
         wake_block_and_neighbors(s, nx, ny);
         emit_into_empty_neighbor(s, nx, ny, w, h, MAT_STEAM);
@@ -884,6 +894,53 @@ cool_off_chain(sand_t* s, int x, int y, int w, int h, uint8_t product, int chanc
  * percolation figure was reactions[MAT_DIRT].soaks = 60. */
 #define SOIL_PERCOLATE_CHANCE 15
 
+/* THE DRYING-FRONT IMPRINT. A cell whose moisture just reached zero picks
+ * its new dry tone here rather than through CELL_WITH_MOISTURE() directly
+ * - see that macro's own comment (material.h) for why zero cannot go
+ * through it like every other level does: there is no old tone left to
+ * fall back on, so a naive write would land every drying cell on the same
+ * fixed value, which is the flat, historyless dry soil this whole
+ * re-encoding exists to fix.
+ *
+ * `nearby_moisture` is the one thing worth spending a read on: the
+ * moisture level, 0 to SOIL_MOISTURE_MAX, of whatever cell this drying was
+ * busy WATERING at the exact moment it ran out - the neighbour a hand-off
+ * had just given a level to, or a root's own sink. Pass 0 where no such
+ * neighbour exists (heat driving off a last puff of steam, ambient decay
+ * with nothing beside it to receive anything, a plant drinking the last
+ * level for itself) and the cell dries bone pale, which is correct: nothing
+ * nearby stayed wet to leave an impression. Every site that can drive
+ * moisture to zero funnels through here - see this function's callers -
+ * so the SAME cell dries to the SAME look whichever of them did it.
+ *
+ * Direct, no scaling: SOIL_DRY_TONES - 1 and SOIL_MOISTURE_MAX are both 7,
+ * so a neighbour's moisture value already IS a valid tone. That is a
+ * constant agreeing with another constant by construction, not by luck -
+ * see the _Static_assert right below, which is what stops the two from
+ * quietly drifting apart the way MATERIAL_LIQUID_DEPTH_BAND's own comment
+ * (material.h) warns two same-valued constants can. */
+static inline cell_t soil_dry_out(cell_t c, uint8_t nearby_moisture)
+{
+    return CELL_SOIL(CELL_MATERIAL(c), nearby_moisture, 0);
+}
+
+_Static_assert(SOIL_DRY_TONES - 1 == SOIL_MOISTURE_MAX,
+               "soil_dry_out() reads a neighbour's moisture straight in as "
+               "a dry tone with no rescaling - the two ranges have to line "
+               "up exactly for every moisture value to land on a real tone");
+
+/* Every site in this file that changes a soil cell's moisture calls this
+ * instead of CELL_WITH_MOISTURE() directly, so the one that matters -
+ * landing on zero - is never missed. Above zero it is exactly
+ * CELL_WITH_MOISTURE(); at zero it is soil_dry_out(), biased by whatever
+ * `nearby_moisture` the call site had to hand (see that function's own
+ * comment). */
+static inline cell_t soil_set_moisture(cell_t c, uint8_t new_moisture, uint8_t nearby_moisture)
+{
+    return new_moisture != 0 ? CELL_WITH_MOISTURE(c, new_moisture)
+                             : soil_dry_out(c, nearby_moisture);
+}
+
 /* One cell that soaks up liquid, or holds what it soaked.
  *
  * Two halves that belong together because they are the same quantity going
@@ -903,9 +960,11 @@ cool_off_chain(sand_t* s, int x, int y, int w, int h, uint8_t product, int chanc
 static bool
 step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const reaction_t* r) {
     const cell_t c = row[x];
-    /* Only the low bits - the top one is soil's carried tone, and reading
-     * the whole nibble as wetness would make half of all freshly poured
-     * dirt look sodden and feed plants that were never watered. */
+    /* CELL_MOISTURE(), not the raw variant - a dry cell's variant is a
+     * TONE (material.h's own comment on soil's state split), and reading
+     * the whole nibble as wetness would make all but the very palest of
+     * freshly poured dirt look sodden and feed plants that were never
+     * watered. */
     const uint8_t held = CELL_MOISTURE(c);
     bool beside_liquid = false;
 
@@ -944,12 +1003,18 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
 
             if (r->soaks_to != 0) {
                 /* Becomes something else, holding the one unit it just
-                 * took - wet sand turning into soil. The tone comes from
-                 * the grain's own shade, so a dune that gets rained on
-                 * turns to soil without losing the pattern it was poured
-                 * with. */
+                 * took - wet sand turning into soil. It arrives WET, and a
+                 * wet cell carries no tone (material.h's own comment on
+                 * soil's state split) - so the grain's shade is simply
+                 * gone, not carried over the way it used to be. That is
+                 * the trade the whole re-encoding makes: soil got its dry
+                 * tones back by giving up an independent one while wet,
+                 * and wet soil's own variation is the moisture gradient
+                 * percolation lays down, not a tone. The tone argument
+                 * below is ignored - CELL_SOIL's own comment - so 0 is as
+                 * good as anything. */
                 s->cells[(size_t)y * (size_t)w + (size_t)x] =
-                    CELL_SOIL(r->soaks_to, CELL_VARIANT(c) >> SOIL_MOISTURE_BITS, 1);
+                    CELL_SOIL(r->soaks_to, 0, 1);
                 latch_content_flags(s, s->cells[(size_t)y * (size_t)w + (size_t)x]);
                 mark_rows(s, y, y);
                 wake_block_and_neighbors(s, x, y);
@@ -1024,31 +1089,38 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
              * have evened out stop trading), and a saturated cell now
              * reaches as far as its water can rather than as far as the
              * step size allows. */
-            int give, cost;
+            int give, cost, recv_m;
             if (nr->soaks_to != 0) {
                 /* Dry sand beside wet soil becomes soil - and is handed
                  * enough to go on wetting ITS neighbours, which is what
-                 * turns a puddle into a spreading patch of earth. It keeps
-                 * its own shade as the new soil's tone. */
+                 * turns a puddle into a spreading patch of earth. It
+                 * arrives WET, so it keeps no tone of its own - see the
+                 * soaking branch above's own comment on the same trade. */
                 give = held / 2;
                 if (give == 0) {
                     continue; /* not enough to bind a grain */
                 }
                 cost = give;
-                s->cells[nat] = CELL_SOIL(nr->soaks_to, CELL_VARIANT(n) >> SOIL_MOISTURE_BITS, (uint8_t)give);
+                recv_m = give;
+                s->cells[nat] = CELL_SOIL(nr->soaks_to, 0, (uint8_t)give);
                 latch_content_flags(s, s->cells[nat]);
             } else if (CELL_MATERIAL(n) == CELL_MATERIAL(c)) {
                 give = (held - CELL_MOISTURE(n)) / 2;
                 if (give == 0) {
                     continue; /* already even with this one */
                 }
-                s->cells[nat] = CELL_WITH_MOISTURE(n, (uint8_t)(CELL_MOISTURE(n) + give));
+                recv_m = CELL_MOISTURE(n) + give;
+                s->cells[nat] = CELL_WITH_MOISTURE(n, (uint8_t)recv_m);
                 cost = give;
             } else {
                 continue;
             }
 
-            row[x] = CELL_WITH_MOISTURE(c, (uint8_t)(held - cost));
+            /* If this hand-off empties the donor, its dry tone is biased
+             * by the neighbour it just watered - see soil_dry_out()'s own
+             * comment for why that neighbour, of everything on the board,
+             * is the one worth reading. */
+            row[x] = soil_set_moisture(c, (uint8_t)(held - cost), (uint8_t)recv_m);
             mark_rows(s, y, y);
             mark_rows(s, ny, ny);
             wake_block_and_neighbors(s, x, y);
@@ -1125,6 +1197,7 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
              * the bottom every time. */
             int give = (held + 1) / 2;
             int cost = give;
+            int recv_m;
             if (br->soaks_to != 0) {
                 /* Turning a grain into soil COSTS a level on top of what
                  * is handed over, because binding sand into earth uses
@@ -1149,17 +1222,23 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
                     return true; /* too little to bind a grain */
                 }
                 cost = give;
-                s->cells[nat] = CELL_SOIL(br->soaks_to, CELL_VARIANT(below) >> SOIL_MOISTURE_BITS, (uint8_t)give);
+                recv_m = give;
+                /* Arrives WET, so no tone of its own - the soaking
+                 * branch above's own comment covers why. */
+                s->cells[nat] = CELL_SOIL(br->soaks_to, 0, (uint8_t)give);
                 latch_content_flags(s, s->cells[nat]);
             } else {
                 const int room = (int)SOIL_MOISTURE_MAX - CELL_MOISTURE(below);
                 if (give > room) {
                     give = room;
                 }
-                s->cells[nat] = CELL_WITH_MOISTURE(below, (uint8_t)(CELL_MOISTURE(below) + give));
+                recv_m = CELL_MOISTURE(below) + give;
+                s->cells[nat] = CELL_WITH_MOISTURE(below, (uint8_t)recv_m);
                 cost = give;
             }
-            row[x] = CELL_WITH_MOISTURE(c, (uint8_t)(held - cost));
+            /* Same imprint rule as the diffusion hand-off above: a donor
+             * this empties dries biased by the cell it just fed. */
+            row[x] = soil_set_moisture(c, (uint8_t)(held - cost), (uint8_t)recv_m);
             mark_rows(s, y, y);
             mark_rows(s, ny, ny);
             wake_block_and_neighbors(s, x, y);
@@ -1169,13 +1248,27 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
     }
 
     if (r->dries != 0 && held != 0 && (int)(rng_next(&s->rng) & 0xFF) < r->dries) {
-        row[x] = CELL_WITH_MOISTURE(c, held - 1);
+        /* AMBIENT DRYING: nothing was handed anywhere this step - the
+         * diffusion and percolation attempts above either did not fire or
+         * had nowhere to go - so there is no neighbour to bias from. A
+         * cell that dries this way with nothing wet beside it goes bone
+         * pale, which is the correct reading: nothing nearby left an
+         * impression on it. */
+        row[x] = soil_set_moisture(c, (uint8_t)(held - 1), 0);
         mark_rows(s, y, y);
         wake_block_and_neighbors(s, x, y);
         return held - 1 != 0;
     }
 
-    return held != 0 || beside_liquid;
+    /* `r->dries` gates the wetness half, for the same reason it gates
+     * every other read of `held` in this function: sand soaks but does
+     * not dry, so its variant is a SHADE, and a grain shaded into the top
+     * half of its band reads as moisture that was never there. Without
+     * this the pass reported "still wet" for every such grain and
+     * may_have_moisture latched on for good on any board with sand on it
+     * - precisely what this return exists to stop, and what the sibling
+     * test in latch_content_flags() (sand_priv.h) had to be fixed for. */
+    return (r->dries != 0 && held != 0) || beside_liquid;
 }
 
 /* One cell of hot GAS, warming whatever around it holds a temperature.
@@ -1728,7 +1821,11 @@ static void
 spend_soil_moisture(sand_t* s, int w, const reaction_t* r, int soil_at, uint8_t amount, int contact_at,
                      int root_depth) {
     const cell_t soil = s->cells[soil_at];
-    s->cells[soil_at] = CELL_WITH_MOISTURE(soil, (uint8_t)(CELL_MOISTURE(soil) - amount));
+    /* Drunk by whatever is growing, not handed to another cell of soil -
+     * there is no neighbour to bias a dry tone from, so a collar spent
+     * down to nothing goes bone pale, the same as ambient drying with
+     * nothing wet beside it. */
+    s->cells[soil_at] = soil_set_moisture(soil, (uint8_t)(CELL_MOISTURE(soil) - amount), 0);
     mark_rows(s, soil_at / w, soil_at / w);
 
     if (r->roots == 0 || contact_at < 0 || root_depth != 0) {
@@ -1892,7 +1989,10 @@ step_one_conducting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t
         return true;
     }
     const cell_t src = s->cells[src_at], dst = s->cells[dst_at];
-    s->cells[src_at] = CELL_WITH_MOISTURE(src, (uint8_t)(src_m - 1));
+    /* Same imprint rule as every other hand-off in this file: a source
+     * this drains dry is biased by the sink it just carried water into,
+     * post-transfer - see soil_dry_out()'s own comment. */
+    s->cells[src_at] = soil_set_moisture(src, (uint8_t)(src_m - 1), (uint8_t)(dst_m + 1));
     s->cells[dst_at] = CELL_WITH_MOISTURE(dst, (uint8_t)(dst_m + 1));
     mark_rows(s, src_y, src_y);
     mark_rows(s, dst_y, dst_y);
