@@ -432,6 +432,7 @@ const DEFAULT_STATE = {
     title_turns_phase: 229376, title_amplitude_px: 22,
     title_wave_amplitude_px: 11, title_wave_period_ms: 1600,
     title_wave_stagger_ms: 90,
+    title_font: 0, title_scale: 1,
     title_wave_out_ms: 5800, title_wave_fade_ms: 600,
     title_height_px: 50, title_x_px: 170,
     title_shadow_dx: 1, title_shadow_dy: 1, title_shadow_alpha: 255,
@@ -508,7 +509,7 @@ const FIELD_GROUPS = [
   { title: 'Title', keys: ['title_start_ms', 'title_stagger_ms', 'title_flight_ms',
       'title_entry_px', 'title_turns_phase', 'title_amplitude_px',
       'title_wave_amplitude_px', 'title_wave_period_ms', 'title_wave_stagger_ms',
-      'title_wave_out_ms', 'title_wave_fade_ms',
+      'title_scale', 'title_wave_out_ms', 'title_wave_fade_ms',
       'title_height_px', 'title_x_px', 'title_shadow_dx', 'title_shadow_dy',
       'title_shadow_alpha'] },
   { title: 'Image', keys: ['image_start_ms', 'image_fade_ms'] },
@@ -521,6 +522,17 @@ const FIELD_GROUPS = [
  * the JSON file needs to see, not something to hide behind a mouseover).
  * A key missing here falls back to showing its own raw name as the label,
  * so a newly-added field never renders as blank. */
+/* The scale each typeface is meant to be drawn at, indexed by title_font's
+ * own id (boot_anim_title_font_id_t in boot_anim.h). Not a preference - it
+ * falls out of how each font was made: gfx_font_lmroman_40 was rasterized
+ * AT 40px so 1 is its native size and anything above it resamples a
+ * coverage atlas (blurry); gfx_font_8x8 is an 8px bitmap whose whole point
+ * is that integer multiples stay crisp, and 5 is what reaches a comparable
+ * ~40px title. Used when the typeface CHANGES; the scale stays editable
+ * afterwards for anyone who wants a bigger or smaller title than the
+ * font's own natural one. */
+const TITLE_FONT_NATURAL_SCALE = { 0: 1, 1: 5 };
+
 const FIELD_LABELS = {
   total_ms: 'total animation length',
   fade_start_ms: 'dissolve to the launcher starts',
@@ -552,6 +564,7 @@ const FIELD_LABELS = {
   title_wave_amplitude_px: 'idle wave amplitude once a letter has landed',
   title_wave_period_ms: 'idle wave cycle time',
   title_wave_stagger_ms: 'idle wave phase offset, per letter',
+  title_scale: 'size multiplier - 8x8 bitmap draws at 8xthis; the 40px atlas is native at 1 and resamples above it',
   title_wave_out_ms: 'when the idle wave starts calming (total_ms = never)',
   title_wave_fade_ms: 'how long the calming takes (0 = stop dead)',
   title_height_px: 'how far down the frame the title lands',
@@ -800,6 +813,41 @@ function addTimingField(list, key) {
  * "reach" below has no JSON field of its own to show), a number input.
  * `onInput` gets the parsed number and does whatever else that particular
  * field needs (updateGridExtent(), etc.) beyond just storing it. */
+/* addStateField()'s sibling for a field whose values are a fixed, NAMED
+ * set rather than a range - title_font today. A number box would work (the
+ * value really is just an int on the way to the generator) but would make
+ * the editor the one place in this pipeline where you have to remember
+ * that 1 means the bitmap font; the whole point of this page is that you
+ * choose by looking, not by recalling an encoding. `choices` is an array
+ * of [value, label] pairs, deliberately not an object, so the order shown
+ * is the order written rather than whatever key ordering happens to
+ * survive. */
+function addSelectField(list, label, key, value, choices, onInput) {
+  const l = document.createElement('label');
+  l.className = 'field';
+  const span = document.createElement('span');
+  span.textContent = label;
+  if (key) {
+    const keyLine = document.createElement('span');
+    keyLine.className = 'field-key';
+    keyLine.textContent = key;
+    span.appendChild(keyLine);
+  }
+  const select = document.createElement('select');
+  for (const [v, text] of choices) {
+    const opt = document.createElement('option');
+    opt.value = String(v);
+    opt.textContent = text;
+    if (Number(v) === Number(value)) opt.selected = true;
+    select.appendChild(opt);
+  }
+  select.addEventListener('change', () => onInput(Number(select.value)));
+  l.appendChild(span);
+  l.appendChild(select);
+  list.appendChild(l);
+  return select;
+}
+
 function addStateField(list, label, key, value, onInput, opts) {
   opts = opts || {};
   const l = document.createElement('label');
@@ -892,6 +940,36 @@ function renderConsts() {
       addStateField(list, 'time for one cycle to pass a fixed point, ms',
         'wave_period_ms', state.wave_period_ms,
         v => { state.wave_period_ms = v; renderDebounced(); });
+    }
+
+    if (group.title === 'Title') {
+      /* A dropdown rather than the numeric field the rest of this group
+       * gets - see addSelectField()'s own comment. Rendered ahead of the
+       * group's own keys because which typeface is drawing is the thing
+       * every other title field is being tuned AGAINST: the advances the
+       * letters lay out on, and the scale they need, both follow from it
+       * (see boot_anim.c's draw_title() and BOOT_ANIM_TITLE_FONT's own
+       * comment in boot_anim.h). */
+      addSelectField(list, 'typeface', 'title_font', state.timing.title_font,
+        [[0, 'Computer Modern 40px (Latin Modern Roman Bold)'],
+         [1, 'Built-in 8x8 bitmap (the old default)']],
+        v => {
+          state.timing.title_font = v;
+          /* Carry title_scale to the new typeface's OWN natural scale
+           * rather than leaving whatever suited the last one. The two are
+           * separate knobs on purpose (see BOOT_ANIM_TITLE_FONT's comment
+           * in boot_anim.h), but a multiplier only means anything relative
+           * to a cell size: 1 against the 8px bitmap is an 8px title, so
+           * switching to it and leaving the scale alone renders something
+           * that looks broken rather than like the font being considered.
+           * Overwriting a tuned value is the right trade here - a scale
+           * chosen for a 40px atlas was never going to be the one you
+           * wanted for an 8px cell - and it stays editable right below. */
+          state.timing.title_scale = TITLE_FONT_NATURAL_SCALE[v] || 1;
+          const scaleInput = document.getElementById('timingField_title_scale');
+          if (scaleInput) scaleInput.value = state.timing.title_scale;
+          renderDebounced();
+        });
     }
 
     for (const key of group.keys) {
@@ -1348,6 +1426,16 @@ function applyLoadedState(loaded) {
   }
   if (loaded.timing.title_wave_fade_ms === undefined) {
     loaded.timing.title_wave_fade_ms = 600;
+  }
+  /* title_font/title_scale are newer again - a file baked before them was
+   * drawn with the 40px coverage atlas at 1x, since that pairing was
+   * hardcoded at the time. Same reasoning as the generator's own
+   * setdefault; see it for why this is not the 8x8-at-5x pairing. */
+  if (loaded.timing.title_font === undefined) {
+    loaded.timing.title_font = 0;
+  }
+  if (loaded.timing.title_scale === undefined) {
+    loaded.timing.title_scale = 1;
   }
   state = loaded;
   selectedKf = 0;

@@ -23,6 +23,14 @@
 *.c text eol=lf
 *.h text eol=lf
 
+# Authored data the tools round-trip, boot_anim_timeline.json above all: it
+# is written back by tools/boot_anim_editor_server.py every time Build &
+# Flash runs, so without this a bake on Windows rewrites all ~320 lines as
+# CRLF and the diff hides which handful of values were actually retuned
+# behind a whole-file change. The server passes newline="\n" itself; this is
+# the belt to that braces, and covers anything else that writes JSON here.
+*.json text eol=lf
+
 # Docs, for the same reason as the scripts above, not the C sources: a doc
 # built by a host tool - report_reactions.sh (main/apps/sand/tools/) is the
 # first, and the only one so far - gets diffed byte-for-byte against a

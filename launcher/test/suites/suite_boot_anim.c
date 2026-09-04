@@ -1488,7 +1488,7 @@ static void test_the_live_end_of_the_curve_is_drawn_thicker(void)
  *
  * boot_anim_title_letter() now takes the font it is laying out - see its
  * own comment in boot_anim.h - so the layout tests below exercise the REAL
- * shipped font (gfx_font_lmroman_40, font_lmroman_40.h) rather than a
+ * font the seed authors (see TITLE_FONT below) rather than a
  * synthetic stand-in: these are checks against the actual authored
  * geometry (BOOT_ANIM_TITLE_VIEW_X/Y, the real "Autana" advances), not
  * just the layout FORMULA in the abstract - suite_gfx_font.c already
@@ -1496,7 +1496,16 @@ static void test_the_live_end_of_the_curve_is_drawn_thicker(void)
  * synthetic proportional font, so there is no need to repeat that here.
  *-------------------------------------------------------------------------*/
 
-#define TITLE_FONT (&gfx_font_lmroman_40)
+/* Whichever font the timeline actually AUTHORS, resolved the same way
+ * draw_title() resolves it (boot_anim.c) - not gfx_font_lmroman_40
+ * hardcoded, as this was when that font was the only one the title could
+ * use. These tests check the real authored geometry, so they have to ask
+ * the same question the renderer does: title_font and title_scale are a
+ * pair, and pinning the font here while the seed tunes the scale for the
+ * OTHER one tests a combination that never ships - a 51px cell at 5x,
+ * which duly ran off the panel and failed. */
+#define TITLE_FONT ((BOOT_ANIM_TITLE_FONT == BOOT_ANIM_TITLE_FONT_8X8) \
+                        ? &gfx_font_8x8 : &gfx_font_lmroman_40)
 
 static void test_the_wobble_is_exactly_flat_once_a_letter_has_arrived(void)
 {
