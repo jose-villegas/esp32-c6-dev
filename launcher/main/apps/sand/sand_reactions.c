@@ -453,6 +453,12 @@ static inline bool emit_into_empty_neighbor(sand_t* s, int x, int y, int w, int 
 static inline __attribute__((always_inline)) bool try_heat_transform_given(sand_t* s, int nx, int ny, int w, int h,
                                                                            size_t at, cell_t n);
 
+/* Defined below, beside step_one_soaking_cell() and the rest of the soil
+ * moisture machinery - try_heat_transform_given()'s wet-earth branch drives
+ * moisture to zero exactly the way that machinery does, and needs the same
+ * dry-tone handling, not a copy of it. */
+static inline cell_t soil_set_moisture(cell_t c, uint8_t new_moisture, uint8_t nearby_moisture);
+
 /* How many consecutive successful dry smelts share one flaw/no-flaw
  * decision - see reaction_t.flaw_to's own comment (material.h) for what
  * this exists to fix, and try_heat_transform()'s SMELT FLAW comment below
@@ -608,21 +614,21 @@ try_heat_transform_given(sand_t* s, int nx, int ny, int w, int h, size_t at, cel
         return false;
     }
 
-    /* WET EARTH FIRST. Dirt can never carry a heat_ramp - its variant is
-     * already fully spent on a carried tone plus SOIL_MOISTURE_BITS of
-     * moisture (material.h's own comment on SOIL_MOISTURE_BITS) - so a
-     * roll that reached this far has nowhere to bank progress. But wet
-     * earth should not smelt as though it were dry, and the drying is the
-     * part worth watching: spend this SAME successful roll driving one
-     * level of moisture off as steam, instead of converting the cell
-     * outright.
+    /* WET EARTH FIRST. Dirt can never carry a heat_ramp - its variant
+     * already means something else, a dry tone or a moisture level
+     * depending on which state the cell is in (material.h's own comment
+     * on soil's state split) - so a roll that reached this far has
+     * nowhere to bank progress. But wet earth should not smelt as though
+     * it were dry, and the drying is the part worth watching: spend this
+     * SAME successful roll driving one level of moisture off as steam,
+     * instead of converting the cell outright.
      *
-     * `dries != 0` is already the canonical "this variant is moisture"
-     * marker - see the MOISTURE SPREADS block above in this file, which
-     * relies on exactly the same test. Sand soaks but does not dry, so
-     * sand -> glass is untouched by this branch without a new field.
-     * CELL_MOISTURE() rather than the raw variant matters too: dirt packs
-     * a carried TONE into the top bit, and a dry cell with a nonzero tone
+     * `dries != 0` is already the canonical "this variant can mean
+     * moisture" marker - see the MOISTURE SPREADS block above in this
+     * file, which relies on exactly the same test. Sand soaks but does
+     * not dry, so sand -> glass is untouched by this branch without a new
+     * field. CELL_MOISTURE() rather than the raw variant matters too: a
+     * dry cell's variant is a TONE, and a dry cell with a nonzero tone
      * must not read as wet.
      *
      * Sits after the roll, on a path that has already succeeded, so it
@@ -664,7 +670,11 @@ try_heat_transform_given(sand_t* s, int nx, int ny, int w, int h, size_t at, cel
             place_reacted(s, nx, ny, at, (material_id_t)r->spoils_to);
             return true;
         }
-        s->cells[at] = CELL_WITH_MOISTURE(n, CELL_MOISTURE(n) - 1);
+        /* No neighbour to bias from - the heat came from whatever is
+         * burning, not from a wetter cell of soil, so a cell driven bone
+         * dry by fire has nothing nearby to leave an imprint of. See
+         * soil_set_moisture()'s own comment for what 0 means here. */
+        s->cells[at] = soil_set_moisture(n, (uint8_t)(CELL_MOISTURE(n) - 1), 0);
         mark_rows(s, ny, ny);
         wake_block_and_neighbors(s, nx, ny);
         emit_into_empty_neighbor(s, nx, ny, w, h, MAT_STEAM);
@@ -884,6 +894,53 @@ cool_off_chain(sand_t* s, int x, int y, int w, int h, uint8_t product, int chanc
  * percolation figure was reactions[MAT_DIRT].soaks = 60. */
 #define SOIL_PERCOLATE_CHANCE 15
 
+/* THE DRYING-FRONT IMPRINT. A cell whose moisture just reached zero picks
+ * its new dry tone here rather than through CELL_WITH_MOISTURE() directly
+ * - see that macro's own comment (material.h) for why zero cannot go
+ * through it like every other level does: there is no old tone left to
+ * fall back on, so a naive write would land every drying cell on the same
+ * fixed value, which is the flat, historyless dry soil this whole
+ * re-encoding exists to fix.
+ *
+ * `nearby_moisture` is the one thing worth spending a read on: the
+ * moisture level, 0 to SOIL_MOISTURE_MAX, of whatever cell this drying was
+ * busy WATERING at the exact moment it ran out - the neighbour a hand-off
+ * had just given a level to, or a root's own sink. Pass 0 where no such
+ * neighbour exists (heat driving off a last puff of steam, ambient decay
+ * with nothing beside it to receive anything, a plant drinking the last
+ * level for itself) and the cell dries bone pale, which is correct: nothing
+ * nearby stayed wet to leave an impression. Every site that can drive
+ * moisture to zero funnels through here - see this function's callers -
+ * so the SAME cell dries to the SAME look whichever of them did it.
+ *
+ * Direct, no scaling: SOIL_DRY_TONES - 1 and SOIL_MOISTURE_MAX are both 7,
+ * so a neighbour's moisture value already IS a valid tone. That is a
+ * constant agreeing with another constant by construction, not by luck -
+ * see the _Static_assert right below, which is what stops the two from
+ * quietly drifting apart the way MATERIAL_LIQUID_DEPTH_BAND's own comment
+ * (material.h) warns two same-valued constants can. */
+static inline cell_t soil_dry_out(cell_t c, uint8_t nearby_moisture)
+{
+    return CELL_SOIL(CELL_MATERIAL(c), nearby_moisture, 0);
+}
+
+_Static_assert(SOIL_DRY_TONES - 1 == SOIL_MOISTURE_MAX,
+               "soil_dry_out() reads a neighbour's moisture straight in as "
+               "a dry tone with no rescaling - the two ranges have to line "
+               "up exactly for every moisture value to land on a real tone");
+
+/* Every site in this file that changes a soil cell's moisture calls this
+ * instead of CELL_WITH_MOISTURE() directly, so the one that matters -
+ * landing on zero - is never missed. Above zero it is exactly
+ * CELL_WITH_MOISTURE(); at zero it is soil_dry_out(), biased by whatever
+ * `nearby_moisture` the call site had to hand (see that function's own
+ * comment). */
+static inline cell_t soil_set_moisture(cell_t c, uint8_t new_moisture, uint8_t nearby_moisture)
+{
+    return new_moisture != 0 ? CELL_WITH_MOISTURE(c, new_moisture)
+                             : soil_dry_out(c, nearby_moisture);
+}
+
 /* One cell that soaks up liquid, or holds what it soaked.
  *
  * Two halves that belong together because they are the same quantity going
@@ -903,9 +960,11 @@ cool_off_chain(sand_t* s, int x, int y, int w, int h, uint8_t product, int chanc
 static bool
 step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const reaction_t* r) {
     const cell_t c = row[x];
-    /* Only the low bits - the top one is soil's carried tone, and reading
-     * the whole nibble as wetness would make half of all freshly poured
-     * dirt look sodden and feed plants that were never watered. */
+    /* CELL_MOISTURE(), not the raw variant - a dry cell's variant is a
+     * TONE (material.h's own comment on soil's state split), and reading
+     * the whole nibble as wetness would make all but the very palest of
+     * freshly poured dirt look sodden and feed plants that were never
+     * watered. */
     const uint8_t held = CELL_MOISTURE(c);
     bool beside_liquid = false;
 
@@ -944,12 +1003,18 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
 
             if (r->soaks_to != 0) {
                 /* Becomes something else, holding the one unit it just
-                 * took - wet sand turning into soil. The tone comes from
-                 * the grain's own shade, so a dune that gets rained on
-                 * turns to soil without losing the pattern it was poured
-                 * with. */
+                 * took - wet sand turning into soil. It arrives WET, and a
+                 * wet cell carries no tone (material.h's own comment on
+                 * soil's state split) - so the grain's shade is simply
+                 * gone, not carried over the way it used to be. That is
+                 * the trade the whole re-encoding makes: soil got its dry
+                 * tones back by giving up an independent one while wet,
+                 * and wet soil's own variation is the moisture gradient
+                 * percolation lays down, not a tone. The tone argument
+                 * below is ignored - CELL_SOIL's own comment - so 0 is as
+                 * good as anything. */
                 s->cells[(size_t)y * (size_t)w + (size_t)x] =
-                    CELL_SOIL(r->soaks_to, CELL_VARIANT(c) >> SOIL_MOISTURE_BITS, 1);
+                    CELL_SOIL(r->soaks_to, 0, 1);
                 latch_content_flags(s, s->cells[(size_t)y * (size_t)w + (size_t)x]);
                 mark_rows(s, y, y);
                 wake_block_and_neighbors(s, x, y);
@@ -1024,31 +1089,38 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
              * have evened out stop trading), and a saturated cell now
              * reaches as far as its water can rather than as far as the
              * step size allows. */
-            int give, cost;
+            int give, cost, recv_m;
             if (nr->soaks_to != 0) {
                 /* Dry sand beside wet soil becomes soil - and is handed
                  * enough to go on wetting ITS neighbours, which is what
-                 * turns a puddle into a spreading patch of earth. It keeps
-                 * its own shade as the new soil's tone. */
+                 * turns a puddle into a spreading patch of earth. It
+                 * arrives WET, so it keeps no tone of its own - see the
+                 * soaking branch above's own comment on the same trade. */
                 give = held / 2;
                 if (give == 0) {
                     continue; /* not enough to bind a grain */
                 }
                 cost = give;
-                s->cells[nat] = CELL_SOIL(nr->soaks_to, CELL_VARIANT(n) >> SOIL_MOISTURE_BITS, (uint8_t)give);
+                recv_m = give;
+                s->cells[nat] = CELL_SOIL(nr->soaks_to, 0, (uint8_t)give);
                 latch_content_flags(s, s->cells[nat]);
             } else if (CELL_MATERIAL(n) == CELL_MATERIAL(c)) {
                 give = (held - CELL_MOISTURE(n)) / 2;
                 if (give == 0) {
                     continue; /* already even with this one */
                 }
-                s->cells[nat] = CELL_WITH_MOISTURE(n, (uint8_t)(CELL_MOISTURE(n) + give));
+                recv_m = CELL_MOISTURE(n) + give;
+                s->cells[nat] = CELL_WITH_MOISTURE(n, (uint8_t)recv_m);
                 cost = give;
             } else {
                 continue;
             }
 
-            row[x] = CELL_WITH_MOISTURE(c, (uint8_t)(held - cost));
+            /* If this hand-off empties the donor, its dry tone is biased
+             * by the neighbour it just watered - see soil_dry_out()'s own
+             * comment for why that neighbour, of everything on the board,
+             * is the one worth reading. */
+            row[x] = soil_set_moisture(c, (uint8_t)(held - cost), (uint8_t)recv_m);
             mark_rows(s, y, y);
             mark_rows(s, ny, ny);
             wake_block_and_neighbors(s, x, y);
@@ -1125,6 +1197,7 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
              * the bottom every time. */
             int give = (held + 1) / 2;
             int cost = give;
+            int recv_m;
             if (br->soaks_to != 0) {
                 /* Turning a grain into soil COSTS a level on top of what
                  * is handed over, because binding sand into earth uses
@@ -1149,17 +1222,23 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
                     return true; /* too little to bind a grain */
                 }
                 cost = give;
-                s->cells[nat] = CELL_SOIL(br->soaks_to, CELL_VARIANT(below) >> SOIL_MOISTURE_BITS, (uint8_t)give);
+                recv_m = give;
+                /* Arrives WET, so no tone of its own - the soaking
+                 * branch above's own comment covers why. */
+                s->cells[nat] = CELL_SOIL(br->soaks_to, 0, (uint8_t)give);
                 latch_content_flags(s, s->cells[nat]);
             } else {
                 const int room = (int)SOIL_MOISTURE_MAX - CELL_MOISTURE(below);
                 if (give > room) {
                     give = room;
                 }
-                s->cells[nat] = CELL_WITH_MOISTURE(below, (uint8_t)(CELL_MOISTURE(below) + give));
+                recv_m = CELL_MOISTURE(below) + give;
+                s->cells[nat] = CELL_WITH_MOISTURE(below, (uint8_t)recv_m);
                 cost = give;
             }
-            row[x] = CELL_WITH_MOISTURE(c, (uint8_t)(held - cost));
+            /* Same imprint rule as the diffusion hand-off above: a donor
+             * this empties dries biased by the cell it just fed. */
+            row[x] = soil_set_moisture(c, (uint8_t)(held - cost), (uint8_t)recv_m);
             mark_rows(s, y, y);
             mark_rows(s, ny, ny);
             wake_block_and_neighbors(s, x, y);
@@ -1169,13 +1248,27 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
     }
 
     if (r->dries != 0 && held != 0 && (int)(rng_next(&s->rng) & 0xFF) < r->dries) {
-        row[x] = CELL_WITH_MOISTURE(c, held - 1);
+        /* AMBIENT DRYING: nothing was handed anywhere this step - the
+         * diffusion and percolation attempts above either did not fire or
+         * had nowhere to go - so there is no neighbour to bias from. A
+         * cell that dries this way with nothing wet beside it goes bone
+         * pale, which is the correct reading: nothing nearby left an
+         * impression on it. */
+        row[x] = soil_set_moisture(c, (uint8_t)(held - 1), 0);
         mark_rows(s, y, y);
         wake_block_and_neighbors(s, x, y);
         return held - 1 != 0;
     }
 
-    return held != 0 || beside_liquid;
+    /* `r->dries` gates the wetness half, for the same reason it gates
+     * every other read of `held` in this function: sand soaks but does
+     * not dry, so its variant is a SHADE, and a grain shaded into the top
+     * half of its band reads as moisture that was never there. Without
+     * this the pass reported "still wet" for every such grain and
+     * may_have_moisture latched on for good on any board with sand on it
+     * - precisely what this return exists to stop, and what the sibling
+     * test in latch_content_flags() (sand_priv.h) had to be fixed for. */
+    return (r->dries != 0 && held != 0) || beside_liquid;
 }
 
 /* One cell of hot GAS, warming whatever around it holds a temperature.
@@ -1728,7 +1821,11 @@ static void
 spend_soil_moisture(sand_t* s, int w, const reaction_t* r, int soil_at, uint8_t amount, int contact_at,
                      int root_depth) {
     const cell_t soil = s->cells[soil_at];
-    s->cells[soil_at] = CELL_WITH_MOISTURE(soil, (uint8_t)(CELL_MOISTURE(soil) - amount));
+    /* Drunk by whatever is growing, not handed to another cell of soil -
+     * there is no neighbour to bias a dry tone from, so a collar spent
+     * down to nothing goes bone pale, the same as ambient drying with
+     * nothing wet beside it. */
+    s->cells[soil_at] = soil_set_moisture(soil, (uint8_t)(CELL_MOISTURE(soil) - amount), 0);
     mark_rows(s, soil_at / w, soil_at / w);
 
     if (r->roots == 0 || contact_at < 0 || root_depth != 0) {
@@ -1892,7 +1989,10 @@ step_one_conducting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t
         return true;
     }
     const cell_t src = s->cells[src_at], dst = s->cells[dst_at];
-    s->cells[src_at] = CELL_WITH_MOISTURE(src, (uint8_t)(src_m - 1));
+    /* Same imprint rule as every other hand-off in this file: a source
+     * this drains dry is biased by the sink it just carried water into,
+     * post-transfer - see soil_dry_out()'s own comment. */
+    s->cells[src_at] = soil_set_moisture(src, (uint8_t)(src_m - 1), (uint8_t)(dst_m + 1));
     s->cells[dst_at] = CELL_WITH_MOISTURE(dst, (uint8_t)(dst_m + 1));
     mark_rows(s, src_y, src_y);
     mark_rows(s, dst_y, dst_y);
@@ -3647,13 +3747,17 @@ conduct_heat(sand_t* s, int x, int y, int w, int h) {
  * defaulting to zero is what keeps acid from eating the container it is
  * standing in, the floor it is standing on, or the air above it.
  *
- * The bite costs the acid one unit of its own mass, through the same
- * pay_quench_cost() a liquid pays to put out a fire, because it is the
- * same kind of transaction: the liquid is CONSUMED rather than merely
- * consulted. Without that a single cell of acid dissolves an unbounded
- * amount of anything and remains a single cell - the exact mistake
- * oil-soaked ash made before soaking became a real transfer, and worth
- * naming twice because it is the easy one to make.
+ * The bite always costs the acid something - never a free eat - but how
+ * much varies by what it ate. Against oil and the generic sand/wood/stone
+ * targets, the ordinary cost is one unit of mass via the same
+ * pay_quench_cost() a liquid pays to put out a fire (the liquid is
+ * CONSUMED rather than merely consulted), but a separate, much higher
+ * death-roll can spend the whole cell in one bite instead - deliberately,
+ * so the acid itself has a real chance to run out rather than dissolving
+ * an unbounded amount of anything while remaining a single cell forever.
+ * That "acid never pays" mistake is the one oil-soaked ash made before
+ * soaking became a real transfer, and worth naming twice because it is
+ * the easy one to make.
  *
  * At most one neighbour per step, so a cell of acid surrounded by sand
  * eats into it rather than opening a hole on all four sides at once.
@@ -3787,60 +3891,127 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
         /* DILUTION, not an eat - a water neighbour never vanishes the way
          * sand or wood does below. The dissolves/dissolvable roll above
          * already decided "this bite lands on water"; this decides which
-         * of the two cells the bite actually changes, biased toward water
-         * per SAND_ACID_DILUTE_TO_WATER_CHANCE (sand.h). Either way the
-         * CELL_VARIANT (mass) of whichever cell flips carries over
-         * unchanged - a swap, not a creation - which is also why
-         * pay_quench_cost() below does not apply to this branch: nothing
-         * is being spent, so this returns before reaching it. */
+         * side wins, per SAND_ACID_DILUTE_TO_WATER_CHANCE (sand.h), and
+         * BOTH cells change, symmetrically either way: whichever material
+         * wins boils off into its own vapour (its own SOURCE cell, spent
+         * doing the winning - MAT_STEAM for water, MAT_GAS for acid,
+         * each material's own ordinary boils_to), and whichever material
+         * loses is converted into the winner's TARGET cell instead of
+         * simply vanishing. CELL_VARIANT (mass) carries over from
+         * whichever cell it started on, into whatever that cell becomes -
+         * a conversion, not a creation, on both ends now, which is also
+         * why pay_quench_cost() below does not apply to this branch:
+         * nothing is being spent as a bite cost, the transformation
+         * itself is the cost. Earlier versions of this left the winning
+         * side's cell untouched (a free water cell minted from nothing
+         * when water won, a free acid cell when acid won) - reported
+         * directly as the reason a body of water, or a body of acid,
+         * could only ever grow from this interaction and never actually
+         * shrink no matter how the win/lose split was tuned. */
         if (CELL_MATERIAL(n) == MAT_WATER) {
-            if ((int)(rng_next(&s->rng) & 0xFF) < SAND_ACID_DILUTE_TO_WATER_CHANCE) {
-                row[x] = CELL_MAKE(MAT_WATER, CELL_VARIANT(row[x]));
-                mark_rows(s, y, y);
-                wake_block_and_neighbors(s, x, y);
+            /* SAND_ACID_DILUTE_MASS_BIAS (sand.h): count how many of the
+             * ACID cell's own cardinal neighbours are themselves acid, and
+             * how many of the WATER cell's own cardinal neighbours are
+             * themselves water (up to 3 each, besides the one direction
+             * that already links the two of them) - a lone grain of
+             * either material reads as 0 either way. Only the DIFFERENCE
+             * between the two moves the split: a deep acid pool meeting
+             * an equally deep water pool nets to zero (neither is more
+             * "backed" than the other, so the base bias holds exactly as
+             * it always did), and it is only once one side's local mass
+             * genuinely outweighs the other's that this tips the roll.
+             * Measuring acid's backing alone was tried first and reads
+             * simpler, but it is not actually symmetric: since only acid
+             * cells ever roll this reaction, a deep, PURE acid pool
+             * always looks "backed" from its own side even while an
+             * equally deep pool of water is piled up right next to it -
+             * water pouring onto acid could not win even in the
+             * relentless-pour tests below, no matter how much of it
+             * accumulated. Eight bounds-checked reads at most, still
+             * cheap, just no longer one-sided. */
+            int acid_backing = 0, water_backing = 0;
+            for (int bd = 0; bd < 4; bd++) {
+                const int abx = x + reaction_dirs[bd][0];
+                const int aby = y + reaction_dirs[bd][1];
+                if ((unsigned)abx < (unsigned)w && (unsigned)aby < (unsigned)h
+                    && CELL_MATERIAL(s->cells[(size_t)aby * (size_t)w + (size_t)abx]) == MAT_ACID) {
+                    acid_backing++;
+                }
 
-                /* A small "fizzle" at the moment water actually wins -
-                 * explicitly asked for, and only for this outcome (not
-                 * the rarer acid-spreads branch below): a puff of gas
-                 * into whatever empty cell is nearby, the same residue
-                 * idiom emit_into_empty_neighbor() already gives ember's
-                 * flame and wet dirt's steam (just a no-op if nothing
-                 * empty is adjacent, same as those).
-                 *
-                 * An impulse pop was tried alongside this too (reusing
-                 * acid_bubble()'s own direction math), then dropped -
-                 * unlike a bubble breaking an exposed surface, dilution
-                 * mostly happens fully submerged, where a thrown grain
-                 * has nowhere open to actually go. Not gated on exposure
-                 * the way acid_bubble() itself is - it would have almost
-                 * always had nothing to do, which is exactly the "wasted
-                 * call" this session already flagged once for acid_bubble()
-                 * itself (see ACID_BUBBLE_INVESTIGATION.md) and is not
-                 * worth repeating here. */
-                emit_into_empty_neighbor(s, x, y, w, h, MAT_GAS);
+                const int wbx = nx + reaction_dirs[bd][0];
+                const int wby = ny + reaction_dirs[bd][1];
+                if ((unsigned)wbx < (unsigned)w && (unsigned)wby < (unsigned)h
+                    && CELL_MATERIAL(s->cells[(size_t)wby * (size_t)w + (size_t)wbx]) == MAT_WATER) {
+                    water_backing++;
+                }
+            }
+            const int mass_bias = (s->acid_dilute_mass_bias >= 0)
+                                       ? s->acid_dilute_mass_bias : SAND_ACID_DILUTE_MASS_BIAS;
+            const int water_wins_chance = SAND_ACID_DILUTE_TO_WATER_CHANCE
+                                           + (water_backing - acid_backing) * mass_bias;
+
+            /* ONE roll, a three-way ladder - see SAND_ACID_DILUTE_EVAPORATE_CHANCE's
+             * own comment (sand.h) for why this replaced two independent
+             * rolls. */
+            const int roll = (int)(rng_next(&s->rng) & 0xFF);
+            const size_t self_at = (size_t)y * (size_t)w + (size_t)x;
+            if (roll < SAND_ACID_DILUTE_EVAPORATE_CHANCE) {
+                /* Acid's own ambient-style boil-off, unrelated to who
+                 * wins the water/acid split below - see this constant's
+                 * own comment (sand.h). Only the acid cell is touched. */
+                place_reacted(s, x, y, self_at, MAT_GAS);
+            } else if (roll < SAND_ACID_DILUTE_EVAPORATE_CHANCE + water_wins_chance) {
+                /* WATER WINS - water is the source, spent boiling off
+                 * into its own MAT_STEAM at a fresh full life via
+                 * place_reacted(), the same as every other vapour-
+                 * creation path in this file. An earlier version of
+                 * this carried the old WATER cell's own mass nibble
+                 * across instead - a bug, not a deliberate choice: mass
+                 * and life-remaining are different fields (material.c),
+                 * and a half-drained water cell says nothing about how
+                 * long its steam should live. Acid is the target,
+                 * converted into water - mass DOES carry over here,
+                 * since both sides of THIS conversion are liquids
+                 * sharing the same mass semantic. Both writes go
+                 * through place_cell()/place_reacted() rather than a
+                 * raw store, so the new steam's content flags
+                 * (may_have_gas, may_have_condenser) actually get
+                 * latched instead of leaving it permanently inert. */
+                place_cell(s, x, y, self_at, CELL_MAKE(MAT_WATER, CELL_VARIANT(row[x])));
+                place_reacted(s, nx, ny, at, MAT_STEAM);
             } else {
-                s->cells[at] = CELL_MAKE(MAT_ACID, CELL_VARIANT(n));
-                mark_rows(s, ny, ny);
-                wake_block_and_neighbors(s, nx, ny);
+                /* ACID WINS - acid is the source, spent boiling off into
+                 * its own MAT_GAS at a fresh full life, same reasoning
+                 * as above. Water is the target, converted into acid,
+                 * mass carried over. */
+                place_reacted(s, x, y, self_at, MAT_GAS);
+                place_cell(s, nx, ny, at, CELL_MAKE(MAT_ACID, CELL_VARIANT(n)));
             }
             return true;
         }
 
-        /* OIL DILUTES INTO ACID - unlike water's free swap just above,
-         * this one still pays the normal cost: pay_quench_cost() below is
-         * NOT skipped here, so the acid that did the eating still spends
-         * a unit of its own mass to grow this new acid cell. Net acid
-         * does not simply increase for free the way it would if this
-         * were wired the same way water's swap is - explicitly asked for
-         * ("it should also dissolve while doing so, so we end with a bit
-         * less of acid"). Always converts, no coin flip: oil either
-         * isn't touched this bite (the dissolvable roll above failed) or
-         * it always becomes acid when it is - the randomness lives
-         * entirely in whether the bite lands at all, the same as it does
-         * for sand or wood below. */
+        /* OIL BOILS OFF, IT DOES NOT BREED MORE ACID - see
+         * SAND_ACID_OIL_TO_GAS_CHANCE and SAND_ACID_OIL_DEATH_CHANCE
+         * (sand.h) for the full story. The bitten oil cell mostly turns
+         * to gas rather than acid; the acid cell separately rolls a much
+         * higher chance to die outright - spend its whole remaining mass
+         * in this one bite - instead of pay_quench_cost()'s ordinary
+         * one-unit chip. The two rolls are independent: which way the
+         * oil goes says nothing about whether the acid survives doing
+         * it. */
         if (CELL_MATERIAL(n) == MAT_OIL) {
-            place_reacted(s, nx, ny, at, MAT_ACID);
-            pay_quench_cost(s, x, y, w);
+            const uint8_t oil_residue = ((int)(rng_next(&s->rng) & 0xFF) < SAND_ACID_OIL_TO_GAS_CHANCE)
+                                         ? MAT_GAS : MAT_ACID;
+            place_reacted(s, nx, ny, at, oil_residue);
+
+            if ((int)(rng_next(&s->rng) & 0xFF) < SAND_ACID_OIL_DEATH_CHANCE) {
+                const size_t self_at = (size_t)y * (size_t)w + (size_t)x;
+                s->cells[self_at] = CELL_EMPTY;
+                mark_rows(s, y, y);
+                wake_block_and_neighbors(s, x, y);
+            } else {
+                pay_quench_cost(s, x, y, w);
+            }
             return true;
         }
 
@@ -3863,10 +4034,19 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
             wake_block_and_neighbors(s, nx, ny);
         }
 
-        /* The acid pays, and may spend itself doing it - pay_quench_cost()
-         * clears the cell when its last unit goes. Done after the target
-         * is dealt with so the two can never both survive a bite. */
-        pay_quench_cost(s, x, y, w);
+        /* The acid pays, and may spend itself doing it. SAND_ACID_EAT_
+         * DEATH_CHANCE (sand.h) rolls first for a chance to die outright -
+         * its whole remaining mass gone in this one bite - and only falls
+         * back to pay_quench_cost()'s ordinary one-unit chip if that
+         * roll misses. Done after the target is dealt with so the two
+         * can never both survive a bite. */
+        if ((int)(rng_next(&s->rng) & 0xFF) < SAND_ACID_EAT_DEATH_CHANCE) {
+            row[x] = CELL_EMPTY;
+            mark_rows(s, y, y);
+            wake_block_and_neighbors(s, x, y);
+        } else {
+            pay_quench_cost(s, x, y, w);
+        }
         return true;
     }
     return false;
@@ -4347,6 +4527,83 @@ step_one_condensing_cell(sand_t* s, int x, int y, int w, int h, const reaction_t
     return true;
 }
 
+/* ACID RAIN - see SAND_ACID_RAIN_CHANCE's own comment (sand.h) for the
+ * feature itself; this is its mechanism, the same "fake collapse" idiom
+ * step_one_condensing_cell() just above already uses, scaled up and
+ * generalised to two materials instead of one. Unlike that 2x2 check,
+ * this is not keyed off a single reaction_t field - MAT_GAS and
+ * MAT_STEAM are named directly by their caller in step_one_reacting_row()
+ * below, the same way acid_bubble() above names MAT_ACID directly rather
+ * than adding a flag that would only ever be true for one material,
+ * since either species can legitimately be the block's own top-left
+ * corner.
+ *
+ * A COLLAPSE, same as condensation, not a like-for-like replacement -
+ * caught directly: the first version of this converted the WHOLE 4x4
+ * (16 cells) into 16 fresh acid cells, no reduction at all, unlike
+ * condensation's own 4-cells-into-1 shrink just above. Acid is one of
+ * this simulation's biggest producers of gas and steam (dilution,
+ * eating oil, eating sand/wood/stone, its own ambient boil-off all leave
+ * one or the other), so handing every cell a matching pocket held
+ * straight back into MORE acid, at full count, turned "acid rain" into a
+ * feedback loop that could keep a lake topped up indefinitely - the
+ * exact opposite of the finite "acid has a budget" rule the rest of
+ * this file spends real effort enforcing. Fixed at the same ratio
+ * condensation itself already uses (4 cells in, 1 surviving): the
+ * block's own top-left 2x2 - not the whole 4x4 - becomes acid, and
+ * every other cell in the block clears to empty. Sixteen cells of vapor
+ * raining down four cells of acid, not sixteen.
+ *
+ * (x, y) is only ever checked as the block's own top-left corner - same
+ * scan-order argument as step_one_condensing_cell() just above: a
+ * genuine matching 4x4 is always reached from its own actual top-left
+ * cell first, scanning left to right, top to bottom, and once it fires -
+ * clearing every cell in the block - any other gas or steam cell that
+ * WAS part of it is no longer gas or steam by the time its own turn
+ * comes. A cheap, honest miss otherwise, not a case worth special-
+ * casing away. */
+static inline bool
+step_one_acid_rain_cell(sand_t* s, int x, int y, int w, int h) {
+    if (x + 3 >= w || y + 3 >= h) {
+        return false;
+    }
+
+    int steam_count = 0, gas_count = 0;
+    for (int dy = 0; dy < 4; dy++) {
+        for (int dx = 0; dx < 4; dx++) {
+            const size_t at = (size_t)(y + dy) * (size_t)w + (size_t)(x + dx);
+            const uint8_t mat = CELL_MATERIAL(s->cells[at]);
+            if (mat == MAT_STEAM) {
+                steam_count++;
+            } else if (mat == MAT_GAS) {
+                gas_count++;
+            } else {
+                return false;
+            }
+        }
+    }
+    if (steam_count < 2 || gas_count < 2) {
+        return false;
+    }
+
+    const int acid_rain = (s->acid_rain >= 0) ? s->acid_rain : SAND_ACID_RAIN_CHANCE;
+    if (acid_rain == 0 || (int)(rng_next(&s->rng) & 0xFF) >= acid_rain) {
+        return false;
+    }
+
+    for (int dy = 0; dy < 4; dy++) {
+        for (int dx = 0; dx < 4; dx++) {
+            const size_t at = (size_t)(y + dy) * (size_t)w + (size_t)(x + dx);
+            if (dx < 2 && dy < 2) {
+                place_reacted(s, x + dx, y + dy, at, MAT_ACID);
+            } else {
+                place_cell(s, x + dx, y + dy, at, CELL_EMPTY);
+            }
+        }
+    }
+    return true;
+}
+
 /* One row's share of the scan - only burning cells are dispatched; keyed
  * on reaction_t.burns (material.h), NOT on kind == KIND_STATIC. Stone
  * and ember both share that kind, and every unused material slot shares
@@ -4403,6 +4660,27 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
                 acid_bubble(s, x, y);
             }
             step_one_dissolver_cell(s, row, x, y, w, h, r);
+            continue;
+        }
+        /* ACID RAIN - see SAND_ACID_RAIN_CHANCE's own comment (sand.h).
+         * MAT_GAS and MAT_STEAM are named directly here rather than
+         * gated behind a reaction_t field of their own - the same
+         * reasoning acid_bubble() above already gives for naming
+         * MAT_ACID directly in the dissolves branch: this is inherently
+         * about these two specific materials, not a trait a future
+         * material could opt into. Checked ahead of the ordinary
+         * condensing branch below, since a steam cell that IS part of a
+         * matching acid-rain block should convert to acid rather than
+         * also rolling to condense into water this same step - the two
+         * are mutually exclusive outcomes for the same cell, and acid
+         * rain is the narrower, more specific match. No flag of its own
+         * to arm or clear: this can never fire without steam existing
+         * somewhere in its own 4x4, and steam's mere presence anywhere
+         * is already what arms may_have_condenser via the branch just
+         * below, so a board with steam on it already keeps this pass
+         * running for as long as either mechanic needs it to. */
+        if ((CELL_MATERIAL(c) == MAT_GAS || CELL_MATERIAL(c) == MAT_STEAM)
+            && step_one_acid_rain_cell(s, x, y, w, h)) {
             continue;
         }
         /* Condensing, on its own presence-not-activity footing exactly
