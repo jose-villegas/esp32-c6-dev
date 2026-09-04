@@ -2579,10 +2579,14 @@ static void step_impulses(sand_t *s, int dx, int dy)
              * sand_liquid.c for why this scope matches the splash feature
              * itself, water and acid only.
              *
-             * A THROWN KIND_STATIC CHUNK REFLECTS TOO, off the blocking
+             * A THROWN CHUNK OR GRAIN REFLECTS TOO, off the blocking
              * surface's approximate normal rather than a flat 180 - a wall
              * chunk glancing off a floor should skid onward, not bounce
              * straight back the way a droplet's flat flip above does.
+             * KIND_POWDER is in for the same reason it is in for drag: a
+             * blast against a wall puts far more sand in the air than it
+             * ever dislodges stone, and every one of those grains used to
+             * stall against the wall until its flight aged out.
              * blocker_normal() (this file) reads the three-cell arc ahead of
              * the mover for what it hit, reflect_off_normal() turns that
              * into a new ring direction, and either returning -1 (no static
@@ -2604,7 +2608,8 @@ static void step_impulses(sand_t *s, int dx, int dy)
              * wall mostly intact. */
             if (mat_id == MAT_WATER || mat_id == MAT_ACID) {
                 entry.dir = (entry.dir + 4) & 7;
-            } else if (materials[mat_id].kind == KIND_STATIC &&
+            } else if ((materials[mat_id].kind == KIND_STATIC ||
+                        materials[mat_id].kind == KIND_POWDER) &&
                        entry.speed >= SAND_IMPULSE_BOUNCE_MIN_SPEED) {
                 const int normal = blocker_normal(s, x, y, entry.dir);
                 const int reflected = (normal < 0)
@@ -2635,18 +2640,21 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * grand total is untouched whichever of the two cases this was. */
         const cell_t displaced = s->cells[nat];
 
-        /* MEDIUM DRAG - KIND_STATIC ONLY. Charged here, at the move site,
-         * rather than folded into the ramp above `rolled_move`'s own decay:
-         * open air (nothing displaced) must cost exactly nothing, so a
-         * flight through empty space stays byte-for-byte what it always
-         * was and none of sand_explode()'s own swept tuning (SAND_IMPULSE_
-         * SPEED_RAMP, SAND_EXPLODE_CORE_DIVISOR - see their comments in
-         * sand.h) moves. See SAND_IMPULSE_DRAG_SHIFT's own comment for what
-         * the number means and why KIND_STATIC only - liquid and powder
-         * movers already carry their own decay or were what that tuning
-         * measured, and widening this to them is a later round. Saturating
-         * at 0, same idiom as the ramp two hundred lines up. */
-        if (!CELL_IS_EMPTY(displaced) && materials[mat_id].kind == KIND_STATIC) {
+        /* MEDIUM DRAG - EVERY MOVER BUT A LIQUID. Charged here, at the move
+         * site, rather than folded into the ramp above `rolled_move`'s own
+         * decay: open air (nothing displaced) must cost exactly nothing, so
+         * a flight through empty space stays byte-for-byte what it always
+         * was. See SAND_IMPULSE_DRAG_SHIFT's own comment in sand.h for what
+         * the number means, and for why powders were briefly left out and
+         * then let back in - a thrown grain is most of what a blast puts in
+         * the air, so a static-only rule was invisible on the device even
+         * though it worked exactly as designed. Liquids stay out: they
+         * carry their own geometric decay (SAND_SPLASH_SPEED_DECAY_SHIFT)
+         * and the splash/cascade feature is tuned around it. Saturating at
+         * 0, same idiom as the ramp two hundred lines up. */
+        if (!CELL_IS_EMPTY(displaced) &&
+            (materials[mat_id].kind == KIND_STATIC ||
+             materials[mat_id].kind == KIND_POWDER)) {
             const uint8_t drag =
                 (uint8_t)(material_of(displaced)->density >> SAND_IMPULSE_DRAG_SHIFT);
             entry.speed = (entry.speed > drag) ? (uint8_t)(entry.speed - drag) : 0;

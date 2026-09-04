@@ -725,9 +725,9 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
 #define SAND_IMPULSE_SPEED_RAMP  2
 
 /* EXTRA speed charged at the move site, on top of the ordinary ramp above,
- * per non-empty cell a KIND_STATIC mover displaces - see step_impulses()'s
- * own comment at the charge site for why there rather than folded into the
- * ramp. `density >> SAND_IMPULSE_DRAG_SHIFT` is the cost, so a heavier
+ * per non-empty cell a KIND_STATIC or KIND_POWDER mover displaces - see
+ * step_impulses()'s own comment at the charge site for why there rather
+ * than folded into the ramp. The cost is `density >> this`, so a heavier
  * medium costs more: open air (nothing displaced) costs nothing, water (30)
  * costs 7, dirt or sand (60-62) cost 15 - roughly an order of magnitude
  * more than the plain ramp's 2, which is the point: today a thrown chunk
@@ -736,12 +736,22 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * flat divide keeps the cost a single-instruction saturating operation, the
  * same idiom SAND_SPLASH_SPEED_DECAY_SHIFT already uses elsewhere in this
  * file. 2 is a STARTING FIGURE, not a measurement - picked from the table
- * above, not from a device sweep - because KIND_STATIC is the only kind
- * this rung touches; widening drag to liquid or powder movers is a later
- * round with its own device evidence, not this constant's job to predict. */
+ * above, not from a device sweep.
+ *
+ * POWDERS WERE OUT AND ARE NOW IN, on device evidence. Scoping this to
+ * KIND_STATIC movers first was deliberate - a thrown grain is what
+ * sand_explode()'s own swept tuning measured, and a dislodged wall chunk
+ * is not - but it also made the mechanism imperceptible in the app: a
+ * static cell only ever enters flight when a blast rolls a density-scaled
+ * dislodge against a wall, so almost everything a person actually watches
+ * moving is a powder grain, and every one of those was still tunnelling.
+ * Correct and invisible is not worth much. Liquids remain out, and for a
+ * reason that has not changed: they carry their own geometric decay
+ * (SAND_SPLASH_SPEED_DECAY_SHIFT) and the splash/cascade feature is tuned
+ * around it, so widening to them would move two tuned features at once. */
 #define SAND_IMPULSE_DRAG_SHIFT  2
 
-/* RESTITUTION FLOOR for the KIND_STATIC wall-bounce (step_impulses()'s
+/* RESTITUTION FLOOR for the wall-bounce (step_impulses()'s
  * blocked branch, sand.c) - below this, a blocked entry just waits, same
  * as it always has; at or above it, it reflects off the blocking surface's
  * approximate normal (blocker_normal()/reflect_off_normal(), sand.c) and
