@@ -1000,6 +1000,28 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * not a measured one - tune on device like every other constant here. */
 #define SAND_ACID_DILUTE_TO_WATER_CHANCE 141
 
+/* EVAPORATION ON DILUTION - once the roll above has already decided the
+ * acid cell wins (becomes water), a second, independent roll gives that
+ * outcome a further chance to boil off into MAT_GAS instead of actually
+ * becoming water. Requested directly: a puddle sitting under a steady
+ * drip of acid was growing without bound, one full water cell born per
+ * winning bite with nothing ever leaving the system - this is the mass
+ * sink that was missing, distinct from r->evaporates (material.c), which
+ * is acid's own ambient boil-off and fires whether or not water is
+ * anywhere nearby. Chance-in-256, checked only inside the water-wins
+ * branch, so it does not touch the 55/45 split above at all: the acid
+ * cell either becomes water as before, or - at this rate instead -
+ * evaporates on the spot, no separate fizzle puff on top of it (unlike
+ * the ordinary water-wins case) since evaporating in place already IS
+ * the gas escaping. Starting bias, not a measured one - tune on device
+ * like every other constant here. Picked small (1 in 8) deliberately:
+ * test_water_wins_the_dilution_more_often_than_acid_does (suite_sand.c)
+ * still needs literal acid-becomes-water bites to clearly outnumber
+ * acid-wins bites over 4000 columns, which stops working somewhere past
+ * roughly 1 in 5 at the current 55/45 split - the margin is documented
+ * there, re-check it before raising this past a small trim. */
+#define SAND_ACID_DILUTE_EVAPORATE_CHANCE 32
+
 /* QUENCHING A FLAME - acid putting out fire is not water's clean,
  * deterministic flash to steam (see step_one_burning_cell(),
  * sand_reactions.c): unconditionally leaving a cell of gas or smoke

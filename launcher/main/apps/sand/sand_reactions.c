@@ -3795,6 +3795,19 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
          * is being spent, so this returns before reaching it. */
         if (CELL_MATERIAL(n) == MAT_WATER) {
             if ((int)(rng_next(&s->rng) & 0xFF) < SAND_ACID_DILUTE_TO_WATER_CHANCE) {
+                /* SAND_ACID_DILUTE_EVAPORATE_CHANCE (sand.h): a second,
+                 * independent roll gives the water-wins outcome a further
+                 * chance to boil the acid cell off into gas instead of
+                 * actually becoming water - the mass sink that keeps a
+                 * steady drip of acid from growing an unbounded puddle.
+                 * No fizzle puff on top of this one; evaporating in place
+                 * already is the gas escaping. */
+                if ((int)(rng_next(&s->rng) & 0xFF) < SAND_ACID_DILUTE_EVAPORATE_CHANCE) {
+                    const size_t self_at = (size_t)y * (size_t)w + (size_t)x;
+                    place_reacted(s, x, y, self_at, MAT_GAS);
+                    return true;
+                }
+
                 row[x] = CELL_MAKE(MAT_WATER, CELL_VARIANT(row[x]));
                 mark_rows(s, y, y);
                 wake_block_and_neighbors(s, x, y);
