@@ -18,7 +18,6 @@ const ctx = canvas.getContext("2d", { alpha: false });
 const loadingEl = document.getElementById("loading");
 const paletteEl = document.getElementById("palette");
 const sourceToggle = document.getElementById("source-toggle");
-const shakeBtn = document.getElementById("shake-btn");
 const clearBtn = document.getElementById("clear-btn");
 const tiltBtn = document.getElementById("tilt-btn");
 const tiltPad = document.getElementById("tilt-pad");
@@ -44,7 +43,6 @@ let tiltAx = 0, tiltAy = COUNTS_PER_G, tiltAz = 0;
 
 let padActive = false;                 // the pad has been dragged at least once
 let padAx = 0, padAy = COUNTS_PER_G, padAz = 0;
-let shakeUntil = 0;
 
 function toHex(rgb) {
   return "#" + (rgb >>> 0).toString(16).padStart(6, "0");
@@ -79,18 +77,31 @@ setMode(MODE_PAINT);
 
 clearBtn.addEventListener("click", () => web_clear && web_clear());
 
-shakeBtn.addEventListener("click", () => {
-  shakeUntil = performance.now() + 260;
-});
-
 // DeviceOrientation, gated the same way iOS gates it: a button the user has
 // to press, because reading it at all needs a permission prompt on iOS and
 // is simply unavailable on a desktop browser - the fallback (fixed straight
 // down) is what app_sand.c's own read_gravity_input() does when imu_ready()
 // is false, so this page behaves the same way with no sensor at all.
+//
+// Toggles rather than a one-shot switch: permission is only ever requested
+// once (iOS caches the grant for the page's lifetime, and re-prompting on
+// every toggle would be obnoxious), but tiltEnabled itself flips freely so
+// a press turns the sensor off again and hands gravity back to the pad.
+let tiltListenerAttached = false;
+
+function setTiltEnabled(enabled) {
+  tiltEnabled = enabled;
+  tiltBtn.textContent = enabled ? "Disable device tilt" : "Use device tilt";
+  tiltPad.classList.toggle("disabled", enabled);
+}
+
 if (typeof DeviceOrientationEvent !== "undefined") {
   tiltBtn.hidden = false;
   tiltBtn.addEventListener("click", async () => {
+    if (tiltListenerAttached) {
+      setTiltEnabled(!tiltEnabled);
+      return;
+    }
     if (typeof DeviceOrientationEvent.requestPermission === "function") {
       try {
         const res = await DeviceOrientationEvent.requestPermission();
@@ -100,10 +111,8 @@ if (typeof DeviceOrientationEvent !== "undefined") {
       }
     }
     window.addEventListener("deviceorientation", onDeviceOrientation);
-    tiltEnabled = true;
-    tiltBtn.textContent = "Using device sensor";
-    tiltBtn.disabled = true;
-    tiltPad.classList.add("disabled");
+    tiltListenerAttached = true;
+    setTiltEnabled(true);
   });
 }
 
@@ -260,13 +269,7 @@ function frame(now) {
   } else {
     [ax, ay, az] = [0, COUNTS_PER_G, 0];
   }
-  let rotation = 0;
-
-  if (now < shakeUntil) {
-    ax = Math.round((Math.random() * 2 - 1) * COUNTS_PER_G * 1.4);
-    ay = Math.round((Math.random() * 2 - 1) * COUNTS_PER_G * 1.4);
-    az = Math.round((Math.random() * 2 - 1) * COUNTS_PER_G * 0.4);
-  }
+  const rotation = 0;
 
   web_step(dt, ax, ay, az, rotation);
   // A press implies "down" for the frame it happens on even if the
