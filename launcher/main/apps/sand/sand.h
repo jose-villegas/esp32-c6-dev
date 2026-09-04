@@ -1153,44 +1153,43 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
 #define SAND_ACID_EAT_DEATH_CHANCE 40
 
 /* ACID RAIN - a mixed pocket of MAT_GAS and MAT_STEAM, sitting together
- * in a 4x4 block (at least two cells of each; the rest either species
- * too, nothing else), has a small chance to collapse into acid - see
- * step_one_acid_rain_cell() (sand_reactions.c) for the mechanism itself.
- * Explicitly requested as an extension of the existing steam-to-water
- * condensation trick (reaction_t.condenses, material.c) - condensation
- * already lets this codebase fake "rain" by collapsing a settled pocket
- * of steam into water; this is the same cosmetic collapse idea,
- * generalised to a mixed two-material pocket instead of a uniform one-
- * material square, producing acid instead of water - acid rain, not
- * plain rain.
- *
- * A COLLAPSE, same ratio condensation itself uses (4 cells in, 1
- * surviving), not a like-for-like replacement - the first version of
- * this converted the WHOLE 4x4 (16 cells) into 16 fresh acid cells, and
- * that was a real bug, not a stylistic choice: acid is one of this
- * simulation's biggest producers of gas and steam (dilution, eating oil,
+ * in a 2x2 block (exactly two cells of each - the only composition four
+ * cells and an "at least two of each" requirement can ever satisfy), has
+ * a small chance to collapse - see step_one_acid_rain_cell()
+ * (sand_reactions.c) for the mechanism itself. An extension of the
+ * existing steam-to-water condensation trick (reaction_t.condenses,
+ * material.c) that already fakes "rain" by collapsing a settled pocket
+ * of steam into water: same 2x2 window, same 4-cells-into-1 collapse
+ * ratio, generalised to a mixed two-material pocket instead of a
+ * uniform one - acid rain, sized exactly like plain rain, not a bigger
+ * production of its own. Only the block's own top-left corner survives,
+ * not the whole pocket: acid is one of this simulation's biggest
+ * producers of gas and steam in the first place (dilution, eating oil,
  * eating sand/wood/stone, its own ambient boil-off all leave one or the
- * other), so handing every cell of a matching pocket straight back into
- * more acid, at full count, turned this into a feedback loop that could
- * keep a lake topped up indefinitely - confirmed directly, a snow-melt
- * scene's acid lake stayed at 16 live cells past 600 steps instead of
- * running dry the way it always used to.
+ * other), so a full-count yield would be a feedback loop that could keep
+ * a lake topped up indefinitely.
  *
- * The yield alone was not enough, either - tuning the chance down as far
- * as 1 (the rarest a single byte-wide roll can express) did not fix the
- * ORIGINAL 16-cell version by itself, because a gas/steam-rich scene
- * offers many independent qualifying windows every single step;
- * lowering any one roll's odds does not change how many rolls get
- * attempted. It took BOTH fixes together: the block's own top-left 2x2
- * becomes acid, the other twelve cells clear to empty (sixteen cells of
- * vapor rain down four cells of acid, not sixteen), and this chance
- * dropped alongside it, from 32 down to 8, once the smaller yield made
- * the chance worth tuning again. Chance-in-256, checked only once a full
- * 4x4 has already been confirmed to hold nothing but gas and steam with
- * at least two of
- * each. Starting bias, not a measured one - tune on device like every
- * other constant here. */
-#define SAND_ACID_RAIN_CHANCE 8
+ * The surviving cell resolves 50/50 to Acid or Water, not always Acid -
+ * a pocket that is HALF gas and HALF steam has no more claim on being
+ * acid's own rain than plain water's, and always-Acid would make this
+ * the same one-way tap on the board's acid budget the full-pocket yield
+ * already was.
+ *
+ * 1, the rarest a single byte-wide roll can express, and (deliberately)
+ * the same figure steam's own condense-to-water roll uses
+ * (reaction_t.condenses, MAT_STEAM's row in material.c) - pinning both
+ * "rain" mechanics to the same per-window floor. This constant is
+ * already at that floor: a big enough vapor pocket offers many
+ * overlapping qualifying windows every step, so it will still convert
+ * fairly readily even here - that scaling comes from how many windows a
+ * large pocket offers, not from this constant, so there is no lower
+ * value left to try if it still reads too frequent on device; the fix
+ * at that point has to be the mechanism, not this number.
+ *
+ * Chance-in-256, checked only once a full 2x2 has already been confirmed
+ * to hold nothing but gas and steam, two of each. Starting bias, not a
+ * measured one - tune on device like every other constant here. */
+#define SAND_ACID_RAIN_CHANCE 1
 
 /* QUENCHING A FLAME - acid putting out fire is not water's clean,
  * deterministic flash to steam (see step_one_burning_cell(),
@@ -1781,14 +1780,15 @@ void sand_set_boils(sand_t *s, int chance);
  * up being tuned.
  *
  * NOT THE ONLY COLLAPSE ON THE BOARD - acid rain (SAND_ACID_RAIN_CHANCE,
- * below) is a second one, a mixed gas/steam pocket collapsing into acid
- * rather than a uniform square collapsing into one material, and it is
- * gated on raw material identity in step_one_reacting_row() rather than
- * on r->condenses or this override. A test relying on
+ * below) is a second one, the same 2x2/4-cells-into-1 shape but a mixed
+ * gas/steam pocket collapsing into Acid or Water (50/50 coin flip)
+ * rather than a uniform square collapsing into one fixed material, and
+ * it is gated on raw material identity in step_one_reacting_row() rather
+ * than on r->condenses or this override. A test relying on
  * sand_set_condenses(s, 0) to mean "no mechanic here destroys cells" -
  * several already do, to keep a strict grain-count assertion honest -
  * also needs sand_set_acid_rain(s, 0) if its board can ever hold both
- * MAT_GAS and MAT_STEAM together in a 4x4 pocket. */
+ * MAT_GAS and MAT_STEAM together in a 2x2 pocket. */
 void sand_set_condenses(sand_t *s, int chance);
 #define SAND_CONDENSES_PER_MATERIAL (-1)
 
