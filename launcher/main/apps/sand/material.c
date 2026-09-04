@@ -641,13 +641,20 @@ const reaction_t reactions[MATERIAL_MAX] = {
          * sand at a pace you can watch rather than one that removes it
          * between frames.
          *
-         * Every bite costs the acid a unit of its own mass, exactly as
-         * quenching costs water a unit (they go through the same
-         * pay_quench_cost()). That is not decoration: without it a single
-         * cell of acid would eat an unbounded amount of anything and
-         * still be a single cell, which is the same mistake oil-soaked
-         * ash made before soaking became a real transfer. A puddle of
-         * acid has a budget, and when it is spent the puddle is gone. */
+         * Every bite costs the acid SOMETHING - without that, a single
+         * cell would eat an unbounded amount of anything and still be a
+         * single cell, the same mistake oil-soaked ash made before
+         * soaking became a real transfer. A puddle of acid has a
+         * budget, and when it is spent the puddle is gone. What the
+         * cost actually is depends on what got eaten: the generic
+         * sand/wood/stone/etc path (sand_reactions.c) pays the ordinary
+         * one-unit chip through pay_quench_cost() on a miss, but can
+         * instead roll a much higher chance to die outright, same as
+         * eating oil does (SAND_ACID_EAT_DEATH_CHANCE,
+         * SAND_ACID_OIL_DEATH_CHANCE, sand.h). Water/acid dilution is its
+         * own case, never the one-unit chip either way - it spends the
+         * acid's whole cell on both outcomes, win or lose - see
+         * SAND_ACID_DILUTE_TO_WATER_CHANCE's own comment in sand.h. */
             .dissolves = 60,
 
             .fizz = 40, /* "about one bite in six" - roughly one visible
@@ -723,16 +730,20 @@ const reaction_t reactions[MATERIAL_MAX] = {
 
             /* Lets acid's ordinary dissolve roll land on oil - the same
              * field water uses for its own acid interaction (see its own
-             * comment above), but the OUTCOME is different: oil always
-             * becomes acid on a successful bite (step_one_dissolver_cell(),
-             * sand_reactions.c), not a biased coin flip between the two
-             * materials the way water's is. Started at 40 ("slowly
-             * dilutes", explicitly asked for), dropped to 1 (the rarest a
-             * single byte-wide roll can express) once still reported too
-             * fast, then brought back up to 16 once 1 read as too slow -
-             * about one bite in sixteen, between the two extremes already
-             * tried. Starting point, not final - tune on device like
-             * every other constant here. */
+             * comment above), but the OUTCOME is different: the bitten oil
+             * cell mostly boils off to gas rather than becoming more acid
+             * (SAND_ACID_OIL_TO_GAS_CHANCE, sand.h), and the acid cell
+             * separately rolls a much higher chance to die outright instead
+             * of paying the ordinary one-unit chip
+             * (SAND_ACID_OIL_DEATH_CHANCE) - see
+             * step_one_dissolver_cell()'s own comment (sand_reactions.c)
+             * for the full story. Started at 40 ("slowly dilutes",
+             * explicitly asked for), dropped to 1 (the rarest a single
+             * byte-wide roll can express) once still reported too fast,
+             * then brought back up to 16 once 1 read as too slow - about
+             * one bite in sixteen, between the two extremes already tried.
+             * Starting point, not final - tune on device like every other
+             * constant here. */
             .dissolvable = 16,
         },
 

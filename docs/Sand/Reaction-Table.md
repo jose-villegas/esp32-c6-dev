@@ -339,6 +339,11 @@ Three more things reach a root cell, and the asymmetry between the first two is 
 
 The generated `Lava | Water / Acid | Stone` row's note column is blank; in full, that reaction chains onward into one further adjacent Lava cell, itself becoming Stone, at `SAND_LAVA_COOLOFF_CHANCE`, up to `SAND_LAVA_COOLOFF_MAX_CHAIN` links - see Lava's own entry above.
 
+The generated `Acid | Water` and `Acid | Oil` rows above both read "nothing (sometimes smoke)" - that was true once, but is WRONG now: `dump_reactions.c` derives those two rows from `dissolves`/`dissolvable`/`fizz` (the generic dissolve path), and both interactions now live almost entirely at their own read site in `step_one_dissolver_cell()` (`sand_reactions.c`), on no `reaction_t` field the generator's pairwise join walks. What actually happens, in full:
+
+- **Acid | Water** is a single roll with three outcomes, not a dissolve at all: a small unconditional slice (`SAND_ACID_DILUTE_EVAPORATE_CHANCE`) boils the acid cell straight to `Gas`; otherwise the remainder splits close to evenly (`SAND_ACID_DILUTE_TO_WATER_CHANCE`, adjusted by each side's own local mass backing - `SAND_ACID_DILUTE_MASS_BIAS`) between water winning (the acid cell converts to `Water`, the water cell boils to `Steam`) and acid winning (the water cell converts to `Acid`, the acid cell boils to `Gas`) - the winner always boils into its own vapour and the loser always converts into the winner's material, never a silent no-op. See `SAND_ACID_DILUTE_TO_WATER_CHANCE`'s own comment in `sand.h` for the full derivation and the discovered density-driven asymmetry between the two pour directions.
+- **Acid | Oil** IS still the generic dissolve path (`dissolves`/`dissolvable`/`fizz`), but the bitten oil cell mostly boils to `Gas` rather than becoming more acid (`SAND_ACID_OIL_TO_GAS_CHANCE`), and the acid cell separately rolls a much higher chance to die outright - its whole remaining mass gone in the one bite - instead of the ordinary one-unit `pay_quench_cost()` chip (`SAND_ACID_OIL_DEATH_CHANCE`). Never "nothing": every bite spends the acid something.
+
 These rows have no generated counterpart at all - none of the three corresponds to a single RATE field the generator's pairwise join walks:
 
 | A | B | becomes | rate | note |
@@ -346,3 +351,4 @@ These rows have no generated counterpart at all - none of the three corresponds 
 | Lava | (3+ covered sides) | Stone, then explodes | slowly (1/256, per covered cell per step) | the centre cell is immediately overwritten by fire again - sand_explode()'s own core fill |
 | Water / Acid | Stone | Stone, itself, draining faster | ~8x `cools`, above ambient only | never past ambient - see Water's own entry above |
 | Water / Acid | Glass | Glass, itself, draining faster | ~8x `cools`, above ambient only | never past ambient - see Water's own entry above |
+| Gas + Steam (4x4, >=2 of each, rest empty/gas/steam) | - | top-left 2x2 becomes Acid, the other 12 cells clear | rare (`SAND_ACID_RAIN_CHANCE`, per matching block per step) | "acid rain" - the same 4-cells-into-1 collapse ratio `condenses`/`condenses_to` uses for Steam->Water, scaled to a 16-cells-into-4 block so it cannot breed acid faster than acid itself produces the gas and steam that feed it; see its own comment on `SAND_ACID_RAIN_CHANCE` (`sand.h`) |
