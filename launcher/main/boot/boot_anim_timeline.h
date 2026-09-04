@@ -78,6 +78,12 @@
 
 #define BOOT_ANIM_TITLE_WAVE_PERIOD_MS 900
 #define BOOT_ANIM_TITLE_WAVE_STAGGER_MS 75
+/* which typeface draws the title - 0 the 40px Computer Modern coverage atlas, 1 the shell's own 8x8 bitmap; see boot_anim.c's draw_title() */
+#define BOOT_ANIM_TITLE_FONT 0
+
+/* integer pixel multiplier the title is drawn at - 1 suits a font rasterized at its final size, ~5 is what the 8x8 bitmap needs */
+#define BOOT_ANIM_TITLE_SCALE 1
+
 /* when the idle wave starts calming back to stillness - at or past total_ms it never does, which is the default */
 #define BOOT_ANIM_TITLE_WAVE_OUT_MS 3200
 

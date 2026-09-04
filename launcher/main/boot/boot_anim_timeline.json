@@ -40,7 +40,9 @@
         "title_shadow_dy": 3,
         "title_shadow_alpha": 128,
         "title_wave_out_ms": 3200,
-        "title_wave_fade_ms": 1500
+        "title_wave_fade_ms": 1500,
+        "title_font": 0,
+        "title_scale": 1
     },
     "camera_focal": 512,
     "grid_step_m": 0.1,
