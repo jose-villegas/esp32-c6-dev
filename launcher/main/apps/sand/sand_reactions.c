@@ -3872,21 +3872,28 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
             return true;
         }
 
-        /* OIL DILUTES INTO ACID - unlike water's free swap just above,
-         * this one still pays the normal cost: pay_quench_cost() below is
-         * NOT skipped here, so the acid that did the eating still spends
-         * a unit of its own mass to grow this new acid cell. Net acid
-         * does not simply increase for free the way it would if this
-         * were wired the same way water's swap is - explicitly asked for
-         * ("it should also dissolve while doing so, so we end with a bit
-         * less of acid"). Always converts, no coin flip: oil either
-         * isn't touched this bite (the dissolvable roll above failed) or
-         * it always becomes acid when it is - the randomness lives
-         * entirely in whether the bite lands at all, the same as it does
-         * for sand or wood below. */
+        /* OIL BOILS OFF, IT DOES NOT BREED MORE ACID - see
+         * SAND_ACID_OIL_TO_GAS_CHANCE and SAND_ACID_OIL_DEATH_CHANCE
+         * (sand.h) for the full story. The bitten oil cell mostly turns
+         * to gas rather than acid; the acid cell separately rolls a much
+         * higher chance to die outright - spend its whole remaining mass
+         * in this one bite - instead of pay_quench_cost()'s ordinary
+         * one-unit chip. The two rolls are independent: which way the
+         * oil goes says nothing about whether the acid survives doing
+         * it. */
         if (CELL_MATERIAL(n) == MAT_OIL) {
-            place_reacted(s, nx, ny, at, MAT_ACID);
-            pay_quench_cost(s, x, y, w);
+            const uint8_t oil_residue = ((int)(rng_next(&s->rng) & 0xFF) < SAND_ACID_OIL_TO_GAS_CHANCE)
+                                         ? MAT_GAS : MAT_ACID;
+            place_reacted(s, nx, ny, at, oil_residue);
+
+            if ((int)(rng_next(&s->rng) & 0xFF) < SAND_ACID_OIL_DEATH_CHANCE) {
+                const size_t self_at = (size_t)y * (size_t)w + (size_t)x;
+                s->cells[self_at] = CELL_EMPTY;
+                mark_rows(s, y, y);
+                wake_block_and_neighbors(s, x, y);
+            } else {
+                pay_quench_cost(s, x, y, w);
+            }
             return true;
         }
 

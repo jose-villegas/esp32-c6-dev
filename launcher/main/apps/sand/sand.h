@@ -1057,6 +1057,33 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * measured one - tune on device like every other constant here. */
 #define SAND_ACID_DILUTE_EVAPORATE_CHANCE 20
 
+/* OIL BOILS OFF, IT DOES NOT BREED MORE ACID - reported directly: a
+ * whole pool of oil was ending up entirely acid. The old rule always
+ * converted a bitten oil cell into a FRESH, full-mass acid cell
+ * (place_reacted() gives every new ordinary material a full life - see
+ * its own comment, sand_reactions.c) while the acid doing the eating
+ * only ever paid pay_quench_cost()'s ordinary one-unit nick, the same
+ * price eating sand or wood costs. One unit spent to mint an entire new
+ * full acid cell, on nearly every bite that landed - net acid could only
+ * grow, never actually shrink, and a burning pool of oil was in effect a
+ * (slow) acid factory. Two independent fixes in step_one_dissolver_cell()
+ * (sand_reactions.c):
+ *
+ * - the bitten oil cell mostly turns to MAT_GAS now, not acid -
+ *   SAND_ACID_OIL_TO_GAS_CHANCE, chance-in-256 that it does. Acid still
+ *   spreading into the oil is the minority outcome that survives, not
+ *   the only one, the same "mostly, not always" shape water's own
+ *   dilution keeps for its own minority branch.
+ * - the acid cell separately rolls SAND_ACID_OIL_DEATH_CHANCE for a MUCH
+ *   higher chance to die OUTRIGHT - spend its whole remaining mass in
+ *   this one bite, cell cleared the same way pay_quench_cost() already
+ *   clears a cell whose last unit just went - instead of the ordinary
+ *   one-unit chip every other dissolve pays. Explicitly asked for:
+ *   eating oil is supposed to be something that can consume the acid
+ *   doing it, not a near-free way to breed more of it. */
+#define SAND_ACID_OIL_TO_GAS_CHANCE 220
+#define SAND_ACID_OIL_DEATH_CHANCE  128
+
 /* QUENCHING A FLAME - acid putting out fire is not water's clean,
  * deterministic flash to steam (see step_one_burning_cell(),
  * sand_reactions.c): unconditionally leaving a cell of gas or smoke
