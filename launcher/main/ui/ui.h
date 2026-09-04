@@ -90,9 +90,10 @@ void ui_set_text_style(ui_text_style_t style);
 
 /* Choose the font microui measures and draws MU_COMMAND_TEXT with, for the
  * rest of this frame and every frame after until this is called again -
- * ui_init() seeds it with gfx_default_font() so it is never left NULL in
- * normal use. Passing NULL here falls back to gfx_default_font() rather
- * than storing NULL, for the same reason.
+ * ui_init() seeds it with gfx_font_ui() (the UI/body-text role - gfx/
+ * gfx_font_roles.h) so it is never left NULL in normal use. Passing NULL
+ * here falls back to gfx_font_ui() rather than storing NULL, for the same
+ * reason.
  *
  * Unlike ui_set_text_style() and ui_set_transform() below it, this does NOT
  * need to call ui_invalidate() - see the comment above ui_set_font()'s

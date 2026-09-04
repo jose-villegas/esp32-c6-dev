@@ -30,6 +30,7 @@
 #include "esp_timer.h"
 
 #include "gfx/gfx.h"
+#include "gfx/gfx_font_roles.h"
 
 static const char *TAG = "device_tests";
 
@@ -426,7 +427,7 @@ void test_dithered_text_at_alpha_255_matches_solid_text_exactly(void)
     fixture();
     const gfx_color_t bg = gfx_rgb(0x000000);
     const gfx_color_t fg = gfx_rgb(0xFFFFFF);
-    const gfx_font_t *font = gfx_default_font();
+    const gfx_font_t *font = gfx_font_ui();
     const int box = 8 * 5;   /* cell_w/cell_h (8) * scale (5) */
 
     for (int row = 0; row < box; row++) {
@@ -455,7 +456,7 @@ void test_dithered_text_at_low_alpha_draws_fewer_pixels_than_solid(void)
     fixture();
     const gfx_color_t bg = gfx_rgb(0x000000);
     const gfx_color_t fg = gfx_rgb(0xFFFFFF);
-    const gfx_font_t *font = gfx_default_font();
+    const gfx_font_t *font = gfx_font_ui();
 
     gfx_clear(bg);
     gfx_text_font(20, 20, "A", fg, 5, 0, font);
