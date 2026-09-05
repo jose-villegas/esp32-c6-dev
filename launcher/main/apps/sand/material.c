@@ -610,8 +610,9 @@ const material_t materials[MATERIAL_ROWS] = {
      * such move), so the gap to sand only shows under an impulse, where a
      * blast sorts the heavier grit out. Real black powder is lighter than
      * quartz sand too. slip/repose/scatter are starting points, not final - tune
-     * on device like every other constant here; see this branch's plan
-     * for the full rationale. */
+     * on device like every other constant here; see
+     * docs/Sand/Adding-a-Material.md's density ladder for where 50 sits
+     * against everything else on the board. */
     [MATERIAL_ROW(MAT_EXTENDED) + 1] =
         {
             .name = "Gunpowder",
@@ -952,6 +953,12 @@ const reaction_t reactions[MATERIAL_MAX] = {
                               * helpers_agree_on_every_byte pins. */
             .moist_max = SOIL_MOISTURE_MAX,
             .soaks = 60,
+
+            /* THE ONLY MATERIAL A PLANT TREATS AS GROUND - see
+             * reaction_t.soil's own comment (material.h) for why this is a
+             * separate field from `dries` rather than reusing it: gunpowder
+             * also dries, but a fuse is not soil. */
+            .soil = 1,
             .dries = 2,
 
             .dissolvable = 200, /* the same as sand: it is mostly sand */
@@ -1743,7 +1750,7 @@ static const gfx_color_t palette[256] = {
      *
      * Three DRY TONES, unlit charcoal through to a dull brick red - visibly
      * granular against sand or dirt without reading as either fire or
-     * blood. Five MOISTURE levels then darken away from black-red 0x2B1410
+     * blood. Four MOISTURE levels then darken away from black-red 0x2B1410
      * toward a wet, glossy near-black blue - deliberately never landing
      * back ON 0x2B1410 itself (tone 1 already owns that exact colour), so
      * "damp" and "dry" are never the same pixel value even at the seam
@@ -3193,7 +3200,7 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_CODES] = {
      *                        water a long time once soaked
      *   soaked_to = MAT_OIL   saturated gunpowder eventually turns to
      *                        oil rather than staying wet and inert forever
-     *   soaked_chance = 8    uncommon (was 3: too rare to see on the device), rolled only once already fully
+     *   soaked_chance = 8    uncommon, rolled only once already fully
      *                        soaked - it lingers wet a good while first
      *   residue = 0          burning out never reaches the ordinary
      *                        smoke-residue roll (step_one_burning_cell()
@@ -3214,8 +3221,8 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_CODES] = {
         .dissolvable = 200,                                                                                            \
         .soaks = 60,                                                                                                   \
         .soaks_to = 0,                                                                                                 \
-        .tones = 3,                                                                                                    \
-        .moist_max = 4,                                                                                                \
+        .tones = GUNPOWDER_TONES,                                                                                      \
+        .moist_max = GUNPOWDER_MOIST_MAX,                                                                              \
         .dries = 1,                                                                                                    \
         .soaked_to = MAT_OIL,                                                                                          \
         .soaked_chance = 8,                                                                                            \

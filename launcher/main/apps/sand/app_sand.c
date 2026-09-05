@@ -379,9 +379,12 @@ _Static_assert(
  * material - see reaction_t.burn_decay, and docs/Sand/Adding-a-Material.md
  * for this as a worked example. */
 /* Whole CELLS rather than material ids, because an extended material
- * cannot be named by an id - its low nibble is its identity (MATX() in
- * material.h). An ordinary material is written CELL_MAKE(id, 0) and its
- * variant is chosen the usual way when it is painted. */
+ * cannot be named by an id - for the static half its whole low nibble is
+ * its identity (MATX() in material.h); gunpowder only goes as far as bit 3
+ * of the low nibble (GUNPOWDER_CELL()), the bottom three bits being a code
+ * rather than part of what names it. An ordinary material is written
+ * CELL_MAKE(id, 0) and its variant is chosen the usual way when it is
+ * painted. */
 static const cell_t brushes[] = {
     CELL_MAKE(MAT_SAND, 0),  CELL_MAKE(MAT_WATER, 0),
     CELL_MAKE(MAT_STONE, 0), CELL_MAKE(MAT_GAS, 0),
@@ -2875,8 +2878,8 @@ static void draw_palette(const input_t *input)
              * microui.c hashes the label string): every brush in
              * BRUSH_COUNT has a distinct display name - Sand, Water,
              * Stone, Gas, Fire, Wood, Oil, Lava, Acid, Glass, Snow, Dirt,
-             * Ice, Plant (material.c's own name tables) - so no two tiles
-             * this loop draws can ever hash to the same id. */
+             * Ice, Plant, Gunpowder (material.c's own name tables) - so no
+             * two tiles this loop draws can ever hash to the same id. */
             const char *name = material_name(brushes[i]);
             mu_layout_set_next(ctx, mu_rect(ix, iy, iw, ih), 0);
             const int clicked = mu_button(ctx, name);
@@ -2952,11 +2955,17 @@ static void draw_palette(const input_t *input)
              *   not eligible            nothing, as before -
              *                           material_can_emit() is false for
              *                           every KIND_STATIC material (stone,
-             *                           glass, the whole extended range),
-             *                           so the absence of a badge is what
-             *                           makes that eligibility rule visible
-             *                           on the panel instead of a fact
-             *                           someone has to be told separately.
+             *                           glass, the STATIC half of the
+             *                           extended range - ice, plant, leaf,
+             *                           metal, root). Gunpowder is the one
+             *                           extended-range brush this rule does
+             *                           NOT hide: it is KIND_POWDER, so it
+             *                           gets a badge like any ordinary
+             *                           powder. The absence or presence of
+             *                           a badge is what makes that
+             *                           eligibility rule visible on the
+             *                           panel instead of a fact someone has
+             *                           to be told separately.
              *
              * The border and fill are a FIXED pair, not derived from the
              * face the way the bezel above is - see PALETTE_BADGE_BORDER_

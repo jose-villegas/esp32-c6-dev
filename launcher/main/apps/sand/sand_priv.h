@@ -1250,7 +1250,7 @@ static inline bool try_fall_or_scatter_impl(sand_t *s, uint8_t *row,
  * the same way. */
 static inline void pick_slide_order(uint32_t r, uint8_t *arow, uint8_t *brow,
                                     const int *slide_a, const int *slide_b,
-                                    uint8_t mat_id, bool driven[MATERIAL_MAX][2],
+                                    uint8_t driven_row, bool driven[][2],
                                     uint8_t **first_row, int *first_dx,
                                     int *first_dy, bool *first_driven,
                                     uint8_t **second_row, int *second_dx,
@@ -1258,14 +1258,14 @@ static inline void pick_slide_order(uint32_t r, uint8_t *arow, uint8_t *brow,
 {
     if (r & 1) {
         *first_row  = arow; *first_dx  = slide_a[0]; *first_dy  = slide_a[1];
-        *first_driven = driven[mat_id][0];
+        *first_driven = driven[driven_row][0];
         *second_row = brow; *second_dx = slide_b[0]; *second_dy = slide_b[1];
-        *second_driven = driven[mat_id][1];
+        *second_driven = driven[driven_row][1];
     } else {
         *first_row  = brow; *first_dx  = slide_b[0]; *first_dy  = slide_b[1];
-        *first_driven = driven[mat_id][1];
+        *first_driven = driven[driven_row][1];
         *second_row = arow; *second_dx = slide_a[0]; *second_dy = slide_a[1];
-        *second_driven = driven[mat_id][0];
+        *second_driven = driven[driven_row][0];
     }
 }
 
@@ -1308,9 +1308,9 @@ static inline bool try_slide_impl(sand_t *s, uint8_t *row, uint8_t *prow,
                                   int w, int dx, int dy, const int *slide_a,
                                   const int *slide_b, int load_dx,
                                   int load_dy, int jostle, cell_t grain,
-                                  uint8_t mat_id, uint8_t density,
+                                  uint8_t driven_row, uint8_t density,
                                   const material_t *mat,
-                                  bool driven[MATERIAL_MAX][2])
+                                  bool driven[][2])
 {
     const uint32_t r = rng_next(&s->rng);
 
@@ -1318,7 +1318,7 @@ static inline bool try_slide_impl(sand_t *s, uint8_t *row, uint8_t *prow,
     int      first_dx,    second_dx;
     int      first_dy,    second_dy;
     bool     first_driven, second_driven;
-    pick_slide_order(r, arow, brow, slide_a, slide_b, mat_id, driven,
+    pick_slide_order(r, arow, brow, slide_a, slide_b, driven_row, driven,
                      &first_row, &first_dx, &first_dy, &first_driven,
                      &second_row, &second_dx, &second_dy, &second_driven);
 
@@ -1364,12 +1364,22 @@ bool try_fall_or_scatter(sand_t *s, uint8_t *row, uint8_t *prow,
                          const int *slide_b, cell_t grain,
                          uint8_t density, int scatter);
 
+/* `driven_row` and `bool driven[][2]`, not `mat_id` and `driven[MATERIAL_
+ * MAX][2]` - this is only ever used to index `driven[]`, and the array's
+ * declared bound was never enforced (a function parameter's outer array
+ * dimension decays to a plain pointer either way), only misleading:
+ * step_one_grain() (sand.c) calls the _impl form of this directly with a
+ * driven[MATERIAL_ROWS][2] backing array indexed by a whole ROW
+ * (grain >> 3, up to 31), while sand_gas.c calls this exported wrapper
+ * with its own driven_gas[MATERIAL_MAX][2] indexed by a plain material id
+ * (up to 15) - two different real bounds behind the same shape, so naming
+ * either one here was never accurate for both callers. */
 bool try_slide(sand_t *s, uint8_t *row, uint8_t *prow, uint8_t *arow,
                uint8_t *brow, int x, int y, int w, int dx, int dy,
                const int *slide_a, const int *slide_b, int load_dx,
-               int load_dy, int jostle, cell_t grain, uint8_t mat_id,
+               int load_dy, int jostle, cell_t grain, uint8_t driven_row,
                uint8_t density, const material_t *mat,
-               bool driven[MATERIAL_MAX][2]);
+               bool driven[][2]);
 
 /* Whether a grain may slide in direction (mx, my) at all, given gravity
  * (gx, gy) and its material's angle of repose. Moved here from sand.c
