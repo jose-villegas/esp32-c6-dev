@@ -2180,9 +2180,10 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
                 const bool grain = (((base + dx + dy) & 7) == 0) ||
                                    (((diff + dx - dy) & 7) == 0);
 
-                /* SHINE: a band travelling along the CURRENT GRAVITY
-                 * DIRECTION, advanced on a clock - see this function's own
-                 * top comment for why both halves of that matter. Projecting
+                /* SHINE: a band travelling against the CURRENT GRAVITY
+                 * DIRECTION, leaned 45 degrees (material_shine_direction()
+                 * owns that turn), advanced on a clock - see this function's
+                 * own top comment for why both halves of that matter. Projecting
                  * (dx, dy) onto shine_ux_q8/shine_uy_q8 is a plain 2D dot
                  * product in Q8 fixed point; the `>> 8` back down to pixel
                  * units is an arithmetic right shift, sign-extending on this

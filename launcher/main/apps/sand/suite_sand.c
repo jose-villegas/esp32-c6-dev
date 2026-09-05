@@ -6481,25 +6481,32 @@ static void test_shine_direction_holds_the_old_diagonal_with_no_gravity(void)
     TEST_ASSERT_EQUAL_INT_MESSAGE(181, uy_q8, "same for the y half of it");
 }
 
-/* The shine sweeps AWAY from gravity, the same MINUS-gravity convention
+/* The shine sweeps AWAY from gravity - the same MINUS-gravity convention
  * liquid_spec's rim highlight uses (test_a_liquid_rim_catches_the_light_
- * from_above just above pins that one's sign) - light comes from "up",
- * whichever way up currently is. */
-static void test_shine_direction_points_opposite_gravity(void)
+ * from_above just above pins that one's sign) - and then a further
+ * eighth of a turn to the LEFT as seen on the panel. Straight up gave
+ * bands lying exactly across gravity; the turn is what makes them lean,
+ * which is how they were wanted on the device. Screen y grows downward,
+ * so "left" on the panel is (x, y) -> (x + y, y - x) / sqrt 2. */
+static void test_shine_direction_is_minus_gravity_turned_left(void)
 {
     int ux_q8 = 999, uy_q8 = 999;
 
     material_shine_direction(0, 1000, &ux_q8, &uy_q8);
-    TEST_ASSERT_TRUE_MESSAGE(uy_q8 < -200,
-        "gravity straight down must sweep the shine straight up");
-    TEST_ASSERT_TRUE_MESSAGE(ux_q8 > -20 && ux_q8 < 20,
-        "and put none of that sweep sideways");
+    TEST_ASSERT_TRUE_MESSAGE(uy_q8 < -150 && uy_q8 > -215,
+        "gravity straight down: minus gravity is straight up, and an eighth "
+        "of a turn left of that is up-left, so the y half is -1/sqrt 2");
+    TEST_ASSERT_TRUE_MESSAGE(ux_q8 < -150 && ux_q8 > -215,
+        "and the x half is the same -1/sqrt 2 - a band that still swept "
+        "straight up would leave this near zero");
 
     material_shine_direction(1000, 0, &ux_q8, &uy_q8);
-    TEST_ASSERT_TRUE_MESSAGE(ux_q8 < -200,
-        "gravity pointing right must sweep the shine left");
-    TEST_ASSERT_TRUE_MESSAGE(uy_q8 > -20 && uy_q8 < 20,
-        "and put none of that sweep vertically");
+    TEST_ASSERT_TRUE_MESSAGE(ux_q8 < -150 && ux_q8 > -215,
+        "gravity pointing right: minus gravity is left, an eighth of a turn "
+        "left of THAT is down-left, so the x half is -1/sqrt 2");
+    TEST_ASSERT_TRUE_MESSAGE(uy_q8 > 150 && uy_q8 < 215,
+        "and the y half is +1/sqrt 2 (downward on screen) - a turn the "
+        "other way round would put -1/sqrt 2 here");
 }
 
 /* A genuine ANGLE, not a choice between a couple of fixed diagonals - the
@@ -6514,14 +6521,20 @@ static void test_shine_direction_is_a_genuine_angle_not_a_snap(void)
     material_shine_direction(1000, 0, &axis_ux_q8, &axis_uy_q8);
     material_shine_direction(1000, 1000, &diag_ux_q8, &diag_uy_q8);
 
-    TEST_ASSERT_TRUE_MESSAGE(diag_uy_q8 < -20,
-        "gravity split evenly between right and down must still sweep the "
-        "shine somewhat upward, not only leftward like the pure-right case "
-        "above - a snap-to-nearest-axis implementation would leave this at "
-        "zero");
-    TEST_ASSERT_TRUE_MESSAGE(diag_ux_q8 != axis_ux_q8,
-        "and the sideways component must differ from the pure-axis case - "
-        "splitting gravity's magnitude across two axes weakens each");
+    /* Pure-right gravity sweeps down-left and pure-down gravity sweeps
+     * up-left (see the test just above), so gravity split evenly between
+     * the two must land halfway between those: straight left, with the
+     * vertical halves cancelling. Either snap would leave |uy| near
+     * 1/sqrt 2 instead. */
+    TEST_ASSERT_TRUE_MESSAGE(diag_uy_q8 > -40 && diag_uy_q8 < 40,
+        "gravity split evenly between right and down must sweep the shine "
+        "straight left, halfway between the two axis cases - a snap-to-"
+        "nearest-axis implementation would leave a 1/sqrt 2 vertical half "
+        "here");
+    TEST_ASSERT_TRUE_MESSAGE(diag_ux_q8 < axis_ux_q8 - 40,
+        "and with nothing left over for the vertical, the sideways half "
+        "must be the full unit length, well beyond the pure-axis case's "
+        "1/sqrt 2");
 }
 
 /* Whatever direction comes out must actually be a unit vector - im_len()'s
@@ -29758,7 +29771,7 @@ void run_sand_suite(void)
     RUN_TEST(test_a_liquid_rim_still_shows_its_fill);
     RUN_TEST(test_a_liquid_rim_catches_the_light_from_above);
     RUN_TEST(test_shine_direction_holds_the_old_diagonal_with_no_gravity);
-    RUN_TEST(test_shine_direction_points_opposite_gravity);
+    RUN_TEST(test_shine_direction_is_minus_gravity_turned_left);
     RUN_TEST(test_shine_direction_is_a_genuine_angle_not_a_snap);
     RUN_TEST(test_shine_direction_is_unit_length);
     RUN_TEST(test_local_depth_follows_the_puddles_own_shape);
