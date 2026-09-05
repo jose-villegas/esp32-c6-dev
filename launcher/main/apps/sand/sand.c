@@ -1460,15 +1460,30 @@ void sand_set_acid_dilute_mass_bias(sand_t *s, int bias)
  * the liquid branch did. */
 
 
-/* Whether each slide is driven at this tilt, for each material - depends
- * only on the direction and the material's angle of repose, so it is worked
- * out once per step for all sixteen materials rather than recomputed for
- * every one of 41,000 cells. */
-static void compute_driven(bool driven[MATERIAL_MAX][2], const int *slide_a,
+/* Whether each slide is driven at this tilt, for each ROW of the hot table -
+ * depends only on the direction and the row's angle of repose, so it is
+ * worked out once per step for all thirty-two rows rather than recomputed
+ * for every one of 41,000 cells.
+ *
+ * Indexed by cell >> 3 (MATERIAL_ROWS rows), not by the material nibble
+ * (MATERIAL_MAX ids) the way this used to read materials[] - see
+ * MATERIAL_ROWS's own comment in material.h for why the hot table has
+ * thirty-two rows at all. Read directly off `materials[]` rather than
+ * through material_by_id(), which only ever resolves an ORDINARY id to its
+ * row pair and cannot reach gunpowder's row (MATERIAL_ROW(MAT_EXTENDED) +
+ * 1) at all - this loop wants every row in the table, gunpowder's included,
+ * not just the sixteen an id can name.
+ *
+ * Byte-identical for every ORDINARY material: TWIN_ROW (material.c) writes
+ * the same repose into both of a material's rows, so driven[2*id] and
+ * driven[2*id + 1] always agree, whichever twin a grain's own cell byte
+ * happens to select - see step_one_grain()'s own comment on `driven_idx`
+ * for the read side of that guarantee. */
+static void compute_driven(bool driven[MATERIAL_ROWS][2], const int *slide_a,
                            const int *slide_b, int gx, int gy)
 {
-    for (int m = 0; m < MATERIAL_MAX; m++) {
-        const int repose = material_by_id((material_id_t)m)->repose;
+    for (int m = 0; m < MATERIAL_ROWS; m++) {
+        const int repose = materials[m].repose;
         driven[m][0] = driven_by_gravity(slide_a[0], slide_a[1], gx, gy, repose);
         driven[m][1] = driven_by_gravity(slide_b[0], slide_b[1], gx, gy, repose);
     }
@@ -1514,7 +1529,7 @@ static bool step_one_grain(sand_t *s, uint8_t *row, uint8_t *prow,
                            uint8_t *arow, uint8_t *brow, int x, int y, int w,
                            int dx, int dy, const int *slide_a,
                            const int *slide_b, int load_dx, int load_dy,
-                           int jostle, bool driven[MATERIAL_MAX][2])
+                           int jostle, bool driven[MATERIAL_ROWS][2])
 {
     const cell_t grain = row[x];
     const material_t *mat = material_of(grain);
@@ -1557,8 +1572,25 @@ static bool step_one_grain(sand_t *s, uint8_t *row, uint8_t *prow,
         }
     }
 
+    /* The ROW this grain's OWN cell byte selects (cell >> 3, material_of()'s
+     * own index), not `mat_id` above - see MATERIAL_ROWS's own comment in
+     * material.h. try_slide_impl()'s `mat_id` parameter (sand_priv.h) exists
+     * for exactly one purpose past this call - indexing `driven[]` inside
+     * pick_slide_order() - so handing it a row index instead of the plain
+     * material nibble is safe without touching that header at all: nothing
+     * downstream of this call reads it as an id.
+     *
+     * For every ORDINARY material this is byte-identical to passing
+     * `mat_id`: TWIN_ROW (material.c) gives both of a material's rows the
+     * same repose, so driven[grain >> 3] and driven[mat_id] agree whichever
+     * twin a grain happens to be sitting in. It only starts to differ for
+     * the one nibble that is NOT a twin pair - MAT_EXTENDED - where it
+     * finally tells a static (row MATERIAL_ROW(MAT_EXTENDED), repose 0)
+     * apart from gunpowder (the next row up, repose 8) instead of both
+     * reading the static's figure. */
+    const uint8_t driven_row = (uint8_t)(grain >> 3);
     return try_slide_impl(s, row, prow, arow, brow, x, y, w, dx, dy, slide_a,
-                          slide_b, load_dx, load_dy, jostle, grain, mat_id,
+                          slide_b, load_dx, load_dy, jostle, grain, driven_row,
                           density, mat, driven);
 }
 
@@ -1744,7 +1776,7 @@ static void step_one_row(sand_t *s, int y, int w, int dx, int dy,
                          const int *slide_a, const int *slide_b, int x_step,
                          int load_dx, int load_dy, int jostle,
                          uint8_t settled_bit, uint16_t is_liquid,
-                         bool driven[MATERIAL_MAX][2])
+                         bool driven[MATERIAL_ROWS][2])
 {
     sweep_ctx_t ctx = {
         .s = s,
@@ -3385,7 +3417,7 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
     s->last_step_dx = dx;
     s->last_step_dy = dy;
 
-    bool driven[MATERIAL_MAX][2];
+    bool driven[MATERIAL_ROWS][2];
     compute_driven(driven, slide_a, slide_b, gx, gy);
 
     /* Sweep AGAINST the direction of travel, on both axes.

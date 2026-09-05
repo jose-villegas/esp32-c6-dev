@@ -390,6 +390,8 @@ static const cell_t brushes[] = {
     CELL_MAKE(MAT_ACID, 0),  CELL_MAKE(MAT_GLASS, 0),
     CELL_MAKE(MAT_SNOW, 0),  CELL_MAKE(MAT_DIRT, 0),
     MATX(MATX_ICE),      MATX(MATX_PLANT),
+    GUNPOWDER_CELL(0), /* dry, tone 0 - see brush_color()'s own comment for
+                         * why the panel tile itself paints a different code */
 };
 #define BRUSH_COUNT ((int)(sizeof(brushes) / sizeof(brushes[0])))
 
@@ -2538,13 +2540,24 @@ static void draw_emitter_markers(void)
  * An ordinary brush cell carries no shade of its own - every entry in
  * brushes[] is CELL_MAKE(mat, 0) - so this substitutes a representative
  * shade (13 of 16) rather than showing variant zero specifically. An
- * extended cell cannot take that shortcut: for a MAT_EXTENDED cell the low
+ * extended STATIC cannot take that shortcut: for one of those cells the low
  * nibble names WHICH extended material this is, not a shade, so bumping it
  * the way an ordinary variant is bumped would silently turn one extended
  * material into a different one. material_palette() is indexed by the raw
- * cell byte, so an extended cell is simply looked up as itself instead. */
+ * cell byte, so a static is simply looked up as itself instead.
+ *
+ * Gunpowder is neither of those - its low three bits ARE a shade (tone or
+ * moisture, see GUNPOWDER_REACTION in material.c), but brushes[] paints it
+ * at GUNPOWDER_CELL(0), the darkest dry tone, which reads as barely more
+ * than the panel's own background. GUNPOWDER_CELL(2), dark red, is the one
+ * of the three dry tones that actually shows on the tile - see that
+ * palette entry's own comment - so the swatch shows that code regardless
+ * of which one gets painted. */
 static gfx_color_t brush_color(cell_t c)
 {
+    if (cell_is_gunpowder(c)) {
+        return material_palette()[GUNPOWDER_CELL(2)];
+    }
     return material_palette()[
         cell_is_extended(c) ? c : CELL_MAKE(CELL_MATERIAL(c), 13)];
 }

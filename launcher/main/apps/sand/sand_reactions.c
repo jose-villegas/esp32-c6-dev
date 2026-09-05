@@ -448,6 +448,8 @@ static void crack_run(sand_t* s, int x, int y, int w, int h, material_id_t from,
  * earlier of its two callers. */
 static inline bool emit_into_empty_neighbor(sand_t* s, int x, int y, int w, int h, uint8_t spec);
 
+static inline bool explodes_against_other(const sand_t* s, int x, int y, int w, int h, cell_t self);
+
 /* Defined just below try_heat_transform() itself - the wrapper needs to
  * call forward into the core it hands off to (stage 2 of bd esp32c6-iu5's
  * pair-matrix restructure - see try_heat_transform()'s own comment). */
@@ -681,6 +683,20 @@ try_heat_transform_given(sand_t* s, int nx, int ny, int w, int h, size_t at, cel
         mark_rows(s, ny, ny);
         wake_block_and_neighbors(s, nx, ny);
         emit_into_empty_neighbor(s, nx, ny, w, h, MAT_STEAM);
+        return true;
+    }
+
+    /* A REACTION THAT DETONATES INSTEAD OF JUST SMELTING - gunpowder's
+     * other read of `explodes`, alongside try_ignite_given()'s (this file,
+     * above); see that one's own comment for the field's full shape.
+     * Without an impulse buffer this falls through to plain `yield =
+     * heats_to` below exactly as an ignited gas pocket falls through to
+     * plain fire in try_ignite_given() - sand_explode() is a total no-op
+     * with no buffer to write impulses into, and a test that never enables
+     * impulses still has to see the ordinary transform happen. */
+    REACTION_DOC(explodes, "if impulses are enabled and it touches another material, in place of the ordinary heat transform");
+    if (r->explodes != 0 && s->impulse_buf != NULL && explodes_against_other(s, nx, ny, w, h, n)) {
+        sand_explode(s, nx, ny, r->explodes);
         return true;
     }
 
@@ -975,6 +991,23 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
      * whole code as wetness would make all but the very palest of freshly
      * poured dirt look sodden and feed plants that were never watered. */
     const uint8_t held = moisture_of(c, r);
+
+    /* SATURATION CAN MINT A NEW LIQUID - gunpowder's own reaction, checked
+     * before the soak loop below (which only ever raises `held` by one) so
+     * a cell already sitting at moist_max on entry gets its chance the
+     * same step it arrives there rather than one step late. `>=`, not
+     * `==`, for the same reason nothing else in this codec insists on
+     * exact equality against a clamped value. Short-circuits on
+     * `soaked_to != 0` before either of the other two tests, so a
+     * material that never sets it - dirt, and every material today - pays
+     * neither the moist_max comparison nor an RNG draw. */
+    REACTION_DOC(soaked_to, "once fully saturated, at a per-step chance");
+    if (r->soaked_to != 0 && held >= r->moist_max && (int)(rng_next(&s->rng) & 0xFF) < r->soaked_chance) {
+        const size_t at = (size_t)y * (size_t)w + (size_t)x;
+        place_reacted(s, x, y, at, r->soaked_to);
+        return true;
+    }
+
     bool beside_liquid = false;
 
     const int soaks = (s->soak >= 0) ? s->soak : r->soaks;
@@ -3327,6 +3360,18 @@ step_one_tempered_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cons
  * final - tune on device like every other constant here. */
 #define SAND_GAS_IGNITE_BLAST_RADIUS 8
 
+/* How hard moisture damps a flammability roll in try_ignite_given() below -
+ * a right-shift per moisture LEVEL, not a flat penalty, so each further
+ * level costs proportionally more of what is left: gunpowder's 200 goes
+ * 200 -> 50 -> 12 -> 3 -> 0 across its four wet codes (moist_max 5), damp
+ * powder misfires far more often than dry, wet powder is inert outright,
+ * and only heat driving the moisture back down (try_heat_transform_given()'s
+ * wet-earth stage) or time makes it catch again. A shift rather than a
+ * per-level table because it falls out of one constant instead of a whole
+ * array, and "roughly a quarter as reliable per level" is exactly the
+ * texture wanted - no material asks for a different curve today. */
+#define SAND_DAMP_IGNITION_SHIFT     2
+
 /* Whether an igniting GAS cell at (x, y) is confined - touches at least
  * one KIND_STATIC neighbour - the cheap LOCAL stand-in for "pressure" that
  * bd esp32c6-zs8's design notes call for: gas in the open burns, the same
@@ -3349,6 +3394,33 @@ gas_ignite_confined(const sand_t* s, int x, int y, int w, int h) {
         }
         const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
         if (!CELL_IS_EMPTY(n) && material_of(n)->kind == KIND_STATIC) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* WHERE AN EXPLOSIVE ACTUALLY DETONATES. A cell of an `explodes` material
+ * bursts only if a cardinal neighbour is a non-empty cell of some OTHER
+ * material; buried in more of itself, or open to the air, it just catches
+ * fire like any fuel. Measured on the device: a pile that detonated cell by
+ * cell spent most of its blasts throwing gunpowder at gunpowder, which
+ * neither reads as anything (the interior is invisible) nor does anything
+ * a plain flame would not - the fire burns through the pile on its own.
+ * Only the boundary against sand, stone, water, a wall, is where a blast
+ * displaces something the eye can see move. Same 4-neighbour scan shape as
+ * gas_ignite_confined() above, for the same performance reason: no flood
+ * fill on the ignition hot path. */
+static inline bool
+explodes_against_other(const sand_t* s, int x, int y, int w, int h, cell_t self) {
+    for (int d = 0; d < 4; d++) {
+        const int nx = x + reaction_dirs[d][0];
+        const int ny = y + reaction_dirs[d][1];
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            continue;
+        }
+        const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
+        if (!CELL_IS_EMPTY(n) && !same_species(n, self)) {
             return true;
         }
     }
@@ -3401,9 +3473,40 @@ try_ignite_given(sand_t* s, int nx, int ny, int w, int h, size_t at, cell_t n) {
      * stream for every existing gas/fire scene, changing results that
      * are currently exactly reproducible (the device frame-budget tests
      * depend on that). Checking first keeps them bit-identical. */
-    const int f = (s->flammability >= 0) ? s->flammability : r->flammability;
+    int f = (s->flammability >= 0) ? s->flammability : r->flammability;
+    /* Moisture damps the roll rather than blocking it outright - see
+     * SAND_DAMP_IGNITION_SHIFT's own comment above for the curve. Only a
+     * material with a moisture codec (`dries != 0`) pays for the
+     * moisture_of() lookup at all; every other material reads m == 0 and
+     * this whole block is a no-op, which is what keeps every existing
+     * scene bit-identical (dirt is the only material with `dries != 0`
+     * today, and its flammability is 0, rejected above before this line
+     * is ever reached). */
+    REACTION_DOC(flammability, "damped further per moisture level, on any material with a moisture codec");
+    const uint8_t m = (r->dries != 0) ? moisture_of(n, r) : 0;
+    if (m) {
+        f >>= SAND_DAMP_IGNITION_SHIFT * m;
+    }
+    if (f <= 0) {
+        return false; /* before any RNG draw - a fully damped roll must not
+                          shift the RNG stream for scenes that never reach
+                          this material's moisture range */
+    }
     if (f < 255 && (int)(rng_next(&s->rng) & 0xFF) >= f) {
         return false;
+    }
+    /* A REACTION THAT DETONATES INSTEAD OF JUST CATCHING - the gunpowder
+     * counterpart to the confined-gas burst just below, and deliberately
+     * checked first: `explodes` fires unconditionally once the flammability
+     * roll passes (no "is it confined" gate the way gas needs one - a pile
+     * of powder does not need to be walled in to detonate), so if this
+     * material somehow also matched the KIND_GAS branch below (nothing
+     * does today) this earlier check would still win, which is the right
+     * order for the more specific reaction to take precedence. */
+    REACTION_DOC(explodes, "if impulses are enabled and it touches another material, in place of an ordinary flame");
+    if (r->explodes != 0 && s->impulse_buf != NULL && explodes_against_other(s, nx, ny, w, h, n)) {
+        sand_explode(s, nx, ny, r->explodes);
+        return true;
     }
     /* A CONFINED GAS POCKET BURSTS RATHER THAN JUST CATCHING - bd
      * esp32c6-zs8. Gated on the material's own kind, not on `becomes`
