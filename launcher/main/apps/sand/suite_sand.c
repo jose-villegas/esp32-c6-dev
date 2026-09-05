@@ -22002,6 +22002,12 @@ static void test_a_thrown_chunk_loses_speed_proportional_to_the_density_it_displ
     }
     sand_set(&s, SX, ROW, STONE);
     sand_set(&s, TX, ROW, CELL_MAKE(MAT_DIRT, 0));
+    /* A wall one cell past the target, so the entry moves EXACTLY one
+     * cell this step. This pin is about what ONE displacement costs;
+     * since an entry can now cover several cells a step, an open lane
+     * would have it paying several ramps and the number here would
+     * stop meaning what the test says it means. */
+    sand_set(&s, SX + 2, ROW, STONE);
     sand_impulse_dislodge(&s, SX, ROW, DIR_RIGHT, 255, SAND_IMPULSE_SPEED_RAMP);
 
     sand_step(&s, 0, 1000, 0);
@@ -22038,6 +22044,12 @@ static void test_a_thrown_powder_grain_pays_drag_displacing_dirt(void)
     }
     sand_set(&s, SX, ROW, CELL_MAKE(MAT_SAND, 8));
     sand_set(&s, TX, ROW, CELL_MAKE(MAT_DIRT, 0));
+    /* A wall one cell past the target, so the entry moves EXACTLY one
+     * cell this step. This pin is about what ONE displacement costs;
+     * since an entry can now cover several cells a step, an open lane
+     * would have it paying several ramps and the number here would
+     * stop meaning what the test says it means. */
+    sand_set(&s, SX + 2, ROW, STONE);
     sand_impulse(&s, SX, ROW, DIR_RIGHT, 255);
 
     sand_step(&s, 0, 1000, 0);
@@ -22160,7 +22172,17 @@ static void test_a_thrown_chunk_displacing_nothing_loses_only_the_plain_ramp(voi
         "the single push roll here succeeds on the order of 99.6% of the "
         "time at speed 255 - losing tracking on this one step means the "
         "scene itself is broken, not that this run was merely unlucky");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(255 - SAND_IMPULSE_SPEED_RAMP,
+    /* The ramp is charged PER CELL of travel, and an entry at full speed
+     * covers several - so the pin is ramp times the cells it was entitled
+     * to, derived from the constants rather than restated. The claim is
+     * unchanged: open air costs the ramp and nothing else, no drag, because
+     * there was nothing there to displace. */
+    const int air_cells = 1 + (255 - SAND_IMPULSE_SPEED_RAMP) /
+                              SAND_IMPULSE_CELLS_PER_STEP_DIVISOR;
+    const int air_capped = (air_cells > SAND_IMPULSE_CELLS_PER_STEP_MAX)
+                               ? SAND_IMPULSE_CELLS_PER_STEP_MAX
+                               : air_cells;
+    TEST_ASSERT_EQUAL_INT_MESSAGE(255 - SAND_IMPULSE_SPEED_RAMP * air_capped,
         s.impulse_buf[0].speed,
         "a chunk moving into an EMPTY cell must lose exactly the plain "
         "ramp and not one speck more - drag is charged per cell displaced, "
