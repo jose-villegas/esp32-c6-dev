@@ -448,8 +448,6 @@ static void crack_run(sand_t* s, int x, int y, int w, int h, material_id_t from,
  * earlier of its two callers. */
 static inline bool emit_into_empty_neighbor(sand_t* s, int x, int y, int w, int h, uint8_t spec);
 
-static inline bool explodes_against_other(const sand_t* s, int x, int y, int w, int h, cell_t self);
-
 /* Defined just below try_heat_transform() itself - the wrapper needs to
  * call forward into the core it hands off to (stage 2 of bd esp32c6-iu5's
  * pair-matrix restructure - see try_heat_transform()'s own comment). */
@@ -686,20 +684,13 @@ try_heat_transform_given(sand_t* s, int nx, int ny, int w, int h, size_t at, cel
         return true;
     }
 
-    /* A REACTION THAT DETONATES INSTEAD OF JUST SMELTING - gunpowder's
-     * other read of `explodes`, alongside try_ignite_given()'s (this file,
-     * above); see that one's own comment for the field's full shape.
-     * Without an impulse buffer this falls through to plain `yield =
-     * heats_to` below exactly as an ignited gas pocket falls through to
-     * plain fire in try_ignite_given() - sand_explode() is a total no-op
-     * with no buffer to write impulses into, and a test that never enables
-     * impulses still has to see the ordinary transform happen. */
-    REACTION_DOC(explodes, "if impulses are enabled and it touches another material, in place of the ordinary heat transform");
-    if (r->explodes != 0 && s->impulse_buf != NULL && explodes_against_other(s, nx, ny, w, h, n)) {
-        sand_explode(s, nx, ny, r->explodes);
-        return true;
-    }
-
+    /* REVISION 2: `explodes` is no longer read here at all - gunpowder's
+     * heat path just falls straight through to the ordinary `yield =
+     * heats_to` below, exactly like any other material, because heats_to
+     * is GUNPOWDER_LIT_CELL (material.c) rather than MAT_FIRE. Heat lights
+     * the fuse; whether that fuse ends in a blast is now entirely
+     * step_one_burning_cell()'s burn-out question, not this function's -
+     * see reaction_t.explodes's own comment (material.h). */
     material_id_t yield = (material_id_t)r->heats_to;
 
     /* SMELT FLAW, CLUMPED. A second, independent roll per cell would give
@@ -3400,33 +3391,6 @@ gas_ignite_confined(const sand_t* s, int x, int y, int w, int h) {
     return false;
 }
 
-/* WHERE AN EXPLOSIVE ACTUALLY DETONATES. A cell of an `explodes` material
- * bursts only if a cardinal neighbour is a non-empty cell of some OTHER
- * material; buried in more of itself, or open to the air, it just catches
- * fire like any fuel. Measured on the device: a pile that detonated cell by
- * cell spent most of its blasts throwing gunpowder at gunpowder, which
- * neither reads as anything (the interior is invisible) nor does anything
- * a plain flame would not - the fire burns through the pile on its own.
- * Only the boundary against sand, stone, water, a wall, is where a blast
- * displaces something the eye can see move. Same 4-neighbour scan shape as
- * gas_ignite_confined() above, for the same performance reason: no flood
- * fill on the ignition hot path. */
-static inline bool
-explodes_against_other(const sand_t* s, int x, int y, int w, int h, cell_t self) {
-    for (int d = 0; d < 4; d++) {
-        const int nx = x + reaction_dirs[d][0];
-        const int ny = y + reaction_dirs[d][1];
-        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
-            continue;
-        }
-        const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
-        if (!CELL_IS_EMPTY(n) && !same_species(n, self)) {
-            return true;
-        }
-    }
-    return false;
-}
-
 /* Ignites (nx, ny) in place if it holds a flammable material and the roll
  * for it succeeds. Returns whether it did - the caller needs this to know
  * whether this burning cell reacted at all. Wake/dirty bookkeeping targets
@@ -3455,8 +3419,11 @@ try_ignite_given(sand_t* s, int nx, int ny, int w, int h, size_t at, cell_t n) {
     /* Already alight. Without this a flame beside a burning log would keep
      * re-igniting it - place_reacted() writes a FULL variant, so every hit
      * would reset how much was left to burn and the log would never go
-     * out. */
-    if (r->burn_decay != 0 && CELL_VARIANT(n) != 0) {
+     * out. cell_is_burning() rather than the raw variant test it used to
+     * be, now that gunpowder's lit state is one specific CODE (7,
+     * GUNPOWDER_LIT) rather than "any nonzero variant" - see that
+     * function's own comment (material.h). */
+    if (cell_is_burning(n)) {
         return false;
     }
     if (r->needs_air && !touches_air(s, nx, ny, w, h)) {
@@ -3494,19 +3461,6 @@ try_ignite_given(sand_t* s, int nx, int ny, int w, int h, size_t at, cell_t n) {
     }
     if (f < 255 && (int)(rng_next(&s->rng) & 0xFF) >= f) {
         return false;
-    }
-    /* A REACTION THAT DETONATES INSTEAD OF JUST CATCHING - the gunpowder
-     * counterpart to the confined-gas burst just below, and deliberately
-     * checked first: `explodes` fires unconditionally once the flammability
-     * roll passes (no "is it confined" gate the way gas needs one - a pile
-     * of powder does not need to be walled in to detonate), so if this
-     * material somehow also matched the KIND_GAS branch below (nothing
-     * does today) this earlier check would still win, which is the right
-     * order for the more specific reaction to take precedence. */
-    REACTION_DOC(explodes, "if impulses are enabled and it touches another material, in place of an ordinary flame");
-    if (r->explodes != 0 && s->impulse_buf != NULL && explodes_against_other(s, nx, ny, w, h, n)) {
-        sand_explode(s, nx, ny, r->explodes);
-        return true;
     }
     /* A CONFINED GAS POCKET BURSTS RATHER THAN JUST CATCHING - bd
      * esp32c6-zs8. Gated on the material's own kind, not on `becomes`
@@ -4180,6 +4134,46 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
     return false;
 }
 
+/* Whether every one of (x, y)'s eight neighbours - cardinal AND diagonal -
+ * is a lit cell of the SAME species as `grain`. The gate step_one_burning_
+ * cell()'s burn-out branch reads to decide whether a fuse ends in a blast
+ * or in plain fire (see reaction_t.explodes's own comment, material.h):
+ * one blast per fully-lit 3x3, not one per grain.
+ *
+ * OFF-BOARD COUNTS AS NOT LIT. The board edge is never the inside of a
+ * pile, so a lit cell sitting against it can never see all eight and never
+ * detonates there - the intended reading, not a bounds-check afterthought
+ * (see test_a_lit_cell_at_the_board_edge_never_detonates, suite_sand.c).
+ *
+ * same_species(), not a raw material compare - gunpowder shares its high
+ * nibble with the extended statics (GUNPOWDER_BASE, material.h), and a
+ * neighbour of static ice must never count as "more of this fuse" just
+ * because both happen to decode through MAT_EXTENDED. cell_code(n) >=
+ * r->lit_from, not cell_is_burning(n): reaction_of(n) would be this exact
+ * row anyway once same_species() has already agreed, so there is nothing
+ * left to re-derive - just the one threshold compare. */
+static inline bool
+all_eight_neighbours_lit(const sand_t* s, int x, int y, int w, int h, cell_t grain) {
+    const reaction_t* r = reaction_of(grain);
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            if (dx == 0 && dy == 0) {
+                continue;
+            }
+            const int nx = x + dx;
+            const int ny = y + dy;
+            if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+                return false;
+            }
+            const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
+            if (!same_species(n, grain) || cell_code(n) < r->lit_from) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 /* One burning cell's turn, in priority order: burn down first (a cell
  * that vanishes this step gets no turn to react further - it cannot
  * both die and spread the same step, but it can leave smoke behind, see
@@ -4216,23 +4210,42 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
     const bool lit_state = rx->burn_decay != 0;
     const int burn_rate = (s->decay >= 0) ? s->decay : rx->burn_decay;
 
-    if (lit_state ? !tick_decay_at(s, row, x, y, &grain, mat_id, burn_rate)
+    if (lit_state ? !tick_decay_at(s, row, x, y, &grain, rx, burn_rate)
                   : !tick_decay(s, row, x, y, &grain, mat, mat_id)) {
-        /* Burned out. tick_decay() already cleared the cell and woke it -
-         * this only adds smoke on top, via place_reacted(), which
-         * overwrites the CELL_EMPTY tick_decay() just wrote and repeats
-         * the same wake/dirty bookkeeping. That double wake is harmless
-         * (mark_rows()/wake_block_and_neighbors() are both idempotent
-         * within a step) and far simpler than threading a "did it
-         * already wake this cell" flag back out of a shared, hot-header
-         * helper for a cold pass's cosmetic byproduct. */
+        /* Burned out. tick_decay()/tick_decay_at() already cleared the
+         * cell and woke it - everything below only decides what, if
+         * anything, is left in its place. `grain` still holds the byte
+         * that was there a moment ago (neither helper touches the local,
+         * only row[x]), which is what lets all_eight_neighbours_lit()
+         * below ask "was this a lit cell of MY species" without having
+         * to have cached that separately. */
+        /* THE FUSE REACHES ITS END. `explodes` is read HERE now, only
+         * here (see its own comment, material.h) - not at ignition. A
+         * lit cell that finds every one of its eight neighbours also lit
+         * detonates; anything less - a lone cell, a thin trail, the
+         * pile's own already-fired-and-now-plain-fire neighbours -
+         * just burns out to plain fire instead, exactly like an
+         * ordinary flame guttering. That is what staggers a big pile's
+         * blasts across several steps rather than landing them all in
+         * one: the first cell to see eight lit neighbours blasts: its
+         * neighbours are fire or in flight one step later, so nothing
+         * else in that 3x3 ever sees eight again. */
+        if (rx->explodes != 0) {
+            REACTION_DOC(explodes, "at burn-out, if every one of its eight neighbours is also lit");
+            if (s->impulse_buf != NULL && all_eight_neighbours_lit(s, x, y, w, h, grain)) {
+                sand_explode(s, x, y, rx->explodes);
+            } else {
+                place_reacted(s, x, y, at, MAT_FIRE);
+            }
+            return true;
+        }
         /* MAT_SMOKE, not MAT_STEAM: nothing here got wet, and a fire
          * puffing kettle-steam as it dies is the exact confusion the
          * two-material split exists to avoid - see this file's own top
          * comment. Hardcoded rather than a `smokes_to` field mirroring
          * quench_to, because every material that burns wants the same
          * residue; if one ever does not, that field is the change. */
-        const uint8_t residue = reaction_of(grain)->residue;
+        const uint8_t residue = rx->residue;
         if (residue != 0 && (int)(rng_next(&s->rng) & 0xFF) < residue) {
             place_reacted(s, x, y, at, MAT_SMOKE);
         }
@@ -4262,8 +4275,23 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
                      * there, just no longer alight - which is only expressible
                      * now that being alight is a state of the wood rather than
                      * a different material. Ember had to name something to
-                     * become, because the ember WAS the fire. */
-                    row[x] = CELL_MAKE(mat_id, 0);
+                     * become, because the ember WAS the fire.
+                     *
+                     * Gunpowder cannot go back to the unlit code 0 the same
+                     * way: that is a DRY tone, and quenching a lit grain
+                     * ought to leave it soaked, not merely unlit - a fuse
+                     * doused mid-burn is wet, and would otherwise sit right
+                     * back at the front of the flammability curve, ready to
+                     * relight off whatever neighbour just wet it. Written
+                     * through with_moisture()/cell_with_code() rather than
+                     * CELL_MAKE(), which would clobber gunpowder's identity
+                     * bits (GUNPOWDER_BASE) the same way it would clobber an
+                     * ordinary material's - see reaction_t.explodes's own
+                     * comment for why gunpowder is the one material this
+                     * branch has two different answers for. */
+                    row[x] = (rx->explodes != 0)
+                                 ? with_moisture(grain, rx->moist_max, rx)
+                                 : CELL_MAKE(mat_id, 0);
                     mark_rows(s, y, y);
                     wake_block_and_neighbors(s, x, y);
                 } else if (quench_to != 0) {
@@ -4366,8 +4394,15 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
      * of the same liquid, never covering, no matter how completely a
      * crust seals its surface. covered_at()'s gravity-relative lid
      * (cover_mask(), sand_priv.h) is what actually answers "is there a
-     * lid over it" for a wide pool. */
-    if (mat->kind != KIND_LIQUID && smothered(s, x, y, w, h, mat->density)) {
+     * lid over it" for a wide pool.
+     *
+     * SKIPPED OUTRIGHT for an `explodes` material - gunpowder carries its
+     * own oxidiser, unlike wood or a candle, which both need outside air
+     * to keep burning. A fuse buried in the middle of its own pile has to
+     * keep burning or nothing inside a pile would ever reach burn-out at
+     * all, and every blast would be stillborn at the one place a pile
+     * actually has enough neighbours lit to detonate. */
+    if (mat->kind != KIND_LIQUID && rx->explodes == 0 && smothered(s, x, y, w, h, mat->density)) {
         /* Burying a burning log smothers the BURN, not the log. Same
          * reasoning as quenching one. */
         row[x] = lit_state ? CELL_MAKE(mat_id, 0) : CELL_EMPTY;
