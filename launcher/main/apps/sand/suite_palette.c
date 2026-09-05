@@ -5,7 +5,7 @@
  * The centred partial last row is the fiddly part and the main reason this
  * module is host-tested at all - get it wrong and the bottom few materials
  * are unhittable or answer to the wrong index. These tests lean on that case
- * specifically, at BRUSH_COUNT's real value (14) and at a couple of others,
+ * specifically, at BRUSH_COUNT's real value (15) and at a couple of others,
  * rather than trusting the arithmetic by eye.
  *
  * Columns are no longer a fixed constant: palette_cols(screen_w) derives them
