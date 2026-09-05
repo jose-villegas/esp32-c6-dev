@@ -22102,8 +22102,21 @@ static void test_a_thrown_liquid_grain_pays_no_drag_displacing_water(void)
         "the single push roll here succeeds on the order of 99.6% of the "
         "time at speed 255 - losing tracking on this one step means the "
         "scene itself is broken, not that this run was merely unlucky");
+    /* Its own geometric decay, applied once PER CELL of travel - an entry
+     * at full speed covers more than one, and the decay is charged for each
+     * the same way the ramp is for everything else. Derived from the
+     * constants rather than restated, so retuning how far a step reaches
+     * cannot quietly turn this pin into a different claim. */
+    int liquid_cells = 1 + (int)255 / SAND_IMPULSE_CELLS_PER_STEP_DIVISOR;
+    if (liquid_cells > SAND_IMPULSE_CELLS_PER_STEP_MAX) {
+        liquid_cells = SAND_IMPULSE_CELLS_PER_STEP_MAX;
+    }
+    unsigned expect_speed = 255u;
+    for (int c = 0; c < liquid_cells; c++) {
+        expect_speed -= expect_speed >> SAND_SPLASH_SPEED_DECAY_SHIFT;
+    }
     TEST_ASSERT_EQUAL_INT_MESSAGE(
-        255 - (255 >> SAND_SPLASH_SPEED_DECAY_SHIFT), s.impulse_buf[0].speed,
+        (int)expect_speed, s.impulse_buf[0].speed,
         "a KIND_LIQUID mover must lose exactly its own geometric decay and "
         "no drag term at all - drag stops at liquids on purpose, and this "
         "is what says so");

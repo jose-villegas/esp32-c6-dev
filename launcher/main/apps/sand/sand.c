@@ -3101,12 +3101,31 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * entry that moved once or not at all is untouched, so a blocked or
          * spent entry ages exactly as it always has - the bounded-lifetime
          * guarantee this file rests on does not move. */
-        if (moved > 1 && mat_id != MAT_WATER && mat_id != MAT_ACID) {
-            const unsigned extra =
-                (unsigned)entry.ramp * (unsigned)(moved - 1);
-            entry.speed = (entry.speed > extra)
-                              ? (uint8_t)(entry.speed - extra)
-                              : 0;
+        if (moved > 1) {
+            if (mat_id == MAT_WATER || mat_id == MAT_ACID) {
+                /* A LIQUID'S OWN SCHEDULE HAD THE SAME FLAW, and excluding
+                 * it here the first time round was the mistake: its decay
+                 * is a different SHAPE (geometric, not linear) but it was
+                 * charged per step exactly as the ramp was, so its range
+                 * tripled too the moment a step stopped being one cell.
+                 * Reported from the device as acid spraying off the rim of
+                 * a pool. Applied once per extra cell rather than folded
+                 * into a multiply because the shift is not linear - three
+                 * eighths off is not the same as an eighth off three
+                 * times - and at most SAND_IMPULSE_CELLS_PER_STEP_MAX
+                 * turns of this is nothing. */
+                for (int extra = 1; extra < moved; extra++) {
+                    entry.speed =
+                        (uint8_t)(entry.speed -
+                                  (entry.speed >> SAND_SPLASH_SPEED_DECAY_SHIFT));
+                }
+            } else {
+                const unsigned extra =
+                    (unsigned)entry.ramp * (unsigned)(moved - 1);
+                entry.speed = (entry.speed > extra)
+                                  ? (uint8_t)(entry.speed - extra)
+                                  : 0;
+            }
         }
 
         if (moved > 0 &&
