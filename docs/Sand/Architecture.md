@@ -483,6 +483,16 @@ breaks no behaviour and nothing else would notice.
 
 - **Flat** is the default and stays free. One colour, whole block, the same
   tight loop it always used.
+
+  Sand's own reserved CULLET band (`SAND_CULLET_BASE`) is still FLAT - one
+  colour, same tight loop - but a TIME-VARYING one: each of the four cullet
+  shades is a starting point on a shared colour cycle that a per-frame
+  phase steps through, so a heap of broken glass shimmers even while every
+  cell's stored byte sits perfectly still, with a rare grain flashing pure
+  white for one step as a glint. It repaints on its own clock the same way the shine does
+  (`row_has_cullet[]`, `CULLET_PHASE_MS`, `app_sand.c`) - see
+  docs/Sand/Shading-and-Colour.md's own section on it for the full
+  mechanism.
 - **Speckled** (stone) picks its shade from the cell's POSITION rather than
   its variant. Stone used to carry a random shade and a wall looked like
   rock because of it; spending the variant on temperature took that away.
