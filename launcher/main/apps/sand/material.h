@@ -272,24 +272,33 @@ typedef enum {
 
     /* THE EXTENDED RANGE. Id 15 is not a material - it is an escape hatch.
      * A cell whose nibble is MAT_EXTENDED reads its LOW nibble as naming
-     * one of MATERIAL_EXTENDED_COUNT further materials, so the last slot
-     * buys sixteen rather than one.
+     * one of sixteen further materials, so the last slot buys sixteen
+     * rather than one - eight inert STATICS (0xF0-0xF7,
+     * MATERIAL_EXTENDED_COUNT of them) and, since GUNPOWDER_BASE split the
+     * upper half of the nibble off, one real KIND_POWDER material spread
+     * across the other eight codes (0xF8-0xFF, MATERIAL_EXTENDED_CODES -
+     * MATERIAL_EXTENDED_COUNT of them - see MATERIAL_ROWS's own comment
+     * below for why the split exists at all).
      *
-     * They cost nothing in the sweep, and the reason is entirely about how
-     * the tables are already indexed:
+     * They cost nothing extra in the sweep, and the reason is entirely
+     * about how the tables are already indexed:
      *
-     *   materials[]   is read by the NIBBLE, so all sixteen share one row
-     *                 and material_of() does not change at all
+     *   materials[]   is read by cell >> 3, so all eight statics share
+     *                 one row and all eight gunpowder codes share
+     *                 another, and material_of() stays one shift and one
+     *                 indexed load either way
      *   palette[]     is read by the whole CELL BYTE, so each of the
      *                 sixteen already has its own entry, for free
      *   reactions[]   is read only by sand_reactions.c - the cold pass -
      *                 so reaction_of() can afford to decode
      *
-     * What they buy: their own colour and their own reactions. What they
-     * cannot have: their own physics, since materials[MAT_EXTENDED] is one
-     * shared row; or a variant, since the low nibble is spent saying which
-     * one they are. That confines them to inert static solids, which is
-     * the price of not touching the hot loop. */
+     * What they buy: their own colour and their own reactions. What the
+     * eight STATICS cannot have: their own physics, since
+     * materials[MATERIAL_ROW(MAT_EXTENDED)] is one shared row; or a
+     * variant, since their low three bits are spent saying which one they
+     * are. That confines them to inert static solids. Gunpowder is the one
+     * extended-range material that escapes both limits, at the cost of
+     * half the range. */
     MAT_EXTENDED = 15   /* the last nibble value; asserted against
                          * MATERIAL_MAX below, which this enum comes
                          * too early to reference */
@@ -538,15 +547,16 @@ typedef struct {
      * into gets the obvious default for free. */
     uint8_t ignites_to;
 
-    /* PHASE 2 FIELD, declared now so both halves of the gunpowder work
-     * compile independently, zero (meaning "ordinary ignition") for every
-     * material today. Nonzero is a BLAST RADIUS: try_ignite_given(), right
-     * after the flammability roll passes, and try_heat_transform_given(),
-     * right before `yield = heats_to` would otherwise be placed, both read
-     * this and call sand_explode() instead of placing plain fire. Gunpowder
-     * is the one material that will set it - see
-     * docs/Sand/Explosion-Plan.md and this branch's own plan for the exact
-     * radius. */
+    /* Zero (the default, "ordinary ignition") for every material but
+     * gunpowder. Nonzero is a BLAST RADIUS in cells: try_ignite_given(),
+     * right after the flammability roll passes, and
+     * try_heat_transform_given(), right before `yield = heats_to` would
+     * otherwise be placed, both read this and call sand_explode() instead
+     * of placing plain fire - see SAND_GUNPOWDER_BLAST_RADIUS's own
+     * comment above for why 6. With impulses disabled sand_explode() is a
+     * total no-op, so both call sites fall through to plain fire anyway -
+     * the gas pocket's own precedent, and for the same reason: a test with
+     * no impulse buffer must still see fire, not silence. */
     uint8_t explodes;
 
     /* Nonzero: this material only catches where it TOUCHES AIR - a cell
@@ -974,15 +984,17 @@ typedef struct {
      * dry - which is why random_cell() has to know. */
     uint8_t dries;
 
-    /* PHASE 2 FIELD PAIR, declared now, zero (meaning "never") for every
-     * material today. Nonzero `soaked_to`: what a cell of this material
-     * becomes, chance `soaked_chance` in 256 per step, once it is fully
-     * SATURATED (moisture_of(cell, r) == moist_max) - read in
+    /* Zero (meaning "never") for every material but gunpowder. Nonzero
+     * `soaked_to`: what a cell of this material becomes, chance
+     * `soaked_chance` in 256 per step, once it is fully SATURATED
+     * (moisture_of(cell, r) == moist_max) - read in
      * step_one_soaking_cell() (sand_reactions.c) after `held` is computed,
      * gated on the saturation check so an unsaturated cell never rolls it
-     * and dirt (soaked_to == 0) never draws at all. Gunpowder is the one
-     * material that will set it: soaked through, it slowly turns to oil
-     * rather than staying inert forever. */
+     * and dirt (soaked_to == 0) never draws at all. Gunpowder names
+     * MAT_OIL here: soaked through, it slowly turns to oil rather than
+     * staying inert forever - one grain and the water it holds becoming
+     * one full oil cell, the same mass-not-conserved trade every other
+     * reaction that mints a liquid already makes. */
     uint8_t soaked_to;
     uint8_t soaked_chance;
 
@@ -1224,8 +1236,10 @@ typedef struct {
      * in. Water on the leaves comes out at the roots.
      *
      * It exists because a plant is `KIND_STATIC` with stone's density -
-     * every extended material is, they share one physics row - so water
-     * cannot fall through a thicket and cannot be soaked up by it either.
+     * every extended STATIC is, they share one physics row (gunpowder is
+     * the one extended-range material that does not, see MATERIAL_ROWS's
+     * own comment, and it is not a plant) - so water cannot fall through a
+     * thicket and cannot be soaked up by it either.
      * Pour into a bowl of foliage and the water sits there for ever with
      * nowhere to go, which is what it looked like.
      *
@@ -1294,9 +1308,12 @@ _Static_assert(MATX_ROOT < MATERIAL_EXTENDED_COUNT,
                "masks to - the upper half of the nibble is gunpowder's");
 
 /* What to call one cell, decoding the extended range. materials[].name is
- * shared across all sixteen extended materials, so it says "Extended" for
- * every one of them - which is right for the physics row and useless for a
- * label. */
+ * shared within each half of the range - "Extended" for all eight statics,
+ * "Gunpowder" for all eight gunpowder codes - which is right for the
+ * physics row and too coarse for a label (a static needs its own name, and
+ * even gunpowder's single physics-row name would rather come from the same
+ * table every other extended material's name does). extended_names[]
+ * below gives every one of the sixteen codes its own entry instead. */
 const char *material_name(cell_t c);
 
 /* One extended STATIC material as a whole cell. There is no variant to
@@ -1322,6 +1339,18 @@ const char *material_name(cell_t c);
  * than the split already costs. */
 #define GUNPOWDER_BASE ((cell_t)((MAT_EXTENDED << 4) | 0x08))
 #define GUNPOWDER_CELL(v) ((cell_t)(GUNPOWDER_BASE | ((v) & 0x07)))
+
+/* GUNPOWDER'S BLAST RADIUS - read off `reaction_t.explodes` (see that
+ * field's own comment) by try_ignite_given() and try_heat_transform_given()
+ * (sand_reactions.c) in place of plain fire. Sized against the other two
+ * radii this simulation already has, not invented fresh: the confined-gas
+ * pocket detonates at SAND_GAS_IGNITE_BLAST_RADIUS 8 (sand_reactions.c),
+ * the covered-lava burst at SAND_LAVA_BURST_RADIUS 16 (sand.h) - gunpowder
+ * sits under both, a hand-charge rather than a vented gas pocket or a
+ * buried reservoir. The CORE that actually becomes fire is always radius /
+ * SAND_EXPLODE_CORE_DIVISOR (5, sand.h), so this yields a one-cell core for
+ * all three. */
+#define SAND_GUNPOWDER_BLAST_RADIUS 6
 
 /* Whether this cell is gunpowder - the high nibble is MAT_EXTENDED AND bit
  * 3 of the low nibble is set. Every gunpowder byte, whatever its 3-bit

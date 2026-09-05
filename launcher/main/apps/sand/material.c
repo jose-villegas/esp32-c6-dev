@@ -1645,11 +1645,15 @@ static const gfx_color_t palette[256] = {
                                     * the palest thing on the board, since
                                     * it has to read as COLD at a glance
                                     * for thermal shock to explain itself */
-    /* THE EXTENDED RANGE, one entry each rather than a shade ramp: an
-     * extended material has no variant to ramp over, because the low
-     * nibble is its identity. Sixteen materials, sixteen colours, and the
-     * palette needed no change to allow it - it was already indexed by the
-     * whole cell byte. */
+    /* THE EXTENDED RANGE, one entry each rather than a shade ramp. Sixteen
+     * codes, sixteen colours, and the palette needed no change to allow it
+     * - it was already indexed by the whole cell byte. Two different
+     * reasons feed the same "one flat entry" shape: an extended STATIC has
+     * no variant to ramp over at all, because its low three bits are its
+     * identity; gunpowder DOES have a variant (moisture/tone, see
+     * GUNPOWDER_REACTION in this file), but draws MATERIAL_FLAT
+     * (material_colours() below) rather than shading, so its eight codes
+     * are still eight independent literals rather than a LERP() ramp. */
     /* The extended range. NAMED rather than counted, unlike every other
      * block here: this one is a single entry per material instead of a run
      * of sixteen, so a miscount does not shift a whole block somewhere
@@ -1657,16 +1661,17 @@ static const gfx_color_t palette[256] = {
      * index out means a duplicate is a build error (-Werror=override-init)
      * rather than a surprise on the panel.
      *
-     * The magenta tail is the padding for slots nobody has claimed, and it
-     * is load-bearing: test_every_material_has_a_palette_block() asserts
-     * all sixteen are non-zero, because zero renders BLACK and black looks
-     * like a styling choice rather than a bug. It has caught exactly that
-     * twice. */
-    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_ICE] = GFX_RGB(0xB6E4F2),   /* ice - paler and bluer than snow's
+     * The magenta tail - three entries now, the statics' own spare codes,
+     * not gunpowder's real colours below - is the padding for slots nobody
+     * has claimed, and it is load-bearing: test_every_material_has_a_
+     * palette_block() asserts all sixteen extended codes are non-zero,
+     * because zero renders BLACK and black looks like a styling choice
+     * rather than a bug. It has caught exactly that twice. */
+    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_ICE] = GFX_RGB(0xB6E4F2),      /* ice - paler and bluer than snow's
                                     * white, and flat rather than speckled:
                                     * a block of it should read as solid
                                     * and cold, where snow reads as loose */
-    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_PLANT] = GFX_RGB(0x55672D), /* plant - OLIVE, pulled most of the
+    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_PLANT] = GFX_RGB(0x55672D),    /* plant - OLIVE, pulled most of the
                                     * way to wood's brown: a stem is
                                     * timber that has not arrived yet,
                                     * and every one of these cells is on
@@ -1676,11 +1681,11 @@ static const gfx_color_t palette[256] = {
                                     * the whole tree glow. The leaves
                                     * keep the green - they are the part
                                     * meant to catch the eye */
-    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_LEAF] = GFX_RGB(0x69B03A),  /* leaf - the one green left in a tree
+    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_LEAF] = GFX_RGB(0x69B03A),     /* leaf - the one green left in a tree
                                     * now that the stem is olive, and the
                                     * only part meant to catch the eye.
                                     * only part meant to catch the eye */
-    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_METAL] = GFX_RGB(0x7C8794), /* metal - a cool blue-grey, brighter and
+    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_METAL] = GFX_RGB(0x7C8794),    /* metal - a cool blue-grey, brighter and
                                     * cooler than ambient stone (STONE_AMBIENT
                                     * 0x5F6673) so a wall of it separates from
                                     * a stone one at two screen pixels per
@@ -1690,7 +1695,7 @@ static const gfx_color_t palette[256] = {
                                     * on the panel, same as every other
                                     * starting-point constant in this table
                                     * (see docs/Sand/Metal-Smelting-Plan.md). */
-    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_ROOT] = GFX_RGB(0xBFA58A), /* root - a PALE, WARM TAN, a shade or two
+    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_ROOT] = GFX_RGB(0xBFA58A),     /* root - a PALE, WARM TAN, a shade or two
                                     * lighter than the trunk it belongs to.
                                     * Three colours to get here, and each
                                     * step was decided on the panel, not on
@@ -1716,17 +1721,38 @@ static const gfx_color_t palette[256] = {
                                     * is 53 against SAND_PALE 0xF2CE90's 98,
                                     * so a root in a dune still separates
                                     * from the dune. */
-    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_ROOT + 1] = GFX_RGB(0xFF00FF),
-    GFX_RGB(0xFF00FF),
-    GFX_RGB(0xFF00FF),
-    GFX_RGB(0xFF00FF),
-    GFX_RGB(0xFF00FF),
-    GFX_RGB(0xFF00FF),
-    GFX_RGB(0xFF00FF),
-    GFX_RGB(0xFF00FF),
-    GFX_RGB(0xFF00FF),
-    GFX_RGB(0xFF00FF),
-    GFX_RGB(0xFF00FF),
+    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_ROOT + 1] = GFX_RGB(0xFF00FF), /* spare static, unclaimed */
+    GFX_RGB(0xFF00FF),                                                      /* spare static, unclaimed */
+    GFX_RGB(0xFF00FF),                                                      /* spare static, unclaimed */
+
+    /* GUNPOWDER, whole-byte designators like the statics above it - see
+     * GUNPOWDER_CELL(), material.h. Flat colour, not a ramp: gunpowder
+     * draws MATERIAL_FLAT (material_colours() below), so there is no
+     * shading pass to feed and each of the eight codes is exactly the
+     * colour it is painted here, nothing lerped between them.
+     *
+     * Three DRY TONES, unlit charcoal through to a dull brick red - visibly
+     * granular against sand or dirt without reading as either fire or
+     * blood. Five MOISTURE levels then darken away from black-red 0x2B1410
+     * toward a wet, glossy near-black blue - deliberately never landing
+     * back ON 0x2B1410 itself (tone 1 already owns that exact colour), so
+     * "damp" and "dry" are never the same pixel value even at the seam
+     * between them - see test_gunpowder_palette_tones_are_distinct_and_
+     * moisture_darkens. */
+    [GUNPOWDER_CELL(0)] = GFX_RGB(0x141014), /* dry, tone 0 - near-black */
+    [GUNPOWDER_CELL(1)] = GFX_RGB(0x2B1410), /* dry, tone 1 - black-red */
+    [GUNPOWDER_CELL(2)] = GFX_RGB(0x46160F), /* dry, tone 2 - dark red;
+                              * the brush paints this one (brush_color(),
+                              * app_sand.c) because it is the only one of
+                              * the three that reads on the panel at all -
+                              * the other two are close enough to the
+                              * background to disappear */
+    [GUNPOWDER_CELL(3)] = GFX_RGB(0x251210), /* moisture 1 */
+    [GUNPOWDER_CELL(4)] = GFX_RGB(0x1F1011), /* moisture 2 */
+    [GUNPOWDER_CELL(5)] = GFX_RGB(0x180E11), /* moisture 3 */
+    [GUNPOWDER_CELL(6)] = GFX_RGB(0x120C12), /* moisture 4 */
+    [GUNPOWDER_CELL(7)] = GFX_RGB(0x0C0A12), /* moisture 5, saturated -
+                              * wet glossy blue-black */
 };
 
 /* Glass's SECOND colour: the same temperature, mixed halfway to the
@@ -3100,19 +3126,65 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_CODES] = {
          * spreads is `roots` above, cell eating cell. */
         },
 
-    /* GUNPOWDER'S REACTION ROW, shared by all eight low-nibble codes
+/* GUNPOWDER'S REACTION ROW, shared by all eight low-nibble codes
      * 0xF8-0xFF (see GUNPOWDER_BASE, material.h) the same way an ordinary
      * material's row is shared by its TWIN_ROW pair above - one row, eight
      * designators, so reaction_of() keeps its single-branch decode.
      *
-     * PHASE 1: only the CODEC is real. `tones`/`moist_max` give gunpowder
-     * something to paint and shade against (three dry tones, five moisture
-     * levels - narrower than dirt's 8/7 because gunpowder has three bits
-     * to spend, not four - see GUNPOWDER_BASE). Every CHEMISTRY field -
-     * `soaks`, `flammability`, `dissolvable`, everything below `tones` in
-     * reaction_t - stays zero, so gunpowder is chemically inert until a
-     * later phase gives it a fuse. */
-#define GUNPOWDER_REACTION { .tones = 3, .moist_max = 5 }
+     * The chemistry, field by field - the trigger sites themselves
+     * (try_ignite_given(), try_heat_transform_given(), the wet-earth branch
+     * of the heat path, step_one_soaking_cell()) live in sand_reactions.c,
+     * not here; this row only says what the numbers are and why:
+     *
+     *   flammability = 200   catches almost the instant a flame touches
+     *                        it - the one trait a powder keg has to have
+     *   ignites_to = MAT_FIRE   no char state of its own, unlike wood -
+     *                        it either has not caught yet or it has gone up
+     *   explodes = SAND_GUNPOWDER_BLAST_RADIUS   the whole point: ignition
+     *                        detonates instead of lighting one grain - see
+     *                        that macro's own comment (material.h) for
+     *                        the radius
+     *   needs_air = 0        catches through its own volume, not just an
+     *                        exposed face - a buried charge is still one
+     *   dissolvable = 200    same rate as sand and dirt (see dirt's own
+     *                        row) - acid does not spare a powder charge
+     *   heats_to = MAT_FIRE   heat alone - lava beside it, heat conducted
+     *                        through stone or metal - sets it off with no
+     *                        flame required
+     *   heat_chance = 24     wood's own smoulder figure: conducted heat is
+     *                        a slower fuse than a direct flame
+     *   soaks = 60           water wets it - moisture climbs, water is
+     *                        consumed - dirt's own rate
+     *   soaks_to = 0         stays gunpowder while it wets, only wetter,
+     *                        same as dirt
+     *   tones = 3            three dry tones - all the low bits gunpowder
+     *                        can spare of nibble 15 (GUNPOWDER_BASE)
+     *   moist_max = 5        five moisture levels in what is left once
+     *                        the three tones are spent
+     *   dries = 1            far under dirt's 2 - a powder keg holds
+     *                        water a long time once soaked
+     *   soaked_to = MAT_OIL   saturated gunpowder eventually turns to
+     *                        oil rather than staying wet and inert forever
+     *   soaked_chance = 3    rare, and rolled only once already fully
+     *                        soaked - it lingers wet a good while first
+     */
+#define GUNPOWDER_REACTION                                                                                             \
+    {                                                                                                                  \
+        .flammability = 200,                                                                                           \
+        .ignites_to = MAT_FIRE,                                                                                        \
+        .explodes = SAND_GUNPOWDER_BLAST_RADIUS,                                                                       \
+        .needs_air = 0,                                                                                                \
+        .dissolvable = 200,                                                                                            \
+        .heats_to = MAT_FIRE,                                                                                          \
+        .heat_chance = 24,                                                                                             \
+        .soaks = 60,                                                                                                   \
+        .soaks_to = 0,                                                                                                 \
+        .tones = 3,                                                                                                    \
+        .moist_max = 5,                                                                                                \
+        .dries = 1,                                                                                                    \
+        .soaked_to = MAT_OIL,                                                                                          \
+        .soaked_chance = 3,                                                                                            \
+    }
     [8] = GUNPOWDER_REACTION,
     [9] = GUNPOWDER_REACTION,
     [10] = GUNPOWDER_REACTION,
