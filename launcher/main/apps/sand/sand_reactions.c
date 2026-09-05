@@ -637,7 +637,7 @@ try_heat_transform_given(sand_t* s, int nx, int ny, int w, int h, size_t at, cel
      * 10. Saturated dirt therefore needs SOIL_MOISTURE_MAX + 1 successes
      * to reach metal instead of one, and each of the first
      * SOIL_MOISTURE_MAX is visible as steam. */
-    if (r->dries != 0 && CELL_MOISTURE(n) != 0) {
+    if (r->dries != 0 && moisture_of(n, r) != 0) {
         /* RUINED BY HASTE, off this SAME roll - see reaction_t.spoils_to's
          * own comment (material.h). Checked first, so a spoil pre-empts
          * the moisture-driving step below rather than competing with it:
@@ -674,7 +674,7 @@ try_heat_transform_given(sand_t* s, int nx, int ny, int w, int h, size_t at, cel
          * burning, not from a wetter cell of soil, so a cell driven bone
          * dry by fire has nothing nearby to leave an imprint of. See
          * soil_set_moisture()'s own comment for what 0 means here. */
-        s->cells[at] = soil_set_moisture(n, (uint8_t)(CELL_MOISTURE(n) - 1), 0);
+        s->cells[at] = soil_set_moisture(n, (uint8_t)(moisture_of(n, r) - 1), 0);
         mark_rows(s, ny, ny);
         wake_block_and_neighbors(s, nx, ny);
         emit_into_empty_neighbor(s, nx, ny, w, h, MAT_STEAM);
@@ -921,7 +921,13 @@ cool_off_chain(sand_t* s, int x, int y, int w, int h, uint8_t product, int chanc
  * (material.h) warns two same-valued constants can. */
 static inline cell_t soil_dry_out(cell_t c, uint8_t nearby_moisture)
 {
-    return CELL_SOIL(CELL_MATERIAL(c), nearby_moisture, 0);
+    /* soil_cell(), the table-driven form of CELL_SOIL() (material.h) -
+     * &reactions[CELL_MATERIAL(c)] rather than a hardcoded MAT_DIRT row,
+     * so this stays correct for whichever material actually called it
+     * (dirt today, the only one with `dries != 0`; see this function's own
+     * callers). Byte-identical to CELL_SOIL() for dirt, since dirt's
+     * `.tones`/`.moist_max` are SOIL_DRY_TONES/SOIL_MOISTURE_MAX exactly. */
+    return soil_cell(c, nearby_moisture, 0, &reactions[CELL_MATERIAL(c)]);
 }
 
 _Static_assert(SOIL_DRY_TONES - 1 == SOIL_MOISTURE_MAX,
@@ -937,8 +943,9 @@ _Static_assert(SOIL_DRY_TONES - 1 == SOIL_MOISTURE_MAX,
  * comment). */
 static inline cell_t soil_set_moisture(cell_t c, uint8_t new_moisture, uint8_t nearby_moisture)
 {
-    return new_moisture != 0 ? CELL_WITH_MOISTURE(c, new_moisture)
-                             : soil_dry_out(c, nearby_moisture);
+    return new_moisture != 0
+               ? with_moisture(c, new_moisture, &reactions[CELL_MATERIAL(c)])
+               : soil_dry_out(c, nearby_moisture);
 }
 
 /* One cell that soaks up liquid, or holds what it soaked.
@@ -960,12 +967,11 @@ static inline cell_t soil_set_moisture(cell_t c, uint8_t new_moisture, uint8_t n
 static bool
 step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const reaction_t* r) {
     const cell_t c = row[x];
-    /* CELL_MOISTURE(), not the raw variant - a dry cell's variant is a
-     * TONE (material.h's own comment on soil's state split), and reading
-     * the whole nibble as wetness would make all but the very palest of
-     * freshly poured dirt look sodden and feed plants that were never
-     * watered. */
-    const uint8_t held = CELL_MOISTURE(c);
+    /* moisture_of(), not the raw code - a dry cell's code is a TONE
+     * (material.h's own comment on the moisture codec), and reading the
+     * whole code as wetness would make all but the very palest of freshly
+     * poured dirt look sodden and feed plants that were never watered. */
+    const uint8_t held = moisture_of(c, r);
     bool beside_liquid = false;
 
     const int soaks = (s->soak >= 0) ? s->soak : r->soaks;
@@ -1014,14 +1020,15 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
                  * below is ignored - CELL_SOIL's own comment - so 0 is as
                  * good as anything. */
                 s->cells[(size_t)y * (size_t)w + (size_t)x] =
-                    CELL_SOIL(r->soaks_to, 0, 1);
+                    soil_cell(CELL_MAKE(r->soaks_to, 0), 0, 1,
+                             &reactions[r->soaks_to]);
                 latch_content_flags(s, s->cells[(size_t)y * (size_t)w + (size_t)x]);
                 mark_rows(s, y, y);
                 wake_block_and_neighbors(s, x, y);
                 return true;
             }
-            if (held < SOIL_MOISTURE_MAX) {
-                row[x] = CELL_WITH_MOISTURE(c, held + 1);
+            if (held < r->moist_max) {
+                row[x] = with_moisture(c, (uint8_t)(held + 1), r);
                 mark_rows(s, y, y);
                 wake_block_and_neighbors(s, x, y);
             }
@@ -1102,15 +1109,16 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
                 }
                 cost = give;
                 recv_m = give;
-                s->cells[nat] = CELL_SOIL(nr->soaks_to, 0, (uint8_t)give);
+                s->cells[nat] = soil_cell(CELL_MAKE(nr->soaks_to, 0), 0,
+                                         (uint8_t)give, &reactions[nr->soaks_to]);
                 latch_content_flags(s, s->cells[nat]);
-            } else if (CELL_MATERIAL(n) == CELL_MATERIAL(c)) {
-                give = (held - CELL_MOISTURE(n)) / 2;
+            } else if (same_species(n, c)) {
+                give = (held - moisture_of(n, nr)) / 2;
                 if (give == 0) {
                     continue; /* already even with this one */
                 }
-                recv_m = CELL_MOISTURE(n) + give;
-                s->cells[nat] = CELL_WITH_MOISTURE(n, (uint8_t)recv_m);
+                recv_m = moisture_of(n, nr) + give;
+                s->cells[nat] = with_moisture(n, (uint8_t)recv_m, nr);
                 cost = give;
             } else {
                 continue;
@@ -1180,7 +1188,7 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
             if (br->soaks == 0) {
                 continue;
             }
-            if (br->soaks_to != 0 || (br->dries != 0 && CELL_MOISTURE(below) < SOIL_MOISTURE_MAX)) {
+            if (br->soaks_to != 0 || (br->dries != 0 && moisture_of(below, br) < br->moist_max)) {
                 open[n_open++] = i;
             }
         }
@@ -1225,15 +1233,16 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
                 recv_m = give;
                 /* Arrives WET, so no tone of its own - the soaking
                  * branch above's own comment covers why. */
-                s->cells[nat] = CELL_SOIL(br->soaks_to, 0, (uint8_t)give);
+                s->cells[nat] = soil_cell(CELL_MAKE(br->soaks_to, 0), 0,
+                                          (uint8_t)give, &reactions[br->soaks_to]);
                 latch_content_flags(s, s->cells[nat]);
             } else {
-                const int room = (int)SOIL_MOISTURE_MAX - CELL_MOISTURE(below);
+                const int room = (int)br->moist_max - moisture_of(below, br);
                 if (give > room) {
                     give = room;
                 }
-                recv_m = CELL_MOISTURE(below) + give;
-                s->cells[nat] = CELL_WITH_MOISTURE(below, (uint8_t)recv_m);
+                recv_m = moisture_of(below, br) + give;
+                s->cells[nat] = with_moisture(below, (uint8_t)recv_m, br);
                 cost = give;
             }
             /* Same imprint rule as the diffusion hand-off above: a donor
@@ -1776,8 +1785,12 @@ find_water(sand_t* s, int x, int y, int w, int h, const reaction_t* r, cell_t se
             /* Two callers, opposite errands, one walk: growth is
              * looking for soil with something in it to spend, drinking
              * for soil with room to take more. */
-            if (wants_room ? CELL_MOISTURE(c) < SOIL_MOISTURE_MAX : CELL_MOISTURE(c) != 0) {
-                return (int)at;
+            {
+                const reaction_t* cr = reaction_of(c);
+                if (wants_room ? moisture_of(c, cr) < cr->moist_max
+                              : moisture_of(c, cr) != 0) {
+                    return (int)at;
+                }
             }
             cx += dx;
             cy += dy;
@@ -1824,8 +1837,12 @@ spend_soil_moisture(sand_t* s, int w, const reaction_t* r, int soil_at, uint8_t 
     /* Drunk by whatever is growing, not handed to another cell of soil -
      * there is no neighbour to bias a dry tone from, so a collar spent
      * down to nothing goes bone pale, the same as ambient drying with
-     * nothing wet beside it. */
-    s->cells[soil_at] = soil_set_moisture(soil, (uint8_t)(CELL_MOISTURE(soil) - amount), 0);
+     * nothing wet beside it.
+     *
+     * reaction_of(soil), not the grower's own `r` - moisture_of() needs
+     * the SOIL's codec (dirt's tones/moist_max), not the plant's. */
+    s->cells[soil_at] = soil_set_moisture(
+        soil, (uint8_t)(moisture_of(soil, reaction_of(soil)) - amount), 0);
     mark_rows(s, soil_at / w, soil_at / w);
 
     if (r->roots == 0 || contact_at < 0 || root_depth != 0) {
@@ -1965,7 +1982,7 @@ step_one_conducting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t
         if (CELL_IS_EMPTY(c) || reaction_of(c)->dries == 0) {
             continue; /* not soil: root, wood, stone, air */
         }
-        const int m = CELL_MOISTURE(c);
+        const int m = moisture_of(c, reaction_of(c));
         if (k == 0 || k == 1 || k == 7) {
             /* Gravity-ward: a sink, if it has room. */
             if (m < dst_m) {
@@ -1993,7 +2010,7 @@ step_one_conducting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t
      * this drains dry is biased by the sink it just carried water into,
      * post-transfer - see soil_dry_out()'s own comment. */
     s->cells[src_at] = soil_set_moisture(src, (uint8_t)(src_m - 1), (uint8_t)(dst_m + 1));
-    s->cells[dst_at] = CELL_WITH_MOISTURE(dst, (uint8_t)(dst_m + 1));
+    s->cells[dst_at] = with_moisture(dst, (uint8_t)(dst_m + 1), reaction_of(dst));
     mark_rows(s, src_y, src_y);
     mark_rows(s, dst_y, dst_y);
     wake_block_and_neighbors(s, src_x, src_y);
@@ -2126,7 +2143,8 @@ step_one_rooting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
         }
         const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
         const cell_t n = s->cells[nat];
-        if (CELL_IS_EMPTY(n) || reaction_of(n)->dries == 0 || CELL_MOISTURE(n) == 0) {
+        if (CELL_IS_EMPTY(n) || reaction_of(n)->dries == 0 ||
+            moisture_of(n, reaction_of(n)) == 0) {
             continue;
         }
         int wgt = 1;
@@ -2193,7 +2211,7 @@ step_one_drinking_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* 
             continue;
         }
         const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
-        if (!CELL_IS_EMPTY(n) && materials[CELL_MATERIAL(n)].kind == KIND_LIQUID && reaction_of(n)->wets != 0) {
+        if (!CELL_IS_EMPTY(n) && material_of(n)->kind == KIND_LIQUID && reaction_of(n)->wets != 0) {
             lx = nx;
             ly = ny;
             break;
@@ -2220,7 +2238,8 @@ step_one_drinking_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* 
     pay_quench_cost(s, lx, ly, w);
 
     const cell_t soil = s->cells[soil_at];
-    s->cells[soil_at] = CELL_WITH_MOISTURE(soil, (uint8_t)(CELL_MOISTURE(soil) + 1));
+    const reaction_t* sr = reaction_of(soil);
+    s->cells[soil_at] = with_moisture(soil, (uint8_t)(moisture_of(soil, sr) + 1), sr);
     mark_rows(s, soil_at / w, soil_at / w);
     wake_block_and_neighbors(s, soil_at % w, soil_at / w);
     return true;
@@ -2255,7 +2274,8 @@ step_one_sprouting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t*
             }
             continue;
         }
-        if (soil_at < 0 && reaction_of(n)->dries != 0 && CELL_MOISTURE(n) != 0) {
+        if (soil_at < 0 && reaction_of(n)->dries != 0 &&
+            moisture_of(n, reaction_of(n)) != 0) {
             soil_at = (int)nat;
         }
     }
@@ -2362,7 +2382,7 @@ step_one_budding_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
      * scarce thing rather than a probability. At one level each, buds
      * simply drank the pour and the forest ran away. */
     const cell_t soil = s->cells[soil_at];
-    if (CELL_MOISTURE(soil) < BUD_COST) {
+    if (moisture_of(soil, reaction_of(soil)) < BUD_COST) {
         return true;
     }
     if ((int)(rng_next(&s->rng) & 0xFF) >= r->buds) {
@@ -3060,7 +3080,7 @@ step_one_cold_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
         const reaction_t* nr = reaction_of(n);
 
         /* MELTING, from any liquid - see reaction_t.thaws. */
-        if (r->thaws != 0 && r->heats_to != 0 && materials[CELL_MATERIAL(n)].kind == KIND_LIQUID
+        if (r->thaws != 0 && r->heats_to != 0 && material_of(n)->kind == KIND_LIQUID
             && (int)(rng_next(&s->rng) & 0xFF) < r->thaws) {
             place_reacted(s, x, y, (size_t)y * (size_t)w + (size_t)x, (material_id_t)r->heats_to);
             return false;
@@ -4891,7 +4911,7 @@ sand_step_reactions(sand_t* s) {
         if (r->heat_ramp != 0 || (r->heats_to != 0 && (r->heat_chance != 0 || r->melts != 0))) {
             theirs_bits[m] |= PAIR_HEAT_RESPONSIVE;
         }
-        if (materials[m].kind == KIND_LIQUID) {
+        if (material_by_id((material_id_t)m)->kind == KIND_LIQUID) {
             if (r->wets != 0) {
                 theirs_bits[m] |= PAIR_WETS;
             }
@@ -4906,7 +4926,14 @@ sand_step_reactions(sand_t* s) {
             theirs_bits[m] |= PAIR_DISSOLVABLE;
         }
     }
-    for (int k = 0; k < MATERIAL_EXTENDED_COUNT; k++) {
+    /* MATERIAL_EXTENDED_CODES (16), not _COUNT (8): every code sharing
+     * nibble 15 - statics AND gunpowder alike - has to feed
+     * theirs_bits[MAT_EXTENDED], since a PROBE only ever knows "this
+     * neighbour's material nibble is MAT_EXTENDED", not which half. Phase 1
+     * gunpowder is chemically inert (GUNPOWDER_REACTION, material.c), so
+     * this widening ORs in eight all-zero rows and changes nothing yet -
+     * see this branch's own fingerprint gate. */
+    for (int k = 0; k < MATERIAL_EXTENDED_CODES; k++) {
         const reaction_t* r = &extended_reactions[k];
         if (r->heat_ramp != 0 || (r->heats_to != 0 && (r->heat_chance != 0 || r->melts != 0))) {
             theirs_bits[MAT_EXTENDED] |= PAIR_HEAT_RESPONSIVE;

@@ -508,7 +508,7 @@ static const char *to_name(uint8_t v)
         return material_name((cell_t)v);
     }
     if (v < MATERIAL_MAX) {
-        return materials[v].name;
+        return material_by_id((material_id_t)v)->name;
     }
     /* Cannot happen for any value this table actually stores - every
      * target/spec field is either an ordinary id (< MATERIAL_MAX) or a
@@ -619,9 +619,9 @@ static void build_rows(void)
 {
     all_rows_count = 0;
     for (uint8_t m = MAT_SAND; m < MAT_COUNT; m++) {
-        all_rows[all_rows_count].name = materials[m].name;
+        all_rows[all_rows_count].name = material_by_id((material_id_t)m)->name;
         all_rows[all_rows_count].r    = &reactions[m];
-        all_rows[all_rows_count].kind = (material_kind_t)materials[m].kind;
+        all_rows[all_rows_count].kind = (material_kind_t)material_by_id((material_id_t)m)->kind;
         all_rows[all_rows_count].self_id = m;
         all_rows[all_rows_count].color_id = m;
         all_rows_count++;
@@ -636,7 +636,7 @@ static void build_rows(void)
         all_rows[all_rows_count].r    = &extended_reactions[k];
         /* Every extended material shares MAT_EXTENDED's one physics row -
          * see material.h's own comment on why. */
-        all_rows[all_rows_count].kind = (material_kind_t)materials[MAT_EXTENDED].kind;
+        all_rows[all_rows_count].kind = (material_kind_t)material_by_id(MAT_EXTENDED)->kind;
         all_rows[all_rows_count].self_id = MAT_EXTENDED;
         all_rows[all_rows_count].color_id = MATX(k);
         all_rows_count++;
@@ -1466,11 +1466,11 @@ static const mrow_t *find_row(const char *name)
 static uint8_t representative_variant(material_id_t material)
 {
     /* A fresh liquid cell is a full one - see random_cell()'s own comment. */
-    if (materials[material].kind == KIND_LIQUID) {
+    if (material_by_id(material)->kind == KIND_LIQUID) {
         return MASS_MAX;
     }
     /* A transient material starts at full life. */
-    if (materials[material].decay != 0) {
+    if (material_by_id(material)->decay != 0) {
         return MATERIAL_VARIANTS - 1;
     }
     /* A heat-ramping material starts at room temperature. */
