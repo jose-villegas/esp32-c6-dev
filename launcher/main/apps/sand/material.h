@@ -272,8 +272,10 @@ typedef enum {
 
     /* THE EXTENDED RANGE. Id 15 is not a material - it is an escape hatch.
      * A cell whose nibble is MAT_EXTENDED reads its LOW nibble as naming
-     * one of sixteen further materials, so the last slot buys sixteen
-     * rather than one - eight inert STATICS (0xF0-0xF7,
+     * one of sixteen further CODES, so the last slot buys sixteen byte
+     * values rather than one - not sixteen further MATERIALS, since
+     * gunpowder's half spends its eight codes on ONE material's variant
+     * instead of eight more distinct ones: eight inert STATICS (0xF0-0xF7,
      * MATERIAL_EXTENDED_COUNT of them) and, since GUNPOWDER_BASE split the
      * upper half of the nibble off, one real KIND_POWDER material spread
      * across the other eight codes (0xF8-0xFF, MATERIAL_EXTENDED_CODES -
@@ -371,6 +373,10 @@ _Static_assert(MAT_EXTENDED == MATERIAL_MAX - 1,
 _Static_assert(MAT_COUNT <= MAT_EXTENDED,
                "an ordinary material has taken the extended range's slot - "
                "there is no room for both");
+_Static_assert(MATERIAL_EXTENDED_CODES == MATERIAL_VARIANTS,
+               "extended_reactions[]/extended_names[] are sized by the "
+               "whole low nibble - one entry per byte value 0xF0-0xFF, the "
+               "same range CELL_VARIANT() already covers");
 
 /* How a material moves. Four kinds cover almost everything, and the movement
  * code branches on this once per cell rather than on the material itself. */
@@ -487,6 +493,12 @@ typedef struct {
  * instruction count as before the split. */
 #define MATERIAL_ROWS 32
 
+_Static_assert(MATERIAL_ROWS == MATERIAL_MAX * 2,
+               "one twin pair per ordinary material plus the extended "
+               "nibble's own pair (static half, gunpowder half) - the hot "
+               "table is exactly twice MATERIAL_MAX rows, never a fixed "
+               "32 that could quietly stop matching it");
+
 /* Where an ordinary id's row PAIR starts. `+1` is the twin - the same row,
  * reached when bit 3 of the cell's low nibble happens to be set (variant
  * 8-15) - and MAT_EXTENDED's own `+1` is the one row that is NOT a twin:
@@ -548,33 +560,42 @@ typedef struct {
     uint8_t ignites_to;
 
     /* Zero (the default, "ordinary ignition") for every material but
-     * gunpowder. Nonzero is a BLAST RADIUS in cells, read in exactly ONE
-     * place now: the burn-out branch of step_one_burning_cell(), when a
-     * lit cell of this material's `burn_decay` countdown reaches
-     * `lit_from` and would otherwise simply vanish. Ignition itself
-     * (try_ignite_given(), try_heat_transform_given()) no longer reads
-     * this field at all - catching just writes the LIT code, through
-     * `ignites_to`/`heats_to` the same as any other burning material.
-     * Burning out then asks in_a_lit_two_by_two() (sand_reactions.c)
-     * whether the cell is one corner of a 2x2 that is all still lit: if
-     * impulses are enabled and so, sand_explode() fires at this radius
-     * (a fully-lit 3x3 was asked for first and made blasts rare enough
-     * to look broken - see that helper's own comment); otherwise
-     * the cell becomes plain MAT_FIRE, the gas pocket's own fallback and
-     * for the same reason (sand_explode() is a documented no-op with no
-     * impulse buffer). See SAND_GUNPOWDER_BLAST_RADIUS's own comment
-     * above for why 12.
+     * gunpowder. Nonzero is a BLAST RADIUS in cells. Ignition itself
+     * (try_ignite_given(), try_heat_transform_given()) never reads this
+     * field for the radius - catching just writes the LIT code, through
+     * `ignites_to`/`heats_to` the same as any other burning material - but
+     * it is read in THREE places in step_one_burning_cell() (sand_
+     * reactions.c), not one, each asking a different question of it:
      *
-     * REVISION: used to fire the instant ignition or heat touched the
-     * cell (one blast per grain, or per boundary cell in the version
-     * after that). Measured on the device: a pile bursting cell by cell
-     * spent nearly every blast throwing gunpowder at gunpowder, which
-     * neither looks like anything nor does anything a plain flame
-     * running through the pile would not. A fuse that burns along the
-     * pile and only detonates where a 2x2 of it is alight at once - the
-     * model this field now describes - puts a blast only where the eye
-     * can see something move, and staggers a big pile's blasts across
-     * frames instead of landing them all in one. */
+     *   BURN-OUT   the actual blast. When a lit cell of this material's
+     *              `burn_decay` countdown reaches `lit_from` and would
+     *              otherwise simply vanish, find_lit_two_by_two() asks
+     *              whether the cell is one corner of a 2x2 that is all
+     *              still lit: if impulses are enabled and so,
+     *              sand_explode() fires at this radius (a fully-lit 3x3
+     *              was asked for first and made blasts rare enough to
+     *              look broken - see that helper's own comment); otherwise
+     *              the cell becomes plain MAT_FIRE, the gas pocket's own
+     *              fallback and for the same reason (sand_explode() is a
+     *              documented no-op with no impulse buffer). See
+     *              SAND_GUNPOWDER_BLAST_RADIUS's own comment below for why
+     *              16.
+     *   QUENCH     `!= 0` there stands in for "this material also has a
+     *              moisture codec", true only because gunpowder is
+     *              currently the one material with both - see that
+     *              branch's own comment for why the two questions are
+     *              different ones that happen to share an answer today.
+     *   SMOTHER    `== 0` skips smothered() outright: gunpowder carries
+     *              its own oxidiser, and a fuse buried in the middle of
+     *              its own pile has to keep burning or nothing inside a
+     *              pile would ever reach burn-out at all.
+     *
+     * REVISION: earlier versions blasted the instant ignition or heat
+     * touched the cell, one grain or one boundary cell at a time, which
+     * measured on the device as spending nearly every blast throwing
+     * gunpowder at gunpowder. See docs/Sand/Explosion-Plan.md for that
+     * history and the reasoning behind the fuse-and-2x2 model this field
+     * now describes. */
     uint8_t explodes;
 
     /* Nonzero: this material only catches where it TOUCHES AIR - a cell
@@ -999,13 +1020,28 @@ typedef struct {
      * (suite_sand.c), which is what proves it.
      *
      * A second material with `dries != 0` needs its own pair here rather
-     * than reusing dirt's - gunpowder's codec is three dry tones plus five
+     * than reusing dirt's - gunpowder's codec is three dry tones plus four
      * moisture levels (material.c's GUNPOWDER_REACTION), not eight and
      * seven, because gunpowder only has THREE bits to spend (it shares
      * nibble 15 with the extended statics - see GUNPOWDER_BASE) where dirt
      * has the whole nibble. */
     uint8_t tones;
     uint8_t moist_max;
+
+    /* WHETHER A PLANT MAY TREAT THIS AS SOIL - a different question from
+     * `dries` below, which only says "this material's code can mean
+     * moisture". Gunpowder has `dries != 0` too (it has its own moisture
+     * codec, wetting and drying the same way dirt does) but a fuse is not
+     * ground: nothing may root in it, sprout from it, drink it dry or
+     * conduct water through it. Every site that asks "is this neighbour
+     * soil" - find_water(), step_one_sprouting_cell(),
+     * step_one_budding_cell() (through find_water()), step_one_rooting_
+     * cell(), step_one_conducting_cell(), spend_soil_moisture() - tests
+     * this instead of `dries`. Moisture DIFFUSION and percolation between
+     * two cells that are already the same species keep testing `dries`:
+     * that is wetness spreading, not a question of what counts as soil.
+     * Dirt sets this; nothing else does. */
+    uint8_t soil;
 
     /* And the way back: chance in 256 per step of losing one level of
      * whatever `soaks` put in. Dirt drying out.
@@ -1372,6 +1408,20 @@ const char *material_name(cell_t c);
 #define GUNPOWDER_BASE ((cell_t)((MAT_EXTENDED << 4) | 0x08))
 #define GUNPOWDER_CELL(v) ((cell_t)(GUNPOWDER_BASE | ((v) & 0x07)))
 
+_Static_assert((GUNPOWDER_BASE >> 3) == MATERIAL_ROW(MAT_EXTENDED) + 1,
+               "gunpowder's row has to be the upper half of MAT_EXTENDED's "
+               "twin pair - material_of()'s cell >> 3 and this constant's "
+               "own bit-3 split have to land on the exact same row or the "
+               "hot table and the byte layout silently disagree");
+
+/* THE MOISTURE CODEC'S OWN SHAPE - the same two numbers material.c's
+ * GUNPOWDER_REACTION spends on `.tones`/`.moist_max`, pulled out here so
+ * GUNPOWDER_LIT below can be checked against them by construction (the
+ * _Static_assert right after it) rather than by two places in the source
+ * happening to agree today and silently drifting apart tomorrow. */
+#define GUNPOWDER_TONES 3
+#define GUNPOWDER_MOIST_MAX 4
+
 /* THE LIT CODE - the one gunpowder code above its moisture range (codes
  * 0-2 dry, 3-6 moisture 1-4, see the reaction row's own comment,
  * material.c) rather than one more moisture level, the way section 2's
@@ -1380,6 +1430,12 @@ const char *material_name(cell_t c);
  */
 #define GUNPOWDER_LIT 7
 #define GUNPOWDER_LIT_CELL GUNPOWDER_CELL(GUNPOWDER_LIT)
+
+_Static_assert(GUNPOWDER_LIT == GUNPOWDER_TONES + GUNPOWDER_MOIST_MAX,
+               "GUNPOWDER_LIT has to sit exactly one past every dry tone "
+               "and every moisture level - moisture_of()'s clamp and "
+               "cell_is_burning()'s own threshold both rely on nothing "
+               "between the wet codes and the lit one");
 
 /* GUNPOWDER'S BLAST RADIUS - read off `reaction_t.explodes` (see that
  * field's own comment) at burn-out, in step_one_burning_cell()
@@ -1511,7 +1567,7 @@ static inline bool cell_is_burning(cell_t c)
  * dry TONE, codes from `r->tones` up to `r->tones + r->moist_max - 1` are
  * MOISTURE 1..moist_max. Dirt sets `.tones = 8, .moist_max = 7` (material.c),
  * which makes these byte-identical to CELL_MOISTURE()/CELL_WITH_MOISTURE()
- * for every dirt byte - see
+ * for every code a dirt cell can hold - see
  * test_dirt_moisture_macros_and_codec_helpers_agree_on_every_byte
  * (suite_sand.c), which pins that equivalence. The dirt-only macros stay,
  * documented as dirt's own fixed instance of this codec, because 123 tests

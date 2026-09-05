@@ -1547,14 +1547,19 @@ static bool step_one_grain(sand_t *s, uint8_t *row, uint8_t *prow,
         return false;
     }
 
-    const uint8_t mat_id  = CELL_MATERIAL(grain);
     const uint8_t density = mat->density;
 
     /* Liquids move an AMOUNT rather than a whole grain - see
      * move_liquid_grain() in sand_liquid.c, and sand_step_liquids() below
      * for the rest of a liquid's behaviour, which is NOT gravity-ward and
-     * so cannot join this sweep. */
+     * so cannot join this sweep. `mat_id` computed here, not above with
+     * `density`: the powder path below never reads a plain material id at
+     * all any more, only `driven_row` (its own comment, below) - so
+     * computing it unconditionally for every grain would cost every
+     * powder cell on the board a CELL_MATERIAL() nobody past this branch
+     * uses. */
     if (mat->kind == KIND_LIQUID) {
+        const uint8_t mat_id = CELL_MATERIAL(grain);
         return move_liquid_grain(s, row, prow, x, y, dx, dy,
                                  slide_a, slide_b, grain, mat_id);
     }
@@ -1575,11 +1580,11 @@ static bool step_one_grain(sand_t *s, uint8_t *row, uint8_t *prow,
 
     /* The ROW this grain's OWN cell byte selects (cell >> 3, material_of()'s
      * own index), not `mat_id` above - see MATERIAL_ROWS's own comment in
-     * material.h. try_slide_impl()'s `mat_id` parameter (sand_priv.h) exists
-     * for exactly one purpose past this call - indexing `driven[]` inside
-     * pick_slide_order() - so handing it a row index instead of the plain
-     * material nibble is safe without touching that header at all: nothing
-     * downstream of this call reads it as an id.
+     * material.h. try_slide_impl()'s `driven_row` parameter (sand_priv.h)
+     * exists for exactly one purpose - indexing `driven[]` inside
+     * pick_slide_order() - and is never read as a material id anywhere
+     * downstream, so handing it a row index instead of the plain material
+     * nibble costs nothing.
      *
      * For every ORDINARY material this is byte-identical to passing
      * `mat_id`: TWIN_ROW (material.c) gives both of a material's rows the
@@ -1614,12 +1619,12 @@ bool try_fall_or_scatter(sand_t *s, uint8_t *row, uint8_t *prow,
 bool try_slide(sand_t *s, uint8_t *row, uint8_t *prow, uint8_t *arow,
                uint8_t *brow, int x, int y, int w, int dx, int dy,
                const int *slide_a, const int *slide_b, int load_dx,
-               int load_dy, int jostle, cell_t grain, uint8_t mat_id,
+               int load_dy, int jostle, cell_t grain, uint8_t driven_row,
                uint8_t density, const material_t *mat,
-               bool driven[MATERIAL_MAX][2])
+               bool driven[][2])
 {
     return try_slide_impl(s, row, prow, arow, brow, x, y, w, dx, dy, slide_a,
-                          slide_b, load_dx, load_dy, jostle, grain, mat_id,
+                          slide_b, load_dx, load_dy, jostle, grain, driven_row,
                           density, mat, driven);
 }
 
@@ -2493,7 +2498,14 @@ static void step_impulses(sand_t *s, int dx, int dy)
              * sealing in, so it is ALWAYS actively ramping while it waits
              * for a turn to actually move. */
             const uint8_t lost_mat = CELL_MATERIAL(entry.cell);
-            if (reactions[lost_mat].heat_ramp != 0) {
+            /* reaction_of(entry.cell), not reactions[lost_mat] - lost_mat
+             * is only the high nibble, and for anything in the extended
+             * range (MAT_EXTENDED) that nibble is shared by the statics AND
+             * gunpowder, with the real row selected by the low bits
+             * reaction_of() already knows how to read. reactions[lost_mat]
+             * for such a byte silently reads reactions[MAT_EXTENDED] - a
+             * row nothing in the extended range actually has - instead. */
+            if (reaction_of(entry.cell)->heat_ramp != 0) {
                 const cell_t here = s->cells[entry.index];
                 if (!CELL_IS_EMPTY(here) && CELL_MATERIAL(here) == lost_mat) {
                     entry.cell = here;

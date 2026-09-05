@@ -627,7 +627,18 @@ void sand_step_gas(sand_t *s, int gx, int gy, int dx, int dy,
      * every gas slide, unconditionally, so they would never fire. Built
      * fresh here against the reversed vector instead - cheap enough
      * (MATERIAL_MAX is 16) that duplicating compute_driven()'s own loop
-     * shape inline is simpler than sharing it. */
+     * shape inline is simpler than sharing it.
+     *
+     * MATERIAL_MAX (16), not MATERIAL_ROWS (32), and indexed below by the
+     * plain material nibble (`mat_id`, step_one_gas_grain()'s own local),
+     * not a row: this is only ever built and read for KIND_GAS cells, and
+     * no gas material lives in the extended range (MAT_EXTENDED, nibble
+     * 15) that MATERIAL_ROWS's twin-row split exists for in the first
+     * place - fire, smoke, steam and gas are all ordinary ids well under
+     * it. Nothing here ever needs to tell a gunpowder row from a static
+     * one, so the plain per-id table sand.c's own step_one_grain() moved
+     * away from (see its own driven_row comment) is still the right shape
+     * here. */
     bool driven_gas[MATERIAL_MAX][2];
     for (int m = 0; m < MATERIAL_MAX; m++) {
         const int repose = material_by_id((material_id_t)m)->repose;
