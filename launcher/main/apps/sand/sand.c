@@ -2341,7 +2341,7 @@ static void step_impulses(sand_t *s, int dx, int dy)
      * other by queue order alone. `deferred_transfer_count` is gated
      * against SAND_CASCADE_TRANSFER_MAX_PER_STEP and writes from the front
      * of `deferred`; `deferred_cascade_count`, just below the main loop, is
-     * gated against SAND_CASCADE_RELAY_MAX_PER_STEP and writes from the
+     * gated against whatever transfer has left unused, and writes from the
      * back - two disjoint partitions of the one array, each mechanism's
      * own cap enforced independently of how much of its half the other one
      * happened to use this same step. */
@@ -3215,7 +3215,8 @@ static void step_impulses(sand_t *s, int dx, int dy)
         if (moved > 0 &&
             (mat_id == MAT_WATER || mat_id == MAT_ACID) &&
             entry.speed >= SAND_CASCADE_MIN_SPEED * SAND_CASCADE_SPEED_DIVISOR &&
-            deferred_cascade_count < SAND_CASCADE_RELAY_MAX_PER_STEP) {
+            deferred_cascade_count <
+                SAND_CASCADE_MAX_PER_STEP - deferred_transfer_count) {
             const int rx = x0 - d0[0];
             const int ry = y0 - d0[1];
             if ((unsigned)rx < (unsigned)w && (unsigned)ry < (unsigned)h) {

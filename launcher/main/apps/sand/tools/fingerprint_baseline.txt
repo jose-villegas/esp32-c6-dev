@@ -1,7 +1,7 @@
 # grid fingerprint: 64x64, 300 steps per scene
 # scene hash mat0..mat15
 dry_fall     3d54ef6ad11afba3 3684 348 0 64 0 0 0 0 0 0 0 0 0 0 0 0
-water_pool   610412b7e76c2eed 3377 18 618 83 0 0 0 0 0 0 0 0 0 0 0 0
-lava_quench  1003b2a4b7b0af1c 2319 26 276 135 0 1113 0 65 0 0 136 0 0 0 26 0
+water_pool   33cdca4eb682d573 3377 18 618 83 0 0 0 0 0 0 0 0 0 0 0 0
+lava_quench  915270f32f6e89ba 2337 26 270 140 0 1105 0 64 0 0 128 0 0 0 26 0
 fire_gas     7e1a00271e3b7479 3177 0 0 64 0 370 360 0 0 125 0 0 0 0 0 0
-sealed_lava  22cccc6ae99af2fa 3963 0 0 49 0 84 0 0 0 0 0 0 0 0 0 0
+sealed_lava  23effbe1f07b84f0 3963 0 0 49 0 84 0 0 0 0 0 0 0 0 0 0

@@ -1202,20 +1202,31 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * relay queued even one step later that same pass got nothing, regardless
  * of how few cells of water were actually relaying.
  *
- * SPLIT EVENLY, INTO SAND_CASCADE_RELAY_MAX_PER_STEP and
- * SAND_CASCADE_TRANSFER_MAX_PER_STEP below, each gating its own mechanism
- * against its own half of this total - not because the two mechanisms fire
- * at the same rate (they measurably do not: transfer's up-to-once-per-hop
- * ceiling is the higher of the two), but because an even split is the
- * simplest rule that guarantees BOTH mechanisms always get a real budget
- * every step regardless of queue order, which is the actual bug this
- * fixes - not "transfer deserves more slots than cascade", a claim nobody
- * has swept evidence for yet. Revisit the split, not this total, if a
- * future measurement shows one mechanism now starves inside its own half. */
+ * RELAY GETS A RESERVE OUT OF THIS TOTAL, not half of it - see
+ * SAND_CASCADE_RELAY_RESERVE below. An even split was tried first and is
+ * the obvious answer, but it fixes starvation by making BOTH mechanisms
+ * permanently smaller, including in the ordinary case where only one of
+ * them is running at all. A reserve fixes the same bug and costs nothing
+ * when a scene has only relays in it, which a settling pool with nothing
+ * thrown at it is. Revisit the reserve, not this total, if a future
+ * measurement shows relay starving inside it. */
 #define SAND_CASCADE_MAX_PER_STEP  64
-#define SAND_CASCADE_RELAY_MAX_PER_STEP     (SAND_CASCADE_MAX_PER_STEP / 2)
+/* A RESERVATION, NOT A SPLIT. Transfer fires up to once per hop and
+ * relay at most once per liquid entry, so a hard half-and-half made it
+ * impossible for transfer to starve relay - at the cost of shrinking
+ * whichever mechanism happened to be running ALONE. A scene with only
+ * relays in it is ordinary (a settling pool with nothing thrown at it),
+ * and that showed up at once as a changed grid fingerprint on a
+ * lava-quench scene, in a refactor that was meant to be neutral.
+ *
+ * So relay gets a FLOOR rather than a ceiling: transfer may fill the
+ * array up to everything except SAND_CASCADE_RELAY_RESERVE, and relay
+ * takes whatever transfer has not actually used - which is the whole
+ * array when nothing is being thrown. A single-mechanism scene is then
+ * untouched, and relay still cannot be starved below its reserve. */
+#define SAND_CASCADE_RELAY_RESERVE          16
 #define SAND_CASCADE_TRANSFER_MAX_PER_STEP  (SAND_CASCADE_MAX_PER_STEP - \
-                                             SAND_CASCADE_RELAY_MAX_PER_STEP)
+                                             SAND_CASCADE_RELAY_RESERVE)
 
 /* ACID BUBBLES - see acid_bubble()'s own comment in sand_reactions.c for the
  * full account of what this replaced and why (2026-09-01): the old "landed
