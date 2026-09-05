@@ -1,17 +1,23 @@
 /*=============================================================================
  * dump_reactions - compile material.c's reaction tables into markdown.
  *
- * See docs/Sand/Reaction-Doc-Generator-Plan.md for the design this follows;
- * this file is that plan's phase 1. Run through report_reactions.sh, which
- * builds this, captures its stdout, and splices it into the BEGIN/END
- * GENERATED region of docs/Sand/Reaction-Table.md (see this file's own
- * main(), and report_reactions.sh's top comment, for why it is a splice
- * and not a whole-file overwrite: some real mechanics - lava's cool-off
- * chaining, the covered-lava burst, water/acid's faster drain on stone and
- * glass - live entirely at a read site in sand_reactions.c with no
- * reaction_t field to walk, so a human documents them by hand outside the
- * markers, and a whole-file overwrite would silently delete that
- * documentation on every regenerate - see bd esp32c6-3mu).
+ * See docs/Sand/Reaction-Doc-Generator-Plan.md for the design this follows.
+ * This file started as that plan's phase 1 (raw ladder output, no by-feel
+ * tuning) and now carries phase 2's by-feel pass as well: the rate ladder's
+ * silent middle, the chance ladders' 0/255 endpoints, the one checked
+ * ADVERB_EXCEPTIONS override, contrast-legible colour via
+ * LEGIBILITY_OVERRIDES, and colour/typography reaching the default
+ * per-material section rather than only the anatomy examples. Run through
+ * report_reactions.sh, which builds this, captures its stdout, and splices
+ * it into the BEGIN/END GENERATED region of docs/Sand/Reaction-Table.md
+ * (see this file's own main(), and report_reactions.sh's top comment, for
+ * why it is a splice and not a whole-file overwrite: some real mechanics -
+ * lava's cool-off chaining, the covered-lava burst, water/acid's faster
+ * drain on stone and glass - live entirely at a read site in
+ * sand_reactions.c with no reaction_t field to walk, so a human documents
+ * them by hand outside the markers, and a whole-file overwrite would
+ * silently delete that documentation on every regenerate - see bd
+ * esp32c6-3mu).
  *
  * WHY A PROGRAM AND NOT A SCRIPT OVER THE TEXT
  *
@@ -22,15 +28,15 @@
  * arrays at runtime resolves every one of them for free, the same way the
  * simulation itself does.
  *
- * WHAT PHASE 1 DELIBERATELY DOES NOT DO
+ * WHAT STILL DELIBERATELY DOES NOT HAPPEN
  *
- * No hand-written prose. Every adverb below is the RATE LADDER's computed
- * bucket - even the ones the plan already flags as reading wrong by feel
- * (sand -> glass, the ignition family) - and every field whose real trigger
- * is a condition living at a read site in sand_reactions.c (not in the
- * table) renders as a literal "[TODO: trigger]" rather than a guessed
- * clause. That is intentional: this is raw output to look at and tune
- * against, not the tuned copy. See the plan's own "Phasing" section.
+ * No hand-written PER-REACTION prose or guessed triggers: every rate/
+ * frequency word is still the ladder's computed bucket (bar the one
+ * checked exception), and every field whose real trigger is a condition
+ * living at a read site in sand_reactions.c (not in the table) still
+ * renders as a literal "[TODO: trigger]" rather than a guessed clause -
+ * that plumbing is still future work, tracked in the plan's own "Phasing"
+ * section, not something this pass fakes.
  *
  * THE ONE PLACE THIS DEVIATES FROM THE PLAN'S OWN WORDING, ON PURPOSE
  *
@@ -175,36 +181,48 @@ typedef struct {
     { offsetof(reaction_t, field), #field, (grp), FK_RATE, SCALE_CHANCE, \
       (vb), NULL, (voc) }
 
-/* The two SCALE_CHANCE vocabularies. Both index off the same five buckets
+/* The two SCALE_CHANCE vocabularies. Both index off the same four slots
  * (chance_bucket_for(), in the Decoding section below) - only the WORDS
  * differ, because a one-shot chance/256 can answer two different
  * questions depending on what it is conditioned on.
  *
+ * Four slots, not five: 0 and 255 are handled directly in adverb() as the
+ * categorical absolutes they are (see adverb_for()'s own top comment for
+ * why 0/255 are not extremes of a scale) - "never" for 0, unconditionally,
+ * on both vocabularies; the OTHER absolute (255, "costs no draw at all")
+ * DOES still take a vocabulary word here, because unlike the rate ladder
+ * there is no shared word that reads right for both "how often" and "how
+ * well" ("always" fits a frequency, "outright" fits an ease/resistance
+ * question, and neither fits the other) - so slot 0 of each array below is
+ * that word, and slots 1-3 are the three ordinary buckets, high to low.
+ *
+ * Silence is NOT an option here, unlike the rate ladder's middle band -
+ * see adverb_for()'s own comment on why RATE can stay quiet for the
+ * common case but CHANCE cannot: a reader who sees no word at all for
+ * `residue` would read that as "always leaves smoke", which is false at
+ * (say) 90/256. So every nonzero, non-255 value here always prints one of
+ * the three in-between words - never nothing.
+ *
  * frequency_words[] is "how often does this happen" - the right question
  * for residue, fizz, harden_chance, canopy and holds_line, each a fresh
- * roll at its own moment ("often leaves smoke when it burns out").
+ * roll at its own moment ("mostly leaves smoke when it burns out").
  *
  * ease_words[] is "how well does this go, given it is already happening" -
  * the right question for `dissolvable` alone. Its own comment in
  * material.h is explicit that it is "the chance an ATTEMPT to dissolve
  * succeeds", i.e. conditional on an attempt already under way, not a
- * frequency in its own right - "Usually gives way to acid" answers a
+ * frequency in its own right - "Mostly gives way to acid" answers a
  * question nobody asked, and fronts the adverb besides. Same buckets,
- * different vocabulary - see field_doc_t.chance_vocab. */
+ * different vocabulary - see field_doc_t.chance_vocab. Deliberately no
+ * duration word anywhere in this array (a prior version used "almost
+ * instantly" / "slowly" here, smuggling a time-to-wait word into a
+ * chance-of-success question - the same category error the rate/frequency
+ * split exists to prevent, just missed on this one field). */
 static const char *const frequency_words[] = {
-    "almost always", "usually", "often", "sometimes", "rarely",
+    "always", "mostly", "occasionally", "seldom",
 };
-/* Same five buckets as frequency_words[] above, but an EASE/RESISTANCE
- * scale rather than a time-to-wait one - `dissolvable` has no clock in it
- * (see this array's own field_docs row and dissolvable's comment in
- * material.h: it is the chance a single ATTEMPT succeeds, not a rate to
- * convert into a duration), so none of these five words may imply "how
- * long". A prior version of this table used "almost instantly" / "slowly"
- * here, which are duration words smuggled into a chance-of-success
- * question - the same category error the rate/frequency split above
- * exists to prevent, just missed on this one field. */
 static const char *const ease_words[] = {
-    "very easily", "easily", "readily", "reluctantly", "barely",
+    "outright", "handily", "adequately", "poorly",
 };
 
 static const field_doc_t field_docs[] = {
@@ -414,38 +432,64 @@ static const field_doc_t *field_doc(const char *name)
  * TIME to wait (SIM_HZ 60 - see app_sand.c - so one step is ~16.7ms, and
  * the expected wait against one steady partner is 256/value steps).
  *
- * Six buckets, not five: the original five left a single "fast" band
- * covering v in [21, 84], and two pairs of materials the source
- * deliberately gives DIFFERENT numbers landed on the SAME word because of
- * it - steam's `warms` 48 against smoke's 28 (materials[MAT_STEAM]/
- * [MAT_SMOKE] call them "the hotter carrier" and "cooler than steam and
- * far longer lived"), and ice's `chills` 60 against snow's 40 (ice's own
- * comment: "Chills harder than snow, 60 against 40"). Splitting that band
- * at 45 keeps both pairs apart without disturbing anything below it:
+ * 0 AND 255 ARE NOT ENDS OF A SCALE, THEY ARE A DIFFERENT CATEGORY
  *
- *   v >= 85   (<=  50ms,  ~<=3 steps)   instantly
- *   v >= 45   (<=  94ms,  ~<=6 steps)   swiftly    <- new: was "fast" too
- *   v >= 21   (<= 203ms,  ~<=12 steps)  fast
- *   v >= 5    (<= 853ms,  ~<=51 steps)  readily
- *   v >= 2    (<=2133ms, ~<=128 steps)  steadily
- *   v == 1    (~4267ms,   256 steps)    slowly
- *   v == 0                              never (defensive; callers gate on
- *                                       v != 0 first)
+ * 0 means the reaction cannot happen - never, full stop, not "extremely
+ * slowly". 255 means it happens on contact and costs NO random draw at
+ * all: see flammability's own comment in material.h - a material at 255
+ * leaves the RNG stream exactly as it was before the field existed,
+ * because try_ignite() (sand_reactions.c) short-circuits before rolling.
+ * Both are therefore handled as flat, unconditional words below, not as
+ * the top/bottom rungs of the ladder that follows.
  *
- * Wood's `flammability` 6 falls in the >= 5 "readily" band, same as
- * before this split - still read as easy/ready, not "barely", "rarely" or
- * "slowly". Oil's 50 now lands in the new "swiftly" band, a full tier
- * above wood's "readily", so oil still reads faster than wood. Gas's 255
- * stays in "instantly". */
+ * THE MIDDLE IS SILENT ON PURPOSE
+ *
+ * Everything from 1 to 254 used to print a word (a six-band ladder:
+ * instantly/swiftly/fast/readily/steadily/slowly). Measured against this
+ * table's actual values, one band - "fast" and up - covered the vast
+ * majority of them: "quickly"-class words printed on the clear majority of
+ * every adverb this file emitted, an ordinary-case word that told a reader
+ * nothing they could not already assume. The fix is to stop printing a
+ * word for the ordinary case and let SILENCE mean "nothing unusual here" -
+ * readable because a RATE lives in a sentence ("catches fire from fire or
+ * lava") where dropping the adverb entirely still reads as a complete,
+ * true claim. Only the genuinely slow band still speaks up:
+ *
+ *   v == 0            never    (cannot happen - see above)
+ *   v in 1..5         slowly   (>= ~853ms against one steady partner)
+ *   v in 6..254       (nothing - ordinary speed, said by staying quiet)
+ *   v == 255          instantly (no draw at all - see above)
+ *
+ * The cutoff sits at 5, verified against this table's own data rather than
+ * assumed: wood's `flammability` is 6, one step above the cutoff, and
+ * correctly falls silent - a flame front touches several of a log's faces
+ * at once, so the single-steady-partner model this ladder is built on
+ * already understates wood's real ignition speed, and silence (ordinary)
+ * reads closer to true than a printed "slowly" would. Glass's `cools` (5)
+ * and dirt's `dries` (2, moved down from an earlier 5 - see MAT_DIRT's own
+ * comment - so both sit at or under the cutoff either way) both land in
+ * "slowly", correctly: draining heat back to ambient and drying out are
+ * both meant to read as slow, ongoing processes, not something that just
+ * happens.
+ *
+ * ONE MEASURED EXCEPTION: sand's `heat_chance` (16) computes to SILENT
+ * under this cutoff, but MAT_SAND's own comment in material.c measures the
+ * real behaviour as "deliberately slow... something you set up and wait
+ * for" - a bed of eleven cells under a held flame takes 137 steps (~2.3s)
+ * to fully convert, because the model above assumes one steady partner and
+ * heat_chance is actually rolled per adjacent heat source, so an interior
+ * cell with no direct exposure waits on its neighbours first. That gap
+ * between the model and the measured comment is real, so it is handled as
+ * a checked ADVERB_EXCEPTIONS entry below, not by moving this cutoff to
+ * paper over it. */
+#define RATE_SLOW_CUTOFF 5
+
 static const char *adverb_for(uint8_t v)
 {
-    if (v >= 85) return "instantly";
-    if (v >= 45) return "swiftly";
-    if (v >= 21) return "fast";
-    if (v >= 5)  return "readily";
-    if (v >= 2)  return "steadily";
-    if (v >= 1)  return "slowly";
-    return "never";  /* defensive: callers gate on v != 0 first */
+    if (v == 0)   return "never";
+    if (v == 255) return "instantly";
+    if (v <= RATE_SLOW_CUTOFF) return "slowly";
+    return ""; /* silent middle - see this function's own top comment */
 }
 
 /* The chance bucket - for FK_RATE fields with scale == SCALE_CHANCE: a
@@ -453,30 +497,18 @@ static const char *adverb_for(uint8_t v)
  * landing, a hardening run deciding whether it takes) rather than a rate
  * against a steady partner. There is no time axis to convert to a speed
  * word for these - see field_scale_t's own comment - so this reads the
- * same raw value as a plain percentage of 256 instead, five buckets wide:
+ * same raw value as a plain percentage of 256 instead.
  *
- *   v >= 231  (>= ~90%)    bucket 0
- *   v >= 154  (>= ~60%)    bucket 1
- *   v >=  77  (>= ~30%)    bucket 2
- *   v >=  26  (>= ~10%)    bucket 3
- *   v >=   1  (>  0%)      bucket 4
- *   v ==   0                          -1 (defensive; callers gate on
- *                                      v != 0 first)
- *
- * A bucket INDEX, not a word - unlike adverb_for() above, this scale only
- * ever answers one question ("which of five bands"), and two different
- * fields ask two different things of that answer. Which vocabulary turns
- * the index into a word is the caller's call (adverb() below), by way of
- * field_doc_t.chance_vocab - see frequency_words[]/ease_words[]'s own
- * comment for why. */
+ * Never called with v == 0 or v == 255 - adverb() below handles both
+ * directly (0 as the universal "never", 255 through the vocabulary's own
+ * slot 0 - see frequency_words[]/ease_words[]'s own comment for why 255
+ * needs a vocabulary word here where the rate ladder just above did not).
+ * So this only ever has to split 1..254 into three ordinary bands: */
 static int chance_bucket_for(uint8_t v)
 {
-    if (v >= 231) return 0;
-    if (v >= 154) return 1;
-    if (v >= 77)  return 2;
-    if (v >= 26)  return 3;
-    if (v >= 1)   return 4;
-    return -1;  /* defensive: callers gate on v != 0 first */
+    if (v >= 150) return 1;
+    if (v >= 50)  return 2;
+    return 3; /* 1..49 */
 }
 
 static const char *adverb(const char *field_name, uint8_t v)
@@ -488,12 +520,77 @@ static const char *adverb(const char *field_name, uint8_t v)
     /* scale is only meaningful for FK_RATE fields, which is every field
      * that ever reaches adverb() - see field_scale_t's own comment. */
     if (fd->scale == SCALE_CHANCE) {
+        /* 0 is the same flat "never" on every vocabulary - see this
+         * section's own top comment on why 0/255 are handled once, here,
+         * rather than duplicated into every vocabulary array. */
+        if (v == 0) return "never";
         const char *const *vocab = (fd->chance_vocab != NULL)
                                         ? fd->chance_vocab : frequency_words;
-        const int b = chance_bucket_for(v);
-        return (b >= 0) ? vocab[b] : "never";
+        return (v == 255) ? vocab[0] : vocab[chance_bucket_for(v)];
     }
     return adverb_for(v);
+}
+
+/*-----------------------------------------------------------------------
+ * Adverb exceptions - a by-feel override for the one case where this
+ * ladder's single-steady-partner model provably disagrees with a measured
+ * comment in material.c (see adverb_for()'s own top comment on sand's
+ * heat_chance). A tiny table with a startup soundness check, the same
+ * idiom field_docs_offsets_are_sound() already uses: wrong data here is
+ * worse than no override at all, so it is checked, not just declared.
+ *---------------------------------------------------------------------*/
+
+typedef struct {
+    uint8_t     cell;   /* the row this override applies to - a plain
+                        * material id, or a MATX() spec for an extended
+                        * one; matched against mrow_t.color_id */
+    const char *field;  /* must name a real field_docs[] row */
+    const char *adverb; /* the word to print instead of the ladder's own */
+    const char *why;    /* the measurement/evidence for overriding the
+                        * ladder - required, never empty, and expected to
+                        * quote or paraphrase the material.c comment that
+                        * justifies it */
+} adverb_exception_t;
+
+static const adverb_exception_t ADVERB_EXCEPTIONS[] = {
+    { MAT_SAND, "heat_chance", "slowly",
+      "MAT_SAND.heat_chance = 16 falls silent under the ladder above (it "
+      "is above RATE_SLOW_CUTOFF), but the field's own comment in "
+      "material.c measures a bed of eleven sand cells under a held flame "
+      "taking 137 steps (~2.3s) to fully convert, and calls that "
+      "\"deliberately slow - glass should be something you set up and "
+      "wait for, not something that happens whenever a spark lands on a "
+      "dune\". The gap is the model, not the data: heat_chance rolls once "
+      "PER ADJACENT HEAT SOURCE, so an interior cell with only one hot "
+      "neighbour waits on the cells ahead of it first - the single-"
+      "steady-partner ladder cannot see that queuing effect." },
+};
+
+/* Looks up an override for (field_name, cell) - the only two things an
+ * emit_*() clause has on hand at the point it would otherwise call
+ * adverb() directly. Returns NULL when no override applies, which is the
+ * overwhelming common case (one entry in the table above, as of this
+ * writing). */
+static const char *adverb_exception_for(const char *field_name, uint8_t cell)
+{
+    for (size_t i = 0; i < ARRAY_LEN(ADVERB_EXCEPTIONS); i++) {
+        if (ADVERB_EXCEPTIONS[i].cell == cell &&
+            strcmp(ADVERB_EXCEPTIONS[i].field, field_name) == 0) {
+            return ADVERB_EXCEPTIONS[i].adverb;
+        }
+    }
+    return NULL;
+}
+
+/* adverb(), but for a clause that also knows which material row it is
+ * printing - checks ADVERB_EXCEPTIONS first, falls back to the plain
+ * ladder otherwise. Every emit_*() clause capable of carrying an override
+ * should call this instead of adverb() directly; today that is only
+ * emit_transform()'s heat_chance clause. */
+static const char *adverb_cell(const char *field_name, uint8_t v, uint8_t cell)
+{
+    const char *ov = adverb_exception_for(field_name, cell);
+    return (ov != NULL) ? ov : adverb(field_name, v);
 }
 
 /* Decode a TARGET field's raw byte the way place_reacted() (sand_reactions.c)
@@ -558,6 +655,12 @@ static const char *prose_name(const char *name)
 }
 
 #define CAUSE "[TODO: trigger]"
+/* CAUSE, already marked ***bold italic*** - the typography emit_anatomy()
+ * gives it via MARK_CAUSE (see mark_t's own comment), applied directly for
+ * every DEFAULT-section clause that prints the placeholder (emit_spoils(),
+ * emit_shatter() - the only two `_to` fields whose real trigger lives at a
+ * read site in sand_reactions.c rather than in this table). */
+#define CAUSE_MARKED "***" CAUSE "***"
 
 /*-----------------------------------------------------------------------
  * One row's worth of rows (materials[] name + reactions[]/extended_
@@ -589,837 +692,9 @@ typedef struct {
 static mrow_t all_rows[(MAT_COUNT - 1) + MATERIAL_EXTENDED_COUNT];
 static size_t all_rows_count;
 
-/* The liquid(s) that actually wet things - KIND_LIQUID with wets != 0 -
- * derived from the data rather than hardcoded, so `soaks`/`drinks` keep
- * naming the right liquid(s) if a second wetting liquid is ever added.
- * Water is the only one today (see material.c, one `.wets = 1` hit), but
- * nothing below assumes that.
- *
- * Populated once in main(), right after build_rows() fills all_rows[] -
- * every emit_* function that reads it runs after that. See reaction_t.
- * wets's own comment in material.h for why "any liquid" is the wrong claim
- * for `soaks`/`drinks`: a bank of sand under oil or lava turned entirely
- * into saturated soil, which is the bug `wets` exists to prevent. `thaws`
- * (GRP_THAW) is the one field that is genuinely any liquid, and keeps
- * saying so untouched - see emit_thaw(). */
-static char wetting_liquids[64];
-
-/* The material(s) that actually radiate heat - `burns != 0` - derived the
- * same way as wetting_liquids just above, so emit_transform()/emit_ignite()
- * keep naming the right source(s) if a third heat source is ever added.
- * Fire and Lava are the only two today (see pred_burns, already used by
- * emit_pairwise_table() to join the same predicate into "Fire / Lava"), but
- * nothing below assumes there are exactly two.
- *
- * Populated once in main(), right after wetting_liquids - same reasoning:
- * every emit_* function that reads it runs after that point. */
-static char heat_sources[64];
-
-static void build_rows(void)
-{
-    all_rows_count = 0;
-    for (uint8_t m = MAT_SAND; m < MAT_COUNT; m++) {
-        all_rows[all_rows_count].name = materials[m].name;
-        all_rows[all_rows_count].r    = &reactions[m];
-        all_rows[all_rows_count].kind = (material_kind_t)materials[m].kind;
-        all_rows[all_rows_count].self_id = m;
-        all_rows[all_rows_count].color_id = m;
-        all_rows_count++;
-    }
-    for (uint8_t k = 0; k < MATERIAL_EXTENDED_COUNT; k++) {
-        const char *nm = material_name(MATX(k));
-        if (nm[0] == '?' && nm[1] == '\0') {
-            continue;  /* unnamed extended slot - material_name()'s own
-                        * fallback for a row nobody has claimed yet */
-        }
-        all_rows[all_rows_count].name = nm;
-        all_rows[all_rows_count].r    = &extended_reactions[k];
-        /* Every extended material shares MAT_EXTENDED's one physics row -
-         * see material.h's own comment on why. */
-        all_rows[all_rows_count].kind = (material_kind_t)materials[MAT_EXTENDED].kind;
-        all_rows[all_rows_count].self_id = MAT_EXTENDED;
-        all_rows[all_rows_count].color_id = MATX(k);
-        all_rows_count++;
-    }
-}
-
-static bool row_is_empty(const reaction_t *r)
-{
-    const unsigned char *bytes = (const unsigned char *)r;
-    for (size_t i = 0; i < sizeof(*r); i++) {
-        if (bytes[i] != 0) return false;
-    }
-    return true;
-}
-
-/*-----------------------------------------------------------------------
- * Per-material clause emitters, one per group, called in group sort-key
- * order for every material row. Each one is a no-op unless its group's
- * driver field is nonzero, so a material with (say) no plant fields at
- * all costs nothing but a skipped comparison.
- *---------------------------------------------------------------------*/
-
-static void emit_ignite(const reaction_t *r, uint8_t self_id)
-{
-    if (r->flammability == 0) return;
-
-    const char *adv = adverb("flammability", r->flammability);
-    const char *air = r->needs_air ? ", only where it touches air" : "";
-
-    /* heat_sources names the same `burns != 0` materials
-     * emit_pairwise_table() already joins into "Fire / Lava" for this exact
-     * relationship (see pred_burns) - derived from the data, not typed out,
-     * so a third heat source would show up here too. It is not the
-     * complete list of things that can set a neighbour alight (a burning
-     * log spreads to the wood beside it too, via burn_decay - see
-     * step_one_burning_cell() in sand_reactions.c), only the materials that
-     * ARE a heat source in their own right, which is what "melts to X" and
-     * "catches fire" are naming. */
-
-    /* "0 (MAT_EMPTY) is read as MAT_FIRE" - reaction_t.ignites_to's own
-     * comment in material.h, and try_ignite() (sand_reactions.c) does
-     * exactly that. Not an inference: it is the field's documented and
-     * coded default. That comment also names the other two shapes
-     * `ignites_to` takes, and each gets its own sentence rather than one
-     * template forcing all three through "becoming %s":
-     *
-     *   resolves to MAT_FIRE (explicit, or the 0 default) - the fuel is
-     *   simply gone, replaced by flame. "becoming Fire" would be true but
-     *   redundant, so it is dropped rather than said.
-     *
-     *   resolves to itself (wood) - burning is a STATE of this material,
-     *   not a transformation into a different one. The same comment says
-     *   why: it "stays put and keeps burning rather than turning into a
-     *   flame that immediately floats away". "becoming Wood" says the
-     *   opposite of that - it reads as a change - so the sentence says
-     *   what actually happens instead.
-     *
-     *   resolves to a third material - the fuel chars into something else
-     *   entirely. Nothing hits this today, but the shape is real: a
-     *   slower fuel could leave behind ash or coal instead of relighting
-     *   as itself. */
-    if (r->ignites_to == 0 || r->ignites_to == MAT_FIRE) {
-        printf("- Catches fire %s from %s%s.\n", adv, heat_sources, air);
-    } else if (r->ignites_to == self_id) {
-        printf("- Catches fire %s from %s%s, and burns where it stands, "
-               "rather than flaring away.\n", adv, heat_sources, air);
-    } else {
-        printf("- Catches fire %s from %s%s, charring to %s.\n", adv,
-               heat_sources, air, prose_name(to_name(r->ignites_to)));
-    }
-}
-
-static void emit_burn(const reaction_t *r)
-{
-    if (r->burns == 0 && r->burn_decay == 0) return;
-
-    if (r->burns != 0) {
-        printf("- Is a heat source in its own right");
-    } else {
-        printf("- Once alight, burns down %s",
-               adverb("burn_decay", r->burn_decay));
-    }
-    if (r->flare != 0) {
-        printf(", and licks flame into an empty neighbour %s",
-               adverb("flare", r->flare));
-    }
-    if (r->residue != 0) {
-        /* `residue` is a one-shot chance at the moment a burn finishes,
-         * not a per-step rate - adverb() already returns a frequency word
-         * ("often", "rarely", ...) for it, so no "sometimes (%s)" wrapper
-         * is needed around it any more. */
-        printf("; %s leaves smoke when it burns out",
-               adverb("residue", r->residue));
-    }
-
-    /* Quenching. step_one_burning_cell() (sand_reactions.c) reads
-     * quench_to only on the `burns` path - a burn_decay material's cell
-     * is reset to unlit (variant 0) on contact with a quenching liquid
-     * WITHOUT ever consulting quench_to, so printing quench_to's value
-     * for that case would describe a field the code provably never reads.
-     * That is a code fact pulled from the read site, not a guess, and it
-     * is the kind of thing this generator is allowed to know - it is not
-     * a hidden threshold the way SAND_SHOCK_HEAT is. */
-    if (r->burns != 0) {
-        const char *quenched = (r->quench_to != 0)
-                                    ? prose_name(to_name(r->quench_to))
-                                    : "nothing";
-        printf(". Touched by a quenching liquid, becomes %s", quenched);
-    } else {
-        printf(". Touched by a quenching liquid, simply goes out");
-    }
-    printf(".\n");
-}
-
-static void emit_transform(const reaction_t *r)
-{
-    if (r->heats_to == 0) return;
-    if (r->heat_ramp != 0) {
-        /* Banked, not rolled - see GRP_TEMPERATURE for the ramp/drain
-         * pair that decides how long "long" is.
-         *
-         * The cause folds into "long heat" itself ("under long heat from
-         * %s") rather than a leading "Beside %s," clause (the no-ramp
-         * branch below). Glass is the one row on this path today, and its
-         * own heats_to is lava - one of heat_sources's two members - so a
-         * leading "Beside fire or lava, melts to lava" would read as a
-         * tautology (naming lava as both cause and product back to back).
-         * Naming the source through what heats it, instead of what stands
-         * beside it, says the same true thing without that collision -
-         * and reads fine whether or not a future banked reaction's product
-         * happens to be a heat source too, so it is not a glass-specific
-         * branch. */
-        printf("- Under long heat from %s, melts to %s.\n", heat_sources,
-               prose_name(to_name(r->heats_to)));
-    } else if (r->heat_chance == 0) {
-        /* `melts` alone: heats_to reachable ONLY through direct contact
-         * with lava - not a flame, not an ember, not heat through a wall.
-         * The only row on this path today is Root, and the whole reason
-         * it exists is that a root must shrug off fire yet give way to
-         * molten rock; see reaction_t.melts. Named as "lava" rather than
-         * through heat_sources on purpose - heat_sources is every burning
-         * material, and naming them all here would state the exact
-         * opposite of what this field means. */
-        if (r->melts == 0) return;
-        printf("- Touching lava - and lava only, never a flame - becomes "
-               "%s %s.\n",
-               prose_name(to_name(r->heats_to)), adverb("melts", r->melts));
-    } else {
-        printf("- Beside %s, melts to %s %s.\n", heat_sources,
-               prose_name(to_name(r->heats_to)),
-               adverb("heat_chance", r->heat_chance));
-        if (r->melts != 0) {
-            printf("  Touching lava directly, %s instead.\n",
-                   adverb("melts", r->melts));
-        }
-        if (r->flaw_to != 0) {
-            /* Same trigger as the clause just printed - the SAME roll,
-             * not a second one - so this reads as a qualifier on it
-             * rather than a separate reaction. */
-            printf("  %s comes out as %s instead, in clumped runs "
-                   "rather than an even speckle.\n",
-                   adverb("flaw_chance", r->flaw_chance),
-                   prose_name(to_name(r->flaw_to)));
-        }
-    }
-}
-
-static void emit_spoils(const reaction_t *r)
-{
-    if (r->spoils_to == 0) return;
-    printf("- Spoils into %s %s.\n", prose_name(to_name(r->spoils_to)),
-           CAUSE);
-}
-
-static void emit_temperature(const reaction_t *r)
-{
-    if (r->heat_ramp == 0 && r->conducts == 0) return;
-    /* Metal conducts (see MATX_METAL's own row) with no heat_ramp at all -
-     * deliberately, per its own comment: no variant to bank heat in, so it
-     * SURVIVES heat rather than holding any. "Holds heat never" would say
-     * the field applies and just came out at the bottom of the ladder,
-     * which is a different claim from "this material has no ramp" - so the
-     * phrase is dropped rather than printed with adverb_for(0). */
-    if (r->heat_ramp != 0) {
-        printf("- Holds heat %s", adverb("heat_ramp", r->heat_ramp));
-        if (r->conducts != 0) {
-            printf(" and passes it on %s", adverb("conducts", r->conducts));
-        }
-        if (r->cools != 0) {
-            printf(", draining back to ambient %s once nothing is heating "
-                   "it", adverb("cools", r->cools));
-        }
-    } else {
-        printf("- Passes heat on %s, without banking any of it itself",
-               adverb("conducts", r->conducts));
-    }
-    printf(".\n");
-}
-
-/* Its own function rather than folded into emit_temperature() just above:
- * that one is gated on heat_ramp/conducts, banking or passing heat along,
- * and water (boils's whole reason for existing) does neither - it just
- * boils where it stands, so emit_temperature()'s own gate would skip it
- * entirely if this clause lived there instead. */
-static void emit_boils(const reaction_t *r)
-{
-    if (r->boils == 0) return;
-    const uint8_t boils_to = r->boils_to ? r->boils_to : MAT_STEAM;
-    printf("- Once conducted heat reaches it, boils into %s %s.\n",
-           prose_name(to_name(boils_to)), adverb("boils", r->boils));
-}
-
-static void emit_cold(const reaction_t *r)
-{
-    if (r->chills == 0) return;
-    printf("- Chills whatever it touches %s.\n",
-           adverb("chills", r->chills));
-}
-
-static void emit_warmth(const reaction_t *r)
-{
-    if (r->warms == 0) return;
-    printf("- Warms whatever it touches %s, without igniting or "
-           "quenching anything.\n", adverb("warms", r->warms));
-}
-
-static void emit_thaw(const reaction_t *r)
-{
-    if (r->thaws == 0) return;
-    /* `thaws` shares its product with GRP_TRANSFORM's `heats_to` - the
-     * liquid-contact roll in sand_reactions.c writes the same target
-     * field the heat-contact roll does, so naming it here is the field's
-     * actual behaviour, not redundant prose borrowed from another group. */
-    if (r->heats_to != 0) {
-        printf("- Melts in any liquid it touches %s, becoming %s.\n",
-               adverb("thaws", r->thaws), prose_name(to_name(r->heats_to)));
-    } else {
-        printf("- Melts in any liquid it touches %s.\n",
-               adverb("thaws", r->thaws));
-    }
-}
-
-static void emit_wet(const reaction_t *r)
-{
-    if (r->wets != 0) {
-        printf("- Wets whatever it touches: things that soak will draw "
-               "it in.\n");
-    }
-    if (r->soaks != 0) {
-        /* `soaks` only ever fires beside a wetting liquid - see
-         * sand_reactions.c's own soaking loop, which skips a neighbour
-         * outright when reaction_of(n)->wets == 0 - so this names
-         * wetting_liquids, not "any liquid" (that claim is `thaws`'s
-         * alone; see this file's comment on wetting_liquids). */
-        if (r->soaks_to != 0) {
-            printf("- Soaks up any %s it touches %s, becoming %s "
-                   "once it takes a unit in.\n",
-                   wetting_liquids, adverb("soaks", r->soaks),
-                   prose_name(to_name(r->soaks_to)));
-        } else {
-            printf("- Soaks up any %s it touches %s, growing wetter "
-                   "(its own moisture rises) rather than changing into "
-                   "anything.\n", wetting_liquids, adverb("soaks", r->soaks));
-        }
-    }
-    if (r->dries != 0) {
-        printf("- Dries back out %s, on its own, with no partner "
-               "needed.\n", adverb("dries", r->dries));
-    }
-}
-
-static void emit_acid(const reaction_t *r)
-{
-    if (r->dissolves != 0) {
-        printf("- Dissolves an adjacent cell %s", adverb("dissolves", r->dissolves));
-        if (r->fizz != 0) {
-            /* `fizz` is a one-shot chance on the cell just eaten, not a
-             * rate - adverb() gives a frequency word here, so it drops
-             * straight in without the old "sometimes (%s)" wrapper. */
-            printf(", %s leaving smoke behind", adverb("fizz", r->fizz));
-        }
-        printf(".\n");
-    }
-    if (r->dissolvable != 0) {
-        /* `dissolvable` is the chance a single ATTEMPT to dissolve THIS
-         * material succeeds (see its own comment in material.h) - an EASE
-         * question, not a frequency one, so adverb() reads it through
-         * ease_words[] rather than frequency_words[] (see field_docs[]'s
-         * FCHANCE_VOCAB row for this field) and the material stays the
-         * subject: "Dissolves in acid easily", not the fronted-adverb
-         * "Usually gives way to acid". */
-        printf("- Dissolves in acid %s.\n",
-               adverb("dissolvable", r->dissolvable));
-    }
-}
-
-static void emit_evaporates(const reaction_t *r)
-{
-    if (r->evaporates == 0) return;
-    printf("- Spontaneously evaporates into gas %s - unconditional, no "
-           "heat or neighbour required.\n",
-           adverb("evaporates", r->evaporates));
-}
-
-static void emit_condense(const reaction_t *r)
-{
-    if (r->condenses == 0 || r->condenses_to == 0) return;
-    printf("- A 2x2 block of it %s condenses into a single cell of %s.\n",
-           adverb("condenses", r->condenses), prose_name(to_name(r->condenses_to)));
-}
-
-static void emit_grow(const reaction_t *r)
-{
-    if (r->grows != 0) {
-        printf("- Grows into wet soil %s, against gravity, spending a "
-               "level of that soil's moisture per cell.\n",
-               adverb("grows", r->grows));
-    }
-    if (r->falls != 0) {
-        printf("- Falls under gravity %s when there is empty space "
-               "beneath it.\n", adverb("falls", r->falls));
-    }
-    if (r->withers != 0) {
-        if (r->sheltered_by != 0) {
-            printf("- Withers away %s if it cannot reach water through "
-                   "its own roots and is not touching %s.\n",
-                   adverb("withers", r->withers),
-                   prose_name(to_name(r->sheltered_by)));
-        } else {
-            printf("- Withers away %s if it cannot reach water through "
-                   "its own roots.\n", adverb("withers", r->withers));
-        }
-    }
-}
-
-static void emit_harden(const reaction_t *r)
-{
-    if (r->hardens_to == 0) return;
-    /* `harden_chance`, `holds_line` and `canopy` are each a one-shot
-     * decision made once, at the moment a run hardens - not a per-step
-     * rate against a partner - so adverb() gives each a frequency word
-     * ("usually", "sometimes", ...) here, and each is phrased before its
-     * verb ("usually hardens") rather than after ("hardens usually"),
-     * which is the reading a frequency word wants. */
-    printf("- A straight run of %u cells %s hardens into %s",
-           (unsigned)r->harden_run, adverb("harden_chance", r->harden_chance),
-           prose_name(to_name(r->hardens_to)));
-    if (r->trunk_girth != 0) {
-        printf(", up to %u cells wider at the foot than at the tip",
-               (unsigned)r->trunk_girth);
-    }
-    if (r->holds_line != 0) {
-        printf(", and %s a limb holds its own direction (rather than "
-               "bending back toward gravity)",
-               adverb("holds_line", r->holds_line));
-    }
-    if (r->clings_to != 0) {
-        printf("; the hardened body counts as part of %s",
-               prose_name(to_name(r->clings_to)));
-    }
-    printf(".\n");
-    if (r->canopy != 0 && r->canopy_to != 0) {
-        printf("- The moment it hardens, it also %s leafs its crown with "
-               "%s, one candidate space at a time.\n",
-               adverb("canopy", r->canopy), prose_name(to_name(r->canopy_to)));
-    }
-}
-
-static void emit_regrow(const reaction_t *r)
-{
-    if (r->sprouts != 0 && r->sprouts_to != 0) {
-        printf("- Standing in wet soil, sprouts %s beside itself %s.\n",
-               prose_name(to_name(r->sprouts_to)), adverb("sprouts", r->sprouts));
-    }
-    if (r->buds != 0 && r->buds_to != 0) {
-        printf("- Once already in leaf and able to reach water, buds new "
-               "%s beside itself %s.\n",
-               prose_name(to_name(r->buds_to)), adverb("buds", r->buds));
-    }
-    if (r->drinks != 0) {
-        /* Same wetting-liquid gate as `soaks` - step_one_drinking_cell()
-         * (sand_reactions.c) requires reaction_of(n)->wets != 0 on the
-         * neighbour it drinks from - so this names wetting_liquids rather
-         * than the generic "a liquid" the old wording implied. */
-        printf("- Touching %s and rooted in soil with room for "
-               "more, drinks %s - the water comes out as a level of "
-               "moisture in the soil at its root, not in itself.\n",
-               wetting_liquids, adverb("drinks", r->drinks));
-    }
-    if (r->roots != 0 && r->roots_to != 0) {
-        printf("- Spending its own soil moisture to grow, bud or sprout, "
-               "%s roots into the soil it drinks from, welding that cell "
-               "into %s.\n",
-               adverb("roots", r->roots), prose_name(to_name(r->roots_to)));
-    }
-}
-
-static void emit_shatter(const reaction_t *r)
-{
-    if (r->shatters_to == 0) return;
-    printf("- Shatters into %s %s.\n", prose_name(to_name(r->shatters_to)),
-           CAUSE);
-}
-
-static void emit_material_section(const char *name, const reaction_t *r,
-                                  uint8_t self_id)
-{
-    if (row_is_empty(r)) return;
-    printf("\n### %s\n\n", name);
-    emit_ignite(r, self_id);
-    emit_burn(r);
-    emit_transform(r);
-    emit_spoils(r);
-    emit_temperature(r);
-    emit_boils(r);
-    emit_cold(r);
-    emit_warmth(r);
-    emit_thaw(r);
-    emit_wet(r);
-    emit_acid(r);
-    emit_evaporates(r);
-    emit_condense(r);
-    emit_grow(r);
-    emit_harden(r);
-    emit_regrow(r);
-    emit_shatter(r);
-}
-
-/*-----------------------------------------------------------------------
- * The pairwise A + B -> C table.
- *
- * Keyed on the RATE field and branching on the target - never the other
- * way around. Walking `*_to` fields and asking what triggers them would
- * miss every reaction whose target IS its own row (dirt getting wetter)
- * or a third cell entirely (a plant drinking) - see the plan's "The
- * pairwise join is phase 1, not phase 2" section, which is the reason
- * this table exists at all rather than being deferred.
- *---------------------------------------------------------------------*/
-
-static bool is_burning_material(const reaction_t *r)
-{
-    return r->burns != 0;
-}
-
-/* Mirrors neighbor_quenches() (sand_reactions.c) exactly: a liquid quenches
- * iff it is neither fuel nor itself a heat source. Not a magic threshold -
- * both fields it reads are already in the table this program links. */
-static bool is_quenching_liquid(const mrow_t *row)
-{
-    return row->kind == KIND_LIQUID && row->r->flammability == 0 &&
-           row->r->burns == 0;
-}
-
-static void join_names(bool (*pred)(const mrow_t *), const char *sep,
-                       char *out, size_t cap)
-{
-    out[0] = '\0';
-    bool first = true;
-    for (size_t i = 0; i < all_rows_count; i++) {
-        if (!pred(&all_rows[i])) continue;
-        size_t len = strlen(out);
-        int n = snprintf(out + len, cap - len, "%s%s", first ? "" : sep,
-                          all_rows[i].name);
-        (void)n;
-        first = false;
-    }
-    if (out[0] == '\0') {
-        snprintf(out, cap, "(none)");
-    }
-}
-
-static bool pred_burns(const mrow_t *row) { return row->r->burns != 0; }
-static bool pred_kind_liquid(const mrow_t *row) { return row->kind == KIND_LIQUID; }
-static bool pred_wets_liquid(const mrow_t *row)
-{
-    return row->kind == KIND_LIQUID && row->r->wets != 0;
-}
-
-static void print_join_row(const char *a, const char *b, const char *becomes,
-                           const char *rate, const char *note)
-{
-    printf("| %s | %s | %s | %s | %s |\n", a, b, becomes, rate, note);
-}
-
-static void emit_pairwise_table(void)
-{
-    printf("\n## Pairwise reactions\n\n");
-    printf("Generated by walking the RATE field that drives each reaction "
-           "and branching on its target, never by walking `*_to` fields - "
-           "see this file's own top comment on the pairwise join for why "
-           "(`soaks_to == 0` is a real reaction with no target, and "
-           "iterating `*_to` alone would silently skip it).\n\n");
-    printf("| A | B | becomes | rate | note |\n");
-    printf("|---|---|---|---|---|\n");
-
-    char burners[256];
-    join_names(pred_burns, " / ", burners, sizeof(burners));
-    char liquids[256];
-    join_names(pred_kind_liquid, " / ", liquids, sizeof(liquids));
-
-    /* dissolves x dissolvable. `fizz` is read from the DISSOLVER's own row
-     * (all_rows[i], not the cell being eaten) - see step_one_dissolver_
-     * cell() in sand_reactions.c, which rolls r->fizz on the acid cell at
-     * the moment it eats a neighbour. */
-    for (size_t i = 0; i < all_rows_count; i++) {
-        if (all_rows[i].r->dissolves == 0) continue;
-        for (size_t j = 0; j < all_rows_count; j++) {
-            if (all_rows[j].r->dissolvable == 0) continue;
-            char becomes[64];
-            snprintf(becomes, sizeof(becomes), "nothing%s",
-                     all_rows[i].r->fizz != 0 ? " (sometimes smoke)" : "");
-            char rate[64];
-            snprintf(rate, sizeof(rate), "%s / %s",
-                     adverb("dissolves", all_rows[i].r->dissolves),
-                     adverb("dissolvable", all_rows[j].r->dissolvable));
-            print_join_row(all_rows[i].name, all_rows[j].name, becomes,
-                           rate, "both rolls must pass");
-        }
-    }
-
-    /* flammability/ignites_to x burns. Same three-way split as
-     * emit_ignite() (see that function's own comment on ignites_to's
-     * three shapes): 0 or MAT_FIRE reads as Fire, a third material reads
-     * as that material, and igniting into SELF reads as "<name>, alight" -
-     * never the bare material name, which would read as a no-op ("Wood ->
-     * becomes: Wood") when what actually happens is a state change, not a
-     * material change. */
-    for (size_t i = 0; i < all_rows_count; i++) {
-        if (all_rows[i].r->flammability == 0) continue;
-        char becomes[64];
-        if (all_rows[i].r->ignites_to == 0 ||
-            all_rows[i].r->ignites_to == MAT_FIRE) {
-            snprintf(becomes, sizeof(becomes), "Fire");
-        } else if (all_rows[i].r->ignites_to == all_rows[i].self_id) {
-            snprintf(becomes, sizeof(becomes), "%s, alight", all_rows[i].name);
-        } else {
-            snprintf(becomes, sizeof(becomes), "%s",
-                     to_name(all_rows[i].r->ignites_to));
-        }
-        print_join_row(all_rows[i].name, burners, becomes,
-                       adverb("flammability", all_rows[i].r->flammability),
-                       all_rows[i].r->needs_air ? "only where it touches air"
-                                                : "");
-    }
-
-    /* heats_to x burns (memoryless and ramped both go through the same
-     * try_heat_transform() trigger - contact with a burning cell, or
-     * through a conductor) */
-    for (size_t i = 0; i < all_rows_count; i++) {
-        if (all_rows[i].r->heats_to == 0) continue;
-        char rate[64];
-        /* `melts` is its own row against LAVA alone, never folded into
-         * the burners row: it is direct contact with a burning liquid,
-         * not "fire or lava, or through a conductor", and a row that has
-         * ONLY melts (Root) would otherwise be printed as reachable by
-         * every burner at a rate of "never" - true and useless. See
-         * reaction_t.melts. */
-        if (all_rows[i].r->melts != 0) {
-            print_join_row(all_rows[i].name, "Lava", to_name(all_rows[i].r->heats_to),
-                           adverb("melts", all_rows[i].r->melts),
-                           "direct contact only - not fire, not through a conductor");
-        }
-        if (all_rows[i].r->heat_ramp == 0 && all_rows[i].r->heat_chance == 0) {
-            continue; /* melts-only: the burners row would be a lie */
-        }
-        if (all_rows[i].r->heat_ramp != 0) {
-            snprintf(rate, sizeof(rate), "under long heat (banked)");
-        } else {
-            snprintf(rate, sizeof(rate), "%s",
-                     adverb("heat_chance", all_rows[i].r->heat_chance));
-        }
-        print_join_row(all_rows[i].name, burners, to_name(all_rows[i].r->heats_to),
-                       rate, "or through a conductor");
-    }
-
-    /* quench_to x quenching liquids */
-    for (size_t i = 0; i < all_rows_count; i++) {
-        if (!is_burning_material(all_rows[i].r) &&
-            all_rows[i].r->burn_decay == 0) {
-            continue;
-        }
-        char qbuf[256];
-        join_names(is_quenching_liquid, " / ", qbuf, sizeof(qbuf));
-        if (all_rows[i].r->burn_decay != 0) {
-            /* burn_decay path: quench_to is never read - see emit_burn()'s
-             * own comment on step_one_burning_cell(). */
-            print_join_row(all_rows[i].name, qbuf, "itself, unlit",
-                           "on contact",
-                           "quench_to is not read on this path");
-        } else {
-            const char *becomes = (all_rows[i].r->quench_to != 0)
-                                       ? to_name(all_rows[i].r->quench_to)
-                                       : "nothing";
-            print_join_row(all_rows[i].name, qbuf, becomes, "on contact", "");
-        }
-    }
-
-    /* chills x heat_ramp/shatters_to */
-    for (size_t i = 0; i < all_rows_count; i++) {
-        if (all_rows[i].r->chills == 0) continue;
-        for (size_t j = 0; j < all_rows_count; j++) {
-            if (all_rows[j].r->heat_ramp == 0) continue;
-            char becomes[64];
-            snprintf(becomes, sizeof(becomes), "%s, one heat level cooler",
-                     all_rows[j].name);
-            print_join_row(all_rows[i].name, all_rows[j].name, becomes,
-                           adverb("chills", all_rows[i].r->chills), "");
-            if (all_rows[j].r->shatters_to != 0) {
-                print_join_row(all_rows[i].name, all_rows[j].name,
-                               to_name(all_rows[j].r->shatters_to), CAUSE,
-                               "only if B is hot enough when A touches it");
-            }
-        }
-    }
-
-    /* wets x soaks - the wetting family. Four reactions, not a loop over
-     * *_to: see this file's top comment and the plan's own section on it. */
-    for (size_t i = 0; i < all_rows_count; i++) {
-        if (all_rows[i].r->wets == 0) continue;
-        for (size_t j = 0; j < all_rows_count; j++) {
-            if (all_rows[j].r->soaks == 0) continue;
-            if (all_rows[j].r->soaks_to != 0) {
-                print_join_row(all_rows[i].name, all_rows[j].name,
-                               to_name(all_rows[j].r->soaks_to),
-                               adverb("soaks", all_rows[j].r->soaks),
-                               "the liquid pays a unit of its own mass");
-            } else {
-                char becomes[64];
-                snprintf(becomes, sizeof(becomes), "%s, +1 moisture",
-                         all_rows[j].name);
-                print_join_row(all_rows[i].name, all_rows[j].name, becomes,
-                               adverb("soaks", all_rows[j].r->soaks),
-                               "no material change - soaks_to is 0");
-            }
-        }
-        /* drinks: a THIRD cell changes (the soil at the root), not the
-         * subject and not the liquid - see reaction_t.drinks. */
-        for (size_t j = 0; j < all_rows_count; j++) {
-            if (all_rows[j].r->drinks == 0) continue;
-            print_join_row(all_rows[i].name, all_rows[j].name,
-                           "the soil at B's root, +1 moisture",
-                           adverb("drinks", all_rows[j].r->drinks),
-                           "B itself is unchanged - a third cell changes");
-        }
-    }
-    /* dries: self-driven, no partner at all. */
-    for (size_t i = 0; i < all_rows_count; i++) {
-        if (all_rows[i].r->dries == 0) continue;
-        char becomes[64];
-        snprintf(becomes, sizeof(becomes), "%s, -1 moisture", all_rows[i].name);
-        print_join_row(all_rows[i].name, "(none - self-driven)", becomes,
-                       adverb("dries", all_rows[i].r->dries), "");
-    }
-
-    /* thaws x any KIND_LIQUID */
-    for (size_t i = 0; i < all_rows_count; i++) {
-        if (all_rows[i].r->thaws == 0) continue;
-        print_join_row(all_rows[i].name, liquids, to_name(all_rows[i].r->heats_to),
-                       adverb("thaws", all_rows[i].r->thaws),
-                       "any liquid counts, not water alone");
-    }
-}
-
-/*-----------------------------------------------------------------------
- * "How these sentences are built."
- *
- * Not the per-material table itself - that stays clean, unmarked prose,
- * on purpose: it is the deliverable a future brush-description feature
- * will read from, not a place for this file's own internals to leak into.
- * This is a SEPARATE section, appended after the pairwise table, showing
- * one representative sentence per group (see group_id_t) with its slots
- * marked, so a reader can see how much of each sentence is a generated
- * slot and how much is hand-written glue inside an emit_*() function.
- *
- * Every marked RATE and OBJECT word below is pulled through the exact
- * same adverb()/to_name()/prose_name() calls (and the exact same live
- * reaction_t rows) the real per-material clauses use above - so those
- * words track material.c and cannot go stale the way a typed-out example
- * would. The GLUE text cannot be sourced the same way: it is prose typed
- * directly into the matching emit_*() function's printf() calls, so it is
- * transcribed by hand from that function here, and needs a matching edit
- * if that function's own wording ever changes - each example below names
- * the emit_*() function and fields it mirrors, to make that edit findable.
- *
- * The material slots are marked with inline LaTeX colour spans -
- * $\textcolor{#RRGGBB}{\text{...}}$, SINGLE dollars on each side. An
- * earlier version used $${\color{...}...}$$ per slot and failed three ways
- * at once: $$...$$ is DISPLAY math (a block element), so every marked span
- * broke onto its own centred line and shredded the sentence; VSCode's math
- * extension reads a bare $ as its own inline delimiter, so it saw $$ as two
- * of those and threw a KaTeX parse error; and even rendered correctly,
- * KaTeX sets the words in an italic serif math font that clashes with the
- * surrounding sans prose. A version after that switched to plain markdown
- * emphasis - **bold**, `code`, *italic* - which sidesteps all three
- * failures but loses colour: three visual weights cannot carry five
- * distinct slots, so Subject had to share **bold** with Verb and Cause had
- * to fold into unmarked glue. Inline single-dollar math keeps colour and
- * drops the block-math and font problems: $\textcolor{...}{\text{...}}$
- * flows inline, renders upright (`\text{}` switches back out of math
- * italics), and every material name below gets its own colour rather than
- * sharing a channel - see COLOUR MEANS MATERIAL, NOTHING ELSE below for
- * why grammar roles do NOT also compete for that same channel any more,
- * which is what lets plain markdown emphasis back in for them without
- * repeating that earlier failure.
- *
- * WHICH COLOUR A MATERIAL GETS
- *
- * Subject and Object used to be two fixed, unrelated colours (a flat red
- * for whichever row the sentence is about, a flat green for whichever
- * material a field's value names) - which meant the colour told you SLOT,
- * not SUBSTANCE: Wood and Glass rendered in the identical red, Steam and
- * Sand in the identical green, even though the whole point of colouring a
- * material anywhere else in this game is that no two materials share a
- * colour. Every material NAME below - subject or object, and the literal
- * word "fire" inside "Catches fire" (emit_ignite()'s own wording for
- * ignites_to's 0/MAT_FIRE default, not a to_name() call, but naming
- * MAT_FIRE all the same) - now renders in THAT material's own colour
- * instead: material_hex() below reads it straight out of
- * material_palette(), the exact array the panel itself renders from, at
- * the same representative swatch a freshly painted cell of that material
- * actually takes - see representative_variant()'s own comment for why that
- * is not simply app_sand.c's brush_color() variant-13 shortcut, and
- * material_hex()'s for the extended-cell case, which still is.
- *
- * COLOUR MEANS MATERIAL, NOTHING ELSE
- *
- * Verb, Rate/frequency and Cause used to keep one fixed colour each, the
- * same way Subject/Object once did before the fix just above - which left
- * colour answering two unrelated questions at once (WHICH material, and
- * WHICH grammar role), and the palette only ever had an opinion on the
- * first one: nothing in material_palette() says what colour `melts`
- * should be, so those three colours were arbitrary picks this file made
- * up out of nowhere, not derived from anything the game itself knows.
- * Colour now means exactly one thing on this whole page - "this word is a
- * material" - and grammar role moved to typography instead: MARK_VERB
- * prints as *italic* (a light touch for the action), MARK_RATE as
- * **bold** (every rate word scannable in one pass - exactly what the
- * by-feel adverb tuning pass still ahead of us, phase 2, needs), and
- * MARK_CAUSE as ***bold italic*** (a clause rather than a single word, and
- * the rarest thing on this page - every instance today is the CAUSE
- * placeholder below). Glue stays plain and unmarked, same as always. This
- * is not a return to the all-markdown attempt two paragraphs up, which
- * failed because it had to carry FIVE distinct slots (Subject, Object,
- * Verb, Rate, Cause) through three visual weights: with material identity
- * now handled entirely by its own per-instance LaTeX colour span, the
- * typography channel only has to tell apart THREE grammar roles plus
- * unmarked glue - one weight per role, nothing sharing, nothing left
- * over. See print_marked() below for where each mark_t turns into its
- * treatment, and the Legend this function prints for the reader-facing
- * version of this same rationale. */
-
-typedef enum {
-    MARK_NONE,     /* glue (see the Legend below) - printed as ordinary
-                    * markdown text, in the reader's own theme colour. */
-    MARK_MATERIAL, /* a material's own name - colour is per-INSTANCE, not
-                    * per-slot: two MARK_MATERIAL segments in the same
-                    * sentence (a subject and a cause used to be able to
-                    * share a word; now Wood and Fire never share a colour)
-                    * each carry their own hex in seg_t.color, computed by
-                    * material_hex() below. Colour means exactly one thing
-                    * on this page - "this word is a material" - so this is
-                    * the only mark that still carries one; see COLOUR
-                    * MEANS MATERIAL, NOTHING ELSE above. */
-    MARK_VERB,     /* the action - *italic*, see print_marked() below and
-                    * the Legend this file prints. */
-    MARK_RATE,     /* rate / frequency - **bold**. */
-    MARK_CAUSE,    /* a trigger clause - ***bold italic***. */
-} mark_t;
-
 /* "#rrggbb" plus the NUL, the fixed width every material_hex() output (and
  * every buffer meant to hold one) needs. */
 #define COLOR_LEN 8
-
-typedef struct {
-    mark_t mark;
-    const char *color; /* only meaningful when mark == MARK_MATERIAL - the
-                        * only mark that carries a colour at all (see
-                        * mark_t's own comment). NULL for every other mark:
-                        * MARK_VERB/MARK_RATE/MARK_CAUSE render as markdown
-                        * emphasis instead (see print_marked() below), and
-                        * MARK_NONE is unmarked glue. */
-    const char *text;
-} seg_t;
 
 static const mrow_t *find_row(const char *name)
 {
@@ -1566,6 +841,1257 @@ static void material_hex(uint8_t v, char *buf, size_t cap)
     snprintf(buf, cap, "#%02X%02X%02X", r8, g8, b8);
 }
 
+/*-----------------------------------------------------------------------
+ * Legibility overrides - material_hex() above returns the device's exact
+ * palette value, which is what the anatomy section below still shows (see
+ * its own top comment: raw values are the documentation of the actual
+ * palette). The DEFAULT per-material section and Legend read colour
+ * through legible_hex() instead: several of those exact values fail a 3:1
+ * WCAG contrast floor against GitHub's light (#FFFFFF) and dark (#0D1117)
+ * page backgrounds - snow and steam wash out on light, oil and lava wash
+ * out on dark, and so on - so a name coloured with the raw value can be
+ * unreadable in whichever theme the reader is in.
+ *
+ * Same idiom as ADVERB_EXCEPTIONS above: a small table of RESULTS, not a
+ * live HSL bisection in C (that was done once, offline, in Python, to get
+ * exact numbers - see the table's own comment below), with a startup
+ * check that recomputes the raw value LIVE through material_hex() and
+ * exits(1) on any mismatch, so a future palette change cannot silently
+ * leave a stale override in place the way it could with no check at all.
+ * Only materials that actually fail get a row - passing materials read
+ * straight through material_hex(), unmodified, forever. */
+typedef struct {
+    uint8_t     cell;    /* matched against mrow_t.color_id, same as
+                          * ADVERB_EXCEPTIONS.cell */
+    const char *raw;     /* material_hex()'s output for `cell` at the time
+                          * this row was computed - the soundness check
+                          * recomputes it live and compares */
+    const char *legible; /* same hue/saturation, lightness bisected against
+                          * both #FFFFFF and #0D1117 until each clears
+                          * 3:1, moving the least distance needed (lift if
+                          * too dark, darken if too pale) */
+} legibility_override_t;
+
+/* Computed 2026-09-05 against this branch's own material.c (see this
+ * file's own git history if these ever need recomputing: hex_to_rgb ->
+ * sRGB-linearise -> WCAG relative luminance -> contrast ratio against
+ * both backgrounds -> bisect HLS lightness, hue/saturation held fixed,
+ * until both ratios clear 3.0 with a small margin to survive hex
+ * rounding). Every material NOT listed here already clears 3:1 on both
+ * backgrounds at its raw value - see legibility_overrides_are_sound()
+ * below and this section's own Legend note for the passing list. */
+static const legibility_override_t LEGIBILITY_OVERRIDES[] = {
+    { MAT_SAND,             "#D6A663", "#C58834" },
+    { MAT_WATER,            "#10416B", "#1863A3" },
+    { MAT_GAS,              "#CEEBBD", "#5CA532" },
+    { MAT_FIRE,             "#FFE363", "#B19100" },
+    { MAT_WOOD,             "#5A3D21", "#825830" },
+    { MAT_STEAM,            "#F7FBFF", "#2D96FF" },
+    { MAT_OIL,              "#101008", "#636331" },
+    { MAT_LAVA,             "#8C1400", "#BF1B00" },
+    { MAT_ACID,             "#296908", "#2B6F08" },
+    { MAT_SNOW,             "#E6EFF7", "#6099CC" },
+    { MATX(MATX_ICE),       "#B5E7F7", "#16A0CC" },
+    { MATX(MATX_PLANT),     "#526529", "#54682A" },
+    { MATX(MATX_LEAF),      "#6BB23A", "#63A435" },
+    { MATX(MATX_ROOT),      "#BDA68C", "#AC8F6F" },
+};
+
+/* legible_hex()'s search below - it is a linear scan of a table with
+ * fifteen rows, not a lookup this program runs often enough to warrant
+ * anything smarter. */
+static const legibility_override_t *legibility_override_for(uint8_t cell)
+{
+    for (size_t i = 0; i < ARRAY_LEN(LEGIBILITY_OVERRIDES); i++) {
+        if (LEGIBILITY_OVERRIDES[i].cell == cell) {
+            return &LEGIBILITY_OVERRIDES[i];
+        }
+    }
+    return NULL;
+}
+
+/* material_hex(), but reading through LEGIBILITY_OVERRIDES first - this is
+ * what every DEFAULT per-material clause and the Legend colour through;
+ * emit_anatomy() calls material_hex() directly instead, on purpose (see
+ * this section's own top comment). */
+static void legible_hex(uint8_t v, char *buf, size_t cap)
+{
+    const legibility_override_t *ov = legibility_override_for(v);
+    if (ov != NULL) {
+        snprintf(buf, cap, "%s", ov->legible);
+        return;
+    }
+    material_hex(v, buf, cap);
+}
+
+/* Startup check, run once after build_rows() - mirrors
+ * adverb_exceptions_are_sound()'s shape exactly: every `cell` must be a
+ * real row, and the stored `raw` value must still match what
+ * material_hex() computes for it live, today. A mismatch means the
+ * palette moved since this table was computed and the `legible` column
+ * needs recomputing against the new raw value, not silently kept. */
+static void legibility_overrides_are_sound(void)
+{
+    for (size_t i = 0; i < ARRAY_LEN(LEGIBILITY_OVERRIDES); i++) {
+        const legibility_override_t *ov = &LEGIBILITY_OVERRIDES[i];
+        const mrow_t *row = NULL;
+        for (size_t j = 0; j < all_rows_count; j++) {
+            if (all_rows[j].color_id == ov->cell) {
+                row = &all_rows[j];
+                break;
+            }
+        }
+        if (row == NULL) {
+            fprintf(stderr,
+                    "dump_reactions: LEGIBILITY_OVERRIDES[%zu] names cell "
+                    "%u, which is not any row build_rows() produced\n",
+                    i, (unsigned)ov->cell);
+            exit(1);
+        }
+        char live[COLOR_LEN];
+        material_hex(ov->cell, live, sizeof(live));
+        if (strcmp(live, ov->raw) != 0) {
+            fprintf(stderr,
+                    "dump_reactions: LEGIBILITY_OVERRIDES[%zu] (%s) was "
+                    "computed against raw value %s, but material_hex() "
+                    "gives %s today - the palette moved; recompute this "
+                    "row's `legible` column against the new raw value\n",
+                    i, row->name, ov->raw, live);
+            exit(1);
+        }
+    }
+}
+
+/* One material-name segment, coloured through legible_hex() and rendered
+ * as the same single-dollar LaTeX span emit_anatomy() uses (see that
+ * section's own top comment on why: inline, upright, one colour per
+ * instance). Returns a pointer into a small ring of static buffers rather
+ * than one shared buffer - contrast prose_name(), which gets away with
+ * exactly one because nothing there ever needs two results alive at once;
+ * several of the sentences below name two or more materials in a single
+ * printf() argument list (a heat_sources list beside a target material, a
+ * hardens_to beside a clings_to), and a single shared buffer would let the
+ * later call silently overwrite the earlier one before printf() ever runs
+ * (argument evaluation order is unspecified, so this is not a hypothetical
+ * - see material_hex()'s own comment on the exact same hazard, solved the
+ * same way there with caller-owned buffers instead of a ring; a ring is
+ * enough here because every caller copies the text out via printf() before
+ * this ring could wrap all the way around within one statement). */
+#define MAT_SPAN_RING 8
+#define MAT_SPAN_LEN  96
+static char mat_span_bufs[MAT_SPAN_RING][MAT_SPAN_LEN];
+static int mat_span_next = 0;
+
+static const char *mat_span(uint8_t v, const char *name)
+{
+    char hex[COLOR_LEN];
+    legible_hex(v, hex, sizeof(hex));
+    char *buf = mat_span_bufs[mat_span_next];
+    mat_span_next = (mat_span_next + 1) % MAT_SPAN_RING;
+    snprintf(buf, MAT_SPAN_LEN, "$\\textcolor{%s}{\\text{%s}}$", hex, name);
+    return buf;
+}
+
+/* mat_span(), naming the material through the same to_name()/prose_name()
+ * pair every plain-text clause already used to print it - the common case
+ * where the displayed name is exactly what a TARGET field's raw byte
+ * decodes to, lowercased for prose. */
+static const char *mat_span_v(uint8_t v)
+{
+    return mat_span(v, prose_name(to_name(v)));
+}
+
+/* The RATE/frequency segment for a default per-material clause - **word**,
+ * bold, with its own leading space, or the empty string when the rate
+ * ladder falls silent (adverb_for()'s middle band - see its own top
+ * comment). Never returns an empty "****": a silent adverb returns "",
+ * full stop, so a format string that places this right before a literal
+ * word boundary (a comma, a "from", a period) collapses cleanly to a
+ * single space there instead of a double space or a pair of empty
+ * asterisks - every call site below relies on that and does NOT also put
+ * a literal space in front of this call's slot. Ring-buffered for the
+ * same reason mat_span() is - emit_acid() alone needs two rate words
+ * (dissolves and fizz) live in one sentence. */
+#define RATE_GAP_RING 4
+#define RATE_GAP_LEN  40
+static char rate_gap_bufs[RATE_GAP_RING][RATE_GAP_LEN];
+static int rate_gap_next = 0;
+
+static const char *rate_gap(const char *word)
+{
+    if (word[0] == '\0') {
+        return "";
+    }
+    char *buf = rate_gap_bufs[rate_gap_next];
+    rate_gap_next = (rate_gap_next + 1) % RATE_GAP_RING;
+    snprintf(buf, RATE_GAP_LEN, " **%s**", word);
+    return buf;
+}
+
+/* Builds a colour-marked, prose-cased join of every all_rows[] row `pred`
+ * selects - the DEFAULT-section equivalent of join_names() (used for the
+ * plain pairwise-table columns) and of collect_material_list() (used for
+ * emit_anatomy()'s raw-coloured examples): every member gets its own
+ * legible colour, never a single flat span around the whole joined
+ * string, because a heat_sources list can legitimately name two materials
+ * (Fire, Lava) that must not share a colour. */
+static void build_colored_list(bool (*pred)(const mrow_t *), const char *sep,
+                                char *out, size_t cap)
+{
+    out[0] = '\0';
+    bool first = true;
+    for (size_t i = 0; i < all_rows_count; i++) {
+        if (!pred(&all_rows[i])) continue;
+        const char *span =
+            mat_span(all_rows[i].color_id, prose_name(all_rows[i].name));
+        size_t len = strlen(out);
+        snprintf(out + len, cap - len, "%s%s", first ? "" : sep, span);
+        first = false;
+    }
+    if (out[0] == '\0') {
+        snprintf(out, cap, "(none)");
+    }
+}
+
+/* Startup check: every ADVERB_EXCEPTIONS entry must name a real field, a
+ * real material row, carry a non-empty `why`, and actually DIFFER from
+ * what the ladder would print unassisted - an override that now agrees
+ * with the default is stale (the ladder moved out from under it, or the
+ * source value changed), and silently keeping it would hide that instead
+ * of surfacing it. Run once, at startup, after build_rows() - see this
+ * file's own field_docs_offsets_are_sound() for the same idiom applied to
+ * a different table. */
+static void adverb_exceptions_are_sound(void)
+{
+    for (size_t i = 0; i < ARRAY_LEN(ADVERB_EXCEPTIONS); i++) {
+        const adverb_exception_t *e = &ADVERB_EXCEPTIONS[i];
+        const field_doc_t *fd = field_doc(e->field); /* exits(1) itself if
+                                    * the field is not a real field_docs[]
+                                    * row */
+        if (e->why == NULL || e->why[0] == '\0') {
+            fprintf(stderr,
+                    "dump_reactions: ADVERB_EXCEPTIONS[%zu] (%s) has no "
+                    "`why` - every override needs the measurement that "
+                    "justifies it\n", i, e->field);
+            exit(1);
+        }
+        const mrow_t *row = NULL;
+        for (size_t j = 0; j < all_rows_count; j++) {
+            if (all_rows[j].color_id == e->cell) {
+                row = &all_rows[j];
+                break;
+            }
+        }
+        if (row == NULL) {
+            fprintf(stderr,
+                    "dump_reactions: ADVERB_EXCEPTIONS[%zu] (%s) names "
+                    "cell %u, which is not any row build_rows() produced\n",
+                    i, e->field, (unsigned)e->cell);
+            exit(1);
+        }
+        const uint8_t raw =
+            *(const uint8_t *)((const unsigned char *)row->r + fd->offset);
+        const char *would_be = adverb(e->field, raw);
+        if (strcmp(would_be, e->adverb) == 0) {
+            fprintf(stderr,
+                    "dump_reactions: ADVERB_EXCEPTIONS[%zu] (%s on %s) is "
+                    "stale - the ladder already computes \"%s\" for this "
+                    "value on its own, so the override does nothing; "
+                    "remove it\n",
+                    i, e->field, row->name, would_be);
+            exit(1);
+        }
+    }
+}
+
+
+/* The liquid(s) that actually wet things - KIND_LIQUID with wets != 0 -
+ * derived from the data rather than hardcoded, so `soaks`/`drinks` keep
+ * naming the right liquid(s) if a second wetting liquid is ever added.
+ * Water is the only one today (see material.c, one `.wets = 1` hit), but
+ * nothing below assumes that.
+ *
+ * Populated once in main(), right after build_rows() fills all_rows[] - via
+ * build_colored_list(), not join_names(): every DEFAULT per-material clause
+ * that reads this wants the coloured, legible-hex form (see build_colored_
+ * list()'s own comment), so this string already carries each member's own
+ * $\textcolor{}{}$ span - it is not a plain name list any more. See
+ * reaction_t.wets's own comment in material.h for why "any liquid" is the
+ * wrong claim for `soaks`/`drinks`: a bank of sand under oil or lava turned
+ * entirely into saturated soil, which is the bug `wets` exists to prevent.
+ * `thaws` (GRP_THAW) is the one field that is genuinely any liquid, and
+ * keeps saying so untouched - see emit_thaw(). Sized for a handful of
+ * coloured spans (~40 bytes each), comfortably more than today's one
+ * member needs. */
+static char wetting_liquids[256];
+
+/* The material(s) that actually radiate heat - `burns != 0` - derived the
+ * same way as wetting_liquids just above, so emit_transform()/emit_ignite()
+ * keep naming the right source(s) if a third heat source is ever added.
+ * Fire and Lava are the only two today (see pred_burns, already used by
+ * emit_pairwise_table() to join the same predicate into "Fire / Lava"), but
+ * nothing below assumes there are exactly two. Coloured, like
+ * wetting_liquids just above - see that variable's own comment. */
+static char heat_sources[256];
+
+/* The liquid(s) that quench a fire - KIND_LIQUID, neither fuel nor a heat
+ * source itself - mirroring neighbor_quenches() (sand_reactions.c)
+ * exactly, the same predicate emit_pairwise_table() already uses
+ * (is_quenching_liquid()) for the pairwise column. Water and Acid both
+ * qualify today (Oil is fuel, Lava is a heat source), but nothing below
+ * assumes there are exactly two - replaces the old hardcoded "a quenching
+ * liquid" phrase in emit_burn() with the real, derived list, coloured like
+ * wetting_liquids above. */
+static char quenching_liquids[256];
+
+/* The material(s) `dries != 0` selects - see pred_dries()'s own comment
+ * for why that is the right predicate. Dirt alone today. Coloured, like
+ * the lists above - replaces the hardcoded word "soil" wherever it
+ * appeared as prose glue rather than a real field value. */
+static char soil_names[64];
+
+static void build_rows(void)
+{
+    all_rows_count = 0;
+    for (uint8_t m = MAT_SAND; m < MAT_COUNT; m++) {
+        all_rows[all_rows_count].name = materials[m].name;
+        all_rows[all_rows_count].r    = &reactions[m];
+        all_rows[all_rows_count].kind = (material_kind_t)materials[m].kind;
+        all_rows[all_rows_count].self_id = m;
+        all_rows[all_rows_count].color_id = m;
+        all_rows_count++;
+    }
+    for (uint8_t k = 0; k < MATERIAL_EXTENDED_COUNT; k++) {
+        const char *nm = material_name(MATX(k));
+        if (nm[0] == '?' && nm[1] == '\0') {
+            continue;  /* unnamed extended slot - material_name()'s own
+                        * fallback for a row nobody has claimed yet */
+        }
+        all_rows[all_rows_count].name = nm;
+        all_rows[all_rows_count].r    = &extended_reactions[k];
+        /* Every extended material shares MAT_EXTENDED's one physics row -
+         * see material.h's own comment on why. */
+        all_rows[all_rows_count].kind = (material_kind_t)materials[MAT_EXTENDED].kind;
+        all_rows[all_rows_count].self_id = MAT_EXTENDED;
+        all_rows[all_rows_count].color_id = MATX(k);
+        all_rows_count++;
+    }
+}
+
+static bool row_is_empty(const reaction_t *r)
+{
+    const unsigned char *bytes = (const unsigned char *)r;
+    for (size_t i = 0; i < sizeof(*r); i++) {
+        if (bytes[i] != 0) return false;
+    }
+    return true;
+}
+
+/*-----------------------------------------------------------------------
+ * Per-material clause emitters, one per group, called in group sort-key
+ * order for every material row. Each one is a no-op unless its group's
+ * driver field is nonzero, so a material with (say) no plant fields at
+ * all costs nothing but a skipped comparison.
+ *---------------------------------------------------------------------*/
+
+static void emit_ignite(const reaction_t *r, uint8_t self_id)
+{
+    if (r->flammability == 0) return;
+
+    const char *adv = adverb("flammability", r->flammability);
+    const char *air = r->needs_air ? ", only where it touches air" : "";
+
+    /* heat_sources names the same `burns != 0` materials
+     * emit_pairwise_table() already joins into "Fire / Lava" for this exact
+     * relationship (see pred_burns) - derived from the data, not typed out,
+     * so a third heat source would show up here too. It is not the
+     * complete list of things that can set a neighbour alight (a burning
+     * log spreads to the wood beside it too, via burn_decay - see
+     * step_one_burning_cell() in sand_reactions.c), only the materials that
+     * ARE a heat source in their own right, which is what "melts to X" and
+     * "catches fire" are naming. */
+
+    /* "0 (MAT_EMPTY) is read as MAT_FIRE" - reaction_t.ignites_to's own
+     * comment in material.h, and try_ignite() (sand_reactions.c) does
+     * exactly that. Not an inference: it is the field's documented and
+     * coded default. That comment also names the other two shapes
+     * `ignites_to` takes, and each gets its own sentence rather than one
+     * template forcing all three through "becoming %s":
+     *
+     *   resolves to MAT_FIRE (explicit, or the 0 default) - the fuel is
+     *   simply gone, replaced by flame. "becoming Fire" would be true but
+     *   redundant, so it is dropped rather than said.
+     *
+     *   resolves to itself (wood) - burning is a STATE of this material,
+     *   not a transformation into a different one. The same comment says
+     *   why: it "stays put and keeps burning rather than turning into a
+     *   flame that immediately floats away". "becoming Wood" says the
+     *   opposite of that - it reads as a change - so the sentence says
+     *   what actually happens instead.
+     *
+     *   resolves to a third material - the fuel chars into something else
+     *   entirely. Nothing hits this today, but the shape is real: a
+     *   slower fuel could leave behind ash or coal instead of relighting
+     *   as itself. */
+    if (r->ignites_to == 0 || r->ignites_to == MAT_FIRE) {
+        printf("- *Catches* %s%s from %s%s.\n", mat_span_v(MAT_FIRE),
+               rate_gap(adv), heat_sources, air);
+    } else if (r->ignites_to == self_id) {
+        /* "burns in place" - shorter than the old "burns where it stands,
+         * rather than flaring away", and the same claim: burning is a
+         * STATE of this material (see the comment above), so it stays put
+         * rather than becoming a flame that floats off on its own. */
+        printf("- *Catches* %s%s from %s%s, and burns in place.\n",
+               mat_span_v(MAT_FIRE), rate_gap(adv), heat_sources, air);
+    } else {
+        printf("- *Catches* %s%s from %s%s, *charring to* %s.\n",
+               mat_span_v(MAT_FIRE), rate_gap(adv), heat_sources, air,
+               mat_span_v(r->ignites_to));
+    }
+}
+
+static void emit_burn(const reaction_t *r)
+{
+    if (r->burns == 0 && r->burn_decay == 0) return;
+
+    if (r->burns != 0) {
+        printf("- Is a heat source in its own right");
+    } else {
+        printf("- Once alight, *burns down*%s",
+               rate_gap(adverb("burn_decay", r->burn_decay)));
+    }
+    if (r->flare != 0) {
+        printf(", and *licks flame into an empty neighbour*%s",
+               rate_gap(adverb("flare", r->flare)));
+    }
+    if (r->residue != 0) {
+        /* `residue` is a one-shot chance at the moment a burn finishes,
+         * not a per-step rate - adverb() always returns a frequency word
+         * for it (chance-scale fields never fall silent - see
+         * frequency_words[]'s own comment), so rate_gap() never collapses
+         * this one to nothing in practice; it is still routed through the
+         * same helper as every other rate/frequency mention for one
+         * consistent bold treatment. */
+        printf(";%s *leaves* %s when it burns out",
+               rate_gap(adverb("residue", r->residue)),
+               mat_span_v(MAT_SMOKE));
+    }
+
+    /* Quenching. step_one_burning_cell() (sand_reactions.c) reads
+     * quench_to only on the `burns` path - a burn_decay material's cell
+     * is reset to unlit (variant 0) on contact with a quenching liquid
+     * WITHOUT ever consulting quench_to, so printing quench_to's value
+     * for that case would describe a field the code provably never reads.
+     * That is a code fact pulled from the read site, not a guess, and it
+     * is the kind of thing this generator is allowed to know - it is not
+     * a hidden threshold the way SAND_SHOCK_HEAT is.
+     *
+     * Named quenching liquids, not the old generic "a quenching liquid" -
+     * quenching_liquids mirrors neighbor_quenches() (sand_reactions.c)
+     * exactly (see pred_dries's neighbour, is_quenching_liquid(), and this
+     * file's own top comment on quenching_liquids). */
+    if (r->burns != 0) {
+        const char *quenched =
+            (r->quench_to != 0) ? mat_span_v(r->quench_to) : "nothing";
+        printf(". Touched by %s, *becomes* %s", quenching_liquids, quenched);
+    } else {
+        printf(". Touched by %s, simply goes out", quenching_liquids);
+    }
+    printf(".\n");
+}
+
+static void emit_transform(const reaction_t *r, uint8_t cell)
+{
+    if (r->heats_to == 0) return;
+    if (r->heat_ramp != 0) {
+        /* Banked, not rolled - see GRP_TEMPERATURE for the ramp/drain
+         * pair that decides how long "long" is.
+         *
+         * The cause folds into "long heat" itself ("under long heat from
+         * %s") rather than a leading "Beside %s," clause (the no-ramp
+         * branch below). Glass is the one row on this path today, and its
+         * own heats_to is lava - one of heat_sources's two members - so a
+         * leading "Beside fire or lava, melts to lava" would read as a
+         * tautology (naming lava as both cause and product back to back).
+         * Naming the source through what heats it, instead of what stands
+         * beside it, says the same true thing without that collision -
+         * and reads fine whether or not a future banked reaction's product
+         * happens to be a heat source too, so it is not a glass-specific
+         * branch. */
+        printf("- Under long heat from %s, *melts* to %s.\n", heat_sources,
+               mat_span_v(r->heats_to));
+    } else if (r->heat_chance == 0) {
+        /* `melts` alone: heats_to reachable ONLY through direct contact
+         * with lava - not a flame, not an ember, not heat through a wall.
+         * The only row on this path today is Root, and the whole reason
+         * it exists is that a root must shrug off fire yet give way to
+         * molten rock; see reaction_t.melts. Named as "lava" rather than
+         * through heat_sources on purpose - heat_sources is every burning
+         * material, and naming them all here would state the exact
+         * opposite of what this field means. */
+        if (r->melts == 0) return;
+        printf("- Touching %s - and %s only, never a flame - "
+               "*becomes* %s%s.\n",
+               mat_span_v(MAT_LAVA), mat_span_v(MAT_LAVA),
+               mat_span_v(r->heats_to),
+               rate_gap(adverb_cell("melts", r->melts, cell)));
+    } else {
+        printf("- Beside %s, *melts* to %s%s.\n", heat_sources,
+               mat_span_v(r->heats_to),
+               rate_gap(adverb_cell("heat_chance", r->heat_chance, cell)));
+        if (r->melts != 0) {
+            printf("  Touching %s directly, *melts*%s instead.\n",
+                   mat_span_v(MAT_LAVA),
+                   rate_gap(adverb_cell("melts", r->melts, cell)));
+        }
+        if (r->flaw_to != 0) {
+            /* Same trigger as the clause just printed - the SAME roll,
+             * not a second one - so this reads as a qualifier on it
+             * rather than a separate reaction. */
+            printf("  *Comes out as* %s%s instead, in clumped runs rather "
+                   "than an even speckle.\n",
+                   mat_span_v(r->flaw_to),
+                   rate_gap(adverb("flaw_chance", r->flaw_chance)));
+        }
+    }
+}
+
+static void emit_spoils(const reaction_t *r)
+{
+    if (r->spoils_to == 0) return;
+    printf("- *Spoils* into %s %s.\n", mat_span_v(r->spoils_to),
+           CAUSE_MARKED);
+}
+
+static void emit_temperature(const reaction_t *r)
+{
+    if (r->heat_ramp == 0 && r->conducts == 0) return;
+    /* Metal conducts (see MATX_METAL's own row) with no heat_ramp at all -
+     * deliberately, per its own comment: no variant to bank heat in, so it
+     * SURVIVES heat rather than holding any. "Holds heat never" would say
+     * the field applies and just came out at the bottom of the ladder,
+     * which is a different claim from "this material has no ramp" - so the
+     * phrase is dropped rather than printed with adverb_for(0). */
+    if (r->heat_ramp != 0) {
+        printf("- *Holds heat*%s", rate_gap(adverb("heat_ramp", r->heat_ramp)));
+        if (r->conducts != 0) {
+            printf(" and *passes it on*%s",
+                   rate_gap(adverb("conducts", r->conducts)));
+        }
+        if (r->cools != 0) {
+            printf(", *draining back to ambient*%s once nothing is "
+                   "heating it", rate_gap(adverb("cools", r->cools)));
+        }
+    } else {
+        printf("- *Passes heat on*%s, without banking any of it itself",
+               rate_gap(adverb("conducts", r->conducts)));
+    }
+    printf(".\n");
+}
+
+/* Its own function rather than folded into emit_temperature() just above:
+ * that one is gated on heat_ramp/conducts, banking or passing heat along,
+ * and water (boils's whole reason for existing) does neither - it just
+ * boils where it stands, so emit_temperature()'s own gate would skip it
+ * entirely if this clause lived there instead. */
+static void emit_boils(const reaction_t *r)
+{
+    if (r->boils == 0) return;
+    const uint8_t boils_to = r->boils_to ? r->boils_to : MAT_STEAM;
+    printf("- Once conducted heat reaches it, *boils* into %s%s.\n",
+           mat_span_v(boils_to), rate_gap(adverb("boils", r->boils)));
+}
+
+static void emit_cold(const reaction_t *r)
+{
+    if (r->chills == 0) return;
+    printf("- *Chills whatever it touches*%s.\n",
+           rate_gap(adverb("chills", r->chills)));
+}
+
+static void emit_warmth(const reaction_t *r)
+{
+    if (r->warms == 0) return;
+    printf("- *Warms whatever it touches*%s, without igniting or "
+           "quenching anything.\n", rate_gap(adverb("warms", r->warms)));
+}
+
+static void emit_thaw(const reaction_t *r)
+{
+    if (r->thaws == 0) return;
+    /* `thaws` shares its product with GRP_TRANSFORM's `heats_to` - the
+     * liquid-contact roll in sand_reactions.c writes the same target
+     * field the heat-contact roll does, so naming it here is the field's
+     * actual behaviour, not redundant prose borrowed from another group. */
+    if (r->heats_to != 0) {
+        printf("- *Melts in any liquid it touches*%s, becoming %s.\n",
+               rate_gap(adverb("thaws", r->thaws)), mat_span_v(r->heats_to));
+    } else {
+        printf("- *Melts in any liquid it touches*%s.\n",
+               rate_gap(adverb("thaws", r->thaws)));
+    }
+}
+
+static void emit_wet(const reaction_t *r)
+{
+    if (r->wets != 0) {
+        printf("- *Wets* whatever it touches: things that soak will draw "
+               "it in.\n");
+    }
+    if (r->soaks != 0) {
+        /* `soaks` only ever fires beside a wetting liquid - see
+         * sand_reactions.c's own soaking loop, which skips a neighbour
+         * outright when reaction_of(n)->wets == 0 - so this names
+         * wetting_liquids, not "any liquid" (that claim is `thaws`'s
+         * alone; see this file's comment on wetting_liquids). */
+        if (r->soaks_to != 0) {
+            printf("- *Soaks up* any %s it touches%s, becoming %s "
+                   "once it takes a unit in.\n",
+                   wetting_liquids, rate_gap(adverb("soaks", r->soaks)),
+                   mat_span_v(r->soaks_to));
+        } else {
+            printf("- *Soaks up* any %s it touches%s, growing wetter "
+                   "(its own moisture rises) rather than changing into "
+                   "anything.\n", wetting_liquids,
+                   rate_gap(adverb("soaks", r->soaks)));
+        }
+    }
+    if (r->dries != 0) {
+        printf("- *Dries back out*%s, on its own, with no partner "
+               "needed.\n", rate_gap(adverb("dries", r->dries)));
+    }
+}
+
+static void emit_acid(const reaction_t *r)
+{
+    if (r->dissolves != 0) {
+        printf("- *Dissolves an adjacent cell*%s",
+               rate_gap(adverb("dissolves", r->dissolves)));
+        if (r->fizz != 0) {
+            /* `fizz` is a one-shot chance on the cell just eaten, not a
+             * rate - adverb() always returns a frequency word for it
+             * (chance-scale fields never fall silent), and "leaving smoke
+             * behind" stays unmarked glue rather than a second verb mark
+             * in the same clause. */
+            printf(",%s leaving %s behind",
+                   rate_gap(adverb("fizz", r->fizz)),
+                   mat_span_v(MAT_SMOKE));
+        }
+        printf(".\n");
+    }
+    if (r->dissolvable != 0) {
+        /* `dissolvable` is the chance a single ATTEMPT to dissolve THIS
+         * material succeeds (see its own comment in material.h) - an EASE
+         * question, not a frequency one, so adverb() reads it through
+         * ease_words[] rather than frequency_words[] (see field_docs[]'s
+         * FCHANCE_VOCAB row for this field) and the material stays the
+         * subject: "Dissolves in acid handily", not the fronted-adverb
+         * "Mostly gives way to acid". */
+        printf("- *Dissolves in* %s%s.\n", mat_span_v(MAT_ACID),
+               rate_gap(adverb("dissolvable", r->dissolvable)));
+    }
+}
+
+static void emit_evaporates(const reaction_t *r)
+{
+    if (r->evaporates == 0) return;
+    printf("- *Spontaneously evaporates into* %s%s - unconditional, no "
+           "heat or neighbour required.\n",
+           mat_span_v(MAT_GAS), rate_gap(adverb("evaporates", r->evaporates)));
+}
+
+static void emit_condense(const reaction_t *r)
+{
+    if (r->condenses == 0 || r->condenses_to == 0) return;
+    printf("- A 2x2 block of it%s *condenses* into a single cell of %s.\n",
+           rate_gap(adverb("condenses", r->condenses)),
+           mat_span_v(r->condenses_to));
+}
+
+static void emit_grow(const reaction_t *r)
+{
+    if (r->grows != 0) {
+        printf("- *Grows into wet* %s%s, against gravity, spending a "
+               "level of that %s's moisture per cell.\n",
+               soil_names, rate_gap(adverb("grows", r->grows)), soil_names);
+    }
+    if (r->falls != 0) {
+        printf("- *Falls under gravity*%s when there is empty space "
+               "beneath it.\n", rate_gap(adverb("falls", r->falls)));
+    }
+    if (r->withers != 0) {
+        if (r->sheltered_by != 0) {
+            printf("- *Withers away*%s if it cannot reach water through "
+                   "its own roots and is not touching %s.\n",
+                   rate_gap(adverb("withers", r->withers)),
+                   mat_span_v(r->sheltered_by));
+        } else {
+            printf("- *Withers away*%s if it cannot reach water through "
+                   "its own roots.\n",
+                   rate_gap(adverb("withers", r->withers)));
+        }
+    }
+}
+
+static void emit_harden(const reaction_t *r)
+{
+    if (r->hardens_to == 0) return;
+    /* `harden_chance`, `holds_line` and `canopy` are each a one-shot
+     * decision made once, at the moment a run hardens - not a per-step
+     * rate against a partner - so adverb() gives each a frequency word
+     * ("mostly", "occasionally", ...) here, and each is phrased before its
+     * verb ("mostly hardens") rather than after ("hardens mostly"), which
+     * is the reading a frequency word wants. */
+    printf("- A straight run of %u cells%s *hardens* into %s",
+           (unsigned)r->harden_run,
+           rate_gap(adverb("harden_chance", r->harden_chance)),
+           mat_span_v(r->hardens_to));
+    if (r->trunk_girth != 0) {
+        printf(", up to %u cells wider at the foot than at the tip",
+               (unsigned)r->trunk_girth);
+    }
+    if (r->holds_line != 0) {
+        printf(", and%s a limb holds its own direction (rather than "
+               "bending back toward gravity)",
+               rate_gap(adverb("holds_line", r->holds_line)));
+    }
+    if (r->clings_to != 0) {
+        printf("; the hardened body counts as part of %s",
+               mat_span_v(r->clings_to));
+    }
+    printf(".\n");
+    if (r->canopy != 0 && r->canopy_to != 0) {
+        printf("- The moment it hardens, it also%s *leafs its crown* with "
+               "%s, one candidate space at a time.\n",
+               rate_gap(adverb("canopy", r->canopy)),
+               mat_span_v(r->canopy_to));
+    }
+}
+
+static void emit_regrow(const reaction_t *r)
+{
+    if (r->sprouts != 0 && r->sprouts_to != 0) {
+        printf("- Standing in wet %s, *sprouts* %s beside itself%s.\n",
+               soil_names, mat_span_v(r->sprouts_to),
+               rate_gap(adverb("sprouts", r->sprouts)));
+    }
+    if (r->buds != 0 && r->buds_to != 0) {
+        printf("- Once already in leaf and able to reach water, *buds* "
+               "new %s beside itself%s.\n",
+               mat_span_v(r->buds_to), rate_gap(adverb("buds", r->buds)));
+    }
+    if (r->drinks != 0) {
+        /* Same wetting-liquid gate as `soaks` - step_one_drinking_cell()
+         * (sand_reactions.c) requires reaction_of(n)->wets != 0 on the
+         * neighbour it drinks from - so this names wetting_liquids rather
+         * than the generic "a liquid" the old wording implied.
+         *
+         * Simplified from an earlier version that said the water "comes
+         * out as a level of moisture in the soil at its root, not in
+         * itself" - that named an invisible internal gate ("room for
+         * more") a reader cannot observe, and denied the water changing
+         * the drinker itself without saying why the sentence was even
+         * under this material. This says where the water actually goes
+         * instead. */
+        printf("- Touching %s, *passes it down to* %s at its roots%s.\n",
+               wetting_liquids, soil_names,
+               rate_gap(adverb("drinks", r->drinks)));
+    }
+    if (r->roots != 0 && r->roots_to != 0) {
+        printf("- Spending its own %s moisture to grow, bud or sprout,%s "
+               "*roots into* %s it drinks from, welding that cell into "
+               "%s.\n",
+               soil_names, rate_gap(adverb("roots", r->roots)), soil_names,
+               mat_span_v(r->roots_to));
+    }
+}
+
+static void emit_shatter(const reaction_t *r)
+{
+    if (r->shatters_to == 0) return;
+    printf("- *Shatters* into %s %s.\n", mat_span_v(r->shatters_to),
+           CAUSE_MARKED);
+}
+
+static void emit_material_section(const char *name, const reaction_t *r,
+                                  uint8_t self_id, uint8_t color_id)
+{
+    if (row_is_empty(r)) return;
+    printf("\n### %s\n\n", name);
+    emit_ignite(r, self_id);
+    emit_burn(r);
+    emit_transform(r, color_id);
+    emit_spoils(r);
+    emit_temperature(r);
+    emit_boils(r);
+    emit_cold(r);
+    emit_warmth(r);
+    emit_thaw(r);
+    emit_wet(r);
+    emit_acid(r);
+    emit_evaporates(r);
+    emit_condense(r);
+    emit_grow(r);
+    emit_harden(r);
+    emit_regrow(r);
+    emit_shatter(r);
+}
+
+/*-----------------------------------------------------------------------
+ * The pairwise A + B -> C table.
+ *
+ * Keyed on the RATE field and branching on the target - never the other
+ * way around. Walking `*_to` fields and asking what triggers them would
+ * miss every reaction whose target IS its own row (dirt getting wetter)
+ * or a third cell entirely (a plant drinking) - see the plan's "The
+ * pairwise join is phase 1, not phase 2" section, which is the reason
+ * this table exists at all rather than being deferred.
+ *---------------------------------------------------------------------*/
+
+static bool is_burning_material(const reaction_t *r)
+{
+    return r->burns != 0;
+}
+
+/* Mirrors neighbor_quenches() (sand_reactions.c) exactly: a liquid quenches
+ * iff it is neither fuel nor itself a heat source. Not a magic threshold -
+ * both fields it reads are already in the table this program links. */
+static bool is_quenching_liquid(const mrow_t *row)
+{
+    return row->kind == KIND_LIQUID && row->r->flammability == 0 &&
+           row->r->burns == 0;
+}
+
+static void join_names(bool (*pred)(const mrow_t *), const char *sep,
+                       char *out, size_t cap)
+{
+    out[0] = '\0';
+    bool first = true;
+    for (size_t i = 0; i < all_rows_count; i++) {
+        if (!pred(&all_rows[i])) continue;
+        size_t len = strlen(out);
+        int n = snprintf(out + len, cap - len, "%s%s", first ? "" : sep,
+                          all_rows[i].name);
+        (void)n;
+        first = false;
+    }
+    if (out[0] == '\0') {
+        snprintf(out, cap, "(none)");
+    }
+}
+
+static bool pred_burns(const mrow_t *row) { return row->r->burns != 0; }
+static bool pred_kind_liquid(const mrow_t *row) { return row->kind == KIND_LIQUID; }
+static bool pred_wets_liquid(const mrow_t *row)
+{
+    return row->kind == KIND_LIQUID && row->r->wets != 0;
+}
+
+/* `dries != 0` is already the canonical "this variant can mean moisture"
+ * marker - sand_reactions.c's own comment on the smelting wet-earth branch
+ * says so explicitly, and the MOISTURE SPREADS block in that same file
+ * relies on the identical test. Dirt is the only row this selects today
+ * (Root has no `dries` of its own), so the derived list below reads
+ * "dirt" wherever the per-material prose used to hardcode the word
+ * "soil" - see the plan's own note on why a hardcoded word cannot track a
+ * second moisture-bearing material if one is ever added. */
+static bool pred_dries(const mrow_t *row) { return row->r->dries != 0; }
+
+/* The two halves of the Legend's legibility note - which materials print
+ * at a lightness-adjusted colour (LEGIBILITY_OVERRIDES has a row for their
+ * cell) versus their exact, unadjusted device value (no row - they already
+ * clear 3:1 against both backgrounds on their own). Derived rather than
+ * typed out, so the note cannot drift from LEGIBILITY_OVERRIDES the way a
+ * hardcoded sentence could. */
+static bool pred_needs_legibility_override(const mrow_t *row)
+{
+    return legibility_override_for(row->color_id) != NULL;
+}
+static bool pred_exact_color(const mrow_t *row)
+{
+    return legibility_override_for(row->color_id) == NULL;
+}
+
+/* The Legend, printed once, before ## Per-material - the key to every
+ * coloured name that follows, and the explanation for why colour and
+ * typography mean what they mean on this page. Unlike emit_anatomy()'s own
+ * material list (raw device values, deliberately - see that section's own
+ * top comment), this one reads through legible_hex(): it is the actual key
+ * a reader needs for the section that follows it. */
+static void emit_legend(void)
+{
+    printf("\n## Legend\n\n");
+    printf("Every material name below is coloured - this list doubles as "
+           "the key: whatever colour a name gets here is the colour that "
+           "same name gets in every bullet that follows.\n\n");
+
+    for (size_t i = 0; i < all_rows_count; i++) {
+        printf("%s%s", mat_span_v(all_rows[i].color_id),
+               (i + 1 < all_rows_count) ? ", " : "\n\n");
+    }
+
+    char adjusted[256];
+    char exact[256];
+    join_names(pred_needs_legibility_override, ", ", adjusted,
+               sizeof(adjusted));
+    join_names(pred_exact_color, ", ", exact, sizeof(exact));
+    printf("These colours are lightness-adjusted from the device's exact "
+           "palette wherever the raw value fails a 3:1 WCAG contrast floor "
+           "against GitHub's light and dark page backgrounds (hue and "
+           "saturation are left alone - only lightness moves, and only as "
+           "far as it has to): %s. Everything else - %s - already clears "
+           "3:1 on its own and prints its exact, unadjusted device value; "
+           "see LEGIBILITY_OVERRIDES in this file's own source for the "
+           "raw/adjusted pair behind each one. `emit_anatomy()`'s own "
+           "material list further down uses the raw values throughout, on "
+           "purpose - it is documenting the actual palette, not standing "
+           "in as this page's key.\n\n", adjusted, exact);
+
+    printf("The pairwise table further down stays plain text, with no "
+           "colour at all, deliberately: every coloured name on this page "
+           "is inline LaTeX (`$\\textcolor{}{}$`), and that has only ever "
+           "been confirmed to render inside running prose on GitHub, never "
+           "inside a markdown TABLE CELL - so this generator does not "
+           "colour table cells on an unverified assumption.\n\n");
+
+    printf("Typography carries the other three roles colour does not: "
+           "*italic* is the verb driving a clause, **bold** is a rate or "
+           "frequency word (silent, rather than printed, for the common "
+           "case - see this file's own adverb_for()), and ***bold "
+           "italic*** is a trigger clause that lives at a read site in "
+           "sand_reactions.c rather than in the table itself - today "
+           "always the literal `%s` placeholder.\n", CAUSE);
+}
+
+static void print_join_row(const char *a, const char *b, const char *becomes,
+                           const char *rate, const char *note)
+{
+    printf("| %s | %s | %s | %s | %s |\n", a, b, becomes, rate, note);
+}
+
+/* The pairwise table's own rate/frequency cell. Absence means something
+ * different in a table cell than it does in a sentence: silence in prose
+ * reads as "ordinary speed" (see adverb_for()'s own top comment on the
+ * rate ladder's silent middle), which is a real, true claim a sentence can
+ * make by simply not mentioning a rate. A blank TABLE CELL cannot make
+ * that claim - it reads as "nobody filled this in" - so every rate/
+ * frequency cell in this table is routed through this helper, which
+ * substitutes an explicit em dash for an empty adverb rather than leaving
+ * the cell blank. */
+static const char *table_rate(const char *word)
+{
+    return (word[0] == '\0') ? "—" : word;
+}
+
+static void emit_pairwise_table(void)
+{
+    printf("\n## Pairwise reactions\n\n");
+    printf("Generated by walking the RATE field that drives each reaction "
+           "and branching on its target, never by walking `*_to` fields - "
+           "see this file's own top comment on the pairwise join for why "
+           "(`soaks_to == 0` is a real reaction with no target, and "
+           "iterating `*_to` alone would silently skip it).\n\n");
+    printf("| A | B | becomes | rate | note |\n");
+    printf("|---|---|---|---|---|\n");
+
+    char burners[256];
+    join_names(pred_burns, " / ", burners, sizeof(burners));
+    char liquids[256];
+    join_names(pred_kind_liquid, " / ", liquids, sizeof(liquids));
+
+    /* dissolves x dissolvable. `fizz` is read from the DISSOLVER's own row
+     * (all_rows[i], not the cell being eaten) - see step_one_dissolver_
+     * cell() in sand_reactions.c, which rolls r->fizz on the acid cell at
+     * the moment it eats a neighbour. */
+    for (size_t i = 0; i < all_rows_count; i++) {
+        if (all_rows[i].r->dissolves == 0) continue;
+        for (size_t j = 0; j < all_rows_count; j++) {
+            if (all_rows[j].r->dissolvable == 0) continue;
+            char becomes[64];
+            if (all_rows[i].r->fizz != 0) {
+                /* `fizz` is FCHANCE - never silent (see frequency_words[]'s
+                 * own comment on why chance-scale fields always print a
+                 * word) - so adverb() always has something real to say
+                 * here. */
+                snprintf(becomes, sizeof(becomes), "nothing (%s smoke)",
+                         adverb("fizz", all_rows[i].r->fizz));
+            } else {
+                snprintf(becomes, sizeof(becomes), "nothing");
+            }
+            char rate[64];
+            snprintf(rate, sizeof(rate), "%s / %s",
+                     table_rate(adverb("dissolves", all_rows[i].r->dissolves)),
+                     table_rate(adverb("dissolvable",
+                                        all_rows[j].r->dissolvable)));
+            print_join_row(all_rows[i].name, all_rows[j].name, becomes,
+                           rate, "both rolls must pass");
+        }
+    }
+
+    /* flammability/ignites_to x burns. Same three-way split as
+     * emit_ignite() (see that function's own comment on ignites_to's
+     * three shapes): 0 or MAT_FIRE reads as Fire, a third material reads
+     * as that material, and igniting into SELF reads as "<name>, alight" -
+     * never the bare material name, which would read as a no-op ("Wood ->
+     * becomes: Wood") when what actually happens is a state change, not a
+     * material change. */
+    for (size_t i = 0; i < all_rows_count; i++) {
+        if (all_rows[i].r->flammability == 0) continue;
+        char becomes[64];
+        if (all_rows[i].r->ignites_to == 0 ||
+            all_rows[i].r->ignites_to == MAT_FIRE) {
+            snprintf(becomes, sizeof(becomes), "Fire");
+        } else if (all_rows[i].r->ignites_to == all_rows[i].self_id) {
+            snprintf(becomes, sizeof(becomes), "%s, alight", all_rows[i].name);
+        } else {
+            snprintf(becomes, sizeof(becomes), "%s",
+                     to_name(all_rows[i].r->ignites_to));
+        }
+        print_join_row(all_rows[i].name, burners, becomes,
+                       table_rate(adverb("flammability",
+                                          all_rows[i].r->flammability)),
+                       all_rows[i].r->needs_air ? "only where it touches air"
+                                                : "");
+    }
+
+    /* heats_to x burns (memoryless and ramped both go through the same
+     * try_heat_transform() trigger - contact with a burning cell, or
+     * through a conductor) */
+    for (size_t i = 0; i < all_rows_count; i++) {
+        if (all_rows[i].r->heats_to == 0) continue;
+        char rate[64];
+        /* `melts` is its own row against LAVA alone, never folded into
+         * the burners row: it is direct contact with a burning liquid,
+         * not "fire or lava, or through a conductor", and a row that has
+         * ONLY melts (Root) would otherwise be printed as reachable by
+         * every burner at a rate of "never" - true and useless. See
+         * reaction_t.melts. */
+        if (all_rows[i].r->melts != 0) {
+            print_join_row(all_rows[i].name, "Lava", to_name(all_rows[i].r->heats_to),
+                           table_rate(adverb("melts", all_rows[i].r->melts)),
+                           "direct contact only - not fire, not through a conductor");
+        }
+        if (all_rows[i].r->heat_ramp == 0 && all_rows[i].r->heat_chance == 0) {
+            continue; /* melts-only: the burners row would be a lie */
+        }
+        if (all_rows[i].r->heat_ramp != 0) {
+            snprintf(rate, sizeof(rate), "under long heat (banked)");
+        } else {
+            snprintf(rate, sizeof(rate), "%s",
+                     table_rate(adverb("heat_chance",
+                                        all_rows[i].r->heat_chance)));
+        }
+        print_join_row(all_rows[i].name, burners, to_name(all_rows[i].r->heats_to),
+                       rate, "or through a conductor");
+    }
+
+    /* quench_to x quenching liquids */
+    for (size_t i = 0; i < all_rows_count; i++) {
+        if (!is_burning_material(all_rows[i].r) &&
+            all_rows[i].r->burn_decay == 0) {
+            continue;
+        }
+        char qbuf[256];
+        join_names(is_quenching_liquid, " / ", qbuf, sizeof(qbuf));
+        if (all_rows[i].r->burn_decay != 0) {
+            /* burn_decay path: quench_to is never read - see emit_burn()'s
+             * own comment on step_one_burning_cell(). */
+            print_join_row(all_rows[i].name, qbuf, "itself, unlit",
+                           "on contact",
+                           "quench_to is not read on this path");
+        } else {
+            const char *becomes = (all_rows[i].r->quench_to != 0)
+                                       ? to_name(all_rows[i].r->quench_to)
+                                       : "nothing";
+            print_join_row(all_rows[i].name, qbuf, becomes, "on contact", "");
+        }
+    }
+
+    /* chills x heat_ramp/shatters_to */
+    for (size_t i = 0; i < all_rows_count; i++) {
+        if (all_rows[i].r->chills == 0) continue;
+        for (size_t j = 0; j < all_rows_count; j++) {
+            if (all_rows[j].r->heat_ramp == 0) continue;
+            char becomes[64];
+            snprintf(becomes, sizeof(becomes), "%s, one heat level cooler",
+                     all_rows[j].name);
+            print_join_row(all_rows[i].name, all_rows[j].name, becomes,
+                           table_rate(adverb("chills", all_rows[i].r->chills)),
+                           "");
+            if (all_rows[j].r->shatters_to != 0) {
+                print_join_row(all_rows[i].name, all_rows[j].name,
+                               to_name(all_rows[j].r->shatters_to), CAUSE,
+                               "only if B is hot enough when A touches it");
+            }
+        }
+    }
+
+    /* wets x soaks - the wetting family. Four reactions, not a loop over
+     * *_to: see this file's top comment and the plan's own section on it. */
+    for (size_t i = 0; i < all_rows_count; i++) {
+        if (all_rows[i].r->wets == 0) continue;
+        for (size_t j = 0; j < all_rows_count; j++) {
+            if (all_rows[j].r->soaks == 0) continue;
+            if (all_rows[j].r->soaks_to != 0) {
+                print_join_row(all_rows[i].name, all_rows[j].name,
+                               to_name(all_rows[j].r->soaks_to),
+                               table_rate(adverb("soaks", all_rows[j].r->soaks)),
+                               "the liquid pays a unit of its own mass");
+            } else {
+                char becomes[64];
+                snprintf(becomes, sizeof(becomes), "%s, +1 moisture",
+                         all_rows[j].name);
+                print_join_row(all_rows[i].name, all_rows[j].name, becomes,
+                               table_rate(adverb("soaks", all_rows[j].r->soaks)),
+                               "no material change - soaks_to is 0");
+            }
+        }
+        /* drinks: a THIRD cell changes (dirt at the root), not the
+         * subject and not the liquid - see reaction_t.drinks. "dirt", not
+         * the old hardcoded "soil" - see pred_dries()'s own comment. */
+        for (size_t j = 0; j < all_rows_count; j++) {
+            if (all_rows[j].r->drinks == 0) continue;
+            print_join_row(all_rows[i].name, all_rows[j].name,
+                           "the dirt at B's root, +1 moisture",
+                           table_rate(adverb("drinks", all_rows[j].r->drinks)),
+                           "B itself is unchanged - a third cell changes");
+        }
+    }
+    /* dries: self-driven, no partner at all. */
+    for (size_t i = 0; i < all_rows_count; i++) {
+        if (all_rows[i].r->dries == 0) continue;
+        char becomes[64];
+        snprintf(becomes, sizeof(becomes), "%s, -1 moisture", all_rows[i].name);
+        print_join_row(all_rows[i].name, "(none - self-driven)", becomes,
+                       table_rate(adverb("dries", all_rows[i].r->dries)), "");
+    }
+
+    /* thaws x any KIND_LIQUID */
+    for (size_t i = 0; i < all_rows_count; i++) {
+        if (all_rows[i].r->thaws == 0) continue;
+        print_join_row(all_rows[i].name, liquids, to_name(all_rows[i].r->heats_to),
+                       table_rate(adverb("thaws", all_rows[i].r->thaws)),
+                       "any liquid counts, not water alone");
+    }
+}
+
+/*-----------------------------------------------------------------------
+ * "How these sentences are built."
+ *
+ * Not the per-material table itself - that stays clean, unmarked prose,
+ * on purpose: it is the deliverable a future brush-description feature
+ * will read from, not a place for this file's own internals to leak into.
+ * This is a SEPARATE section, appended after the pairwise table, showing
+ * one representative sentence per group (see group_id_t) with its slots
+ * marked, so a reader can see how much of each sentence is a generated
+ * slot and how much is hand-written glue inside an emit_*() function.
+ *
+ * Every marked RATE and OBJECT word below is pulled through the exact
+ * same adverb()/to_name()/prose_name() calls (and the exact same live
+ * reaction_t rows) the real per-material clauses use above - so those
+ * words track material.c and cannot go stale the way a typed-out example
+ * would. The GLUE text cannot be sourced the same way: it is prose typed
+ * directly into the matching emit_*() function's printf() calls, so it is
+ * transcribed by hand from that function here, and needs a matching edit
+ * if that function's own wording ever changes - each example below names
+ * the emit_*() function and fields it mirrors, to make that edit findable.
+ *
+ * The material slots are marked with inline LaTeX colour spans -
+ * $\textcolor{#RRGGBB}{\text{...}}$, SINGLE dollars on each side. An
+ * earlier version used $${\color{...}...}$$ per slot and failed three ways
+ * at once: $$...$$ is DISPLAY math (a block element), so every marked span
+ * broke onto its own centred line and shredded the sentence; VSCode's math
+ * extension reads a bare $ as its own inline delimiter, so it saw $$ as two
+ * of those and threw a KaTeX parse error; and even rendered correctly,
+ * KaTeX sets the words in an italic serif math font that clashes with the
+ * surrounding sans prose. A version after that switched to plain markdown
+ * emphasis - **bold**, `code`, *italic* - which sidesteps all three
+ * failures but loses colour: three visual weights cannot carry five
+ * distinct slots, so Subject had to share **bold** with Verb and Cause had
+ * to fold into unmarked glue. Inline single-dollar math keeps colour and
+ * drops the block-math and font problems: $\textcolor{...}{\text{...}}$
+ * flows inline, renders upright (`\text{}` switches back out of math
+ * italics), and every material name below gets its own colour rather than
+ * sharing a channel - see COLOUR MEANS MATERIAL, NOTHING ELSE below for
+ * why grammar roles do NOT also compete for that same channel any more,
+ * which is what lets plain markdown emphasis back in for them without
+ * repeating that earlier failure.
+ *
+ * WHICH COLOUR A MATERIAL GETS
+ *
+ * Subject and Object used to be two fixed, unrelated colours (a flat red
+ * for whichever row the sentence is about, a flat green for whichever
+ * material a field's value names) - which meant the colour told you SLOT,
+ * not SUBSTANCE: Wood and Glass rendered in the identical red, Steam and
+ * Sand in the identical green, even though the whole point of colouring a
+ * material anywhere else in this game is that no two materials share a
+ * colour. Every material NAME below - subject or object, and the literal
+ * word "fire" inside "Catches fire" (emit_ignite()'s own wording for
+ * ignites_to's 0/MAT_FIRE default, not a to_name() call, but naming
+ * MAT_FIRE all the same) - now renders in THAT material's own colour
+ * instead: material_hex() below reads it straight out of
+ * material_palette(), the exact array the panel itself renders from, at
+ * the same representative swatch a freshly painted cell of that material
+ * actually takes - see representative_variant()'s own comment for why that
+ * is not simply app_sand.c's brush_color() variant-13 shortcut, and
+ * material_hex()'s for the extended-cell case, which still is.
+ *
+ * COLOUR MEANS MATERIAL, NOTHING ELSE
+ *
+ * Verb, Rate/frequency and Cause used to keep one fixed colour each, the
+ * same way Subject/Object once did before the fix just above - which left
+ * colour answering two unrelated questions at once (WHICH material, and
+ * WHICH grammar role), and the palette only ever had an opinion on the
+ * first one: nothing in material_palette() says what colour `melts`
+ * should be, so those three colours were arbitrary picks this file made
+ * up out of nowhere, not derived from anything the game itself knows.
+ * Colour now means exactly one thing on this whole page - "this word is a
+ * material" - and grammar role moved to typography instead: MARK_VERB
+ * prints as *italic* (a light touch for the action), MARK_RATE as
+ * **bold** (every rate word scannable in one pass - which is exactly what
+ * made the by-feel adverb tuning pass legible once it landed), and
+ * MARK_CAUSE as ***bold italic*** (a clause rather than a single word, and
+ * the rarest thing on this page - every instance today is the CAUSE
+ * placeholder below). Glue stays plain and unmarked, same as always. This
+ * is not a return to the all-markdown attempt two paragraphs up, which
+ * failed because it had to carry FIVE distinct slots (Subject, Object,
+ * Verb, Rate, Cause) through three visual weights: with material identity
+ * now handled entirely by its own per-instance LaTeX colour span, the
+ * typography channel only has to tell apart THREE grammar roles plus
+ * unmarked glue - one weight per role, nothing sharing, nothing left
+ * over. See print_marked() below for where each mark_t turns into its
+ * treatment, and the Legend this function prints for the reader-facing
+ * version of this same rationale. */
+
+typedef enum {
+    MARK_NONE,     /* glue (see the Legend below) - printed as ordinary
+                    * markdown text, in the reader's own theme colour. */
+    MARK_MATERIAL, /* a material's own name - colour is per-INSTANCE, not
+                    * per-slot: two MARK_MATERIAL segments in the same
+                    * sentence (a subject and a cause used to be able to
+                    * share a word; now Wood and Fire never share a colour)
+                    * each carry their own hex in seg_t.color, computed by
+                    * material_hex() below. Colour means exactly one thing
+                    * on this page - "this word is a material" - so this is
+                    * the only mark that still carries one; see COLOUR
+                    * MEANS MATERIAL, NOTHING ELSE above. */
+    MARK_VERB,     /* the action - *italic*, see print_marked() below and
+                    * the Legend this file prints. */
+    MARK_RATE,     /* rate / frequency - **bold**. */
+    MARK_CAUSE,    /* a trigger clause - ***bold italic***. */
+} mark_t;
+
+typedef struct {
+    mark_t mark;
+    const char *color; /* only meaningful when mark == MARK_MATERIAL - the
+                        * only mark that carries a colour at all (see
+                        * mark_t's own comment). NULL for every other mark:
+                        * MARK_VERB/MARK_RATE/MARK_CAUSE render as markdown
+                        * emphasis instead (see print_marked() below), and
+                        * MARK_NONE is unmarked glue. */
+    const char *text;
+} seg_t;
+
 /* One member of a derived material list (heat_sources, wetting_liquids)
  * with its own name and colour copied into stable, per-item storage -
  * never a pointer into prose_name()'s or material_hex()'s shared/reused
@@ -1617,6 +2143,28 @@ static void seg_glue(seg_t *segs, size_t *n, const char *text)
 static void seg_mark(seg_t *segs, size_t *n, mark_t mark, const char *text)
 {
     segs[(*n)++] = (seg_t){ mark, NULL, text };
+}
+
+/* A MARK_RATE segment that can legitimately be empty - the rate ladder's
+ * silent middle (adverb_for()'s own top comment) applies here exactly as
+ * it does in the default per-material clauses, and several of this
+ * section's own examples land a live value in that silent band (Metal's
+ * `conducts`, Ice's `chills`, and others - the ladder was tuned against
+ * this table's real data, not against which examples happen to be picked
+ * here). Appends its own leading-space glue AND the mark together, and
+ * appends NOTHING at all when the word is empty, so the caller's own
+ * surrounding glue never ends up with a stray double space or an empty
+ * "****" - the same rule rate_gap() enforces for the plain-text default
+ * clauses, just expressed as two seg_t entries instead of one pre-joined
+ * string. Every call site below therefore drops the "seg_glue(\" \")"
+ * a fixed-present rate word used to need immediately before it. */
+static void seg_rate_gap(seg_t *segs, size_t *n, const char *word)
+{
+    if (word[0] == '\0') {
+        return;
+    }
+    seg_glue(segs, n, " ");
+    seg_mark(segs, n, MARK_RATE, word);
 }
 
 /* A single material-name segment, coloured by its own already-computed hex
@@ -1710,9 +2258,10 @@ static void emit_anatomy(void)
 {
     printf("\n## How these sentences are built\n\n");
     printf("Not a markup pass on the table above - that table stays as "
-           "clean prose, unedited (see the plan's own phasing: it is the "
-           "deliverable this whole file exists to produce). This section "
-           "is generated separately, from the same decode helpers "
+           "clean prose, unedited (see docs/Sand/Reaction-Doc-Generator-"
+           "Plan.md: it is the deliverable this whole file exists to "
+           "produce). This section is generated separately, from the same "
+           "decode helpers "
            "(`adverb()`, `to_name()`, `prose_name()`) and the same live "
            "`reactions[]`/`extended_reactions[]` rows, picking one "
            "representative sentence per group and marking which part of "
@@ -1762,21 +2311,23 @@ static void emit_anatomy(void)
     printf("- Verb (*italic*) - the wording tied to the field driving the "
            "clause, set off with a light touch since it is naming an "
            "action, not a substance. `field_docs[]` carries a `verb` "
-           "string per field for exactly this reason, but phase 1 never "
+           "string per field for exactly this reason, but this file never "
            "actually reads that column back out (grep `->verb` in this "
            "file - nothing matches): today the words are typed directly "
            "into the matching `emit_*()` printf() call, kept in sync with "
            "`field_docs[]` by hand instead of by the compiler.\n");
     printf("- Rate / frequency (**bold**) - the ladder bucket: "
-           "`adverb_for()` for a genuine per-step rate (SCALE_RATE), or "
-           "`chance_bucket_for()` through frequency_words[]/ease_words[] "
-           "for a one-shot chance (SCALE_CHANCE). Two different ladders "
-           "share this one channel because both answer the same question "
-           "- \"which of five bands\" - for the same kind of raw byte; "
-           "only the vocabulary differs, and it is DIFFERENT for a reason "
-           "(see ease_words[]'s own comment above). Bold makes every rate "
-           "word scannable in one pass, which is exactly what the by-feel "
-           "adverb tuning pass still ahead of us (phase 2) needs.\n");
+           "`adverb_for()` for a genuine per-step rate (SCALE_RATE, silent "
+           "for the ordinary middle band - see that function's own top "
+           "comment for why), or `chance_bucket_for()` through "
+           "frequency_words[]/ease_words[] for a one-shot chance "
+           "(SCALE_CHANCE, which never falls silent). Two different "
+           "ladders share this one channel because both answer the same "
+           "kind of question for the same kind of raw byte; only the "
+           "vocabulary differs, and it is DIFFERENT for a reason (see "
+           "ease_words[]'s own comment above). Bold makes every rate word "
+           "scannable in one pass. A silent rate prints no word at all "
+           "here, same as in the default section - see seg_rate_gap().\n");
     printf("- Cause (***bold italic***) - a trigger that lives at a read "
            "site in sand_reactions.c, not in this table - rendered as the "
            "literal `%s` placeholder rather than guessed at. Bold italic "
@@ -1816,18 +2367,18 @@ static void emit_anatomy(void)
         seg_mark(segs, &n, MARK_VERB, "Catches");
         seg_glue(segs, &n, " ");
         seg_material(segs, &n, fire, "fire");
-        seg_glue(segs, &n, " ");
-        seg_mark(segs, &n, MARK_RATE,
-                 adverb("flammability", row->r->flammability));
+        seg_rate_gap(segs, &n, adverb("flammability", row->r->flammability));
         seg_glue(segs, &n, " from ");
         seg_list(segs, &n, heat, heat_n, " or ");
-        seg_glue(segs, &n, ", and burns where it stands, rather than "
-                 "flaring away.");
+        seg_glue(segs, &n, ", and burns in place.");
         print_example("Ignite - GRP_IGNITE: flammability, ignites_to, "
                        "heat_sources (emit_ignite)", segs, n);
     }
 
-    /* GRP_BURN - emit_burn(), the `burns` branch: residue, quench_to. */
+    /* GRP_BURN - emit_burn(), the `burns` branch: residue, quench_to,
+     * quenching_liquids (derived, not a single field - see emit_burn()'s
+     * own comment on why "a quenching liquid" was replaced with the real,
+     * derived list). */
     {
         const mrow_t *row = find_row("Fire");
         char subject[COLOR_LEN];
@@ -1837,6 +2388,11 @@ static void emit_anatomy(void)
         snprintf(quench_name, sizeof(quench_name), "%s",
                  prose_name(to_name(row->r->quench_to)));
         material_hex(row->r->quench_to, quench_color, sizeof(quench_color));
+        list_item_t quench[LIST_ITEM_MAX];
+        const size_t quench_n = collect_material_list(is_quenching_liquid,
+                                                       quench, LIST_ITEM_MAX);
+        char smoke_color[COLOR_LEN];
+        material_hex(MAT_SMOKE, smoke_color, sizeof(smoke_color));
 
         seg_t segs[SEG_MAX];
         size_t n = 0;
@@ -1845,9 +2401,12 @@ static void emit_anatomy(void)
         seg_glue(segs, &n, "Is a heat source in its own right; ");
         seg_mark(segs, &n, MARK_RATE, adverb("residue", row->r->residue));
         seg_glue(segs, &n, " ");
-        seg_mark(segs, &n, MARK_VERB, "leaves smoke");
-        seg_glue(segs, &n, " when it burns out. Touched by a quenching "
-                 "liquid, becomes ");
+        seg_mark(segs, &n, MARK_VERB, "leaves");
+        seg_glue(segs, &n, " ");
+        seg_material(segs, &n, smoke_color, "smoke");
+        seg_glue(segs, &n, " when it burns out. Touched by ");
+        seg_list(segs, &n, quench, quench_n, " or ");
+        seg_glue(segs, &n, ", becomes ");
         seg_material(segs, &n, quench_color, quench_name);
         seg_glue(segs, &n, ".");
         print_example("Burn - GRP_BURN: burns, residue, quench_to "
@@ -1878,9 +2437,14 @@ static void emit_anatomy(void)
         seg_mark(segs, &n, MARK_VERB, "melts");
         seg_glue(segs, &n, " to ");
         seg_material(segs, &n, heats_color, heats_name);
-        seg_glue(segs, &n, " ");
-        seg_mark(segs, &n, MARK_RATE,
-                 adverb("heat_chance", row->r->heat_chance));
+        /* adverb_cell(), not adverb() - Sand's heat_chance is exactly the
+         * row ADVERB_EXCEPTIONS overrides (see that table's own comment),
+         * so this example shows the same "slowly" a reader sees in the
+         * default Sand section below, not the silent middle the plain
+         * ladder alone would give it. */
+        seg_rate_gap(segs, &n,
+                     adverb_cell("heat_chance", row->r->heat_chance,
+                                 row->color_id));
         seg_glue(segs, &n, ".");
         print_example("Transform - GRP_TRANSFORM: heats_to, heat_chance, "
                        "heat_sources (emit_transform)", segs, n);
@@ -1898,8 +2462,7 @@ static void emit_anatomy(void)
         seg_material(segs, &n, subject, "Metal");
         seg_glue(segs, &n, ": ");
         seg_mark(segs, &n, MARK_VERB, "Passes heat on");
-        seg_glue(segs, &n, " ");
-        seg_mark(segs, &n, MARK_RATE, adverb("conducts", row->r->conducts));
+        seg_rate_gap(segs, &n, adverb("conducts", row->r->conducts));
         seg_glue(segs, &n, ", without banking any of it itself.");
         print_example("Temperature - GRP_TEMPERATURE: conducts "
                        "(emit_temperature)", segs, n);
@@ -1916,8 +2479,7 @@ static void emit_anatomy(void)
         seg_material(segs, &n, subject, "Ice");
         seg_glue(segs, &n, ": ");
         seg_mark(segs, &n, MARK_VERB, "Chills whatever it touches");
-        seg_glue(segs, &n, " ");
-        seg_mark(segs, &n, MARK_RATE, adverb("chills", row->r->chills));
+        seg_rate_gap(segs, &n, adverb("chills", row->r->chills));
         seg_glue(segs, &n, ".");
         print_example("Cold - GRP_COLD: chills (emit_cold)", segs, n);
     }
@@ -1933,8 +2495,7 @@ static void emit_anatomy(void)
         seg_material(segs, &n, subject, "Steam");
         seg_glue(segs, &n, ": ");
         seg_mark(segs, &n, MARK_VERB, "Warms whatever it touches");
-        seg_glue(segs, &n, " ");
-        seg_mark(segs, &n, MARK_RATE, adverb("warms", row->r->warms));
+        seg_rate_gap(segs, &n, adverb("warms", row->r->warms));
         seg_glue(segs, &n, ", without igniting or quenching anything.");
         print_example("Warmth - GRP_WARMTH: warms (emit_warmth)", segs, n);
     }
@@ -1986,8 +2547,8 @@ static void emit_anatomy(void)
         seg_mark(segs, &n, MARK_VERB, "Soaks up");
         seg_glue(segs, &n, " any ");
         seg_list(segs, &n, wet, wet_n, " or ");
-        seg_glue(segs, &n, " it touches ");
-        seg_mark(segs, &n, MARK_RATE, adverb("soaks", row->r->soaks));
+        seg_glue(segs, &n, " it touches");
+        seg_rate_gap(segs, &n, adverb("soaks", row->r->soaks));
         seg_glue(segs, &n, ", becoming ");
         seg_material(segs, &n, soaks_color, soaks_name);
         seg_glue(segs, &n, " once it takes a unit in.");
@@ -2003,36 +2564,51 @@ static void emit_anatomy(void)
         const mrow_t *row = find_row("Acid");
         char subject[COLOR_LEN];
         material_hex(row->color_id, subject, sizeof(subject));
+        char smoke_color[COLOR_LEN];
+        material_hex(MAT_SMOKE, smoke_color, sizeof(smoke_color));
 
         seg_t segs[SEG_MAX];
         size_t n = 0;
         seg_material(segs, &n, subject, "Acid");
         seg_glue(segs, &n, ": ");
         seg_mark(segs, &n, MARK_VERB, "Dissolves an adjacent cell");
-        seg_glue(segs, &n, " ");
-        seg_mark(segs, &n, MARK_RATE, adverb("dissolves", row->r->dissolves));
+        seg_rate_gap(segs, &n, adverb("dissolves", row->r->dissolves));
         seg_glue(segs, &n, ", ");
+        /* `fizz` is FCHANCE - never silent, unlike `dissolves` just above -
+         * so this one keeps the unconditional seg_mark() the way every
+         * chance-scale field in this section does. */
         seg_mark(segs, &n, MARK_RATE, adverb("fizz", row->r->fizz));
-        seg_glue(segs, &n, " leaving smoke behind.");
+        seg_glue(segs, &n, " leaving ");
+        seg_material(segs, &n, smoke_color, "smoke");
+        seg_glue(segs, &n, " behind.");
         print_example("Acid - GRP_ACID: dissolves, fizz (emit_acid)", segs,
                        n);
     }
 
-    /* GRP_GROW - emit_grow(), the grows branch. */
+    /* GRP_GROW - emit_grow(), the grows branch. "Wet DIRT", not the old
+     * hardcoded "wet soil" - see pred_dries()'s own comment and this
+     * file's emit_grow(). Dirt is itself a material name now, so it gets
+     * its own MARK_MATERIAL segment rather than folding into the verb
+     * phrase the way "wet soil" once did. */
     {
         const mrow_t *row = find_row("Plant");
+        const mrow_t *dirt = find_row("Dirt");
         char subject[COLOR_LEN];
+        char dirt_color[COLOR_LEN];
         material_hex(row->color_id, subject, sizeof(subject));
+        material_hex(dirt->color_id, dirt_color, sizeof(dirt_color));
 
         seg_t segs[SEG_MAX];
         size_t n = 0;
         seg_material(segs, &n, subject, "Plant");
         seg_glue(segs, &n, ": ");
-        seg_mark(segs, &n, MARK_VERB, "Grows into wet soil");
+        seg_mark(segs, &n, MARK_VERB, "Grows into wet");
         seg_glue(segs, &n, " ");
-        seg_mark(segs, &n, MARK_RATE, adverb("grows", row->r->grows));
-        seg_glue(segs, &n, ", against gravity, spending a level of that "
-                 "soil's moisture per cell.");
+        seg_material(segs, &n, dirt_color, "dirt");
+        seg_rate_gap(segs, &n, adverb("grows", row->r->grows));
+        seg_glue(segs, &n, ", against gravity, spending a level of that ");
+        seg_material(segs, &n, dirt_color, "dirt");
+        seg_glue(segs, &n, "'s moisture per cell.");
         print_example("Grow - GRP_GROW: grows (emit_grow)", segs, n);
     }
 
@@ -2085,11 +2661,16 @@ static void emit_anatomy(void)
                        "holds_line, clings_to (emit_harden)", segs, n);
     }
 
-    /* GRP_REGROW - emit_regrow(), the sprouts branch: sprouts, sprouts_to. */
+    /* GRP_REGROW - emit_regrow(), the sprouts branch: sprouts, sprouts_to.
+     * "Wet DIRT", not the old hardcoded "wet soil" - see the GRP_GROW
+     * example just above for the same fix, and pred_dries()'s comment. */
     {
         const mrow_t *row = find_row("Wood");
+        const mrow_t *dirt = find_row("Dirt");
         char subject[COLOR_LEN];
+        char dirt_color[COLOR_LEN];
         material_hex(row->color_id, subject, sizeof(subject));
+        material_hex(dirt->color_id, dirt_color, sizeof(dirt_color));
         char sprouts_name[32];
         char sprouts_color[COLOR_LEN];
         snprintf(sprouts_name, sizeof(sprouts_name), "%s",
@@ -2099,12 +2680,14 @@ static void emit_anatomy(void)
         seg_t segs[SEG_MAX];
         size_t n = 0;
         seg_material(segs, &n, subject, "Wood");
-        seg_glue(segs, &n, ": Standing in wet soil, ");
+        seg_glue(segs, &n, ": Standing in wet ");
+        seg_material(segs, &n, dirt_color, "dirt");
+        seg_glue(segs, &n, ", ");
         seg_mark(segs, &n, MARK_VERB, "sprouts");
         seg_glue(segs, &n, " ");
         seg_material(segs, &n, sprouts_color, sprouts_name);
-        seg_glue(segs, &n, " beside itself ");
-        seg_mark(segs, &n, MARK_RATE, adverb("sprouts", row->r->sprouts));
+        seg_glue(segs, &n, " beside itself");
+        seg_rate_gap(segs, &n, adverb("sprouts", row->r->sprouts));
         seg_glue(segs, &n, ".");
         print_example("Regrow - GRP_REGROW: sprouts, sprouts_to "
                        "(emit_regrow)", segs, n);
@@ -2157,19 +2740,22 @@ int main(void)
 #endif
     field_docs_offsets_are_sound();
     build_rows();
-    join_names(pred_wets_liquid, " or ", wetting_liquids,
-              sizeof(wetting_liquids));
-    /* wetting_liquids is only ever read in prose (emit_wet(), emit_regrow())
-     * - never a table cell or heading - so, unlike to_name()'s results, it
-     * can be lowercased once, here, rather than at each of its three call
-     * sites. */
-    str_lower(wetting_liquids);
-    /* Same deal for heat_sources - only ever read in prose (emit_transform(),
-     * emit_ignite()), so it is lowercased once here rather than at each call
-     * site. pred_burns is already defined above (emit_pairwise_table() uses
-     * it too, for the Title-Case "Fire / Lava" pairwise column). */
-    join_names(pred_burns, " or ", heat_sources, sizeof(heat_sources));
-    str_lower(heat_sources);
+    adverb_exceptions_are_sound();
+    legibility_overrides_are_sound();
+    /* Each of these four is only ever read in DEFAULT-section prose
+     * (emit_wet(), emit_regrow(), emit_transform(), emit_ignite(),
+     * emit_burn(), emit_grow()) - never a table cell or heading - so
+     * build_colored_list() already lowercases and colours each member once
+     * here, rather than at every call site. pred_burns/pred_wets_liquid are
+     * shared with emit_pairwise_table()'s plain, uncoloured columns; see
+     * this section's own top comment on why the pairwise table never gets
+     * this treatment. */
+    build_colored_list(pred_wets_liquid, " or ", wetting_liquids,
+                        sizeof(wetting_liquids));
+    build_colored_list(pred_burns, " or ", heat_sources, sizeof(heat_sources));
+    build_colored_list(is_quenching_liquid, " or ", quenching_liquids,
+                        sizeof(quenching_liquids));
+    build_colored_list(pred_dries, " or ", soil_names, sizeof(soil_names));
 
     /* The title ("# Reaction Table") and everything before this point in
      * the checked-in doc are hand-owned structural furniture, not this
@@ -2191,20 +2777,20 @@ int main(void)
            "replaced whole on every run; hand-written material outside "
            "those two markers is left untouched - see this doc's own top "
            "note. -->\n\n");
-    printf("Phase 1 output (see docs/Sand/Reaction-Doc-Generator-Plan.md): "
-           "every adverb below is the rate ladder's computed bucket, "
-           "unedited - some are already known to read wrong by feel "
-           "(sand -> glass, the ignition family - see the plan's own "
-           "\"The ladder lies in two directions\" section) and are queued "
-           "for a by-feel pass in phase 2, not fixed here. Every "
-           "`" CAUSE "` marks a trigger that lives at a read site in "
-           "sand_reactions.c rather than in the table itself, and is not "
-           "guessed at.\n");
+    printf("See docs/Sand/Reaction-Doc-Generator-Plan.md for the design "
+           "this follows. Every rate/frequency word below is the ladder's "
+           "computed bucket (see this file's own adverb_for()/"
+           "chance_bucket_for()), with one checked, by-feel exception - see "
+           "ADVERB_EXCEPTIONS in the source. Every `" CAUSE "` marks a "
+           "trigger that lives at a read site in sand_reactions.c rather "
+           "than in the table itself, and is not guessed at.\n");
+
+    emit_legend();
 
     printf("\n## Per-material\n");
     for (size_t i = 0; i < all_rows_count; i++) {
         emit_material_section(all_rows[i].name, all_rows[i].r,
-                              all_rows[i].self_id);
+                              all_rows[i].self_id, all_rows[i].color_id);
     }
 
     emit_pairwise_table();
