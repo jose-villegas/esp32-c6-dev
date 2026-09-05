@@ -23,9 +23,9 @@ burns** is `reactions[]`. Neither constrains the other.
 flowchart LR
     subgraph MOVE["materials[] - how it MOVES (hot table)"]
         direction TB
-        M1["KIND_STATIC\nstone, wood, ember"]
+        M1["KIND_STATIC\nstone, wood"]
         M2["KIND_POWDER\nsand"]
-        M3["KIND_LIQUID\nwater"]
+        M3["KIND_LIQUID\nwater, lava"]
         M4["KIND_GAS\ngas, fire, steam, smoke"]
     end
 
@@ -33,7 +33,7 @@ flowchart LR
         direction TB
         R1["inert\nsand, water, steam, smoke"]
         R2["fuel\ngas, wood"]
-        R3["heat source\nfire, ember"]
+        R3["heat source\nfire, lava"]
         R4["conductor\nstone"]
     end
 
@@ -49,11 +49,16 @@ flowchart LR
     style R4 fill:#3d6b8a,color:#fff
 ```
 
-**Ember is the proof the axes are independent**: `KIND_STATIC`, the same
-kind as motionless stone, and simultaneously a full heat source that
-decays, ignites its neighbours, conducts and flares. A `KIND_POWDER`
-material that is also flammable needs a `reactions[]` row and *nothing
-else* - no new pass, no movement code, no branch anywhere.
+**Lava is the clearest proof the axes are independent** - its own comment
+in `material.c` says exactly that: `KIND_LIQUID`, the same kind as
+ordinary water, and simultaneously a heat source that ignites its
+neighbours and flares, with not one line of movement code anywhere
+knowing about the combination. (Ember made the same point once, as a
+`KIND_STATIC` material that was also a heat source - see "Lesson: the
+obvious material is sometimes the wrong one" below for why it folded into
+wood instead.) A `KIND_POWDER` material that is also flammable needs a
+`reactions[]` row and *nothing else* - no new pass, no movement code, no
+branch anywhere.
 
 Colour convention, used consistently in every diagram in this folder:
 
