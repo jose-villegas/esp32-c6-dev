@@ -26,13 +26,20 @@ const qualitySelect = document.getElementById("quality");
 const modeButtons = [...document.querySelectorAll(".mode")];
 const fsBtn = document.getElementById("fullscreen-btn");
 const fsTarget = document.getElementById("app");
+const orientationBtn = document.getElementById("orientation-btn");
 
 let Module, web_init, web_step, web_input, web_clear, web_set_brush,
-    web_brush_swatch, web_render;
-let screenW = 368, screenH = 448;
+    web_brush_swatch, web_render, web_screen_w, web_screen_h, web_pixels_ptr;
+let screenW = 448, screenH = 368;
 let pixelsPtr = 0;
 let mode = MODE_PAINT;
 let brush = 0;
+
+// LANDSCAPE by default - see web_sand.c's own comment on screen_w/screen_h
+// for why this is a genuinely landscape-shaped grid (grid_w > grid_h), not
+// a portrait grid rotated for display: gravity, the tilt pad and touch
+// input all keep working completely unchanged either way.
+let landscape = true;
 
 let pointerDown = false;
 let pointerJustPressed = false;
@@ -240,11 +247,37 @@ if (requestFs) {
     }));
 }
 
-qualitySelect.addEventListener("change", () => {
-  const cellPx = Number(qualitySelect.value);
-  screenW = web_init ? Module.ccall("web_screen_w", "number", [], []) : screenW;
-  screenH = web_init ? Module.ccall("web_screen_h", "number", [], []) : screenH;
-  web_init(cellPx);
+// Shared by the quality selector, the orientation toggle, and the initial
+// load below - anything that changes web_init()'s own two parameters goes
+// through here, so the canvas's raster size/aspect-ratio and the palette's
+// selection (web_init() resets brush_index to 0 internally, same as a
+// fresh sand_enter() would) never drift out of step with whichever grid
+// actually exists now.
+function reinitSim() {
+  web_init(Number(qualitySelect.value), landscape ? 1 : 0);
+  screenW = web_screen_w();
+  screenH = web_screen_h();
+  // web_pixels_ptr() only returns a real address once web_init() has
+  // allocated the buffer - which just happened, on the line above. The
+  // buffer address is stable across every LATER web_init() call (see
+  // web_pixels_ptr()'s own comment in web_sand.c), so re-reading it here
+  // on every reinit is a formality, not a requirement - but it is what
+  // makes that guarantee airtight rather than assumed.
+  pixelsPtr = web_pixels_ptr();
+  canvas.width = screenW;
+  canvas.height = screenH;
+  canvas.style.aspectRatio = `${screenW} / ${screenH}`;
+  brush = 0;
+  web_set_brush(0);
+  [...paletteEl.children].forEach((c, ci) => c.classList.toggle("selected", ci === 0));
+}
+
+qualitySelect.addEventListener("change", reinitSim);
+
+orientationBtn.addEventListener("click", () => {
+  landscape = !landscape;
+  orientationBtn.textContent = landscape ? "Portrait" : "Landscape";
+  reinitSim();
 });
 
 let lastFrame = 0;
@@ -296,7 +329,7 @@ function frame(now) {
 
 SandModule().then((mod) => {
   Module = mod;
-  web_init = Module.cwrap("web_init", "number", ["number"]);
+  web_init = Module.cwrap("web_init", "number", ["number", "number"]);
   web_step = Module.cwrap("web_step", null,
     ["number", "number", "number", "number", "number"]);
   web_input = Module.cwrap("web_input", null,
@@ -304,20 +337,15 @@ SandModule().then((mod) => {
   web_clear = Module.cwrap("web_clear", null, []);
   web_set_brush = Module.cwrap("web_set_brush", null, ["number"]);
   web_brush_swatch = Module.cwrap("web_brush_swatch", "number", ["number"]);
+  web_screen_w = Module.cwrap("web_screen_w", "number", []);
+  web_screen_h = Module.cwrap("web_screen_h", "number", []);
   const web_brush_count = Module.cwrap("web_brush_count", "number", []);
-  const web_screen_w = Module.cwrap("web_screen_w", "number", []);
-  const web_screen_h = Module.cwrap("web_screen_h", "number", []);
 
   web_render = Module.cwrap("web_render", null, []);
-  const web_pixels_ptr = Module.cwrap("web_pixels_ptr", "number", []);
-
-  web_init(Number(qualitySelect.value));
-  screenW = web_screen_w();
-  screenH = web_screen_h();
-  pixelsPtr = web_pixels_ptr();
+  web_pixels_ptr = Module.cwrap("web_pixels_ptr", "number", []);
 
   buildPalette(web_brush_count());
-  web_set_brush(0);
+  reinitSim();
 
   loadingEl.hidden = true;
   requestAnimationFrame(frame);

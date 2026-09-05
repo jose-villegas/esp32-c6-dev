@@ -39,8 +39,14 @@ html, body {
 
 #canvas {
   display: block;
-  width: min(92vw, 460px);
-  height: calc(min(92vw, 460px) * 448 / 368);
+  width: min(92vw, 640px);
+  height: auto;
+  max-height: 80vh;
+  /* Default (landscape); app.js sets this inline on every orientation
+   * change to the raster's own current width/height, so the box always
+   * matches whatever web_screen_w()/web_screen_h() actually returned - see
+   * applyOrientation() there. */
+  aspect-ratio: 448 / 368;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 6px;

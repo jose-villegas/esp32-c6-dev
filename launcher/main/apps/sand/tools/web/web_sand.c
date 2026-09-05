@@ -47,12 +47,18 @@
 
 /* Duplicated from gfx.h's GFX_WIDTH/GFX_HEIGHT, the same way palette.h
  * already duplicates them - gfx.h drags in bsp/esp-bsp.h, which this file,
- * like every other host-portable module in this app, must never include. */
-#define WEB_SCREEN_W 368
-#define WEB_SCREEN_H 448
+ * like every other host-portable module in this app, must never include.
+ * The DEVICE's own two dimensions, fixed - used only to size the one pixel
+ * buffer this file ever allocates (see `pixels` below), at whichever of the
+ * two products is larger (they are in fact equal, 368*448 either way, but
+ * nothing here relies on that). What actually varies per web_init() call is
+ * `screen_w`/`screen_h` just below - PORTRAIT uses these two numbers
+ * unchanged; LANDSCAPE swaps them. */
+#define DEVICE_W 368
+#define DEVICE_H 448
 
 /* Same value as imu.h's IMU_COUNTS_PER_G - duplicated rather than included,
- * for the same "no hardware header" reason as WEB_SCREEN_W/H above. Any
+ * for the same "no hardware header" reason as DEVICE_W/H above. Any
  * caller feeding web_step() a gravity sample scales it against this. */
 #define WEB_COUNTS_PER_G 4096
 
@@ -108,15 +114,29 @@ static const cell_t brushes[] = {
 
 static uint8_t   *grid;
 static impulse_t *impulse_buf;
-static uint8_t   *pixels;   /* WEB_SCREEN_W * WEB_SCREEN_H * 4 bytes, RGBA8888 -
-                              * see web_render() below and web_pixels_ptr(),
+static uint8_t   *pixels;   /* DEVICE_W * DEVICE_H * 4 bytes, RGBA8888 - see
+                              * web_render() below and web_pixels_ptr(),
                               * which is how JS gets at it without needing
                               * raw malloc/free exported across the wasm
-                              * boundary. */
+                              * boundary. Allocated once, at the device's own
+                              * fixed size, regardless of orientation - see
+                              * screen_w/screen_h below for what varies. */
 static uint8_t   *depth_buf; /* grid_w * grid_h bytes - see
                                * compute_local_depth() below. */
 static sand_t      sim;
 static tilt_t      tilt;
+
+/* This orientation's own canvas size - DEVICE_W x DEVICE_H (portrait) or
+ * DEVICE_H x DEVICE_W (landscape), set by web_init() below. Everything that
+ * used to read the fixed DEVICE_W/H constants directly now reads these instead:
+ * the grid's own cell count, web_render()'s row stride and bounds, and the
+ * two web_screen_w()/web_screen_h() getters JS sizes its canvas from. A
+ * landscape grid is genuinely landscape-shaped (grid_w > grid_h) rather
+ * than a portrait grid rotated for display - see web_init()'s own comment
+ * for why that is what makes landscape need no other change anywhere:
+ * gravity, the tilt pad, and touch input all already work in whichever
+ * axes screen_w/screen_h currently mean, unchanged. */
+static int screen_w = DEVICE_W, screen_h = DEVICE_H;
 
 static int grid_w, grid_h, cell_px;
 static int brush_index;
@@ -152,12 +172,22 @@ static int ready;
  * Setup
  *-------------------------------------------------------------------------*/
 
+/* `landscape` swaps which of DEVICE_W/DEVICE_H is screen_w vs screen_h -
+ * see screen_w/screen_h's own comment above for why that alone is a
+ * complete landscape mode, with nothing to rotate anywhere else: the grid
+ * this allocates is genuinely (DEVICE_H/cell_px) cells wide by
+ * (DEVICE_W/cell_px) cells tall in landscape, not a portrait grid drawn
+ * sideways, so "down" - gravity's own +y, the tilt pad's own drag axis,
+ * touch input's own y coordinate - already means the same visual direction
+ * either way without this file doing any extra transform. */
 EMSCRIPTEN_KEEPALIVE
-int web_init(int cell_px_in)
+int web_init(int cell_px_in, int landscape)
 {
-    cell_px = cell_px_in > 0 ? cell_px_in : 2;
-    grid_w  = WEB_SCREEN_W / cell_px;
-    grid_h  = WEB_SCREEN_H / cell_px;
+    cell_px  = cell_px_in > 0 ? cell_px_in : 2;
+    screen_w = landscape ? DEVICE_H : DEVICE_W;
+    screen_h = landscape ? DEVICE_W : DEVICE_H;
+    grid_w   = screen_w / cell_px;
+    grid_h   = screen_h / cell_px;
 
     free(grid);
     free(impulse_buf);
@@ -167,7 +197,7 @@ int web_init(int cell_px_in)
     depth_buf   = malloc((size_t)grid_w * grid_h);
     impulse_buf = malloc((size_t)WEB_IMPULSE_MAX * sizeof(*impulse_buf));
     if (!pixels) {
-        pixels = malloc((size_t)WEB_SCREEN_W * WEB_SCREEN_H * 4);
+        pixels = malloc((size_t)DEVICE_W * DEVICE_H * 4);
     }
     if (!grid || !depth_buf || !pixels) {
         ready = 0;
@@ -202,11 +232,13 @@ int web_grid_w(void) { return grid_w; }
 EMSCRIPTEN_KEEPALIVE
 int web_grid_h(void) { return grid_h; }
 
-EMSCRIPTEN_KEEPALIVE
-int web_screen_w(void) { return WEB_SCREEN_W; }
+
 
 EMSCRIPTEN_KEEPALIVE
-int web_screen_h(void) { return WEB_SCREEN_H; }
+int web_screen_w(void) { return screen_w; }
+
+EMSCRIPTEN_KEEPALIVE
+int web_screen_h(void) { return screen_h; }
 
 EMSCRIPTEN_KEEPALIVE
 int web_brush_count(void) { return BRUSH_COUNT; }
@@ -510,7 +542,7 @@ void web_render(void)
         const uint8_t *depth_row = &depth_buf[(size_t)cy * grid_w];
 
         const int py0 = cy * cell_px;
-        const int py1 = py0 + cell_px < WEB_SCREEN_H ? py0 + cell_px : WEB_SCREEN_H;
+        const int py1 = py0 + cell_px < screen_h ? py0 + cell_px : screen_h;
 
         for (int cx = 0; cx < grid_w; cx++) {
             const cell_t c = row[cx];
@@ -547,7 +579,7 @@ void web_render(void)
                 c, material_grain_hash(cx, cy), mask, depth, col);
 
             const int px0 = cx * cell_px;
-            const int px1 = px0 + cell_px < WEB_SCREEN_W ? px0 + cell_px : WEB_SCREEN_W;
+            const int px1 = px0 + cell_px < screen_w ? px0 + cell_px : screen_w;
 
             if (pat != MATERIAL_HATCHED) {
                 /* FLAT and SPECKLED both land here, same as app_sand.c's
@@ -560,7 +592,7 @@ void web_render(void)
                 const uint8_t b = (uint8_t)rgb;
 
                 for (int py = py0; py < py1; py++) {
-                    uint8_t *out = rgba + ((size_t)py * WEB_SCREEN_W + px0) * 4;
+                    uint8_t *out = rgba + ((size_t)py * screen_w + px0) * 4;
                     for (int px = px0; px < px1; px++) {
                         out[0] = r;
                         out[1] = g;
@@ -590,7 +622,7 @@ void web_render(void)
 
             for (int py = py0; py < py1; py++) {
                 const int dy = py - py0;
-                uint8_t *out = rgba + ((size_t)py * WEB_SCREEN_W + px0) * 4;
+                uint8_t *out = rgba + ((size_t)py * screen_w + px0) * 4;
 
                 for (int px = px0; px < px1; px++) {
                     const int dx = px - px0;
