@@ -724,6 +724,284 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * first once it is. */
 #define SAND_IMPULSE_SPEED_RAMP  2
 
+/* HOW MANY CELLS THE PUSH MOVE COVERS IN ONE STEP, once the per-step roll
+ * (rolled_move, step_impulses(), sand.c) says this is a turn it moves at
+ * all. That roll's own meaning is UNCHANGED by this constant - it still
+ * decides only whether the push happens this step, exactly as it always
+ * has. What used to be fixed at exactly one cell per successful roll is
+ * now 1 + speed / SAND_IMPULSE_CELLS_PER_STEP_DIVISOR, uncapped - see
+ * "NO SEPARATE CAP" below for why a full-speed entry needs none.
+ *
+ * THE PROBLEM THIS FIXES: every displacing move in this file, before this
+ * existed, advanced an entry exactly one cell per successful roll -
+ * identical to how far the ordinary gravity sweep moves a falling grain in
+ * that same step (SAND_IMPULSE_SPEED_RAMP's own comment above: "the
+ * vertical component is still exactly one cell per step, the whole time").
+ * An impulse could therefore never outrun gravity: a horizontal throw sank
+ * at close to 45 degrees, one cell of push for every one cell of fall, and
+ * ejecta thrown off a powder volume could only ever reposition material,
+ * never visibly leave it - nothing this engine threw ever moved sideways
+ * faster than gravity pulled it down. Measured, seeds 1..40, an 8-cell-wide
+ * stone chunk thrown at an angle into a settled sand bed: BEFORE this
+ * constant existed, 26 of 40 seeds ever produced any airborne sand (a bed
+ * cell with all eight neighbours empty) at all, peaking at 3 simultaneously
+ * airborne cells; AFTER, all 40 seeds show airborne sand, peaking at 8 -
+ * material rearranging became material visibly flying. See
+ * test_a_stone_chunk_thrown_into_a_sand_bed_launches_sand_airborne
+ * (suite_sand.c), which pins this exact scene and these exact figures.
+ *
+ * 104, SO A FULL-SPEED (255) ENTRY COVERS THREE CELLS AND A SPENT ONE
+ * STILL COVERS EXACTLY ONE, UNCHANGED - 1 + 255/104 = 3, and integer
+ * division means anything under 104 rounds to 1 + 0 = 1, the same single
+ * cell every entry already moved before this existed. THAT IS THE POINT,
+ * not a side effect to work around: it is what keeps a slow-moving
+ * entry's own behaviour, and every test written against the old
+ * one-cell-per-roll design, byte-for-byte unchanged - see
+ * test_a_sub_divisor_speed_impulse_never_moves_more_than_one_cell_a_step
+ * (suite_sand.c), which pins exactly this.
+ *
+ * NO SEPARATE CAP - there used to be one, SAND_IMPULSE_CELLS_PER_STEP_MAX,
+ * standing on its own so a future retune of this divisor could not
+ * silently move it too. An adversarial review of step_impulses() (bd
+ * esp32c6-w2h) measured what it was actually worth at this divisor's own
+ * shipped value: 1 + 255/104 = 3, always strictly under the cap's 4, at
+ * every speed a uint8_t can hold - the cap could never fire, so it was
+ * dead weight standing guard over nothing. Deleted rather than kept as
+ * insurance: a future divisor change that would make the cap matter again
+ * has to reintroduce it deliberately, with the same reasoning this
+ * paragraph records, not inherit a number nobody re-checked. */
+#define SAND_IMPULSE_CELLS_PER_STEP_DIVISOR  104
+
+/* EXTRA speed charged at the move site, on top of the ordinary ramp above,
+ * per non-empty cell a KIND_STATIC or KIND_POWDER mover displaces - see
+ * step_impulses()'s own comment at the charge site for why there rather
+ * than folded into the ramp, and impulse_drag_of() (sand_priv.h) for the
+ * one place this is actually computed. The base cost IS `density`, no shift
+ * applied to it at all - open air (nothing displaced) costs nothing, water
+ * (30) costs 30, dirt or sand (60-62) cost 60-62 - and THIS constant is an
+ * additional per-kind adjustment on top of that, `density << this`, applied
+ * only for KIND_POWDER. Density alone gave every non-liquid medium the same
+ * SHAPE of resistance, which is the thing that was wrong: packed grain jams
+ * against itself and stops a mover dead, while a fluid parts around one and
+ * barely slows it. So powder multiplies, and LIQUID CHARGES NOTHING AT ALL -
+ * a liquid mover was always exempt, and now a liquid MEDIUM is too, which
+ * puts a chunk falling into a pool back to exactly the behaviour it had
+ * before any of this existed. That was the device call: sinking to the floor
+ * had always looked right, so there was nothing here for drag to fix.
+ *
+ * USED TO BE TWO CONSTANTS - a general SAND_IMPULSE_DRAG_SHIFT applied to
+ * every non-liquid kind's density, and this one layered on top for
+ * KIND_POWDER only. The general shift shipped at 2 (dirt/sand cost 15,
+ * water cost 7) and a real throw against a real bank of sand on device did
+ * not stop at that figure: a chunk at full speed still drove roughly 15
+ * cells into a bank, plainly not "the first few layers" the maintainer
+ * asked for. Dropping it to 0 - `density >> 0` is the identity, drag IS the
+ * density, honestly - fixed that for KIND_STATIC, and an adversarial
+ * architecture review (bd esp32c6-w2h) later pointed out the shift, sitting
+ * at its own identity value, was adding a second lever over the same
+ * density with no effect left to have: folded away here rather than kept as
+ * a second constant with nothing left to say. A future STATIC-only
+ * adjustment, if one is ever needed, is a new constant scoped to that kind,
+ * not this one reopened.
+ *
+ * RE-SWEPT AGAINST THE ENERGY EXIT (step_impulses()'s hop loop, sand.c),
+ * not inherited from the distance-only-budget regime the 3.0 figure above
+ * was measured under. This constant's own comment carried 12.5 / 11.9 /
+ * 0.8 once (one cell a step), then 27.8 / 25.0 / 3.0 (multi-cell travel,
+ * no energy exit) - both stale the moment the loop that produced them
+ * changed again, which is exactly why this number gets re-measured rather
+ * than trusted to still be right. Swept over the shift itself, 32 seeds,
+ * cells of travel (plow_total_distance(), suite_sand.c), air and water
+ * unaffected by this constant at any value (air displaces nothing; water
+ * is KIND_LIQUID and impulse_drag_of() charges liquids nothing regardless
+ * of shift), so only dirt moves:
+ *
+ *     shift   air    water   dirt
+ *     0       27.8   25.0    3.81   (identity - the pre-powder-drag figure)
+ *     1       27.8   25.0    1.88
+ *     2       27.8   25.0    0.91   <- kept
+ *     3       27.8   25.0    0.81
+ *     4       27.8   25.0    0.81
+ *     5       27.8   25.0    0.81
+ *     6       27.8   25.0    0.81
+ *     8       27.8   25.0    0.81
+ *
+ * KEPT AT 2, THE SHIPPED VALUE - not carried over unexamined, but
+ * reconfirmed against the loop that actually governs it now: 0.91 cells is
+ * the closest any candidate gets to the stated intent ("stop at the rim",
+ * roughly one) without already being on the far side of it. Shift 3 and
+ * every value above it plateau at 0.81 - dirt's density (62), doubled
+ * three times or more, already exceeds a single hop's own speed budget
+ * before the energy exit even has to fire twice, so further shifting buys
+ * nothing: the loop is stopping on hop 0 regardless. Shift 1 (1.88) is the
+ * only candidate closer to "two cells" than to "one", and shift 0 (3.81 -
+ * worse than the OLD, energy-exit-less 3.0 figure, since a full-speed
+ * entry with dirt's UNSHIFTED cost of 62 a cell needs four hops rather
+ * than one to exhaust its own energy budget) is the pre-powder-drag
+ * baseline, kept in the table only to show the shape the sweep moves
+ * across, not as a candidate. See
+ * test_a_thrown_chunk_stops_near_the_rim_of_a_dirt_bank (suite_sand.c) for
+ * the pin this figure is checked against. */
+#define SAND_IMPULSE_DRAG_POWDER_SHIFT  2
+
+/* THE FLOOR BELOW WHICH A KIND_STATIC ENTRY IS SPENT, for the gravity-drift
+ * move AND the settled check right after it in step_impulses() (sand.c,
+ * the "AIRBORNE SOLIDS FALL TOO" block and the has_opening loop just below
+ * it) - see can_impulse_enter_gravity_ward()'s own comment (sand.c) for the
+ * one predicate both now call, so they can never again disagree about what
+ * "open" means the way they once did before impulse_gravity_candidates()
+ * unified the candidate list itself.
+ *
+ * WHY THIS HAS TO EXIST AT ALL: drag (impulse_drag_of(), sand_priv.h) only
+ * charges at the PUSH move site - a KIND_STATIC entry's unconditional
+ * gravity-drift pays no drag at all, ever, by design ("gating this on
+ * speed would tie 'still falling' to 'still has outward energy left', which
+ * is backwards" - that block's own comment). Stronger drag alone therefore
+ * stops the sideways travel but does nothing to the drift, which keeps
+ * swapping a spent chunk downward through an entire bank one row a step
+ * until it reaches the bottom - reported on device as "a thrown chunk
+ * entering a powder bank does not stop." An entry below this floor is
+ * SPENT - genuinely out of push, not merely between rolls - and a spent
+ * entry may only continue into a cell that is genuinely CELL_IS_EMPTY(),
+ * never swap through an occupant the way an energetic entry still can.
+ * Above the floor, nothing changes: an energetic chunk still swaps through
+ * powder and liquid exactly as it always has, so a hard impact still
+ * buries itself - this only ends the drift's own free ride once the push
+ * that justified it is gone.
+ *
+ * 1, SO IT MEANS EXACTLY "speed is zero" - the narrowest floor that is
+ * still a floor at all, deliberately not a bigger number: this is meant to
+ * catch an entry that has nothing left, not one that merely has little,
+ * and `speed` already saturates at 0 rather than wrapping (SAND_IMPULSE_
+ * SPEED_RAMP's own comment), so 1 is the first value genuine exhaustion
+ * can never reach.
+ *
+ * THE KNOWN, CHOSEN TRADE: this floor is not kind-aware, so a spent chunk
+ * now comes to rest inside a liquid too, not only a powder - roughly eight
+ * cells down in water at drag's own present figure, rather than
+ * sinking all the way to the floor of a deep pool. The maintainer measured
+ * liquid behaviour as already looking fine and chose this one simple rule
+ * over a second, kind-aware version anyway - simplicity over splitting
+ * powder from liquid, accepted with the trade-off named rather than
+ * discovered later on device. If a chunk stalling mid-pool ever looks
+ * wrong in practice, the fix is to make this predicate ask a different
+ * question for KIND_LIQUID than for KIND_POWDER, not to raise or lower
+ * this number. */
+#define SAND_IMPULSE_SINK_MIN_SPEED  1
+
+/* RESTITUTION FLOOR for the wall-bounce (step_impulses()'s
+ * blocked branch, sand.c) - below this, a blocked entry just waits, same
+ * as it always has; at or above it, it reflects off the blocking surface's
+ * approximate normal (blocker_normal()/reflect_off_normal(), sand.c) and
+ * pays restitution for the privilege. Not a polish knob: see
+ * step_impulses()'s own roll comment (its "A DETERMINISTIC, NEVER-ROLLED
+ * VARIANT..." paragraph) for the reverted-attempt history this rung can
+ * reopen if bouncing were left undamped and unfloored - pieces that never
+ * settle because they keep finding just enough energy to bounce again.
+ * Every bounce ALSO costs restitution (half the speed on a head-on
+ * reflection, a quarter on a glancing one - see the charge site), so nothing
+ * here is immortal even without this floor, but at SAND_IMPULSE_SPEED_RAMP
+ * 2 the plain linear ramp alone takes 255 / 2 ~= 128 steps to exhaust - a
+ * long time for something to keep visibly rattling in a corner before
+ * restitution alone brings it under a floor.
+ *
+ * 32, LOWERED FROM 64, AND THE MEASUREMENT SAYS IT BARELY MATTERS. Run
+ * against the two-wall scene (test_the_two_wall_explosion_scene_...,
+ * suite_sand.c, 100 seeds, 284 tracked entries) the two floors give:
+ *
+ *     floor 64   >=1 bounce 205   >=2 45   >=3 0
+ *     floor 32   >=1 bounce 208   >=2 48   >=3 3
+ *
+ * about one percent, plus the first entries ever to reach a third bounce.
+ * Kept because it is free and strictly more lively, NOT because it is the
+ * lever it was expected to be - the arithmetic said an entry crossing back
+ * at speed 43 would newly clear a floor of 32, and that is true and almost
+ * never happens, because THE BINDING CONSTRAINT IS FALL TIME, not energy.
+ * A tracked cell drops one row a step unconditionally ("AIRBORNE SOLIDS
+ * FALL TOO", step_impulses()), so in an arena 40 tall it is on the ground
+ * inside 40 steps while crossing a 42-cell gap costs it 42 - most entries
+ * land before finishing even one crossing, whatever speed they still have.
+ * What actually buys bounces is GEOMETRY: a gap narrower than the fall
+ * height. Not lowered further regardless: speed IS the per-step move
+ * chance, so an entry much under this crawls a step in eight rather than
+ * ricocheting - the rattling this floor exists to prevent, just slower. */
+#define SAND_IMPULSE_BOUNCE_MIN_SPEED  32
+
+/* TRANSFER - what a struck cell inherits from the mover that just displaced
+ * it, at the move site in step_impulses() (sand.c), right after the swap.
+ * Today a flying cell simply swaps with whatever it displaces and the
+ * medium closes behind it with no further effect; this is what lets a
+ * struck cell pick up impulse of its own instead, including flying clean
+ * out of the volume it was sitting in.
+ *
+ * DIRECTION IS A BACKWARD CONE, NOT THE MOVER'S OWN `dir` - one of `dir+3`,
+ * `dir+4` (straight back) or `dir+5`, picked with rng_below(). Queuing the
+ * struck cell along the mover's own heading was tried first and reported
+ * as the reason nothing ever visibly sprayed off a bank: pushing struck
+ * material further ALONG the impact just drives it deeper into whatever it
+ * was already part of, the opposite of the wanted crater. What a real
+ * impact actually does is squeeze material back out through the surface it
+ * came in by, roughly backward and outward - straight back is also where
+ * the open room is, since the mover just came through those exact cells, so
+ * the ejecta has somewhere to go instead of wedging further into the bank.
+ * See the transfer site's own comment for the rest of the scope
+ * (KIND_STATIC/KIND_POWDER movers only, matching drag's own scope just
+ * above; any non-static displaced cell, powder or liquid alike).
+ *
+ * SAND_IMPULSE_TRANSFER_KEEP is HOW MUCH OF THE ARRIVAL SPEED THE CHILD
+ * KEEPS, in 256ths - not what that speed is divided by. The arrival speed,
+ * not what the mover has left, which is the whole point of capturing
+ * impact_speed before drag takes its cut (see the transfer site).
+ *
+ * A KEEP FACTOR RATHER THAN A DIVISOR because an integer divisor can only
+ * express 1, 2, 3 - and the useful range turned out to sit between the
+ * first two. At 1 a strike hands over everything; at 2 it halves; on device
+ * the first was too strong and the second too weak, and there was no way to
+ * say so. In 256ths the whole range is reachable, using the same "in 256"
+ * vocabulary this file already speaks everywhere else, and a shift instead
+ * of a divide.
+ *
+ *     keep 256   divisor 1.00   a 255 parent hands over 255
+ *     keep 213   divisor 1.20   a 255 parent hands over 212
+ *     keep 171   divisor 1.50   a 255 parent hands over 170
+ *     keep 128   divisor 2.00   a 255 parent hands over 127
+ *
+ * ANY VALUE BELOW 256 SATISFIES THE RULE THIS EXISTS FOR, which is worth
+ * being exact about because the review that raised it named 2 specifically.
+ * The problem at keep 256 is that a strike MINTS energy: the child carries
+ * the parent's full arrival speed while the parent loses nearly all of it
+ * to drag, so nothing bounds a chain except the backward cone usually
+ * finding open air - geometry and luck rather than a rule. Below 256 each
+ * generation is strictly smaller than the last, so a chain decays
+ * geometrically whatever the geometry does. 2 buys a faster decay, not the
+ * only bound; 1.2 is a weaker bound that is still a bound.
+ *
+ * 213 is a device figure, picked between a 1 that sprayed too hard and a 2
+ * that sprayed too softly. */
+#define SAND_IMPULSE_TRANSFER_KEEP  213
+
+/* THE TRANSFER FLOOR - below this post-drag speed, a mover does not queue a
+ * transfer at all, the same shape SAND_IMPULSE_BOUNCE_MIN_SPEED already
+ * floors restitution at (a nearly-spent mover queuing a transfer too faint
+ * to ever visibly move is not worth the entry). 64 matches that floor's own
+ * starting figure for the same reason - not a coincidence to be tuned
+ * independently without cause.
+ *
+ * THE REAL BUDGET REASON THIS EXISTS AT ALL: impulse_buf is a FIXED-SIZE
+ * buffer (APP_IMPULSE_MAX, app_sand.c - 2048 entries, 12 KiB) shared with
+ * whatever explosion or splash is already using it, and sand_impulse()
+ * silently refuses once it is full - graceful, but silent. A chunk plowing
+ * through a wide bank, uncapped, would queue one transfer per cell it
+ * displaces; TRANSFER's own share of the deferred array's total capacity
+ * (SAND_CASCADE_TRANSFER_MAX_PER_STEP, this file - see SAND_CASCADE_MAX_
+ * PER_STEP's own comment for why that total is now split rather than one
+ * counter shared with the cascade relay) is what actually protects the
+ * buffer, but this floor is the first, cheaper gate: a plow through a
+ * LOW-density medium (most cells pass the floor easily) still queues
+ * plenty, so both gates matter - this one trims the faintest transfers
+ * before they even compete for the per-step cap. */
+#define SAND_IMPULSE_TRANSFER_MIN_SPEED  64
+
 /* sand_explode()'s OWN choice of what speed to hand every entry it queues -
  * not a property of sand_impulse() itself, which takes speed as a plain
  * parameter and assumes nothing about what any particular caller wants.
@@ -931,7 +1209,47 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * go. */
 #define SAND_CASCADE_SPEED_DIVISOR 2
 #define SAND_CASCADE_MIN_SPEED     1
+
+/* THE SHARED DEFERRED ARRAY'S TOTAL SIZE (step_impulses(), sand.c) - the
+ * physical capacity of `deferred[]`, not a per-mechanism budget any more.
+ * That array carries two unrelated kinds of follow-up (that array's own top
+ * comment in sand.c has the full account of why one array grew a second
+ * caller): a CASCADE relay, fired at most once per water/acid entry per
+ * step, and a TRANSFER, fired at most once per HOP of any entry's push -
+ * up to SAND_IMPULSE_CELLS_PER_STEP_DIVISOR's own multi-cell reach per
+ * entry per step. A single shared counter gating both against this one
+ * number let whichever kind queued first this step starve the other: an
+ * adversarial review (bd esp32c6-w2h) measured sixteen ploughing chunks
+ * filling every one of the 64 slots with transfers alone, in queue order,
+ * not by any physical difference between the two mechanisms - a cascade
+ * relay queued even one step later that same pass got nothing, regardless
+ * of how few cells of water were actually relaying.
+ *
+ * RELAY GETS A RESERVE OUT OF THIS TOTAL, not half of it - see
+ * SAND_CASCADE_RELAY_RESERVE below. An even split was tried first and is
+ * the obvious answer, but it fixes starvation by making BOTH mechanisms
+ * permanently smaller, including in the ordinary case where only one of
+ * them is running at all. A reserve fixes the same bug and costs nothing
+ * when a scene has only relays in it, which a settling pool with nothing
+ * thrown at it is. Revisit the reserve, not this total, if a future
+ * measurement shows relay starving inside it. */
 #define SAND_CASCADE_MAX_PER_STEP  64
+/* A RESERVATION, NOT A SPLIT. Transfer fires up to once per hop and
+ * relay at most once per liquid entry, so a hard half-and-half made it
+ * impossible for transfer to starve relay - at the cost of shrinking
+ * whichever mechanism happened to be running ALONE. A scene with only
+ * relays in it is ordinary (a settling pool with nothing thrown at it),
+ * and that showed up at once as a changed grid fingerprint on a
+ * lava-quench scene, in a refactor that was meant to be neutral.
+ *
+ * So relay gets a FLOOR rather than a ceiling: transfer may fill the
+ * array up to everything except SAND_CASCADE_RELAY_RESERVE, and relay
+ * takes whatever transfer has not actually used - which is the whole
+ * array when nothing is being thrown. A single-mechanism scene is then
+ * untouched, and relay still cannot be starved below its reserve. */
+#define SAND_CASCADE_RELAY_RESERVE          16
+#define SAND_CASCADE_TRANSFER_MAX_PER_STEP  (SAND_CASCADE_MAX_PER_STEP - \
+                                             SAND_CASCADE_RELAY_RESERVE)
 
 /* ACID BUBBLES - see acid_bubble()'s own comment in sand_reactions.c for the
  * full account of what this replaced and why (2026-09-01): the old "landed
@@ -1099,6 +1417,9 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * measured one - tune on device like every other constant here. */
 #define SAND_ACID_DILUTE_EVAPORATE_CHANCE 20
 
+
+
+
 /* OIL BOILS OFF, IT DOES NOT BREED MORE ACID - reported directly: a
  * whole pool of oil was ending up entirely acid. The old rule always
  * converted a bitten oil cell into a FRESH, full-mass acid cell
@@ -1188,7 +1509,10 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  *
  * Chance-in-256, checked only once a full 2x2 has already been confirmed
  * to hold nothing but gas and steam, two of each. Starting bias, not a
- * measured one - tune on device like every other constant here. */
+ * measured one - tune on device like every other constant here.
+ *
+ * Chance-in-256, checked only once a full 2x2 has already been confirmed
+ * to hold nothing but gas and steam, two of each. */
 #define SAND_ACID_RAIN_CHANCE 1
 
 /* QUENCHING A FLAME - acid putting out fire is not water's clean,
@@ -1965,6 +2289,7 @@ void sand_set_acid_dilute_mass_bias(sand_t *s, int bias);
  * COOLOFF_DEFAULT and SAND_ACID_RAIN_DEFAULT use for a constant with no
  * per-material table figure to fall back to. */
 #define SAND_ACID_DILUTE_MASS_BIAS_DEFAULT (-1)
+
 
 /* How often a gas grain attempts its spontaneous rise/slide at all, as a
  * chance in 256 - see material.h's `mobility` field. 255, the default,
