@@ -444,7 +444,7 @@ stage of `try_heat_transform_given()`, once it reads moisture through the
 generic `moisture_of()` helper rather than dirt's own macros), or simple
 time (`dries = 1`, half dirt's own rate of 2 - powder holds water longer
 than soil does). A saturated cell - moisture pinned at `moist_max` -
-additionally has a small chance per step (`soaked_to`/`soaked_chance`, 3
+additionally has a small chance per step (`soaked_to`/`soaked_chance`, 8
 in 256) to give up being powder altogether and become a full `MAT_OIL`
 cell instead, the same "one grain plus its water becomes one liquid cell"
 shape other saturation reactions already use. Acid dissolves gunpowder at
