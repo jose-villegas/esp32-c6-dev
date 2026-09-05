@@ -21287,7 +21287,7 @@ static void test_an_energetic_static_chunk_still_sinks_into_water_instead_of_res
         "still has push left");
 }
 
-static void test_a_spent_static_chunk_rests_on_water_instead_of_sinking_forever(void)
+static void test_a_spent_static_chunk_still_sinks_through_water_to_the_bottom(void)
 {
     fixture();
     sand_clear(&s);
@@ -21309,12 +21309,13 @@ static void test_a_spent_static_chunk_rests_on_water_instead_of_sinking_forever(
         sand_step(&s, 0, 1000, 0);
     }
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(SETTLE_TOP_ROW, first_row_holding(MAT_STONE),
-        "a SPENT thrown KIND_STATIC chunk over a water column must rest "
-        "on the surface instead of sinking forever - the known, chosen "
-        "trade named in SAND_IMPULSE_SINK_MIN_SPEED's own comment (sand.h): "
-        "this floor is not kind-aware, so a spent chunk stalls on a "
-        "liquid exactly as readily as on a powder");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(H - 1, first_row_holding(MAT_STONE),
+        "a SPENT thrown KIND_STATIC chunk over a water column must still "
+        "sink all the way down - the settle rule IS kind-aware now, and "
+        "only packed grain holds an exhausted chunk up. A fluid parts "
+        "around a solid whether or not the solid has energy left, and on "
+        "device a chunk stalled mid-pool read as wrong where sinking to "
+        "the floor had always looked right");
 }
 
 /* THE INVARIANT GUARD. Deleting the drift's liquid exclusion is only safe
@@ -29104,7 +29105,7 @@ void run_sand_suite(void)
     RUN_TEST(test_an_energetic_static_chunk_over_a_powder_bank_still_sinks_to_the_bottom);
     RUN_TEST(test_a_spent_static_chunk_rests_on_a_powder_bank_instead_of_sinking_forever);
     RUN_TEST(test_an_energetic_static_chunk_still_sinks_into_water_instead_of_resting_on_its_surface);
-    RUN_TEST(test_a_spent_static_chunk_rests_on_water_instead_of_sinking_forever);
+    RUN_TEST(test_a_spent_static_chunk_still_sinks_through_water_to_the_bottom);
     RUN_TEST(test_a_thrown_static_chunk_conserves_lava_mass_on_sink);
     RUN_TEST(test_a_chunk_stacked_on_an_in_flight_chunk_waits_instead_of_settling_and_both_eventually_land);
     RUN_TEST(test_an_ordinary_static_solid_still_does_not_sink_into_liquid_or_powder);
