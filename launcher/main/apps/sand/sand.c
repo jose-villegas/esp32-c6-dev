@@ -2939,19 +2939,27 @@ static void step_impulses(sand_t *s, int dx, int dy)
             continue;   /* settled - out of flight for good */
         }
 
-        /* HOW MANY CELLS THIS STEP'S PUSH ACTUALLY COVERS - see
-         * SAND_IMPULSE_CELLS_PER_STEP_DIVISOR's own comment in sand.h for
-         * the problem this solves (an impulse could never outrun gravity
-         * while every displacing move here advanced exactly one cell per
-         * successful roll). Computed ONCE, from the post-ramp `speed` the
-         * decay just above landed on - "how far this step's move reaches"
-         * is a property of the STEP, the same as the roll and the ramp
-         * are, not something re-derived per cell below. At any speed under
-         * the divisor this is exactly 1, the same single cell every entry
-         * already moved before this constant existed - see that constant's
-         * own comment for why that has to stay exact, and
-         * test_a_sub_divisor_speed_impulse_never_moves_more_than_one_cell_
-         * a_step (suite_sand.c) for the pin. */
+        /* THE DISTANCE BUDGET - HOW MANY CELLS THIS STEP'S PUSH CAN COVER
+         * AT MOST - see SAND_IMPULSE_CELLS_PER_STEP_DIVISOR's own comment
+         * in sand.h for the problem this solves (an impulse could never
+         * outrun gravity while every displacing move here advanced exactly
+         * one cell per successful roll). Computed ONCE, from the post-ramp
+         * `speed` the decay just above landed on - "how far this step's
+         * move reaches" is a property of the STEP, the same as the roll
+         * and the ramp are, not something re-derived per cell below. At
+         * any speed under the divisor this is exactly 1, the same single
+         * cell every entry already moved before this constant existed -
+         * see that constant's own comment for why that has to stay exact,
+         * and test_a_sub_divisor_speed_impulse_never_moves_more_than_one_
+         * cell_a_step (suite_sand.c) for the pin.
+         *
+         * NOT THE ONLY BUDGET ANY MORE - the hop loop below also carries
+         * an ENERGY exit (see its own comment, right after `moved++`) that
+         * can end the push before this many hops are ever attempted, once
+         * drag has spent the mover down. This one stays a hard upper
+         * bound regardless: it is what keeps a mover crossing open air (or
+         * any medium too light for the energy exit to catch) from
+         * covering more ground than the divisor says it has earned. */
         const int push_count =
             1 + (int)entry.speed / SAND_IMPULSE_CELLS_PER_STEP_DIVISOR;
 
@@ -3132,6 +3140,43 @@ static void step_impulses(sand_t *s, int dx, int dy)
             impulse_charge_displacement(s, &entry, nat, entry.dir,
                                         deferred, &deferred_transfer_count);
             moved++;
+
+            /* THE ENERGY EXIT (finding 1, bd esp32c6-w2h) - push_count
+             * above is a DISTANCE budget only, fixed for the whole step
+             * from the speed the mover carried BEFORE this loop's own drag
+             * ever charged. Without this, a chunk that paid nearly all of
+             * `speed` to drag on hop 0 still took every hop that budget
+             * allowed - the loop's only other exit was the wall-block
+             * `break` a few dozen lines up, and packed medium is not a
+             * wall. Measured before this existed: a chunk thrown into a
+             * dirt bank averaged 3.0 cells of penetration (32 seeds,
+             * plow_total_distance(), suite_sand.c) against the constant's
+             * own stated intent of stopping at the rim, roughly one - see
+             * test_a_thrown_chunk_stops_near_the_rim_of_a_dirt_bank for the
+             * pin this closes.
+             *
+             * THE THRESHOLD IS THE SAME DIVISOR THAT SIZED THE BUDGET -
+             * SAND_IMPULSE_CELLS_PER_STEP_DIVISOR is, by its own formula
+             * (push_count above), exactly "how much speed buys one more
+             * cell of reach". Once drag has left less than that, the
+             * mover is no longer entitled to another cell by the same
+             * arithmetic that granted it this one, so reusing the divisor
+             * here needs no second, independently-tuned constant.
+             *
+             * DISTANCE ALONE STAYS A HARD CAP - an energy-only exit
+             * (`while (speed >= DIVISOR)`, no push_count at all) was
+             * considered and rejected: in OPEN AIR, nothing is ever
+             * displaced, so impulse_charge_displacement() never charges
+             * drag and only the plain ramp (2) erodes `speed` each hop - a
+             * full-speed (255) entry would then take (255-104)/2 ~= 75
+             * hops before this exit ever fired, tunnelling three orders of
+             * magnitude further than push_count's own 1-3 cells ever
+             * allowed. Both budgets are required: DISTANCE bounds the
+             * common case (nothing displaced, or a light medium), ENERGY
+             * cuts the loop short the moment a heavy one already has. */
+            if (entry.speed < SAND_IMPULSE_CELLS_PER_STEP_DIVISOR) {
+                break;
+            }
         }
 
         /* CASCADE - see this array's own top comment for why this only

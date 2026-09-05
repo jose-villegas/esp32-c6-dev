@@ -22110,6 +22110,42 @@ static void test_a_thrown_chunk_travels_less_far_through_dirt_than_through_air(v
         "rung fixes");
 }
 
+/* THE ENERGY EXIT'S OWN PIN (finding 1, bd esp32c6-w2h - an adversarial
+ * architecture review of step_impulses()). push_count (the DISTANCE
+ * budget) is computed once, from the speed the mover carried BEFORE this
+ * step's own drag ever charges - so a chunk that pays most of its speed on
+ * hop 0 still had every remaining hop of that budget to spend, drag or no
+ * drag, because nothing inside the loop ever asked whether there was any
+ * energy left to justify another one. Measured before this rung existed
+ * (32 seeds, plow_total_distance(), the same harness the test above uses):
+ * dirt penetration averaged 3.0 cells, where SAND_IMPULSE_DRAG_POWDER_
+ * SHIFT's own comment states the intent as "stop at the rim" - roughly
+ * one. `PLOW_SEEDS * 2` as the threshold asserts an average comfortably
+ * under 2 cells, a wide margin below the pre-fix ~3.0 and above the
+ * roughly-1.0 target, so this does not double as a tuning pin for
+ * whatever exact figure the drag sweep below eventually lands on. */
+static void test_a_thrown_chunk_stops_near_the_rim_of_a_dirt_bank(void)
+{
+    uint8_t *cells = malloc((size_t)PLOW_W * PLOW_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
+        "plow grid must fit in what the framebuffer leaves");
+    impulse_t buf[4];
+
+    const long dirt_total = plow_total_distance(cells, buf, CELL_MAKE(MAT_DIRT, 0));
+
+    free(cells);
+
+    TEST_ASSERT_LESS_THAN_INT_MESSAGE(PLOW_SEEDS * 2, dirt_total,
+        "a chunk plowing into packed dirt must stop within about one cell "
+        "of the rim, ON AVERAGE - not several. Before the energy exit, "
+        "push_count's own DISTANCE budget was the hop loop's only exit "
+        "besides a wall, so a mover that spent nearly all its speed on the "
+        "very first hop still took every remaining hop that budget "
+        "allowed, at whatever near-zero speed drag left it. Drag charging "
+        "a hop must be able to end the push before push_count is "
+        "exhausted, not merely slow the mover down while it keeps moving");
+}
+
 static void test_a_thrown_chunk_travels_less_far_through_dirt_than_through_water(void)
 {
     uint8_t *cells = malloc((size_t)PLOW_W * PLOW_H);
@@ -29897,6 +29933,7 @@ void run_sand_suite(void)
     RUN_TEST(test_a_chunk_stacked_on_an_in_flight_chunk_waits_instead_of_settling_and_both_eventually_land);
     RUN_TEST(test_an_ordinary_static_solid_still_does_not_sink_into_liquid_or_powder);
     RUN_TEST(test_a_thrown_chunk_travels_less_far_through_dirt_than_through_air);
+    RUN_TEST(test_a_thrown_chunk_stops_near_the_rim_of_a_dirt_bank);
     RUN_TEST(test_a_thrown_chunk_travels_less_far_through_dirt_than_through_water);
     RUN_TEST(test_a_thrown_chunk_loses_speed_proportional_to_the_density_it_displaces);
     RUN_TEST(test_a_thrown_powder_grain_pays_drag_displacing_dirt);
