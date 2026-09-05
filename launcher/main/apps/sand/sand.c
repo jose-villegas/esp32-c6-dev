@@ -2016,25 +2016,105 @@ static bool impulse_index_still_tracked(const sand_t *s, int kept, int self_i,
     return false;
 }
 
-/* MEDIUM DRAG AND TRANSFER, CHARGED THE SAME WAY REGARDLESS OF WHICH OF
- * step_impulses()'s TWO DISPLACING MOVES ACTUALLY MOVED THE MOVER THIS
- * STEP - the push move at the bottom of that loop, or the "AIRBORNE SOLIDS
- * FALL TOO" gravity-drift a few dozen lines above it, which is what keeps a
- * KIND_STATIC entry falling once its own push has spent itself. Only the
- * push move used to charge either. The drift's own swap ran for free: no
- * drag to slow it, no transfer to show for it - which is exactly the
- * asymmetry a slow-arriving chunk exploited. A chunk struck near the blast
- * is still fast enough for its push-roll (rolled_move, that loop's own
- * comment) to succeed most turns, so it mostly takes the push path and
- * pays for what it hits; a chunk that has flown a long way arrives with
- * `speed` mostly ramped away, its push-roll mostly failing, so nearly every
- * displacement IT makes is the drift's own free swap - it tunnels through
- * a bank in complete silence, burying itself no matter how the drag
- * constants are tuned, and never throwing a single transfer entry however
- * far it travelled to get there. A displacement is a displacement either
- * way - the medium being displaced does not know or care which of the
- * loop's two rules is what moved the mover into it, so neither should the
- * bookkeeping.
+/* "IS THERE ANYWHERE GRAVITY CAN STILL TAKE THIS ENTRY FROM (x, y) THIS
+ * STEP" - the one check step_impulses() (below) asks twice: once for a
+ * KIND_STATIC entry deciding whether it is still airborne, once for a
+ * KIND_POWDER entry asking the same question. Both used to write out this
+ * exact same three-candidate scan in full, verbatim - an adversarial
+ * architecture review (bd esp32c6-w2h) named it as the kind of duplication
+ * this file had already been burned by once (impulse_gravity_candidates()'s
+ * own comment has that history): two call sites free to quietly diverge on
+ * what "still has an opening" means, the same way the candidate LIST itself
+ * once did before impulse_gravity_candidates() unified it.
+ *
+ * `cand_out` is filled regardless of the result - the KIND_STATIC caller
+ * still needs cand_out[0] (the straight-down candidate) after a `false`
+ * result, to tell a genuine wall from support that is itself mid-flight
+ * (the "SUPPORT THAT IS ITSELF IN FLIGHT" block, below); the KIND_POWDER
+ * caller has no such follow-up and simply ignores it. */
+static bool impulse_has_opening(const sand_t *s, int x, int y, int dx, int dy,
+                                cell_t mover, uint8_t speed, int cand_out[3][2])
+{
+    impulse_gravity_candidates(x, y, dx, dy, cand_out);
+    for (int c = 0; c < 3; c++) {
+        if (can_impulse_enter_gravity_ward(
+                sand_at(s, cand_out[c][0], cand_out[c][1]), mover, speed)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* ONE RAMP CHARGE, FOR `cells` CELLS OF IT - the single mechanism behind
+ * what used to be two separately-written branches in step_impulses() (an
+ * adversarial architecture review, bd esp32c6-w2h, named this as the same
+ * duplication the decay logic had already grown once): a "per-step" charge,
+ * unconditional and paid before any hop was even attempted, and a "per-
+ * extra-cell" charge, paid once per cell beyond the first AFTER the whole
+ * hop loop finished. Both were the exact same schedule - MAT_WATER/MAT_ACID
+ * geometric (SAND_SPLASH_SPEED_DECAY_SHIFT), everything else linear
+ * (entry->ramp) - written out twice because one was charged before the loop
+ * and the other after it, not because the RULE itself ever differed.
+ *
+ * THIS FUNCTION IS THE ONE RULE; THE TWO CALL SITES ARE UNCHANGED IN
+ * NUMBER, ONLY IN BODY. step_impulses() still charges the first cell's
+ * ramp unconditionally, before push_count is even computed - that call
+ * site stays where it always was because push_count's own formula has
+ * always been measured against the speed left AFTER that one charge (see
+ * its own comment), and moving it would quietly hand push_count a
+ * different number to work from, a second consequence nobody asked this
+ * fix to have. It still charges every cell BEYOND the first inside the hop
+ * loop, next to drag, one call per extra cell - the part that actually
+ * moved from a batched pass after the whole loop to a per-cell one inside
+ * it. Every entry pays exactly the same TOTAL either way a step could have
+ * gone: `cells` lets both call sites share one body instead of each
+ * re-stating the water/acid-vs-everything-else branch. */
+static void impulse_decay(impulse_t *entry, uint8_t mat_id, int cells)
+{
+    if (mat_id == MAT_WATER || mat_id == MAT_ACID) {
+        for (int i = 0; i < cells; i++) {
+            entry->speed = (uint8_t)(entry->speed -
+                                     (entry->speed >> SAND_SPLASH_SPEED_DECAY_SHIFT));
+        }
+        return;
+    }
+    const unsigned total = (unsigned)entry->ramp * (unsigned)cells;
+    entry->speed = (entry->speed > total) ? (uint8_t)(entry->speed - total) : 0;
+}
+
+/* DISPLACE THE MOVER INTO (the cell at) `new_index` - charge what that
+ * costs, then actually do it: swap, latch, mark, and update `entry->index`.
+ * Re-cut this way (bd esp32c6-w2h, an adversarial architecture review) from
+ * an earlier version that only charged drag and transfer and left an
+ * identical 8-line swap/latch/mark/index block duplicated at both of this
+ * function's two call sites below - a caller-visible ordering rule
+ * (charge, THEN swap, in that order) that this function can simply enforce
+ * itself instead of trusting two call sites to keep restating it the same
+ * way. Also derives what it can from `entry` and `s` rather than taking it
+ * as a parameter: `mat_id` is CELL_MATERIAL(entry->cell) and `impact_speed`
+ * is `entry->speed` at the moment this function is entered, both always
+ * true at every call site there ever was, so a parameter for either only
+ * existed so a caller could hand back a fact this function already has
+ * access to.
+ *
+ * CHARGED THE SAME WAY REGARDLESS OF WHICH OF step_impulses()'s TWO
+ * DISPLACING MOVES ACTUALLY MOVED THE MOVER THIS STEP - the push move at
+ * the bottom of that loop, or the "AIRBORNE SOLIDS FALL TOO" gravity-drift
+ * a few dozen lines above it, which is what keeps a KIND_STATIC entry
+ * falling once its own push has spent itself. Only the push move used to
+ * charge either. The drift's own swap ran for free: no drag to slow it, no
+ * transfer to show for it - which is exactly the asymmetry a slow-arriving
+ * chunk exploited. A chunk struck near the blast is still fast enough for
+ * its push-roll (rolled_move, that loop's own comment) to succeed most
+ * turns, so it mostly takes the push path and pays for what it hits; a
+ * chunk that has flown a long way arrives with `speed` mostly ramped away,
+ * its push-roll mostly failing, so nearly every displacement IT makes is
+ * the drift's own free swap - it tunnels through a bank in complete
+ * silence, burying itself no matter how the drag constants are tuned, and
+ * never throwing a single transfer entry however far it travelled to get
+ * there. A displacement is a displacement either way - the medium being
+ * displaced does not know or care which of the loop's two rules is what
+ * moved the mover into it, so neither should the bookkeeping.
  *
  * ONE BODY, NOT TWO CALL SITES ANSWERING "WHAT DOES DISPLACING A CELL
  * COST" TWO DIFFERENT WAYS - this file already shipped one bug from
@@ -2045,14 +2125,15 @@ static bool impulse_index_still_tracked(const sand_t *s, int kept, int self_i,
  * changes this function once, not the drift site and the push site
  * separately, free to drift apart again exactly as they already did.
  *
- * `impact_speed` is the speed `entry` ARRIVED at this displacement WITH,
- * captured by the CALLER before this call charges drag - the "what it
- * LOST, not what it has LEFT" rule the push site's own history already
- * settled (momentum handed to the medium is what the mover lost, so
- * deriving the transfer from what is left after paying drag gets the
- * relationship backwards - measured, at powder's present cost, as a
- * full-speed impactor keeping 5 of 253, which would starve the transfer to
- * nothing were it read after this call instead of before).
+ * `impact_speed` is the speed `entry` ARRIVED at this displacement WITH -
+ * the "what it LOST, not what it has LEFT" rule the push site's own
+ * history already settled (momentum handed to the medium is what the
+ * mover lost, so deriving the transfer from what is left after paying drag
+ * gets the relationship backwards - measured, at powder's present cost, as
+ * a full-speed impactor keeping 5 of 253, which would starve the transfer
+ * to nothing were it read after drag instead of before). Capturing it as
+ * the very first thing this function does, before drag touches
+ * `entry->speed`, is what makes that true regardless of caller.
  *
  * `dir_for_transfer` is the direction THIS displacement actually happened
  * in - the push site's own `entry.dir` unchanged, or, at the drift site,
@@ -2064,81 +2145,109 @@ static bool impulse_index_still_tracked(const sand_t *s, int kept, int self_i,
  * further along the direction it was just hit from only ever shoves it
  * deeper into whatever bank it is already part of) has to spray out of the
  * surface the chunk actually broke through, not out of whatever heading it
- * happens to still carry.
+ * happens to still carry. Still a parameter, unlike `mat_id` and
+ * `impact_speed` above: unlike those two, it is NOT always derivable from
+ * `entry` alone, so a caller still has to say it.
  *
  * Gated twice, same as the ordinary push-site transfer always was: the
  * floor (SAND_IMPULSE_TRANSFER_MIN_SPEED) keeps a nearly-spent mover from
- * queuing a transfer too faint to ever move, and the shared per-step cap
- * (SAND_CASCADE_MAX_PER_STEP) is what actually protects impulse_buf from a
- * long plow queuing one transfer per cell touched.
+ * queuing a transfer too faint to ever move, and `deferred_transfer_count`'s
+ * own cap (SAND_CASCADE_TRANSFER_MAX_PER_STEP - see SAND_CASCADE_MAX_
+ * PER_STEP's own comment in sand.h for why TRANSFER now has its own share
+ * of that budget rather than a counter shared with the cascade relay) is
+ * what actually protects impulse_buf from a long plow queuing one transfer
+ * per cell touched.
  *
- * Mutates `entry->speed` in place - the caller's own stack copy - so
- * whatever runs next (the drift's own gravity-ward gate on its NEXT
- * candidate, the settle/spent check, or the ordinary write-back at the end
- * of this step) sees the post-drag figure, exactly as the push site's
- * write-back already did before this existed. That is deliberate, not
- * incidental: a KIND_STATIC chunk should come to rest within the first few
- * layers of a packed bank whether it arrived falling or pushing, the same
- * "close to the rim, not buried in it" shape the push site's own drag
- * already produced - see SAND_IMPULSE_DRAG_POWDER_SHIFT's own comment in
- * sand.h for the measured figure that shape rests on. */
+ * The swap, latch, mark and `entry->index` update at the bottom run
+ * UNCONDITIONALLY, even when nothing was displaced (an empty `new_index`)
+ * or the mover is a kind drag/transfer never charges (KIND_LIQUID) - only
+ * the charging above is conditional. That is deliberate, not incidental: a
+ * KIND_STATIC chunk should come to rest within the first few layers of a
+ * packed bank whether it arrived falling or pushing, the same "close to
+ * the rim, not buried in it" shape the push site's own drag already
+ * produced - see SAND_IMPULSE_DRAG_POWDER_SHIFT's own comment in sand.h
+ * for the measured figure that shape rests on. */
 static void impulse_charge_displacement(sand_t *s, impulse_t *entry,
-                                        uint8_t mat_id, cell_t displaced,
-                                        uint8_t impact_speed, uint16_t at_index,
-                                        int dir_for_transfer,
-                                        impulse_t *deferred, int *deferred_count)
+                                        size_t new_index, int dir_for_transfer,
+                                        impulse_t *deferred,
+                                        int *deferred_transfer_count)
 {
-    if (CELL_IS_EMPTY(displaced) ||
-        (materials[mat_id].kind != KIND_STATIC &&
-         materials[mat_id].kind != KIND_POWDER)) {
-        return;
-    }
+    const int w = s->w;
+    const size_t old_index = entry->index;
+    const cell_t displaced = s->cells[new_index];
+    const uint8_t mat_id = CELL_MATERIAL(entry->cell);
+    const uint8_t impact_speed = entry->speed;
 
-    const uint8_t drag = impulse_drag_of(displaced);
-    entry->speed = (entry->speed > drag) ? (uint8_t)(entry->speed - drag) : 0;
+    if (!CELL_IS_EMPTY(displaced) &&
+        (materials[mat_id].kind == KIND_STATIC ||
+         materials[mat_id].kind == KIND_POWDER)) {
+        const uint8_t drag = impulse_drag_of(displaced);
+        entry->speed = (entry->speed > drag) ? (uint8_t)(entry->speed - drag)
+                                              : 0;
 
-    if (impact_speed >= SAND_IMPULSE_TRANSFER_MIN_SPEED &&
-        *deferred_count < SAND_CASCADE_MAX_PER_STEP) {
-        /* ONLY THROW A CELL THAT HAS OPEN AIR TO BE THROWN INTO - the
-         * ejecta a person actually sees is the volume's SURFACE coming
-         * off it, and a cell deeper in has nowhere to go however hard it
-         * is hit. Queuing one anyway was most of why the spray read as
-         * barely there: the entry spent a slot of a per-step budget the
-         * surface cells were competing for, then wedged on its first
-         * move against the neighbour it was pointed at and did nothing
-         * visible. Checking first is also strictly CHEAPER than not - at
-         * most three reads here against a queued entry that costs a slot
-         * plus a full turn of the flight pass to discover the same thing.
-         *
-         * Starting the scan at a random arm of the cone rather than
-         * always the same one keeps a flat surface from throwing every
-         * one of its cells along an identical vector, which reads as a
-         * sheet lifting off rather than a spray. sand_at()'s off-grid
-         * STONE means the board edge is never chosen, so nothing is ever
-         * thrown out of the world. */
-        const int ex = (int)((unsigned)at_index % (unsigned)s->w);
-        const int ey = (int)((unsigned)at_index / (unsigned)s->w);
-        const int base = dir_for_transfer + 3;
-        const unsigned first = rng_below(&s->rng, 3);
-        int chosen = -1;
+        if (impact_speed >= SAND_IMPULSE_TRANSFER_MIN_SPEED &&
+            *deferred_transfer_count < SAND_CASCADE_TRANSFER_MAX_PER_STEP) {
+            /* ONLY THROW A CELL THAT HAS OPEN AIR TO BE THROWN INTO - the
+             * ejecta a person actually sees is the volume's SURFACE coming
+             * off it, and a cell deeper in has nowhere to go however hard it
+             * is hit. Queuing one anyway was most of why the spray read as
+             * barely there: the entry spent a slot of a per-step budget the
+             * surface cells were competing for, then wedged on its first
+             * move against the neighbour it was pointed at and did nothing
+             * visible. Checking first is also strictly CHEAPER than not - at
+             * most three reads here against a queued entry that costs a slot
+             * plus a full turn of the flight pass to discover the same thing.
+             *
+             * Starting the scan at a random arm of the cone rather than
+             * always the same one keeps a flat surface from throwing every
+             * one of its cells along an identical vector, which reads as a
+             * sheet lifting off rather than a spray. sand_at()'s off-grid
+             * STONE means the board edge is never chosen, so nothing is ever
+             * thrown out of the world. */
+            const int ex = (int)((unsigned)old_index % (unsigned)w);
+            const int ey = (int)((unsigned)old_index / (unsigned)w);
+            const int base = dir_for_transfer + 3;
+            const unsigned first = rng_below(&s->rng, 3);
+            int chosen = -1;
 
-        for (unsigned k = 0; k < 3u && chosen < 0; k++) {
-            const int cand = (base + (int)((first + k) % 3u)) & 7;
-            const int *cd = ring_dir(cand);
-            if (CELL_IS_EMPTY(sand_at(s, ex + cd[0], ey + cd[1]))) {
-                chosen = cand;
+            for (unsigned k = 0; k < 3u && chosen < 0; k++) {
+                const int cand = (base + (int)((first + k) % 3u)) & 7;
+                const int *cd = ring_dir(cand);
+                if (CELL_IS_EMPTY(sand_at(s, ex + cd[0], ey + cd[1]))) {
+                    chosen = cand;
+                }
             }
+            if (chosen >= 0) {
+                impulse_t *t = &deferred[(*deferred_transfer_count)++];
+                t->index = (uint16_t)old_index;
+                t->cell  = displaced;
+                t->dir   = (uint8_t)chosen;
+                t->speed = (uint8_t)(impact_speed / SAND_IMPULSE_TRANSFER_DIVISOR);
+            }
+            /* chosen < 0 means buried - no surface to leave by - so nothing
+             * is queued, but the displacement below still happens: burial
+             * is a fact about the EJECTA, not about whether the mover
+             * itself still moves into the cell it just paid drag for. */
         }
-        if (chosen < 0) {
-            return;   /* buried - no surface to leave by */
-        }
-
-        impulse_t *t = &deferred[(*deferred_count)++];
-        t->index = at_index;
-        t->cell  = displaced;
-        t->dir   = (uint8_t)chosen;
-        t->speed = (uint8_t)(impact_speed / SAND_IMPULSE_TRANSFER_DIVISOR);
     }
+
+    s->cells[new_index] = entry->cell;
+    s->cells[old_index] = displaced;
+    latch_content_flags(s, entry->cell);
+    /* The displaced occupant, if any, is not a fresh cell - it already
+     * existed on the board a moment ago, at `new_index` - but every write
+     * owes the same bookkeeping regardless of whether what landed there
+     * is new, so this costs one more cheap latch rather than a special
+     * case for "not empty". Skipped only for the everyday case where
+     * there was nothing to displace at all. */
+    if (!CELL_IS_EMPTY(displaced)) {
+        latch_content_flags(s, displaced);
+    }
+    mark_move(s, (int)((unsigned)old_index % (unsigned)w),
+             (int)((unsigned)old_index / (unsigned)w),
+             (int)((unsigned)new_index % (unsigned)w),
+             (int)((unsigned)new_index / (unsigned)w));
+    entry->index = (uint16_t)new_index;
 }
 
 /* The flight pass: every entry in s->impulse_buf either moves exactly one
@@ -2220,14 +2329,25 @@ static void step_impulses(sand_t *s, int dx, int dy)
      * comment describes for the old `blast_t` name. It now also carries
      * TRANSFER entries (a struck cell picking up impulse of its own from
      * whatever just displaced it, KIND_STATIC/KIND_POWDER movers only,
-     * below) - a second, unrelated reason to defer a follow-up queue by
-     * exactly the same one step, sharing this one array and its cap
-     * (SAND_CASCADE_MAX_PER_STEP - left named for the mechanism that
-     * motivated the cap's own size, not renamed just because a second
-     * caller now shares it) rather than growing a twin of this whole
-     * mechanism for a second kind of follow-up. */
+     * inside impulse_charge_displacement() above) - a second, unrelated
+     * reason to defer a follow-up queue by exactly the same one step,
+     * sharing this one array (SAND_CASCADE_MAX_PER_STEP cells - left named
+     * for the mechanism that motivated the array's own size, not renamed
+     * just because a second caller now shares it) rather than growing a
+     * twin of this whole mechanism for a second kind of follow-up.
+     *
+     * TWO COUNTERS, ONE ARRAY - see SAND_CASCADE_MAX_PER_STEP's own comment
+     * in sand.h for why a single shared count let one mechanism starve the
+     * other by queue order alone. `deferred_transfer_count` is gated
+     * against SAND_CASCADE_TRANSFER_MAX_PER_STEP and writes from the front
+     * of `deferred`; `deferred_cascade_count`, just below the main loop, is
+     * gated against SAND_CASCADE_RELAY_MAX_PER_STEP and writes from the
+     * back - two disjoint partitions of the one array, each mechanism's
+     * own cap enforced independently of how much of its half the other one
+     * happened to use this same step. */
     impulse_t deferred[SAND_CASCADE_MAX_PER_STEP];
-    int deferred_count = 0;
+    int deferred_transfer_count = 0;
+    int deferred_cascade_count = 0;
 
     for (int i = 0; i < s->impulse_count; i++) {
         impulse_t entry = s->impulse_buf[i];
@@ -2317,14 +2437,13 @@ static void step_impulses(sand_t *s, int dx, int dy)
 
             const int ox = (int)((unsigned)entry.index % (unsigned)w);
             const int oy = (int)((unsigned)entry.index / (unsigned)w);
-            const int i_dir = ring_of(dx, dy);
-            const int *slide_a = ring_dir(i_dir + 7);
-            const int *slide_b = ring_dir(i_dir + 1);
-            const int cand[3][2] = {
-                { ox + dx,         oy + dy         },
-                { ox + slide_a[0], oy + slide_a[1] },
-                { ox + slide_b[0], oy + slide_b[1] },
-            };
+            /* THE SAME THREE CANDIDATES impulse_gravity_candidates() (above)
+             * already builds for the gravity-drift move and the settled
+             * check further down this loop - hand-rolled here before an
+             * adversarial review (bd esp32c6-w2h) pointed out this was the
+             * exact duplication that helper exists to prevent. */
+            int cand[3][2];
+            impulse_gravity_candidates(ox, oy, dx, dy, cand);
 
             for (int c = 0; c < 3 && !reacquired; c++) {
                 const int cx = cand[c][0];
@@ -2469,33 +2588,18 @@ static void step_impulses(sand_t *s, int dx, int dy)
                                                     entry.speed)) {
                     continue;
                 }
-                const size_t gat  = entry.index;
-                const size_t gnat = (size_t)cy * (size_t)w + (size_t)cx;
-                const cell_t gdisplaced = s->cells[gnat];
-
                 /* A DISPLACEMENT IS A DISPLACEMENT - see
                  * impulse_charge_displacement()'s own comment for the
                  * silent tunnelling this closes: without this, a chunk
                  * arriving slow (mostly falling by the time it gets here,
                  * its own push-roll long since unlikely to fire) ploughed
                  * through a bank paying nothing and throwing nothing,
-                 * however far it had already flown to get there. Arrival
-                 * speed captured BEFORE the charge, same rule the push
-                 * site below keeps. */
-                const uint8_t gimpact_speed = entry.speed;
-                impulse_charge_displacement(s, &entry, mat_id, gdisplaced,
-                                            gimpact_speed, (uint16_t)gat,
-                                            gcand_dir[c], deferred,
-                                            &deferred_count);
-
-                s->cells[gnat] = entry.cell;
-                s->cells[gat]  = gdisplaced;
-                latch_content_flags(s, entry.cell);
-                if (!CELL_IS_EMPTY(gdisplaced)) {
-                    latch_content_flags(s, gdisplaced);
-                }
-                mark_move(s, gx, gy, cx, cy);
-                entry.index = (uint16_t)gnat;
+                 * however far it had already flown to get there. That
+                 * function owns the swap/latch/mark/index-update too, not
+                 * just the charge - see its own top comment for why. */
+                const size_t gnat = (size_t)cy * (size_t)w + (size_t)cx;
+                impulse_charge_displacement(s, &entry, gnat, gcand_dir[c],
+                                            deferred, &deferred_transfer_count);
                 break;
             }
         }
@@ -2558,14 +2662,27 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * deterministic version measured. */
         const bool rolled_move = rng_chance(&s->rng, entry.speed);
 
-        /* Ramps down every turn, for exactly the same "no exceptions"
-         * reason the roll above runs every turn - moved, blocked, or about
-         * to be dropped, `speed` ages regardless. Saturating rather than
-         * wrapping: once it reaches zero it stays there, so rng_chance()
-         * with a zero numerator never succeeds again and the entry is
-         * dropped, below, the very next time this runs - the ramp needs no
-         * separate "done flying" check of its own.
-         *
+        /* THE FIRST CELL'S RAMP, CHARGED HERE UNCONDITIONALLY, EVERY TURN -
+         * moved, blocked, or about to be dropped, `speed` ages regardless,
+         * the same "no exceptions" reason the roll above runs every turn.
+         * This is also what push_count (below) has always been computed
+         * FROM: "how far this step's move reaches" was already a property
+         * of the post-this-charge speed before impulse_decay() existed, and
+         * staying here keeps that true rather than quietly handing push_
+         * cells a pre-decay figure it was never measured against. Any
+         * FURTHER cell this step's push actually crosses is charged again,
+         * once per cell, INSIDE the hop loop next to drag - see
+         * impulse_decay()'s own comment for why one function now covers
+         * both this call and that one, replacing what used to be this same
+         * charge plus a second, separately-written "extra cells" pass after
+         * the loop finished. Saturating rather than wrapping: once `speed`
+         * reaches zero it stays there, so rng_chance() with a zero
+         * numerator never succeeds again and the entry is dropped, below,
+         * the very next time this runs - the ramp needs no separate "done
+         * flying" check of its own. */
+        impulse_decay(&entry, mat_id, 1);
+
+        /*
          * WATER AND ACID GET THEIR OWN, GEOMETRIC DECAY - reported as
          * needing to hit hard and then die out fast, rather than fading
          * gradually over a linear ramp's full ~128-step tail (see
@@ -2603,14 +2720,6 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * always did for them; sand_impulse_dislodge() (sand.h) is the
          * one primitive whose caller can queue a different figure
          * instead. */
-        if (mat_id == MAT_WATER || mat_id == MAT_ACID) {
-            entry.speed = (uint8_t)(entry.speed -
-                                    (entry.speed >> SAND_SPLASH_SPEED_DECAY_SHIFT));
-        } else {
-            entry.speed = (entry.speed > entry.ramp)
-                              ? (uint8_t)(entry.speed - entry.ramp)
-                              : 0;
-        }
 
         /* "OUT OF FLIGHT" USED TO MEAN "SETTLES EXACTLY WHERE IT IS" -
          * dropped from tracking (not re-added to kept, below) the instant
@@ -2705,18 +2814,8 @@ static void step_impulses(sand_t *s, int dx, int dy)
                 const int rx = (int)((unsigned)entry.index % (unsigned)w);
                 const int ry = (int)((unsigned)entry.index / (unsigned)w);
                 int rcand[3][2];
-                impulse_gravity_candidates(rx, ry, dx, dy, rcand);
-
-                bool has_opening = false;
-                for (int c = 0; c < 3; c++) {
-                    if (can_impulse_enter_gravity_ward(
-                            sand_at(s, rcand[c][0], rcand[c][1]), entry.cell,
-                            entry.speed)) {
-                        has_opening = true;
-                        break;
-                    }
-                }
-                if (has_opening) {
+                if (impulse_has_opening(s, rx, ry, dx, dy, entry.cell,
+                                        entry.speed, rcand)) {
                     s->impulse_buf[kept++] = entry;
                     continue;   /* still airborne - keep falling */
                 }
@@ -2830,18 +2929,8 @@ static void step_impulses(sand_t *s, int dx, int dy)
                 const int rx = (int)((unsigned)entry.index % (unsigned)w);
                 const int ry = (int)((unsigned)entry.index / (unsigned)w);
                 int rcand[3][2];
-                impulse_gravity_candidates(rx, ry, dx, dy, rcand);
-
-                bool has_opening = false;
-                for (int c = 0; c < 3; c++) {
-                    if (can_impulse_enter_gravity_ward(
-                            sand_at(s, rcand[c][0], rcand[c][1]), entry.cell,
-                            entry.speed)) {
-                        has_opening = true;
-                        break;
-                    }
-                }
-                if (has_opening) {
+                if (impulse_has_opening(s, rx, ry, dx, dy, entry.cell,
+                                        entry.speed, rcand)) {
                     s->impulse_buf[kept++] = entry;
                     continue;   /* still airborne - keep tracked; the
                                  * ordinary sweep does the actual falling */
@@ -2863,11 +2952,8 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * own comment for why that has to stay exact, and
          * test_a_sub_divisor_speed_impulse_never_moves_more_than_one_cell_
          * a_step (suite_sand.c) for the pin. */
-        const int push_cells =
+        const int push_count =
             1 + (int)entry.speed / SAND_IMPULSE_CELLS_PER_STEP_DIVISOR;
-        const int push_count = (push_cells > SAND_IMPULSE_CELLS_PER_STEP_MAX)
-                                   ? SAND_IMPULSE_CELLS_PER_STEP_MAX
-                                   : push_cells;
 
         /* Position and direction BEFORE any of this step's cells move -
          * what the CASCADE block below (water/acid only, unchanged in
@@ -2984,51 +3070,44 @@ static void step_impulses(sand_t *s, int dx, int dy)
                 break;
             }
 
-            const size_t at  = entry.index;
-            const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
-
             /* A SWAP, not an overwrite - move_to()'s own trick (sand_priv.h),
              * reused here for the same reason: whatever the mover is displacing
              * (empty, same as always, or now a real occupant) takes the cell
              * the mover is vacating, rather than that occupant's cell being
              * blanked. Conservation needs nothing extra to hold: two cells that
              * both already existed a moment ago simply trade places, so the
-             * grand total is untouched whichever of the two cases this was. */
-            const cell_t displaced = s->cells[nat];
-
-            /* MEDIUM DRAG AND TRANSFER - EVERY MOVER BUT A LIQUID, both now
+             * grand total is untouched whichever of the two cases this was.
+             *
+             * MEDIUM DRAG AND TRANSFER - EVERY MOVER BUT A LIQUID, both now
              * charged by impulse_charge_displacement() (this file, just above
              * step_impulses()), the one place this loop's OTHER displacing move
              * - the gravity-drift a few dozen lines up - charges the exact same
-             * two things for the exact same reason. See that function's own
-             * comment for the full history (why one shared body, not two sites
-             * quietly answering "what does displacing a cell cost" two
-             * different ways) and for SAND_IMPULSE_DRAG_SHIFT's own comment in
-             * sand.h for what the drag number itself means. Charged here, at
-             * the move site, rather than folded into the ramp above
-             * `rolled_move`'s own decay: open air (nothing displaced) must
-             * cost exactly nothing, so a flight through empty space stays
-             * byte-for-byte what it always was. Liquids pay no drag either
-             * way: they carry their own geometric decay
-             * (SAND_SPLASH_SPEED_DECAY_SHIFT) and the splash/cascade feature is
-             * tuned around it.
+             * two things for the exact same reason, and which now performs the
+             * swap above too - see that function's own comment for the full
+             * history (why one shared body, not two sites quietly answering
+             * "what does displacing a cell cost" two different ways) and for
+             * SAND_IMPULSE_DRAG_POWDER_SHIFT's own comment in sand.h for what
+             * the drag number itself means. Charged here, at the move site,
+             * rather than folded into impulse_decay()'s own per-cell ramp:
+             * open air (nothing displaced) must cost exactly nothing, so a
+             * flight through empty space stays byte-for-byte what it always
+             * was. Liquids pay no drag either way: they carry their own
+             * geometric decay (SAND_SPLASH_SPEED_DECAY_SHIFT) and the
+             * splash/cascade feature is tuned around it.
              *
              * CHARGED ONCE PER CELL OF THIS STEP'S TRAVEL, NOT ONCE PER STEP -
-             * `impact_speed` is re-read fresh at the top of every hop, after
-             * whatever the PREVIOUS cell's own drag already took, so a mover
-             * crossing several cells in one step pays for each one exactly as
-             * if it had taken one step per cell, the same total cost a
-             * multi-step crossing always charged. THE SPEED IT ARRIVED WITH,
-             * captured before THIS hop's own drag takes its cut - this is
-             * what the TRANSFER inside that call is owed, and reading
-             * `entry.speed` AFTER drag instead was a real bug rather than a
-             * detail. Momentum handed to the medium is what the mover LOST, so
-             * deriving the throw from what it has LEFT gets the relationship
-             * exactly backwards: the harder a medium resists, the less it
-             * would fling. Every round that strengthened drag was quietly
-             * strangling the ejecta, and at powder's present cost a
-             * full-speed impactor would keep 5 of 253 - under the transfer
-             * gate, so a bank would have thrown nothing at all, ever.
+             * `impact_speed` is captured fresh inside that call on every hop,
+             * after whatever the PREVIOUS cell's own drag already took, so a
+             * mover crossing several cells in one step pays for each one
+             * exactly as if it had taken one step per cell, the same total
+             * cost a multi-step crossing always charged. Momentum handed to
+             * the medium is what the mover LOST, so deriving the throw from
+             * what it has LEFT gets the relationship exactly backwards: the
+             * harder a medium resists, the less it would fling. Every round
+             * that strengthened drag was quietly strangling the ejecta, and at
+             * powder's present cost a full-speed impactor would keep 5 of 253
+             * - under the transfer gate, so a bank would have thrown nothing
+             * at all, ever.
              *
              * `entry.dir` IS THE DIRECTION THIS DISPLACEMENT HAPPENED IN, at
              * this site specifically - the push move only ever moves along the
@@ -3036,26 +3115,22 @@ static void step_impulses(sand_t *s, int dx, int dy)
              * the drift site has to work out its own `dir_for_transfer`
              * instead of reusing `entry.dir` (see that function's own comment
              * on the parameter). */
-            const uint8_t impact_speed = entry.speed;
-            impulse_charge_displacement(s, &entry, mat_id, displaced,
-                                        impact_speed, (uint16_t)at, entry.dir,
-                                        deferred, &deferred_count);
-
-            s->cells[nat] = entry.cell;
-            s->cells[at]  = displaced;
-            latch_content_flags(s, entry.cell);
-            /* The displaced occupant, if any, is not a fresh cell - it already
-             * existed on the board a moment ago, at `nat` - but every write
-             * owes the same bookkeeping regardless of whether what landed there
-             * is new, so this costs one more cheap latch rather than a special
-             * case for "not empty". Skipped only for the everyday case where
-             * there was nothing to displace at all. */
-            if (!CELL_IS_EMPTY(displaced)) {
-                latch_content_flags(s, displaced);
+            /* ONLY AN *EXTRA* CELL IS CHARGED HERE, NEXT TO DRAG - hop 0's
+             * ramp was already paid before push_count (above) was even
+             * computed, the same single charge a blocked-on-hop-0 or never-
+             * rolled entry also pays and no more, so charging it again here
+             * would double it. Every hop AFTER the first is exactly the
+             * "extra cell" this file used to charge in one lump, after the
+             * whole loop finished - impulse_decay()'s own comment has the
+             * full account of why that lump is now paid per cell, here,
+             * instead. */
+            if (hop > 0) {
+                impulse_decay(&entry, mat_id, 1);
             }
-            mark_move(s, x, y, nx, ny);
 
-            entry.index = (uint16_t)nat;
+            const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
+            impulse_charge_displacement(s, &entry, nat, entry.dir,
+                                        deferred, &deferred_transfer_count);
             moved++;
         }
 
@@ -3085,54 +3160,17 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * entry just left, which is what actually turns one grain moving
          * into a connected chain advancing together - a piston, not a
          * single flying droplet. */
-        /* THE RAMP IS A COST PER CELL OF TRAVEL, NOT PER TICK OF THE CLOCK.
-         * The decay above this loop charges it once a step, which was the
-         * same thing back when a step WAS one cell. It is not any more, and
-         * leaving it there quietly tripled an entry's range: three cells for
-         * the price of one. Worse than the range was the SHAPE - speed
-         * barely fell across a flight, so nothing ever dropped out of the
-         * three-cell band into two and then one, and a throw that should
-         * arc read as a straight line. Charging the extra cells restores
-         * decay per unit distance, which is what the arc was always made of.
-         *
-         * Only the extra cells, and only for the ramp materials: the first
-         * cell was already paid for above, and water and acid decay
-         * geometrically on their own schedule (SAND_SPLASH_SPEED_DECAY_
-         * SHIFT) that the splash and cascade features are tuned around. An
-         * entry that moved once or not at all is untouched, so a blocked or
-         * spent entry ages exactly as it always has - the bounded-lifetime
-         * guarantee this file rests on does not move. */
-        if (moved > 1) {
-            if (mat_id == MAT_WATER || mat_id == MAT_ACID) {
-                /* A LIQUID'S OWN SCHEDULE HAD THE SAME FLAW, and excluding
-                 * it here the first time round was the mistake: its decay
-                 * is a different SHAPE (geometric, not linear) but it was
-                 * charged per step exactly as the ramp was, so its range
-                 * tripled too the moment a step stopped being one cell.
-                 * Reported from the device as acid spraying off the rim of
-                 * a pool. Applied once per extra cell rather than folded
-                 * into a multiply because the shift is not linear - three
-                 * eighths off is not the same as an eighth off three
-                 * times - and at most SAND_IMPULSE_CELLS_PER_STEP_MAX
-                 * turns of this is nothing. */
-                for (int extra = 1; extra < moved; extra++) {
-                    entry.speed =
-                        (uint8_t)(entry.speed -
-                                  (entry.speed >> SAND_SPLASH_SPEED_DECAY_SHIFT));
-                }
-            } else {
-                const unsigned extra =
-                    (unsigned)entry.ramp * (unsigned)(moved - 1);
-                entry.speed = (entry.speed > extra)
-                                  ? (uint8_t)(entry.speed - extra)
-                                  : 0;
-            }
-        }
+        /* THE RAMP IS A COST PER CELL OF TRAVEL, NOT PER TICK OF THE CLOCK -
+         * the first cell was already charged before push_count was even
+         * computed, and every cell beyond it was charged inside the hop
+         * loop above, next to drag, one impulse_decay() call per extra cell
+         * rather than a second pass in this exact spot. See that function's
+         * own comment for why one mechanism now covers both call sites. */
 
         if (moved > 0 &&
             (mat_id == MAT_WATER || mat_id == MAT_ACID) &&
             entry.speed >= SAND_CASCADE_MIN_SPEED * SAND_CASCADE_SPEED_DIVISOR &&
-            deferred_count < SAND_CASCADE_MAX_PER_STEP) {
+            deferred_cascade_count < SAND_CASCADE_RELAY_MAX_PER_STEP) {
             const int rx = x0 - d0[0];
             const int ry = y0 - d0[1];
             if ((unsigned)rx < (unsigned)w && (unsigned)ry < (unsigned)h) {
@@ -3140,7 +3178,16 @@ static void step_impulses(sand_t *s, int dx, int dy)
                     s->cells[(size_t)ry * (size_t)w + (size_t)rx];
                 if (!CELL_IS_EMPTY(relay_target) &&
                     CELL_MATERIAL(relay_target) == mat_id) {
-                    impulse_t *c = &deferred[deferred_count++];
+                    /* Writes from the BACK of `deferred` - see the array's
+                     * own top comment for why this and TRANSFER (which
+                     * writes from the front, inside
+                     * impulse_charge_displacement()) never collide: each
+                     * partition is sized to its own cap, and the two caps
+                     * sum to exactly this array's capacity. */
+                    const int relay_slot = SAND_CASCADE_MAX_PER_STEP - 1 -
+                                           deferred_cascade_count;
+                    deferred_cascade_count++;
+                    impulse_t *c = &deferred[relay_slot];
                     c->index = (uint16_t)((size_t)ry * (size_t)w + (size_t)rx);
                     c->cell  = relay_target;
                     c->dir   = entry.dir;
@@ -3162,13 +3209,24 @@ static void step_impulses(sand_t *s, int dx, int dy)
     /* Appended only now that `kept` (and so s->impulse_count, set just
      * above) is final - see this array's own top comment for why mid-loop
      * queuing was not safe here. Each entry - a cascade relay or a
-     * transfer alike, this loop does not distinguish - is queued exactly
-     * the way sand_impulse() itself would, just batched: this is not a
-     * new primitive, only a deferred, bounded set of ordinary impulses. */
-    for (int i = 0; i < deferred_count; i++) {
+     * transfer alike - is queued exactly the way sand_impulse() itself
+     * would, just batched: this is not a new primitive, only a deferred,
+     * bounded set of ordinary impulses. TWO RANGES, not one: TRANSFER
+     * entries occupy [0, deferred_transfer_count) from the front of the
+     * array, CASCADE relays occupy the same number of cells back from the
+     * end - see the array's own top comment and the relay site's own
+     * comment on `relay_slot` for why the two never overlap even at both
+     * caps' own maximum. */
+    for (int i = 0; i < deferred_transfer_count; i++) {
         sand_impulse(s, (int)((unsigned)deferred[i].index % (unsigned)w),
                     (int)((unsigned)deferred[i].index / (unsigned)w),
                     deferred[i].dir, deferred[i].speed);
+    }
+    for (int i = 0; i < deferred_cascade_count; i++) {
+        const impulse_t *c = &deferred[SAND_CASCADE_MAX_PER_STEP - 1 - i];
+        sand_impulse(s, (int)((unsigned)c->index % (unsigned)w),
+                    (int)((unsigned)c->index / (unsigned)w),
+                    c->dir, c->speed);
     }
 }
 
