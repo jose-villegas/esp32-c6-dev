@@ -3952,63 +3952,56 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
 
             /* ONE roll, now a four-way ladder - see SAND_ACID_DILUTE_EVAPORATE_CHANCE's
              * own comment (sand.h) for why this replaced two independent
-             * rolls, and SAND_ACID_DILUTE_SMOKE_CHANCE's own comment
+             * rolls, and SAND_ACID_DILUTE_NO_BYPRODUCT_CHANCE's own comment
              * (sand.h) for why the smoke band sits ahead of every other
              * band rather than folded into one of them: every band below
              * keeps its own width and its own meaning, simply shifted up
              * by however wide the smoke band is. */
             const int roll = (int)(rng_next(&s->rng) & 0xFF);
             const size_t self_at = (size_t)y * (size_t)w + (size_t)x;
-            const int smoke_chance = (s->acid_dilute_smoke_chance >= 0)
-                                          ? s->acid_dilute_smoke_chance : SAND_ACID_DILUTE_SMOKE_CHANCE;
-            if (roll < smoke_chance) {
-                /* SAND_ACID_DILUTE_SMOKE_CHANCE (sand.h): the acid cell
-                 * boils off into MAT_SMOKE rather than its ordinary
-                 * MAT_GAS - deliberately a DIFFERENT material, so a
-                 * single cell of it poisons any 4x4 acid-rain pocket
-                 * (step_one_acid_rain_cell(), below) it ends up inside.
-                 * CARVED OUT OF THE EVAPORATE BAND, not added ahead of
-                 * the whole ladder. Added, it took its width out of the
-                 * acid-wins share at the bottom, which quietly weakened
-                 * how fast acid converts a pool - caught by
-                 * test_a_relentless_pour_of_acid_overwhelms_a_pool_of_
-                 * water, whose mass-bias signal it swamped. Carved, every
-                 * boundary below is exactly where it was and the only
-                 * thing that changes is what an evaporation YIELDS. It
-                 * also suppresses pockets harder for free: a 4x4 needs at
-                 * least two MAT_GAS, and this takes its width out of the
-                 * band that was the only source of them. */
-                place_reacted(s, x, y, self_at, MAT_SMOKE);
-            } else if (roll < SAND_ACID_DILUTE_EVAPORATE_CHANCE) {
-                /* Acid's own ambient-style boil-off, unrelated to who
-                 * wins the water/acid split below - see this constant's
-                 * own comment (sand.h). Only the acid cell is touched. */
-                place_reacted(s, x, y, self_at, MAT_GAS);
+            /* A SECOND, INDEPENDENT ROLL: does this dilution leave a
+             * byproduct at all, or nothing? Deliberately NOT a band of the
+             * ladder below. A band takes its width out of one outcome and
+             * so changes which side wins, and how fast acid converts a pool
+             * is already tuned (SAND_ACID_DILUTE_TO_WATER_CHANCE,
+             * SAND_ACID_DILUTE_MASS_BIAS) - a smoke band tried exactly that
+             * and was caught by the mass-bias test, whose signal it
+             * swamped. This leaves every band as wide as it was and every
+             * winner unchanged; the only thing it takes away is the VAPOUR.
+             * See SAND_ACID_DILUTE_NO_BYPRODUCT_CHANCE's own comment
+             * (sand.h) for the loop it exists to starve. */
+            const int voided_chance = (s->acid_dilute_no_byproduct >= 0)
+                                          ? s->acid_dilute_no_byproduct
+                                          : SAND_ACID_DILUTE_NO_BYPRODUCT_CHANCE;
+            const bool voided =
+                (int)(rng_next(&s->rng) & 0xFF) < voided_chance;
+
+            if (roll < SAND_ACID_DILUTE_EVAPORATE_CHANCE) {
+                /* Acid's own ambient-style boil-off, unrelated to who wins
+                 * the water/acid split below. Only the acid cell is
+                 * touched. */
+                if (voided) {
+                    place_cell(s, x, y, self_at, CELL_EMPTY);
+                } else {
+                    place_reacted(s, x, y, self_at, MAT_GAS);
+                }
             } else if (roll < SAND_ACID_DILUTE_EVAPORATE_CHANCE + water_wins_chance) {
-                /* WATER WINS - water is the source, spent boiling off
-                 * into its own MAT_STEAM at a fresh full life via
-                 * place_reacted(), the same as every other vapour-
-                 * creation path in this file. An earlier version of
-                 * this carried the old WATER cell's own mass nibble
-                 * across instead - a bug, not a deliberate choice: mass
-                 * and life-remaining are different fields (material.c),
-                 * and a half-drained water cell says nothing about how
-                 * long its steam should live. Acid is the target,
-                 * converted into water - mass DOES carry over here,
-                 * since both sides of THIS conversion are liquids
-                 * sharing the same mass semantic. Both writes go
-                 * through place_cell()/place_reacted() rather than a
-                 * raw store, so the new steam's content flags
-                 * (may_have_gas, may_have_condenser) actually get
-                 * latched instead of leaving it permanently inert. */
+                /* WATER WINS - water is the source, spent boiling off into
+                 * its own MAT_STEAM, or into nothing at all. */
                 place_cell(s, x, y, self_at, CELL_MAKE(MAT_WATER, CELL_VARIANT(row[x])));
-                place_reacted(s, nx, ny, at, MAT_STEAM);
+                if (voided) {
+                    place_cell(s, nx, ny, at, CELL_EMPTY);
+                } else {
+                    place_reacted(s, nx, ny, at, MAT_STEAM);
+                }
             } else {
-                /* ACID WINS - acid is the source, spent boiling off into
-                 * its own MAT_GAS at a fresh full life, same reasoning
-                 * as above. Water is the target, converted into acid,
-                 * mass carried over. */
-                place_reacted(s, x, y, self_at, MAT_GAS);
+                /* ACID WINS - the water cell becomes acid, and the acid
+                 * cell spends itself as vapour, or as nothing at all. */
+                if (voided) {
+                    place_cell(s, x, y, self_at, CELL_EMPTY);
+                } else {
+                    place_reacted(s, x, y, self_at, MAT_GAS);
+                }
                 place_cell(s, nx, ny, at, CELL_MAKE(MAT_ACID, CELL_VARIANT(n)));
             }
             return true;
