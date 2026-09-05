@@ -1386,14 +1386,17 @@ const char *material_name(cell_t c);
  * (sand_reactions.c). Sized against the other two radii this simulation
  * already has, not invented fresh: the confined-gas pocket detonates at
  * SAND_GAS_IGNITE_BLAST_RADIUS 8 (sand_reactions.c), the covered-lava
- * burst at SAND_LAVA_BURST_RADIUS 16 (sand.h). Gunpowder sits BETWEEN
- * them, above gas: it started at 6, under both, and on the device the
- * gas pocket then read as the more meaningful blast - wrong for the one
- * material whose whole point is to go off. With blasts capped at one a
- * step (SAND_GUNPOWDER_BLASTS_PER_STEP) the radius is what carries the
- * punch. The CORE that becomes fire is radius / SAND_EXPLODE_CORE_DIVISOR
- * (5, sand.h): two cells here, against one for the gas pocket. */
-#define SAND_GUNPOWDER_BLAST_RADIUS 12
+ * burst at SAND_LAVA_BURST_RADIUS 12 (sand.h). Gunpowder is the BIGGEST
+ * reaction-driven blast on the board, on purpose: it started at 6, under
+ * both, and on the device the gas pocket then read as the more meaningful
+ * blast - wrong for the one material whose whole point is to go off - so
+ * it took the lava burst's old 16 and the lava burst dropped to 12. Only
+ * the hand-fired detonate mode (app_sand.c, ~25 cells) is larger. With
+ * blasts capped at one a step (SAND_GUNPOWDER_BLASTS_PER_STEP) the radius
+ * is what carries the punch. The CORE that becomes fire is radius /
+ * SAND_EXPLODE_CORE_DIVISOR (5, sand.h): three cells here, against one
+ * for the gas pocket. */
+#define SAND_GUNPOWDER_BLAST_RADIUS 16
 
 /* Whether this cell is gunpowder - the high nibble is MAT_EXTENDED AND bit
  * 3 of the low nibble is set. Every gunpowder byte, whatever its 3-bit

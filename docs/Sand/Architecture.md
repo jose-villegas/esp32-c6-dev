@@ -136,7 +136,7 @@ burning or nothing inside a pile ever goes off), and quenching it with
 water writes moisture at `moist_max` (soaked) rather than the unlit code,
 or it would relight from an adjacent lit cell on the very next step.
 
-Only at **burn-out** does `explodes` (blast radius, 6) get read: if the
+Only at **burn-out** does `explodes` (blast radius, 16) get read: if the
 cell is one corner of a 2x2 whose other three cells are also lit gunpowder
 and the impulse buffer is live, it detonates (`sand_explode()`); otherwise
 it becomes an ordinary `MAT_FIRE` cell, the same no-buffer fallback the
