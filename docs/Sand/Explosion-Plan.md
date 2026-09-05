@@ -616,11 +616,22 @@ indexed by `cell >> 3`, to make room for it. Full mechanism and costs
 against it) in `Architecture.md`'s "The material budget, and what is
 left".
 
-The fuse this paragraph imagined did not ship either: by the maintainer's
-own spec, ignition is **immediate** - `sand_explode()` fires the moment
-`reaction_t.explodes` is read as true, in the same step as ignition or the
-qualifying heat hit, with no burn-down delay. A pile still chain-detonates
-over *several* steps regardless, because each blast's fire has to reach
-the next grain of powder on its own step before that grain's turn to
-ignite comes up - the fuse effect this paragraph wanted falls out of
-neighbour propagation, not a counter on the cell.
+**Revised, 2026-09-05, after device testing.** The fuse this paragraph
+imagined shipped after all - just not on the first attempt. The version
+above (immediate `sand_explode()` on ignition) is what actually landed
+first; a boundary-only variant on top of it came next, and the maintainer
+measured that one on the device and found it no cheaper. What replaced
+both is a real burn-down: gunpowder now has a **lit** state,
+code 7 of its own 3-bit variant - "to burn down as a fuse" needed exactly
+one more code out of the three bits this paragraph already asked for, not
+a fourth bit. Ignition and the qualifying heat hit write that lit code
+instead of blasting; a lit cell is a heat source like a burning log
+(ignites neighbours, so a trail burns along; counts down its own
+`burn_decay`, 32); only at burn-out does `reaction_t.explodes` (radius 6)
+get read, and only if all eight neighbours are also lit gunpowder and
+impulses are enabled - otherwise the cell becomes plain fire. A pile still
+chain-detonates over several steps, exactly as this paragraph predicted,
+but now for the reason it names: a counter on the cell, not merely
+neighbour propagation racing to keep up. Full mechanism in
+`Architecture.md`'s "The reaction table" and `Sand-Simulation.md`'s
+"Fire chemistry" section.

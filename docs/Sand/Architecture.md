@@ -42,8 +42,8 @@ sitting in that row:
 | `0` (immortal) and `kind == KIND_LIQUID` | fill level, 1-15 | water |
 | non-zero (transient) | life remaining, counts down to 0 = gone | gas, fire |
 | `heat_ramp != 0` | **temperature, 0-15, resting at 3** - and the palette index, so the cell's colour *is* its temperature. Below 3 is frost, above it is heat | glass, stone |
-| `burn_decay != 0` | **how much is left to burn**; 0 is unlit, and anything else means the cell is on fire | wood |
-| `dries != 0` | **read by STATE, not a fixed bit split**: dry tones first, then moisture 1..`moist_max` - the exact split is per-material (`reaction_t.tones`/`moist_max`), see below | dirt (8 tones, moisture 1-7, code 15 unused); gunpowder (3 tones, moisture 1-5, but only 3 bits of variant to spend them in - see the budget section) |
+| `burn_decay != 0` | **how much is left to burn**; how "unlit" and "lit" are spelled is per-material (`reaction_t.lit_from`), see below | wood (variant 0 unlit, non-zero lit); gunpowder (code 7 is its only lit state, the top of its 3-bit variant) |
+| `dries != 0` | **read by STATE, not a fixed bit split**: dry tones first, then moisture 1..`moist_max` - the exact split is per-material (`reaction_t.tones`/`moist_max`), see below | dirt (8 tones, moisture 1-7, code 15 unused); gunpowder (3 tones, moisture 1-4, then code 7 borrowed by `burn_decay` for lit - only 3 bits of variant to spend, see the budget section) |
 
 Reusing one nibble for three different jobs is deliberate, not a
 shortcut: the alternative is a second byte per cell, which at this grid
@@ -77,7 +77,7 @@ there as an immovable block.
 | 13 | glass | `KIND_STATIC` | never | `density=200`; made from sand by heat, the **only** thing acid cannot eat. Carries a temperature, like stone, and unlike stone it shatters on thermal shock |
 | 14 | snow | `KIND_POWDER` | falls | `density=15` (floats on water **and** oil), `scatter=90` (drifts), `repose=9` (~42°); the only **cold** material. Melts in any liquid, keeps indefinitely on dry ground |
 | 15, `0xF0`-`0xF7` | *extended statics* | one shared row, `KIND_STATIC` | - | not a material: the low 3 bits name one of `MATERIAL_EXTENDED_COUNT` (8) further statics, 3 spare. `MATX_ICE`, `MATX_PLANT`, `MATX_LEAF`, `MATX_METAL`, `MATX_ROOT` so far |
-| 15, `0xF8`-`0xFF` | gunpowder | `KIND_POWDER` | falls | `density=50`, `slip=80`, `repose=8`, `scatter=30`. The other half of id 15's row, split off by bit 3 of the cell byte rather than a slot of its own - see below. 3-bit variant (`GUNPOWDER_CELL()`/`cell_is_gunpowder()`): 3 dry tones then moisture 1-5, the same state-split pattern as dirt but with three fewer bits to spend it in |
+| 15, `0xF8`-`0xFF` | gunpowder | `KIND_POWDER` | falls | `density=50`, `slip=80`, `repose=8`, `scatter=30`. The other half of id 15's row, split off by bit 3 of the cell byte rather than a slot of its own - see below. 3-bit variant (`GUNPOWDER_CELL()`/`cell_is_gunpowder()`): 3 dry tones, then moisture 1-4, then code 7 is **lit** - a burning fuse cell, same state-carrying trick as wood's `burn_decay` variant, just sharing the 3 bits dirt's pattern already uses for tone/moisture |
 
 Every field on `material_t` is read from the innermost loop, several
 times per cell per step, which is why the struct is kept small with the
@@ -116,19 +116,43 @@ it stay.
 | acid | 0 | - | - | 0 | 0 | 0 | - | 0 | **60** | 0 | - |
 | glass | 0 | - | - | 0 | **220** | 0 | - | 0 | 0 | **0** (immune) | **lava**, by ramp |
 | snow | 0 | - | - | 0 | 0 | 0 | - | 0 | 0 | 0 | **water** (120) |
-| gunpowder | 200 | - | fire (**explodes** instead - see below) | 0 | 0 | 0 | - | 0 | 0 | **200** | **fire** (24) |
+| gunpowder | 200 | - | **lit** (code 7, a heat source - not fire) | 0, but **burn_decay 32** | 0 | 0 | **soaked** (quenched to wet, not unlit) | 0 | 0 | **200** | **lit** (24) |
 
-Gunpowder is the only row with an `explodes` (blast radius, 6) and a
-`soaked_to`/`soaked_chance` (saturated powder has a 3-in-256 chance per
-step to become a full `MAT_OIL` cell instead of drying out) - neither
-field fits these columns, since nothing else in the table has ever used
-them. `ignites_to` still names `MAT_FIRE` because that is what a plain
-`try_ignite()` would place; `explodes` is checked first and, with the
-impulse buffer live, replaces the fire with `sand_explode()` at that
-radius instead - see
-[`Sand-Simulation.md`](Sand-Simulation.md#fire-chemistry-wood-embers-steam-and-a-working-boiler)
-for the full trigger and the no-buffer fallback. Moisture damps the
-`flammability` roll itself (`f >>= 2 * moisture`, generic to any
+Gunpowder catches like a `burn_decay` material, not like gas: `ignites_to`
+and `heats_to` both name its own **lit** cell (code 7) rather than
+`MAT_FIRE` - what a burn-down material ignites *into* is itself, carrying
+a new variant, not a different material. A lit cell is a heat source in
+its own right (ignites neighbours, so a trail of powder burns along; boils
+adjacent water), and it counts down every step
+(`burn_decay = 32`, roughly eight steps of fuse per cell) via the same
+`tick_decay_at()` wood already uses, generalised by a new field,
+`reaction_t.lit_from` - the first variant code that counts as "burning"
+(wood: 1; gunpowder: 7), so `cell_is_burning()` stops assuming unlit is
+always variant 0. Two gunpowder-only wrinkles on top of the shared
+mechanism: it is never smothered by neighbours the way a buried wood fire
+would be (`explodes != 0` opts a material out of `smothered()` - it
+carries its own oxidiser, and a fuse buried in its own pile has to keep
+burning or nothing inside a pile ever goes off), and quenching it with
+water writes moisture at `moist_max` (soaked) rather than the unlit code,
+or it would relight from an adjacent lit cell on the very next step.
+
+Only at **burn-out** does `explodes` (blast radius, 6) get read: if every
+one of the cell's eight neighbours is also lit gunpowder and the impulse
+buffer is live, it detonates (`sand_explode()`); otherwise it becomes an
+ordinary `MAT_FIRE` cell, the same no-buffer fallback the confined-gas
+blast already relies on. That neighbour check is what keeps a thin trail
+or a lone lit cell from ever blasting - only a pile thick enough that a
+cell's whole 3x3 catches before the first one burns out does, and even
+then only the first cell to burn out sees eight lit neighbours; the ones
+around it are fire or in flight by their own turn, so a big pile's blasts
+land one at a time across several frames rather than all at once. Two
+earlier designs - immediate detonation on ignition, then a boundary-only
+check - were measured on-device and dropped for costing the same or more;
+see [`Sand-Simulation.md`](Sand-Simulation.md#fire-chemistry-wood-embers-steam-and-a-working-boiler)
+for the full trigger and `soaked_to`/`soaked_chance` (saturated powder has
+a 3-in-256 chance per step to become a full `MAT_OIL` cell instead of
+drying out - the other field that fits none of these columns). Moisture
+damps the `flammability` roll itself (`f >>= 2 * moisture`, generic to any
 `dries != 0` material), which is why gunpowder needs no separate "is it
 wet" branch here.
 
