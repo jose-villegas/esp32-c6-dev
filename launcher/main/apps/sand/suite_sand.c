@@ -52,6 +52,27 @@
 
 static sand_t   s;
 static uint8_t  cells[W * H];
+/* DIRAM on-device is one pool for .data/.bss AND the heap, so every static
+ * byte here is a byte the heap never gets - sand_t is 232 B, and three of
+ * this file's tests need one contiguous 41,216 B (184x224, real screen
+ * size) grid the diagnostics image can't spare from a ~37-38 KiB largest
+ * free DMA block (bd esp32c6-e82). Safe to union: only one fixture is ever
+ * live at a time, each test's fixture() helper re-inits it with sand_init()
+ * before use, and no function mixes two members below or one of these with
+ * s/big/pool/pour/wide.
+ *
+ * Rule for new tests: use exactly ONE member of fx. A fixture that must
+ * stay alive alongside another needs its own static. s/big/pool/pour/wide
+ * stay separate because they're each referenced by many tests, thousands
+ * of times combined - never idle the way these are. */
+static union {
+    sand_t loc, splash_sim, crater_sim, cascade_test_sim, stir_sim,
+           liq_cascade_sim, quench_sim, obst_pool, blend_pool,
+           debounce_test, hdebounce_test, depth_test, shallow_pool,
+           wake_test_grid, band_test_grid, flash_test_grid, shadow_test_grid,
+           fizz_sim, dilute_sim, separated_dilute_sim, oil_dilute_sim,
+           dilute_pour_sim, bubble_sim, sleepy_bubble_sim;
+} fx;
 
 static void fixture(void)
 {
@@ -945,7 +966,6 @@ static void test_turning_the_board_wakes_a_sleeping_pile(void)
 #define LOC_BLOCK_ROWS ((LOC_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
 static uint8_t *loc_cells;
 static uint8_t *loc_sleep_blocks;
-static sand_t   loc;
 
 /* Mallocs the three buffers above, fresh, every call - loc_free() below
  * must be called before the test returns, or the next call here leaks the
@@ -957,8 +977,8 @@ static void loc_fixture(void)
     TEST_ASSERT_NOT_NULL(loc_cells);
     TEST_ASSERT_NOT_NULL(loc_sleep_blocks);
 
-    sand_init(&loc, loc_cells, LOC_W, LOC_H, 555u);
-    sand_enable_sleeping(&loc, loc_sleep_blocks);
+    sand_init(&fx.loc, loc_cells, LOC_W, LOC_H, 555u);
+    sand_enable_sleeping(&fx.loc, loc_sleep_blocks);
 }
 
 static void loc_free(void)
@@ -973,10 +993,10 @@ static void test_two_separate_active_spots_in_the_same_block_row_do_not_wake_eac
 
     /* A small heap, settled on the floor in the leftmost block-column. */
     for (int x = 0; x < SAND_BLOCK_W; x++) {
-        sand_set(&loc, x, LOC_H - 1, SAND_FIRST_SHADE);
+        sand_set(&fx.loc, x, LOC_H - 1, SAND_FIRST_SHADE);
     }
     for (int i = 0; i < 100; i++) {
-        sand_step(&loc, 0, 1000, 0);
+        sand_step(&fx.loc, 0, 1000, 0);
     }
 
     /* Heap, not a stack array: at the shipped SAND_BLOCK_W (16) this was a
@@ -991,7 +1011,7 @@ static void test_two_separate_active_spots_in_the_same_block_row_do_not_wake_eac
     TEST_ASSERT_NOT_NULL(left_before);
     for (int y = 0; y < LOC_H; y++) {
         for (int x = 0; x < SAND_BLOCK_W; x++) {
-            left_before[y * SAND_BLOCK_W + x] = sand_at(&loc, x, y);
+            left_before[y * SAND_BLOCK_W + x] = sand_at(&fx.loc, x, y);
         }
     }
 
@@ -1002,20 +1022,20 @@ static void test_two_separate_active_spots_in_the_same_block_row_do_not_wake_eac
      * fresh grain to fall the full height of the grid, whatever
      * SAND_BLOCK_H currently is. */
     for (int i = 0; i < LOC_H; i++) {
-        sand_set(&loc, LOC_W - 1, 0, SAND_FIRST_SHADE);
-        sand_step(&loc, 0, 1000, 0);
+        sand_set(&fx.loc, LOC_W - 1, 0, SAND_FIRST_SHADE);
+        sand_step(&fx.loc, 0, 1000, 0);
     }
 
     bool left_unchanged = true;
     for (int y = 0; y < LOC_H && left_unchanged; y++) {
         for (int x = 0; x < SAND_BLOCK_W; x++) {
-            if (sand_at(&loc, x, y) != left_before[y * SAND_BLOCK_W + x]) {
+            if (sand_at(&fx.loc, x, y) != left_before[y * SAND_BLOCK_W + x]) {
                 left_unchanged = false;
                 break;
             }
         }
     }
-    const cell_t stream_landed = sand_at(&loc, LOC_W - 1, LOC_H - 1);
+    const cell_t stream_landed = sand_at(&fx.loc, LOC_W - 1, LOC_H - 1);
 
     free(left_before);
     loc_free();
@@ -1039,36 +1059,36 @@ static void test_a_block_wakes_when_disturbed_diagonally(void)
      * both diagonals. */
     const int gx = SAND_BLOCK_W;
     const int gy = SAND_BLOCK_H - 1;
-    sand_set(&loc, gx, gy, SAND_FIRST_SHADE);
-    sand_set(&loc, gx,     gy + 1, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));  /* blocks the fall */
-    sand_set(&loc, gx + 1, gy + 1, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));  /* blocks down-right */
-    sand_set(&loc, gx - 1, gy + 1, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));  /* blocks down-left */
+    sand_set(&fx.loc, gx, gy, SAND_FIRST_SHADE);
+    sand_set(&fx.loc, gx,     gy + 1, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));  /* blocks the fall */
+    sand_set(&fx.loc, gx + 1, gy + 1, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));  /* blocks down-right */
+    sand_set(&fx.loc, gx - 1, gy + 1, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));  /* blocks down-left */
     /* Once the down-left slide is freed and the grain lands there, it
      * must stop - otherwise it keeps sliding on its own three legal moves
      * from its new position, and the test would be checking the wrong
      * cell. */
-    sand_set(&loc, gx - 1, gy + 2, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
-    sand_set(&loc, gx - 2, gy + 2, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
-    sand_set(&loc, gx,     gy + 2, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+    sand_set(&fx.loc, gx - 1, gy + 2, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+    sand_set(&fx.loc, gx - 2, gy + 2, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+    sand_set(&fx.loc, gx,     gy + 2, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
 
     for (int i = 0; i < 100; i++) {
-        sand_step(&loc, 0, 1000, 0);
+        sand_step(&fx.loc, 0, 1000, 0);
     }
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(SAND_FIRST_SHADE, sand_at(&loc, gx, gy),
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(SAND_FIRST_SHADE, sand_at(&fx.loc, gx, gy),
         "the grain must still be boxed in and asleep before the test begins,"
         " or freeing the down-left slide below proves nothing");
 
     /* Free the down-left slide - differs from the grain's own block in
      * BOTH x and y, a true diagonal neighbour, not the orthogonal case an
      * easy bug could special-case by mistake. */
-    sand_erase(&loc, gx - 1, gy + 1, 0);
+    sand_erase(&fx.loc, gx - 1, gy + 1, 0);
 
     for (int i = 0; i < 20; i++) {
-        sand_step(&loc, 0, 1000, 0);
+        sand_step(&fx.loc, 0, 1000, 0);
     }
 
-    const cell_t old_cell = sand_at(&loc, gx, gy);
-    const cell_t new_cell = sand_at(&loc, gx - 1, gy + 1);
+    const cell_t old_cell = sand_at(&fx.loc, gx, gy);
+    const cell_t new_cell = sand_at(&fx.loc, gx - 1, gy + 1);
 
     loc_free();
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(SAND_EMPTY, old_cell,
@@ -1086,45 +1106,45 @@ static void test_sideways_tilt_wakes_only_the_disturbed_column(void)
     /* Two grains in the same row, far apart in x - which is now the
      * direction of travel, gravity pointing straight right - each boxed in
      * by three stone blockers covering its only three legal moves. */
-    sand_set(&loc, 2, 10, SAND_FIRST_SHADE);
-    sand_set(&loc, 3, 10, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));    /* blocks the fall */
-    sand_set(&loc, 3, 11, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));    /* blocks down-right slide */
-    sand_set(&loc, 3, 9,  CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));    /* blocks up-right slide */
+    sand_set(&fx.loc, 2, 10, SAND_FIRST_SHADE);
+    sand_set(&fx.loc, 3, 10, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));    /* blocks the fall */
+    sand_set(&fx.loc, 3, 11, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));    /* blocks down-right slide */
+    sand_set(&fx.loc, 3, 9,  CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));    /* blocks up-right slide */
     /* Once (3,10) is freed and the grain moves there, it must stop, or it
      * keeps sliding diagonally from its new position and the test would
      * be checking the wrong cell. */
-    sand_set(&loc, 4, 10, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
-    sand_set(&loc, 4, 11, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
-    sand_set(&loc, 4, 9,  CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+    sand_set(&fx.loc, 4, 10, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+    sand_set(&fx.loc, 4, 11, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+    sand_set(&fx.loc, 4, 9,  CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
 
-    sand_set(&loc, 18, 10, SAND_FIRST_SHADE);
-    sand_set(&loc, 19, 10, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
-    sand_set(&loc, 19, 11, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
-    sand_set(&loc, 19, 9,  CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+    sand_set(&fx.loc, 18, 10, SAND_FIRST_SHADE);
+    sand_set(&fx.loc, 19, 10, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+    sand_set(&fx.loc, 19, 11, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+    sand_set(&fx.loc, 19, 9,  CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
 
     for (int i = 0; i < 100; i++) {
-        sand_step(&loc, 1000, 0, 0);
+        sand_step(&fx.loc, 1000, 0, 0);
     }
 
     uint8_t right_before[8 * 4];   /* a small window around the right grain */
     for (int y = 8; y < 12; y++) {
         for (int x = 16; x < 24; x++) {
-            right_before[(y - 8) * 8 + (x - 16)] = sand_at(&loc, x, y);
+            right_before[(y - 8) * 8 + (x - 16)] = sand_at(&fx.loc, x, y);
         }
     }
 
     /* Free only the left grain's fall. */
-    sand_erase(&loc, 3, 10, 0);
+    sand_erase(&fx.loc, 3, 10, 0);
     for (int i = 0; i < 20; i++) {
-        sand_step(&loc, 1000, 0, 0);
+        sand_step(&fx.loc, 1000, 0, 0);
     }
 
-    const cell_t left_moved = sand_at(&loc, 3, 10);
+    const cell_t left_moved = sand_at(&fx.loc, 3, 10);
 
     bool right_unchanged = true;
     for (int y = 8; y < 12 && right_unchanged; y++) {
         for (int x = 16; x < 24; x++) {
-            if (sand_at(&loc, x, y) != right_before[(y - 8) * 8 + (x - 16)]) {
+            if (sand_at(&fx.loc, x, y) != right_before[(y - 8) * 8 + (x - 16)]) {
                 right_unchanged = false;
                 break;
             }
@@ -2521,7 +2541,6 @@ static void test_a_pool_settles_at_the_angle_it_is_tilted_to(void)
 #define SPLASH_W 3
 #define SPLASH_H 10
 static uint8_t splash_cells[SPLASH_W * SPLASH_H];
-static sand_t  splash_sim;
 
 static void test_water_falling_onto_water_also_queues_a_small_displacement(void)
 {
@@ -2556,20 +2575,20 @@ static void test_water_falling_onto_water_also_queues_a_small_displacement(void)
     impulse_t *drop_impulse_buf = malloc(4096 * sizeof *drop_impulse_buf);
     TEST_ASSERT_NOT_NULL_MESSAGE(drop_impulse_buf,
         "the splash impulse queue must fit in what the framebuffer leaves");
-    sand_init(&splash_sim, splash_cells, SPLASH_W, SPLASH_H, 1u);
-    sand_enable_impulses(&splash_sim, drop_impulse_buf, 4096);
+    sand_init(&fx.splash_sim, splash_cells, SPLASH_W, SPLASH_H, 1u);
+    sand_enable_impulses(&fx.splash_sim, drop_impulse_buf, 4096);
 
     for (int y = POOL_TOP + 1; y < SPLASH_H; y++) {
         for (int x = 0; x < SPLASH_W; x++) {
-            sand_set(&splash_sim, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+            sand_set(&fx.splash_sim, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
         }
     }
     /* The surface row has ROOM - a fully-packed target has nothing for the
      * straight-down transfer this trigger reads to give it. */
-    sand_set(&splash_sim, CX, POOL_TOP, CELL_MAKE(MAT_WATER, SURFACE_MASS));
-    sand_set(&splash_sim, CX, 0, CELL_MAKE(MAT_WATER, MASS_MAX));
+    sand_set(&fx.splash_sim, CX, POOL_TOP, CELL_MAKE(MAT_WATER, SURFACE_MASS));
+    sand_set(&fx.splash_sim, CX, 0, CELL_MAKE(MAT_WATER, MASS_MAX));
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(0, splash_sim.impulse_count,
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, fx.splash_sim.impulse_count,
         "setup: nothing should be queued before the drop has even fallen");
 
     /* Checked EVERY step, not just after all 15 - the queued impulse is a
@@ -2579,8 +2598,8 @@ static void test_water_falling_onto_water_also_queues_a_small_displacement(void)
      * ends. */
     bool queued = false;
     for (int i = 0; i < 15 && !queued; i++) {
-        sand_step(&splash_sim, 0, 1000, 0);
-        queued = splash_sim.impulse_count > 0;
+        sand_step(&fx.splash_sim, 0, 1000, 0);
+        queued = fx.splash_sim.impulse_count > 0;
     }
 
     /* Freed BEFORE the assertion: Unity longjmps out of a failure, so a
@@ -2596,7 +2615,6 @@ static void test_water_falling_onto_water_also_queues_a_small_displacement(void)
 #define CRATER_W 11
 #define CRATER_H 12
 static uint8_t crater_cells[CRATER_W * CRATER_H];
-static sand_t  crater_sim;
 
 static void test_a_water_splash_actually_opens_a_gap(void)
 {
@@ -2642,21 +2660,21 @@ static void test_a_water_splash_actually_opens_a_gap(void)
     impulse_t *buf = malloc(4096 * sizeof *buf);
     TEST_ASSERT_NOT_NULL_MESSAGE(buf,
         "the crater impulse queue must fit in what the framebuffer leaves");
-    sand_init(&crater_sim, crater_cells, CRATER_W, CRATER_H, 1u);
-    sand_enable_impulses(&crater_sim, buf, 4096);
+    sand_init(&fx.crater_sim, crater_cells, CRATER_W, CRATER_H, 1u);
+    sand_enable_impulses(&fx.crater_sim, buf, 4096);
 
     for (int y = POOL_TOP; y < CRATER_H; y++) {
         for (int x = POOL_L; x <= POOL_R; x++) {
             if (x == CX && y == POOL_TOP) {
                 continue;   /* the surface cell gets SURFACE_MASS below */
             }
-            sand_set(&crater_sim, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+            sand_set(&fx.crater_sim, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
         }
     }
     /* The surface row has ROOM - a fully-packed target has nothing for
      * the straight-down transfer this trigger reads to give it. */
-    sand_set(&crater_sim, CX, POOL_TOP, CELL_MAKE(MAT_WATER, SURFACE_MASS));
-    sand_set(&crater_sim, CX, 0, CELL_MAKE(MAT_WATER, MASS_MAX));
+    sand_set(&fx.crater_sim, CX, POOL_TOP, CELL_MAKE(MAT_WATER, SURFACE_MASS));
+    sand_set(&fx.crater_sim, CX, 0, CELL_MAKE(MAT_WATER, MASS_MAX));
 
     const int nbr_x[4] = { POOL_L, POOL_R, POOL_L, POOL_R };
     const int nbr_y[4] = { POOL_TOP, POOL_TOP, POOL_TOP + 1, POOL_TOP + 1 };
@@ -2667,15 +2685,15 @@ static void test_a_water_splash_actually_opens_a_gap(void)
                  "setup: neighbour %d (%d, %d) must start as water for "
                  "the splash to have anything to push", i, nbr_x[i], nbr_y[i]);
         TEST_ASSERT_FALSE_MESSAGE(
-            CELL_IS_EMPTY(sand_at(&crater_sim, nbr_x[i], nbr_y[i])), why);
+            CELL_IS_EMPTY(sand_at(&fx.crater_sim, nbr_x[i], nbr_y[i])), why);
     }
 
     int cleared = 0;
     for (int i = 0; i < 15; i++) {
-        sand_step(&crater_sim, 0, 1000, 0);
+        sand_step(&fx.crater_sim, 0, 1000, 0);
     }
     for (int i = 0; i < 4; i++) {
-        if (CELL_IS_EMPTY(sand_at(&crater_sim, nbr_x[i], nbr_y[i]))) {
+        if (CELL_IS_EMPTY(sand_at(&fx.crater_sim, nbr_x[i], nbr_y[i]))) {
             cleared++;
         }
     }
@@ -2693,7 +2711,6 @@ static void test_a_water_splash_actually_opens_a_gap(void)
 #define CASCADE_TEST_W 1
 #define CASCADE_TEST_H 16
 static uint8_t cascade_test_cells[CASCADE_TEST_W * CASCADE_TEST_H];
-static sand_t  cascade_test_sim;
 
 static void test_a_cascading_impulse_moves_more_than_one_cell(void)
 {
@@ -2738,15 +2755,15 @@ static void test_a_cascading_impulse_moves_more_than_one_cell(void)
      * off-grid convention, the same guarantee a real wall would give. */
     enum { COL = 0, TOP = 8, COL_LEN = 8, DIR_UP = 4 };
     impulse_t buf[64];
-    sand_init(&cascade_test_sim, cascade_test_cells, CASCADE_TEST_W,
+    sand_init(&fx.cascade_test_sim, cascade_test_cells, CASCADE_TEST_W,
              CASCADE_TEST_H, 1u);
-    sand_enable_impulses(&cascade_test_sim, buf, 64);
+    sand_enable_impulses(&fx.cascade_test_sim, buf, 64);
 
     for (int y = TOP; y < TOP + COL_LEN; y++) {
-        sand_set(&cascade_test_sim, COL, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+        sand_set(&fx.cascade_test_sim, COL, y, CELL_MAKE(MAT_WATER, MASS_MAX));
     }
 
-    sand_impulse(&cascade_test_sim, COL, TOP, DIR_UP, 255);
+    sand_impulse(&fx.cascade_test_sim, COL, TOP, DIR_UP, 255);
 
     /* NOT "is any cell below TOP empty", any more - that check's own
      * premise ("nothing else in this scene ever touches those cells") was
@@ -2774,8 +2791,8 @@ static void test_a_cascading_impulse_moves_more_than_one_cell(void)
      * side effect gravity can erase. */
     bool cascade_confirmed = false;
     for (int i = 0; i < 10 && !cascade_confirmed; i++) {
-        sand_step(&cascade_test_sim, 0, 1000, 0);
-        if (cascade_test_sim.impulse_count > 1) {
+        sand_step(&fx.cascade_test_sim, 0, 1000, 0);
+        if (fx.cascade_test_sim.impulse_count > 1) {
             cascade_confirmed = true;
         }
     }
@@ -2794,7 +2811,6 @@ static void test_a_cascading_impulse_moves_more_than_one_cell(void)
 #define STIR_W 14
 #define STIR_H 30
 static uint8_t stir_cells[STIR_W * STIR_H];
-static sand_t  stir_sim;
 
 /* THE PINPOINTING TEST THE MAINTAINER ASKED FOR. Reported: pouring water
  * over dirt makes the submerged dirt "move a lot". Measured (see can_
@@ -2835,42 +2851,42 @@ static void test_pouring_water_over_a_dirt_bed_never_moves_a_dirt_cell(void)
     impulse_t *buf = malloc(4096 * sizeof *buf);
     TEST_ASSERT_NOT_NULL_MESSAGE(buf,
         "the pour impulse queue must fit in what the framebuffer leaves");
-    sand_init(&stir_sim, stir_cells, STIR_W, STIR_H, 0xC0FFEEu);
-    sand_enable_impulses(&stir_sim, buf, 4096);
+    sand_init(&fx.stir_sim, stir_cells, STIR_W, STIR_H, 0xC0FFEEu);
+    sand_enable_impulses(&fx.stir_sim, buf, 4096);
 
     for (int y = 0; y < STIR_H; y++) {
-        sand_set(&stir_sim, 0, y, STONE);
-        sand_set(&stir_sim, STIR_W - 1, y, STONE);
+        sand_set(&fx.stir_sim, 0, y, STONE);
+        sand_set(&fx.stir_sim, STIR_W - 1, y, STONE);
     }
     for (int x = 0; x < STIR_W; x++) {
-        sand_set(&stir_sim, x, FLOOR, STONE);
+        sand_set(&fx.stir_sim, x, FLOOR, STONE);
     }
     for (int y = DIRT_TOP; y < FLOOR; y++) {
         for (int x = 1; x < STIR_W - 1; x++) {
-            sand_set(&stir_sim, x, y, CELL_MAKE(MAT_DIRT, 0));
+            sand_set(&fx.stir_sim, x, y, CELL_MAKE(MAT_DIRT, 0));
         }
     }
     for (int y = POOL_TOP; y < DIRT_TOP; y++) {
         for (int x = 1; x < STIR_W - 1; x++) {
-            sand_set(&stir_sim, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+            sand_set(&fx.stir_sim, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
         }
     }
 
     bool was_dirt[STIR_W * STIR_H];
     for (int i = 0; i < STIR_W * STIR_H; i++) {
-        was_dirt[i] = CELL_MATERIAL(stir_sim.cells[i]) == MAT_DIRT;
+        was_dirt[i] = CELL_MATERIAL(fx.stir_sim.cells[i]) == MAT_DIRT;
     }
 
     for (int i = 0; i < POUR_STEPS; i++) {
-        sand_spawn(&stir_sim, STREAM_X, 1, 2, MAT_WATER);   /* 5-wide stream */
-        sand_step(&stir_sim, 0, 1000, 0);
+        sand_spawn(&fx.stir_sim, STREAM_X, 1, 2, MAT_WATER);   /* 5-wide stream */
+        sand_step(&fx.stir_sim, 0, 1000, 0);
     }
 
     free(buf);
 
     int left_its_cell = 0, arrived_elsewhere = 0;
     for (int i = 0; i < STIR_W * STIR_H; i++) {
-        const bool is_dirt_now = CELL_MATERIAL(stir_sim.cells[i]) == MAT_DIRT;
+        const bool is_dirt_now = CELL_MATERIAL(fx.stir_sim.cells[i]) == MAT_DIRT;
         if (was_dirt[i] && !is_dirt_now) {
             left_its_cell++;
         }
@@ -3001,7 +3017,6 @@ static void test_a_flying_water_grain_still_displaces_another_liquid(void)
 #define LIQ_CASCADE_W 1
 #define LIQ_CASCADE_H 16
 static uint8_t liq_cascade_cells[LIQ_CASCADE_W * LIQ_CASCADE_H];
-static sand_t  liq_cascade_sim;
 
 /* SAME SCENE SHAPE AND SAME impulse_count > 1 SIGNAL AS
  * test_a_cascading_impulse_moves_more_than_one_cell ABOVE - see that
@@ -3017,20 +3032,20 @@ static void test_a_water_into_water_cascade_is_untouched_by_the_liquid_fix(void)
 {
     enum { COL = 0, TOP = 8, COL_LEN = 8, DIR_UP = 4 };
     impulse_t buf[64];
-    sand_init(&liq_cascade_sim, liq_cascade_cells, LIQ_CASCADE_W,
+    sand_init(&fx.liq_cascade_sim, liq_cascade_cells, LIQ_CASCADE_W,
              LIQ_CASCADE_H, 1u);
-    sand_enable_impulses(&liq_cascade_sim, buf, 64);
+    sand_enable_impulses(&fx.liq_cascade_sim, buf, 64);
 
     for (int y = TOP; y < TOP + COL_LEN; y++) {
-        sand_set(&liq_cascade_sim, COL, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+        sand_set(&fx.liq_cascade_sim, COL, y, CELL_MAKE(MAT_WATER, MASS_MAX));
     }
 
-    sand_impulse(&liq_cascade_sim, COL, TOP, DIR_UP, 255);
+    sand_impulse(&fx.liq_cascade_sim, COL, TOP, DIR_UP, 255);
 
     bool cascade_confirmed = false;
     for (int i = 0; i < 10 && !cascade_confirmed; i++) {
-        sand_step(&liq_cascade_sim, 0, 1000, 0);
-        if (liq_cascade_sim.impulse_count > 1) {
+        sand_step(&fx.liq_cascade_sim, 0, 1000, 0);
+        if (fx.liq_cascade_sim.impulse_count > 1) {
             cascade_confirmed = true;
         }
     }
@@ -4002,7 +4017,6 @@ static void test_quenching_costs_the_water_a_unit_of_mass(void)
  * bias itself, not a single sample, and without hard-coding exact counts
  * a future retune of either constant would break. */
 #define QUENCH_W 2000
-static sand_t  quench_sim;
 
 /* cells is HEAP, not static file scope - each of the three callers below
  * mallocs its own QUENCH_W * 2 (4000 byte) grid and frees it before its
@@ -4011,16 +4025,16 @@ static sand_t  quench_sim;
  * memory budget. */
 static void acid_quench_fixture(uint8_t *cells)
 {
-    sand_init(&quench_sim, cells, QUENCH_W, 2, 11u);
-    sand_set_mobility(&quench_sim, 0);   /* keep fire from rising away
+    sand_init(&fx.quench_sim, cells, QUENCH_W, 2, 11u);
+    sand_set_mobility(&fx.quench_sim, 0);   /* keep fire from rising away
                                           * before reactions quenches it
                                           * this same step - same
                                           * technique
                                           * test_creating_steam_arms_the_gas_pass
                                           * already uses */
     for (int x = 0; x < QUENCH_W; x++) {
-        sand_set(&quench_sim, x, 0, FIRE);
-        sand_set(&quench_sim, x, 1, CELL_MAKE(MAT_ACID, MASS_MAX));
+        sand_set(&fx.quench_sim, x, 0, FIRE);
+        sand_set(&fx.quench_sim, x, 1, CELL_MAKE(MAT_ACID, MASS_MAX));
     }
 }
 
@@ -4030,11 +4044,11 @@ static void test_acid_quenching_fire_never_leaves_steam(void)
     TEST_ASSERT_NOT_NULL_MESSAGE(quench_cells,
         "acid-quench grid must fit in what the framebuffer leaves");
     acid_quench_fixture(quench_cells);
-    sand_step(&quench_sim, 0, 1000, 0);
+    sand_step(&fx.quench_sim, 0, 1000, 0);
 
     bool any_steam = false;
     for (int x = 0; x < QUENCH_W; x++) {
-        if (CELL_MATERIAL(sand_at(&quench_sim, x, 0)) == MAT_STEAM) {
+        if (CELL_MATERIAL(sand_at(&fx.quench_sim, x, 0)) == MAT_STEAM) {
             any_steam = true;
             break;
         }
@@ -4056,11 +4070,11 @@ static void test_acid_quenching_fire_sometimes_leaves_nothing(void)
     TEST_ASSERT_NOT_NULL_MESSAGE(quench_cells,
         "acid-quench grid must fit in what the framebuffer leaves");
     acid_quench_fixture(quench_cells);
-    sand_step(&quench_sim, 0, 1000, 0);
+    sand_step(&fx.quench_sim, 0, 1000, 0);
 
     int empty = 0;
     for (int x = 0; x < QUENCH_W; x++) {
-        if (CELL_IS_EMPTY(sand_at(&quench_sim, x, 0))) {
+        if (CELL_IS_EMPTY(sand_at(&fx.quench_sim, x, 0))) {
             empty++;
         }
     }
@@ -4082,12 +4096,12 @@ static void test_acid_quenching_fire_favours_smoke_over_gas(void)
     TEST_ASSERT_NOT_NULL_MESSAGE(quench_cells,
         "acid-quench grid must fit in what the framebuffer leaves");
     acid_quench_fixture(quench_cells);
-    sand_step(&quench_sim, 0, 1000, 0);
+    sand_step(&fx.quench_sim, 0, 1000, 0);
 
     int smoke = 0;
     int gas   = 0;
     for (int x = 0; x < QUENCH_W; x++) {
-        const uint8_t m = CELL_MATERIAL(sand_at(&quench_sim, x, 0));
+        const uint8_t m = CELL_MATERIAL(sand_at(&fx.quench_sim, x, 0));
         if (m == MAT_SMOKE) {
             smoke++;
         } else if (m == MAT_GAS) {
@@ -6731,12 +6745,11 @@ static void mirror_local_depth_column(sand_t *g, int cx, int h,
 #define OBST_POOL_W 6
 #define OBST_POOL_H 14
 static uint8_t obst_pool_cells[OBST_POOL_W * OBST_POOL_H];
-static sand_t  obst_pool;
 
 static void test_local_depth_follows_the_puddles_own_shape(void)
 {
     enum { PW = OBST_POOL_W, PH = OBST_POOL_H };
-    sand_init(&obst_pool, obst_pool_cells, PW, PH, 4242u);
+    sand_init(&fx.obst_pool, obst_pool_cells, PW, PH, 4242u);
 
     /* A plain rectangular pool. Off-grid reads as solid (sand_at()'s own
      * convention), so the grid's own bottom and side edges already act as
@@ -6746,7 +6759,7 @@ static void test_local_depth_follows_the_puddles_own_shape(void)
      * silhouette. */
     for (int y = 2; y < PH; y++) {
         for (int x = 0; x < PW; x++) {
-            sand_set(&obst_pool, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+            sand_set(&fx.obst_pool, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
         }
     }
 
@@ -6755,13 +6768,13 @@ static void test_local_depth_follows_the_puddles_own_shape(void)
      * pool with a rock island poking through it", the exact case that first
      * suggested this whole change. */
     enum { OBST_X = 3, OBST_Y0 = 7, OBST_Y1 = 8 };
-    sand_set(&obst_pool, OBST_X, OBST_Y0,
+    sand_set(&fx.obst_pool, OBST_X, OBST_Y0,
              CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
-    sand_set(&obst_pool, OBST_X, OBST_Y1,
+    sand_set(&fx.obst_pool, OBST_X, OBST_Y1,
              CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
 
     for (int i = 0; i < 40; i++) {
-        sand_step(&obst_pool, 0, 1000, 0);   /* straight down, matching the
+        sand_step(&fx.obst_pool, 0, 1000, 0);   /* straight down, matching the
                                                * mirror's own fixed gravity */
     }
 
@@ -6776,10 +6789,10 @@ static void test_local_depth_follows_the_puddles_own_shape(void)
     unsigned depth_obstructed[PH], depth_clear[PH];
     unsigned char obst_stable = 0, obst_top_row = 255;
     unsigned char clear_stable = 0, clear_top_row = 255;
-    mirror_local_depth_column(&obst_pool, OBST_X, PH,
+    mirror_local_depth_column(&fx.obst_pool, OBST_X, PH,
                               &obst_stable, &obst_top_row, depth_obstructed,
                               1u, MATERIAL_LIQUID_DEPTH_BAND);
-    mirror_local_depth_column(&obst_pool, CLEAR_X, PH,
+    mirror_local_depth_column(&fx.obst_pool, CLEAR_X, PH,
                               &clear_stable, &clear_top_row, depth_clear,
                               1u, MATERIAL_LIQUID_DEPTH_BAND);
 
@@ -6787,14 +6800,14 @@ static void test_local_depth_follows_the_puddles_own_shape(void)
      * water survived on both sides of it - otherwise the rest of this test
      * proves nothing. */
     TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STONE,
-        CELL_MATERIAL(sand_at(&obst_pool, OBST_X, OBST_Y0)),
+        CELL_MATERIAL(sand_at(&fx.obst_pool, OBST_X, OBST_Y0)),
         "setup: the rock plug must still be stone after settling");
     TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER,
-        CELL_MATERIAL(sand_at(&obst_pool, OBST_X, OBST_Y1 + 1)),
+        CELL_MATERIAL(sand_at(&fx.obst_pool, OBST_X, OBST_Y1 + 1)),
         "setup: water must still be there just below the plug, or this "
         "test is not exercising the case it claims to");
     TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER,
-        CELL_MATERIAL(sand_at(&obst_pool, CLEAR_X, OBST_Y1 + 1)),
+        CELL_MATERIAL(sand_at(&fx.obst_pool, CLEAR_X, OBST_Y1 + 1)),
         "setup: the comparison column must be plain water all the way "
         "down, with nothing of its own to reset against");
 
@@ -7105,16 +7118,15 @@ static const struct { int gx, gy; } BLEND_SWEEP[] = {
 enum { BLEND_POOL_W = 4, BLEND_POOL_H = 40 };
 enum { BLEND_TEST_CX = 0, BLEND_TEST_CY = BLEND_POOL_H - 1 };
 static uint8_t blend_pool_cells[BLEND_POOL_W * BLEND_POOL_H];
-static sand_t  blend_pool;
 
 static void test_the_blend_has_no_jump_crossing_45_degrees(void)
 {
     enum { PW = BLEND_POOL_W, PH = BLEND_POOL_H };
-    sand_init(&blend_pool, blend_pool_cells, PW, PH, 9001u);
+    sand_init(&fx.blend_pool, blend_pool_cells, PW, PH, 9001u);
 
     for (int y = 2; y < PH; y++) {
         for (int x = 0; x < PW; x++) {
-            sand_set(&blend_pool, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+            sand_set(&fx.blend_pool, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
         }
     }
 
@@ -7132,7 +7144,7 @@ static void test_the_blend_has_no_jump_crossing_45_degrees(void)
         for (int r = 0; r < PH; r++) {
             const int cy = asc ? r : (PH - 1 - r);
             unsigned row_depth[RAY_WALK_STATE_W];
-            mirror_ray_walk_row(&blend_pool, cy, PW, PH, vdom, vrev, hrev,
+            mirror_ray_walk_row(&fx.blend_pool, cy, PW, PH, vdom, vrev, hrev,
                                 ax, ay, scale_q8, MATERIAL_LIQUID_DEPTH_BAND,
                                 &st, row_depth);
             if (cy == BLEND_TEST_CY) {
@@ -7333,7 +7345,6 @@ static void mirror_debounced_depth_column(sand_t *g, int cx, int h,
 #define DEBOUNCE_TEST_W 4
 #define DEBOUNCE_TEST_H 20
 static uint8_t debounce_test_cells[DEBOUNCE_TEST_W * DEBOUNCE_TEST_H];
-static sand_t  debounce_test;
 
 /* DIAGNOSTIC PROBE, NOT YET A CLAIM OF CORRECT BEHAVIOUR - checking a
  * hypothesis raised from a device report: unlike a one-frame BLINK (the
@@ -7353,10 +7364,10 @@ static sand_t  debounce_test;
 static void test_a_continuously_moving_boundary_does_not_run_away(void)
 {
     enum { CX = 1, START_TOP = 5, DRAIN_ROWS = 8 };
-    sand_init(&debounce_test, debounce_test_cells, DEBOUNCE_TEST_W,
+    sand_init(&fx.debounce_test, debounce_test_cells, DEBOUNCE_TEST_W,
              DEBOUNCE_TEST_H, 2u);
     for (int y = START_TOP; y < DEBOUNCE_TEST_H; y++) {
-        sand_set(&debounce_test, CX, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+        sand_set(&fx.debounce_test, CX, y, CELL_MAKE(MAT_WATER, MASS_MAX));
     }
 
     unsigned char stable = 0, top_row = 255;
@@ -7364,17 +7375,17 @@ static void test_a_continuously_moving_boundary_does_not_run_away(void)
 
     /* Settle once, exactly like the sibling test below, before the drain
      * begins. */
-    mirror_debounced_depth_column(&debounce_test, CX, DEBOUNCE_TEST_H,
+    mirror_debounced_depth_column(&fx.debounce_test, CX, DEBOUNCE_TEST_H,
                                   &stable, &top_row, depth);
-    mirror_debounced_depth_column(&debounce_test, CX, DEBOUNCE_TEST_H,
+    mirror_debounced_depth_column(&fx.debounce_test, CX, DEBOUNCE_TEST_H,
                                   &stable, &top_row, depth);
 
     /* The drain: the boundary recedes by exactly one row every frame, for
      * several frames running - never landing on the same row twice, so
      * col_top_row[] can never confirm a commit for any of them. */
     for (int i = 0; i < DRAIN_ROWS; i++) {
-        sand_erase(&debounce_test, CX, START_TOP + i, 0);
-        mirror_debounced_depth_column(&debounce_test, CX, DEBOUNCE_TEST_H,
+        sand_erase(&fx.debounce_test, CX, START_TOP + i, 0);
+        mirror_debounced_depth_column(&fx.debounce_test, CX, DEBOUNCE_TEST_H,
                                       &stable, &top_row, depth);
 
         const int new_top = START_TOP + i + 1;
@@ -7397,10 +7408,10 @@ static void test_a_continuously_moving_boundary_does_not_run_away(void)
 static void test_the_debounce_survives_open_air_above_the_pool(void)
 {
     enum { CX = 1, WATER_TOP = 5 };
-    sand_init(&debounce_test, debounce_test_cells, DEBOUNCE_TEST_W,
+    sand_init(&fx.debounce_test, debounce_test_cells, DEBOUNCE_TEST_W,
              DEBOUNCE_TEST_H, 1u);
     for (int y = WATER_TOP; y < DEBOUNCE_TEST_H; y++) {
-        sand_set(&debounce_test, CX, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+        sand_set(&fx.debounce_test, CX, y, CELL_MAKE(MAT_WATER, MASS_MAX));
     }
 
     unsigned char stable = 0, top_row = 255;
@@ -7409,7 +7420,7 @@ static void test_the_debounce_survives_open_air_above_the_pool(void)
     /* FRAME 1: first-ever paint. The boundary gets at most a one-frame
      * cold-start grace, not a value climbed through the five empty rows
      * above it - THE EXACT BUG the previous version shipped with. */
-    mirror_debounced_depth_column(&debounce_test, CX, DEBOUNCE_TEST_H,
+    mirror_debounced_depth_column(&fx.debounce_test, CX, DEBOUNCE_TEST_H,
                                   &stable, &top_row, depth);
     TEST_ASSERT_LESS_OR_EQUAL_UINT_MESSAGE(1u, depth[WATER_TOP],
         "the boundary's first-ever reading must be at most 1 (the accepted "
@@ -7420,7 +7431,7 @@ static void test_the_debounce_survives_open_air_above_the_pool(void)
      * exactly 0 - and every row below it must show a small, correctly
      * climbed depth, not something still recovering from a saturated
      * start. */
-    mirror_debounced_depth_column(&debounce_test, CX, DEBOUNCE_TEST_H,
+    mirror_debounced_depth_column(&fx.debounce_test, CX, DEBOUNCE_TEST_H,
                                   &stable, &top_row, depth);
     for (int y = WATER_TOP; y < DEBOUNCE_TEST_H; y++) {
         char why[144];
@@ -7438,8 +7449,8 @@ static void test_the_debounce_survives_open_air_above_the_pool(void)
     unsigned settled[DEBOUNCE_TEST_H];
     memcpy(settled, depth, sizeof depth);
 
-    sand_erase(&debounce_test, CX, WATER_TOP, 0);
-    mirror_debounced_depth_column(&debounce_test, CX, DEBOUNCE_TEST_H,
+    sand_erase(&fx.debounce_test, CX, WATER_TOP, 0);
+    mirror_debounced_depth_column(&fx.debounce_test, CX, DEBOUNCE_TEST_H,
                                   &stable, &top_row, depth);
     for (int y = WATER_TOP + 1; y < DEBOUNCE_TEST_H; y++) {
         char why[160];
@@ -7449,10 +7460,10 @@ static void test_the_debounce_survives_open_air_above_the_pool(void)
         TEST_ASSERT_EQUAL_UINT_MESSAGE(settled[y], depth[y], why);
     }
 
-    sand_set(&debounce_test, CX, WATER_TOP, CELL_MAKE(MAT_WATER, MASS_MAX));
-    mirror_debounced_depth_column(&debounce_test, CX, DEBOUNCE_TEST_H,
+    sand_set(&fx.debounce_test, CX, WATER_TOP, CELL_MAKE(MAT_WATER, MASS_MAX));
+    mirror_debounced_depth_column(&fx.debounce_test, CX, DEBOUNCE_TEST_H,
                                   &stable, &top_row, depth);   /* revert */
-    mirror_debounced_depth_column(&debounce_test, CX, DEBOUNCE_TEST_H,
+    mirror_debounced_depth_column(&fx.debounce_test, CX, DEBOUNCE_TEST_H,
                                   &stable, &top_row, depth);   /* settle */
     for (int y = WATER_TOP; y < DEBOUNCE_TEST_H; y++) {
         char why[160];
@@ -7465,10 +7476,10 @@ static void test_the_debounce_survives_open_air_above_the_pool(void)
     /* A REAL, LASTING change - the topmost cell empties and STAYS empty -
      * must still commit within a couple of frames, or genuine changes
      * would be hidden forever, not just one-frame blinks. */
-    sand_erase(&debounce_test, CX, WATER_TOP, 0);
-    mirror_debounced_depth_column(&debounce_test, CX, DEBOUNCE_TEST_H,
+    sand_erase(&fx.debounce_test, CX, WATER_TOP, 0);
+    mirror_debounced_depth_column(&fx.debounce_test, CX, DEBOUNCE_TEST_H,
                                   &stable, &top_row, depth);
-    mirror_debounced_depth_column(&debounce_test, CX, DEBOUNCE_TEST_H,
+    mirror_debounced_depth_column(&fx.debounce_test, CX, DEBOUNCE_TEST_H,
                                   &stable, &top_row, depth);
     TEST_ASSERT_EQUAL_UINT_MESSAGE(0u, depth[WATER_TOP + 1],
         "a boundary that genuinely moved - the old top cell erased and not "
@@ -7517,7 +7528,6 @@ static void mirror_debounced_depth_row(sand_t *g, int cy, int w,
 #define HDEBOUNCE_TEST_W 20
 #define HDEBOUNCE_TEST_H 4
 static uint8_t hdebounce_test_cells[HDEBOUNCE_TEST_W * HDEBOUNCE_TEST_H];
-static sand_t  hdebounce_test;
 
 /* THE HORIZONTAL COUNTERPART of test_the_debounce_survives_open_air_above_
  * the_pool above - closing exactly the gap that test's own neighbouring
@@ -7543,10 +7553,10 @@ static sand_t  hdebounce_test;
 static void test_the_horizontal_debounce_survives_open_air_beside_the_pool(void)
 {
     enum { CY = 1, WATER_LEFT = 5 };
-    sand_init(&hdebounce_test, hdebounce_test_cells, HDEBOUNCE_TEST_W,
+    sand_init(&fx.hdebounce_test, hdebounce_test_cells, HDEBOUNCE_TEST_W,
              HDEBOUNCE_TEST_H, 1u);
     for (int x = WATER_LEFT; x < HDEBOUNCE_TEST_W; x++) {
-        sand_set(&hdebounce_test, x, CY, CELL_MAKE(MAT_WATER, MASS_MAX));
+        sand_set(&fx.hdebounce_test, x, CY, CELL_MAKE(MAT_WATER, MASS_MAX));
     }
 
     unsigned char stable = 0, top_col = 255;
@@ -7556,7 +7566,7 @@ static void test_the_horizontal_debounce_survives_open_air_beside_the_pool(void)
      * cold-start grace, not a value climbed through the five empty columns
      * beside it - the same bug class the vertical test's own frame 1 guards
      * against. */
-    mirror_debounced_depth_row(&hdebounce_test, CY, HDEBOUNCE_TEST_W,
+    mirror_debounced_depth_row(&fx.hdebounce_test, CY, HDEBOUNCE_TEST_W,
                                &stable, &top_col, depth);
     TEST_ASSERT_LESS_OR_EQUAL_UINT_MESSAGE(1u, depth[WATER_LEFT],
         "the boundary's first-ever reading must be at most 1 (the accepted "
@@ -7567,7 +7577,7 @@ static void test_the_horizontal_debounce_survives_open_air_beside_the_pool(void)
      * exactly 0 - and every column past it must show a small, correctly
      * climbed depth, not something still recovering from a saturated
      * start. */
-    mirror_debounced_depth_row(&hdebounce_test, CY, HDEBOUNCE_TEST_W,
+    mirror_debounced_depth_row(&fx.hdebounce_test, CY, HDEBOUNCE_TEST_W,
                                &stable, &top_col, depth);
     for (int x = WATER_LEFT; x < HDEBOUNCE_TEST_W; x++) {
         char why[160];
@@ -7594,8 +7604,8 @@ static void test_the_horizontal_debounce_survives_open_air_beside_the_pool(void)
     unsigned settled[HDEBOUNCE_TEST_W];
     memcpy(settled, depth, sizeof depth);
 
-    sand_erase(&hdebounce_test, WATER_LEFT, CY, 0);
-    mirror_debounced_depth_row(&hdebounce_test, CY, HDEBOUNCE_TEST_W,
+    sand_erase(&fx.hdebounce_test, WATER_LEFT, CY, 0);
+    mirror_debounced_depth_row(&fx.hdebounce_test, CY, HDEBOUNCE_TEST_W,
                                &stable, &top_col, depth);
     for (int x = WATER_LEFT + 1; x < HDEBOUNCE_TEST_W; x++) {
         char why[224];
@@ -7607,10 +7617,10 @@ static void test_the_horizontal_debounce_survives_open_air_beside_the_pool(void)
         TEST_ASSERT_EQUAL_UINT_MESSAGE(settled[x], depth[x], why);
     }
 
-    sand_set(&hdebounce_test, WATER_LEFT, CY, CELL_MAKE(MAT_WATER, MASS_MAX));
-    mirror_debounced_depth_row(&hdebounce_test, CY, HDEBOUNCE_TEST_W,
+    sand_set(&fx.hdebounce_test, WATER_LEFT, CY, CELL_MAKE(MAT_WATER, MASS_MAX));
+    mirror_debounced_depth_row(&fx.hdebounce_test, CY, HDEBOUNCE_TEST_W,
                                &stable, &top_col, depth);   /* revert */
-    mirror_debounced_depth_row(&hdebounce_test, CY, HDEBOUNCE_TEST_W,
+    mirror_debounced_depth_row(&fx.hdebounce_test, CY, HDEBOUNCE_TEST_W,
                                &stable, &top_col, depth);   /* settle */
     for (int x = WATER_LEFT; x < HDEBOUNCE_TEST_W; x++) {
         char why[160];
@@ -7623,10 +7633,10 @@ static void test_the_horizontal_debounce_survives_open_air_beside_the_pool(void)
     /* A REAL, LASTING change - the leftmost cell empties and STAYS empty -
      * must still commit within a couple of frames, or genuine changes would
      * be hidden forever, not just one-frame blinks. */
-    sand_erase(&hdebounce_test, WATER_LEFT, CY, 0);
-    mirror_debounced_depth_row(&hdebounce_test, CY, HDEBOUNCE_TEST_W,
+    sand_erase(&fx.hdebounce_test, WATER_LEFT, CY, 0);
+    mirror_debounced_depth_row(&fx.hdebounce_test, CY, HDEBOUNCE_TEST_W,
                                &stable, &top_col, depth);
-    mirror_debounced_depth_row(&hdebounce_test, CY, HDEBOUNCE_TEST_W,
+    mirror_debounced_depth_row(&fx.hdebounce_test, CY, HDEBOUNCE_TEST_W,
                                &stable, &top_col, depth);
     TEST_ASSERT_EQUAL_UINT_MESSAGE(0u, depth[WATER_LEFT + 1],
         "a boundary that genuinely moved - the old leftmost cell erased and "
@@ -7653,12 +7663,11 @@ static void test_the_horizontal_debounce_survives_open_air_beside_the_pool(void)
 #define DEPTH_TEST_W 4
 #define DEPTH_TEST_H 80
 static uint8_t depth_test_cells[DEPTH_TEST_W * DEPTH_TEST_H];
-static sand_t  depth_test;
 static uint8_t depth_test_dirty[DEPTH_TEST_H];
 
 static void test_pouring_onto_a_settled_pool_redirties_a_bounded_band_below(void)
 {
-    sand_init(&depth_test, depth_test_cells, DEPTH_TEST_W, DEPTH_TEST_H, 99u);
+    sand_init(&fx.depth_test, depth_test_cells, DEPTH_TEST_W, DEPTH_TEST_H, 99u);
 
     /* A deep reservoir, full width, so it starts already level and settles
      * in essentially one step - nothing here needs the settling itself to
@@ -7666,27 +7675,27 @@ static void test_pouring_onto_a_settled_pool_redirties_a_bounded_band_below(void
     const int fill_top = 10;
     for (int y = fill_top; y < DEPTH_TEST_H; y++) {
         for (int x = 0; x < DEPTH_TEST_W; x++) {
-            sand_set(&depth_test, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+            sand_set(&fx.depth_test, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
         }
     }
     for (int i = 0; i < 300; i++) {
-        sand_step(&depth_test, 0, 1000, 0);
+        sand_step(&fx.depth_test, 0, 1000, 0);
     }
 
     uint8_t settled_snapshot[DEPTH_TEST_W * DEPTH_TEST_H];
     memcpy(settled_snapshot, depth_test_cells, sizeof settled_snapshot);
 
-    sand_track_dirty_rows(&depth_test, depth_test_dirty);
+    sand_track_dirty_rows(&fx.depth_test, depth_test_dirty);
     memset(depth_test_dirty, 0, sizeof depth_test_dirty);
 
     /* The pour: new water dropped at the very top, well above the
      * reservoir's current surface. */
     for (int i = 0; i < 60; i++) {
-        sand_spawn(&depth_test, DEPTH_TEST_W / 2, 1, 1, MAT_WATER);
-        sand_step(&depth_test, 0, 1000, 0);
+        sand_spawn(&fx.depth_test, DEPTH_TEST_W / 2, 1, 1, MAT_WATER);
+        sand_step(&fx.depth_test, 0, 1000, 0);
     }
     for (int i = 0; i < 200; i++) {
-        sand_step(&depth_test, 0, 1000, 0);
+        sand_step(&fx.depth_test, 0, 1000, 0);
     }
 
     /* The reservoir's NEW surface: the shallowest row that is now water in
@@ -7696,7 +7705,7 @@ static void test_pouring_onto_a_settled_pool_redirties_a_bounded_band_below(void
     for (int y = 0; y < DEPTH_TEST_H; y++) {
         bool full_row = true;
         for (int x = 0; x < DEPTH_TEST_W; x++) {
-            if (CELL_MATERIAL(sand_at(&depth_test, x, y)) != MAT_WATER) {
+            if (CELL_MATERIAL(sand_at(&fx.depth_test, x, y)) != MAT_WATER) {
                 full_row = false;
                 break;
             }
@@ -7885,18 +7894,17 @@ static void test_every_liquid_interior_is_exactly_the_body_colour_when_saturated
  * 14, a real two-step gap). */
 enum { SHALLOW_POOL_W = 4, SHALLOW_POOL_H = 20 };
 static uint8_t shallow_pool_cells[SHALLOW_POOL_W * SHALLOW_POOL_H];
-static sand_t  shallow_pool;
 
 static void test_a_shallow_puddle_still_shows_real_darkening(void)
 {
     enum { PW = SHALLOW_POOL_W, PH = SHALLOW_POOL_H };
-    sand_init(&shallow_pool, shallow_pool_cells, PW, PH, 777u);
+    sand_init(&fx.shallow_pool, shallow_pool_cells, PW, PH, 777u);
 
     /* Rows 0-1 stay empty (the surface); rows 2..PH-1 are water - 18 rows,
      * squarely inside the 10-20 cell range measured as broken. */
     for (int y = 2; y < PH; y++) {
         for (int x = 0; x < PW; x++) {
-            sand_set(&shallow_pool, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+            sand_set(&fx.shallow_pool, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
         }
     }
 
@@ -7909,7 +7917,7 @@ static void test_a_shallow_puddle_still_shows_real_darkening(void)
      * DIFFERENCE this test actually checks - see mirror_local_depth_
      * column()'s own comment for the hold-then-commit mechanism. */
     unsigned char stable = 0, top_row = 255;
-    mirror_local_depth_column(&shallow_pool, 0, PH, &stable, &top_row, depth,
+    mirror_local_depth_column(&fx.shallow_pool, 0, PH, &stable, &top_row, depth,
                               1u, MATERIAL_LIQUID_DEPTH_BAND);
 
     const unsigned near_surface_depth = depth[NEAR_SURFACE_Y];
@@ -8019,7 +8027,6 @@ enum {
  * reference to it. */
 #define WAKE_TEST_WAKE_MS 120u
 
-static sand_t  wake_test_grid;
 static uint8_t wake_test_blocks[
     ((WAKE_TEST_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
     ((WAKE_TEST_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)];
@@ -8032,7 +8039,11 @@ static uint8_t wake_test_blocks[
  * repeatedly stack-allocated - and persists across the frame loop exactly
  * like the real local_depth_row_a[]/local_depth_row_b[]/local_depth_
  * top_row[] persist across paint_row_n() calls. */
-static ray_walk_state_t wake_ray_state;
+/* Same reasoning as fx above (see its comment) - these three
+ * ray_walk_state_t fixtures are never live at the same time either. */
+static union {
+    ray_walk_state_t wake_ray_state, band_ray_state, flash_ray_state;
+} fx_ray;
 /* wake_test_cells/wake_prev_occupied/wake_displayed_depth used to be file
  * statics here, permanently resident .bss even though only wake_test_run()
  * below ever touches them - malloc'd there instead, fresh per call, freed
@@ -8107,11 +8118,11 @@ static double wake_test_run(int steps)
             "fit in what the framebuffer leaves");
     }
 
-    sand_init(&wake_test_grid, wake_test_cells, WAKE_TEST_W, WAKE_TEST_H,
+    sand_init(&fx.wake_test_grid, wake_test_cells, WAKE_TEST_W, WAKE_TEST_H,
               41u);
-    sand_enable_sleeping(&wake_test_grid, wake_test_blocks);
+    sand_enable_sleeping(&fx.wake_test_grid, wake_test_blocks);
 
-    ray_walk_state_reset(&wake_ray_state);
+    ray_walk_state_reset(&fx_ray.wake_ray_state);
     memset(wake_prev_occupied, 0,
            (size_t)WAKE_TEST_W * WAKE_TEST_H * sizeof *wake_prev_occupied);
     for (int i = 0; i < WAKE_TEST_W * WAKE_TEST_H; i++) {
@@ -8124,13 +8135,13 @@ static double wake_test_run(int steps)
      * classification, so it could never have found this bug. */
     for (int y = WAKE_TEST_H - 6; y < WAKE_TEST_H; y++) {
         for (int x = 0; x < WAKE_TEST_W; x++) {
-            sand_set(&wake_test_grid, x, y, CELL_MAKE(MAT_STONE, 0));
+            sand_set(&fx.wake_test_grid, x, y, CELL_MAKE(MAT_STONE, 0));
         }
     }
-    sand_spawn(&wake_test_grid, WAKE_TEST_W / 3, 6, 5, MAT_WATER);
-    sand_spawn(&wake_test_grid, 2 * WAKE_TEST_W / 3, 4, 6, MAT_WATER);
+    sand_spawn(&fx.wake_test_grid, WAKE_TEST_W / 3, 6, 5, MAT_WATER);
+    sand_spawn(&fx.wake_test_grid, 2 * WAKE_TEST_W / 3, 4, 6, MAT_WATER);
     for (int y = WAKE_TEST_H - 9; y < WAKE_TEST_H - 8; y++) {
-        sand_set(&wake_test_grid, WAKE_TEST_W / 2, y,
+        sand_set(&fx.wake_test_grid, WAKE_TEST_W / 2, y,
                   CELL_MAKE(MAT_STONE, 0));
     }
 
@@ -8158,7 +8169,7 @@ static double wake_test_run(int steps)
         const int gx = tri + (int)rng_below(&wobble, 21) - 10;
         const int gy = 950 + (int)rng_below(&wobble, 11) - 5;
 
-        sand_step(&wake_test_grid, gx, gy, 0);
+        sand_step(&fx.wake_test_grid, gx, gy, 0);
 
         bool vdom, vrev, hrev;
         unsigned ax, ay, scale_q8;
@@ -8182,7 +8193,7 @@ static double wake_test_run(int steps)
         for (int y = 0; y < WAKE_TEST_H; y++) {
             for (int x = 0; x < WAKE_TEST_W; x++) {
                 const bool now =
-                    !CELL_IS_EMPTY(sand_at(&wake_test_grid, x, y));
+                    !CELL_IS_EMPTY(sand_at(&fx.wake_test_grid, x, y));
                 if (now != wake_prev_occupied[y * WAKE_TEST_W + x]) {
                     row_dirty[y] = true;
                 }
@@ -8197,9 +8208,9 @@ static double wake_test_run(int steps)
         for (int y = 0; y < WAKE_TEST_H; y++) {
             bool has_liquid = false;
             for (int x = 0; x < WAKE_TEST_W; x++) {
-                const cell_t c = sand_at(&wake_test_grid, x, y);
+                const cell_t c = sand_at(&fx.wake_test_grid, x, y);
                 if (!CELL_IS_EMPTY(c) && CELL_MATERIAL(c) == MAT_WATER) {
-                    const unsigned mask = wake_test_edge_mask(&wake_test_grid,
+                    const unsigned mask = wake_test_edge_mask(&fx.wake_test_grid,
                                                               x, y);
                     if (wake_test_row_has_liquid(mask)) {
                         has_liquid = true;
@@ -8220,12 +8231,12 @@ static double wake_test_run(int steps)
                 continue;
             }
             unsigned row_depth[RAY_WALK_STATE_W];
-            mirror_ray_walk_row(&wake_test_grid, y, WAKE_TEST_W, WAKE_TEST_H,
+            mirror_ray_walk_row(&fx.wake_test_grid, y, WAKE_TEST_W, WAKE_TEST_H,
                                 vdom, vrev, hrev, ax, ay, scale_q8,
-                                MATERIAL_LIQUID_DEPTH_BAND, &wake_ray_state,
+                                MATERIAL_LIQUID_DEPTH_BAND, &fx_ray.wake_ray_state,
                                 row_depth);
             for (int x = 0; x < WAKE_TEST_W; x++) {
-                const cell_t here = sand_at(&wake_test_grid, x, y);
+                const cell_t here = sand_at(&fx.wake_test_grid, x, y);
                 wake_displayed_depth[y * WAKE_TEST_W + x] = CELL_IS_EMPTY(here)
                     ? -1 : (int8_t)row_depth[x];
             }
@@ -8234,7 +8245,7 @@ static double wake_test_run(int steps)
         for (int y = 0; y < WAKE_TEST_H; y++) {
             for (int x = 0; x < WAKE_TEST_W; x++) {
                 wake_prev_occupied[y * WAKE_TEST_W + x] =
-                    !CELL_IS_EMPTY(sand_at(&wake_test_grid, x, y));
+                    !CELL_IS_EMPTY(sand_at(&fx.wake_test_grid, x, y));
             }
         }
 
@@ -8245,11 +8256,11 @@ static double wake_test_run(int steps)
         int n = 0;
         for (int y = 0; y < WAKE_TEST_H; y++) {
             for (int x = 0; x < WAKE_TEST_W; x++) {
-                const cell_t c = sand_at(&wake_test_grid, x, y);
+                const cell_t c = sand_at(&fx.wake_test_grid, x, y);
                 if (CELL_IS_EMPTY(c) || CELL_MATERIAL(c) != MAT_WATER) {
                     continue;
                 }
-                if ((wake_test_edge_mask(&wake_test_grid, x, y) &
+                if ((wake_test_edge_mask(&fx.wake_test_grid, x, y) &
                      MATERIAL_EDGE_CARDINAL) != 0) {
                     continue;
                 }
@@ -8620,12 +8631,10 @@ enum {
 #define BAND_TEST_FRAMES  900
 #define BAND_TEST_SETTLE  300
 
-static sand_t  band_test_grid;
 static uint8_t band_test_blocks[
     ((BAND_TEST_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
     ((BAND_TEST_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)];
 
-static ray_walk_state_t band_ray_state;
 /* band_test_cells/band_prev_occupied/band_displayed_depth used to be file
  * statics here - malloc'd inside band_test_run() below instead (its own
  * reproduction owns the only call), for the same reason as wake_test_run()
@@ -8671,10 +8680,10 @@ static int band_test_run(void)
             "fit in what the framebuffer leaves");
     }
 
-    sand_init(&band_test_grid, band_test_cells, BAND_TEST_W, BAND_TEST_H, 41u);
-    sand_enable_sleeping(&band_test_grid, band_test_blocks);
+    sand_init(&fx.band_test_grid, band_test_cells, BAND_TEST_W, BAND_TEST_H, 41u);
+    sand_enable_sleeping(&fx.band_test_grid, band_test_blocks);
 
-    ray_walk_state_reset(&band_ray_state);
+    ray_walk_state_reset(&fx_ray.band_ray_state);
     memset(band_prev_occupied, 0,
            (size_t)BAND_TEST_W * BAND_TEST_H * sizeof *band_prev_occupied);
     for (int i = 0; i < BAND_TEST_W * BAND_TEST_H; i++) {
@@ -8686,16 +8695,16 @@ static int band_test_run(void)
      * and the reason the walk's range here is the grid's own height rather
      * than a settled pool's few dozen cells. */
     for (int y = 0; y < BAND_TEST_H; y++) {
-        sand_set(&band_test_grid, 0, y, CELL_MAKE(MAT_STONE, 0));
-        sand_set(&band_test_grid, BAND_TEST_W - 1, y, CELL_MAKE(MAT_STONE, 0));
+        sand_set(&fx.band_test_grid, 0, y, CELL_MAKE(MAT_STONE, 0));
+        sand_set(&fx.band_test_grid, BAND_TEST_W - 1, y, CELL_MAKE(MAT_STONE, 0));
     }
     for (int x = 0; x < BAND_TEST_W; x++) {
-        sand_set(&band_test_grid, x, 0, CELL_MAKE(MAT_STONE, 0));
-        sand_set(&band_test_grid, x, BAND_TEST_H - 1, CELL_MAKE(MAT_STONE, 0));
+        sand_set(&fx.band_test_grid, x, 0, CELL_MAKE(MAT_STONE, 0));
+        sand_set(&fx.band_test_grid, x, BAND_TEST_H - 1, CELL_MAKE(MAT_STONE, 0));
     }
     for (int y = 1; y < BAND_TEST_H - 1; y++) {
         for (int x = BAND_TEST_W - 17; x < BAND_TEST_W - 1; x++) {
-            sand_set(&band_test_grid, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+            sand_set(&fx.band_test_grid, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
         }
     }
 
@@ -8723,9 +8732,9 @@ static int band_test_run(void)
          * own reason: it is what makes this test's repaints SPARSE and
          * simulation-driven rather than whole-body. */
         if ((f % 7) == 0) {
-            sand_set(&band_test_grid, BAND_TEST_W - 22, 2,
+            sand_set(&fx.band_test_grid, BAND_TEST_W - 22, 2,
                       CELL_MAKE(MAT_WATER, MASS_MAX));
-            sand_set(&band_test_grid, BAND_TEST_W - 21, 2,
+            sand_set(&fx.band_test_grid, BAND_TEST_W - 21, 2,
                       CELL_MAKE(MAT_WATER, MASS_MAX));
         }
 
@@ -8747,7 +8756,7 @@ static int band_test_run(void)
         const int gy = sway + tremor + rng_below(&wobble, 21) - 10;
         const int gx = 950 + rng_below(&wobble, 11) - 5;
 
-        sand_step(&band_test_grid, gx, gy, 0);
+        sand_step(&fx.band_test_grid, gx, gy, 0);
 
         bool vdom, vrev, hrev;
         unsigned ax, ay, scale_q8;
@@ -8766,7 +8775,7 @@ static int band_test_run(void)
         for (int y = 0; y < BAND_TEST_H; y++) {
             for (int x = 0; x < BAND_TEST_W; x++) {
                 const bool now =
-                    !CELL_IS_EMPTY(sand_at(&band_test_grid, x, y));
+                    !CELL_IS_EMPTY(sand_at(&fx.band_test_grid, x, y));
                 if (now != band_prev_occupied[y * BAND_TEST_W + x]) {
                     row_dirty[y] = true;
                 }
@@ -8775,7 +8784,7 @@ static int band_test_run(void)
         if (wake_fired) {
             for (int y = 0; y < BAND_TEST_H; y++) {
                 for (int x = 0; x < BAND_TEST_W; x++) {
-                    const cell_t c = sand_at(&band_test_grid, x, y);
+                    const cell_t c = sand_at(&fx.band_test_grid, x, y);
                     if (!CELL_IS_EMPTY(c) &&
                         material_of(c)->kind == KIND_LIQUID) {
                         row_dirty[y] = true;
@@ -8792,9 +8801,9 @@ static int band_test_run(void)
                 continue;
             }
             unsigned row_depth[RAY_WALK_STATE_W];
-            mirror_ray_walk_row(&band_test_grid, cy, BAND_TEST_W, BAND_TEST_H,
+            mirror_ray_walk_row(&fx.band_test_grid, cy, BAND_TEST_W, BAND_TEST_H,
                                 vdom, vrev, hrev, ax, ay, scale_q8, ceiling,
-                                &band_ray_state, row_depth);
+                                &fx_ray.band_ray_state, row_depth);
             for (int x = 0; x < BAND_TEST_W; x++) {
                 band_displayed_depth[cy * BAND_TEST_W + x] =
                     (int8_t)row_depth[x];
@@ -8804,7 +8813,7 @@ static int band_test_run(void)
         for (int y = 0; y < BAND_TEST_H; y++) {
             for (int x = 0; x < BAND_TEST_W; x++) {
                 band_prev_occupied[y * BAND_TEST_W + x] =
-                    !CELL_IS_EMPTY(sand_at(&band_test_grid, x, y));
+                    !CELL_IS_EMPTY(sand_at(&fx.band_test_grid, x, y));
             }
         }
 
@@ -8815,8 +8824,8 @@ static int band_test_run(void)
         int jumps = 0;
         for (int y = 1; y < BAND_TEST_H; y++) {
             for (int x = 0; x < BAND_TEST_W; x++) {
-                const cell_t up = sand_at(&band_test_grid, x, y - 1);
-                const cell_t here = sand_at(&band_test_grid, x, y);
+                const cell_t up = sand_at(&fx.band_test_grid, x, y - 1);
+                const cell_t here = sand_at(&fx.band_test_grid, x, y);
                 if (CELL_IS_EMPTY(up) || CELL_IS_EMPTY(here)) {
                     continue;
                 }
@@ -8826,9 +8835,9 @@ static int band_test_run(void)
                 }
                 /* Interior only, both of them - a rim cell's depth is never
                  * read by material_colours() at all. */
-                if ((wake_test_edge_mask(&band_test_grid, x, y - 1) &
+                if ((wake_test_edge_mask(&fx.band_test_grid, x, y - 1) &
                      MATERIAL_EDGE_CARDINAL) != 0 ||
-                    (wake_test_edge_mask(&band_test_grid, x, y) &
+                    (wake_test_edge_mask(&fx.band_test_grid, x, y) &
                      MATERIAL_EDGE_CARDINAL) != 0) {
                     continue;
                 }
@@ -8998,12 +9007,10 @@ enum {
  * `sizeof *flash_displayed` throughout rather than a hardcoded width, so it
  * automatically keeps matching this array's element size. */
 static uint8_t *flash_test_cells;
-static sand_t   flash_test_grid;
 static uint8_t  flash_test_blocks[
     ((FLASH_TEST_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
     ((FLASH_TEST_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)];
 static uint8_t  flash_test_dirty[FLASH_TEST_H];
-static ray_walk_state_t flash_ray_state;
 static int8_t  *flash_displayed;       /* -1 = never painted */
 static int8_t  *flash_displayed_prev;
 static uint8_t  flash_row_has_liquid[FLASH_TEST_H];
@@ -9127,12 +9134,12 @@ static void flash_test_paint(int gx, int gy, bool wake_fired)
         }
         flash_test_dirty[cy] = 0;
         flash_row_has_liquid[cy] = 0;
-        mirror_ray_walk_row(&flash_test_grid, cy, FLASH_TEST_W, FLASH_TEST_H,
+        mirror_ray_walk_row(&fx.flash_test_grid, cy, FLASH_TEST_W, FLASH_TEST_H,
                             vdom, vrev, hrev, ax, ay, scale_q8,
-                            MATERIAL_LIQUID_DEPTH_BAND, &flash_ray_state,
+                            MATERIAL_LIQUID_DEPTH_BAND, &fx_ray.flash_ray_state,
                             row_depth);
         for (int x = 0; x < FLASH_TEST_W; x++) {
-            const cell_t c = sand_at(&flash_test_grid, x, cy);
+            const cell_t c = sand_at(&fx.flash_test_grid, x, cy);
             if (!CELL_IS_EMPTY(c) && material_of(c)->kind == KIND_LIQUID) {
                 flash_row_has_liquid[cy] = 1;
             }
@@ -9143,11 +9150,11 @@ static void flash_test_paint(int gx, int gy, bool wake_fired)
 
 static bool flash_test_is_interior_liquid(int x, int y)
 {
-    const cell_t c = sand_at(&flash_test_grid, x, y);
+    const cell_t c = sand_at(&fx.flash_test_grid, x, y);
     if (CELL_IS_EMPTY(c) || material_of(c)->kind != KIND_LIQUID) {
         return false;
     }
-    return (wake_test_edge_mask(&flash_test_grid, x, y) &
+    return (wake_test_edge_mask(&fx.flash_test_grid, x, y) &
             MATERIAL_EDGE_CARDINAL) == 0;
 }
 
@@ -9167,19 +9174,19 @@ static void flash_test_settle(bool guard_chain, bool gate_reset)
         "flash test buffers (flash_test_cells/flash_displayed/flash_"
         "displayed_prev) must fit in what the framebuffer leaves");
 
-    sand_init(&flash_test_grid, flash_test_cells, FLASH_TEST_W, FLASH_TEST_H,
+    sand_init(&fx.flash_test_grid, flash_test_cells, FLASH_TEST_W, FLASH_TEST_H,
               1234u);
-    sand_enable_sleeping(&flash_test_grid, flash_test_blocks);
-    sand_track_dirty_rows(&flash_test_grid, flash_test_dirty);
+    sand_enable_sleeping(&fx.flash_test_grid, flash_test_blocks);
+    sand_track_dirty_rows(&fx.flash_test_grid, flash_test_dirty);
 
     for (int y = FLASH_TEST_H - FLASH_TEST_FILL_ROWS; y < FLASH_TEST_H; y++) {
         for (int x = 0; x < FLASH_TEST_W; x++) {
-            sand_set(&flash_test_grid, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+            sand_set(&fx.flash_test_grid, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
         }
     }
 
-    ray_walk_state_reset(&flash_ray_state);
-    flash_ray_state.ignore_chain_break = !guard_chain;
+    ray_walk_state_reset(&fx_ray.flash_ray_state);
+    fx_ray.flash_ray_state.ignore_chain_break = !guard_chain;
     memset(flash_row_has_liquid, 0, sizeof flash_row_has_liquid);
     for (int i = 0; i < FLASH_TEST_W * FLASH_TEST_H; i++) {
         flash_displayed[i] = -1;
@@ -9196,9 +9203,9 @@ static void flash_test_settle(bool guard_chain, bool gate_reset)
     /* PORTRAIT, at the steady tilt the device's own sidecars report
      * (tilt_x -12 against tilt_y 3342). */
     for (int f = 0; f < FLASH_TEST_SETTLE; f++) {
-        sand_step(&flash_test_grid, -12, FLASH_TEST_G, 0);
+        sand_step(&fx.flash_test_grid, -12, FLASH_TEST_G, 0);
         flash_test_frame_reset(-12, FLASH_TEST_G, FLASH_TEST_W, FLASH_TEST_H,
-                               gate_reset, &flash_ray_state, &flash_vdom_prev,
+                               gate_reset, &fx_ray.flash_ray_state, &flash_vdom_prev,
                                &flash_vrev_prev, &flash_hrev_prev, &fired);
         flash_wake_elapsed_ms += FLASH_TEST_DT_MS;
         bool wake_fired = false;
@@ -9227,7 +9234,7 @@ static int flash_test_run(bool guard_chain, bool gate_reset)
         const int gy = FLASH_TEST_G - gx;
 
         flash_test_frame_reset(gx, gy, FLASH_TEST_W, FLASH_TEST_H, gate_reset,
-                               &flash_ray_state, &flash_vdom_prev,
+                               &fx_ray.flash_ray_state, &flash_vdom_prev,
                                &flash_vrev_prev, &flash_hrev_prev, &fired);
         wake_elapsed_ms += FLASH_TEST_DT_MS;
         bool wake_fired = false;
@@ -9380,7 +9387,7 @@ static void tremor_test_run(bool gate_reset, int *resets, int *changed)
         const int gx = (f & 1) ? 12 : -12;
         const int gy = FLASH_TEST_G;
         flash_test_frame_reset(gx, gy, FLASH_TEST_W, FLASH_TEST_H, gate_reset,
-                               &flash_ray_state, &flash_vdom_prev,
+                               &fx_ray.flash_ray_state, &flash_vdom_prev,
                                &flash_vrev_prev, &flash_hrev_prev, &fired);
         fires += fired ? 1 : 0;
         wake_elapsed_ms += FLASH_TEST_DT_MS;
@@ -9509,14 +9516,13 @@ enum { SHADOW_TEST_W = 92, SHADOW_TEST_H = 112 };
 /* shadow_test_cells used to be a file static here (10304 bytes, resident for
  * the whole suite even though only the one test below ever touches it) -
  * malloc'd there instead, freed once that test is done with the grid. */
-static sand_t  shadow_test_grid;
 
 static bool shadow_test_is_liquid(int x, int y)
 {
     if (x < 0 || y < 0 || x >= SHADOW_TEST_W || y >= SHADOW_TEST_H) {
         return false;
     }
-    const cell_t c = sand_at(&shadow_test_grid, x, y);
+    const cell_t c = sand_at(&fx.shadow_test_grid, x, y);
     return !CELL_IS_EMPTY(c) && material_of(c)->kind == KIND_LIQUID;
 }
 
@@ -9551,7 +9557,7 @@ static void shadow_test_coherent_pass(int gx, int gy, unsigned depth_out[])
     for (int r = 0; r < SHADOW_TEST_H; r++) {
         const int cy = asc ? r : (SHADOW_TEST_H - 1 - r);
         unsigned row_depth[RAY_WALK_STATE_W];
-        mirror_ray_walk_row(&shadow_test_grid, cy, SHADOW_TEST_W,
+        mirror_ray_walk_row(&fx.shadow_test_grid, cy, SHADOW_TEST_W,
                             SHADOW_TEST_H, vdom, vrev, hrev, ax, ay, scale_q8,
                             MATERIAL_LIQUID_DEPTH_BAND, &st, row_depth);
         for (int x = 0; x < SHADOW_TEST_W; x++) {
@@ -9636,23 +9642,23 @@ static void test_a_submerged_obstacle_casts_a_gravity_aligned_shadow(void)
     enum { PW = SHADOW_TEST_W, PH = SHADOW_TEST_H };
     uint8_t *shadow_test_cells = malloc((size_t)PW * PH);
     TEST_ASSERT_NOT_NULL(shadow_test_cells);
-    sand_init(&shadow_test_grid, shadow_test_cells, PW, PH, 777u);
+    sand_init(&fx.shadow_test_grid, shadow_test_cells, PW, PH, 777u);
 
     for (int y = 0; y < PH; y++) {
-        sand_set(&shadow_test_grid, 0, y, CELL_MAKE(MAT_STONE, 0));
-        sand_set(&shadow_test_grid, PW - 1, y, CELL_MAKE(MAT_STONE, 0));
+        sand_set(&fx.shadow_test_grid, 0, y, CELL_MAKE(MAT_STONE, 0));
+        sand_set(&fx.shadow_test_grid, PW - 1, y, CELL_MAKE(MAT_STONE, 0));
     }
     for (int x = 0; x < PW; x++) {
-        sand_set(&shadow_test_grid, x, 0, CELL_MAKE(MAT_STONE, 0));
-        sand_set(&shadow_test_grid, x, PH - 1, CELL_MAKE(MAT_STONE, 0));
+        sand_set(&fx.shadow_test_grid, x, 0, CELL_MAKE(MAT_STONE, 0));
+        sand_set(&fx.shadow_test_grid, x, PH - 1, CELL_MAKE(MAT_STONE, 0));
     }
     for (int y = 1; y < PH - 1; y++) {
         for (int x = 1; x < PW - 1; x++) {
-            sand_set(&shadow_test_grid, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+            sand_set(&fx.shadow_test_grid, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
         }
     }
     for (int i = 0; i < 400; i++) {
-        sand_step(&shadow_test_grid, 1000, 1000, 0);
+        sand_step(&fx.shadow_test_grid, 1000, 1000, 0);
     }
 
     /* One stone obstacle, fully submerged, dead centre - away from every
@@ -9662,15 +9668,15 @@ static void test_a_submerged_obstacle_casts_a_gravity_aligned_shadow(void)
     enum { OX = PW / 2, OY = PH / 2 };
     for (int dy = -1; dy <= 1; dy++) {
         for (int dx = -1; dx <= 1; dx++) {
-            sand_set(&shadow_test_grid, OX + dx, OY + dy,
+            sand_set(&fx.shadow_test_grid, OX + dx, OY + dy,
                      CELL_MAKE(MAT_STONE, 0));
         }
     }
     for (int i = 0; i < 30; i++) {
-        sand_step(&shadow_test_grid, 1000, 1000, 0);
+        sand_step(&fx.shadow_test_grid, 1000, 1000, 0);
     }
 
-    if (CELL_MATERIAL(sand_at(&shadow_test_grid, OX, OY)) != MAT_STONE) {
+    if (CELL_MATERIAL(sand_at(&fx.shadow_test_grid, OX, OY)) != MAT_STONE) {
         free(shadow_test_cells);
         TEST_FAIL_MESSAGE("setup: the obstacle must still be stone after settling");
     }
@@ -16112,7 +16118,6 @@ static void test_acid_spends_at_least_a_unit_of_itself_per_cell_dissolved(void)
  * actually needs to change. */
 #define FIZZ_W 40
 #define FIZZ_H 12
-static sand_t  fizz_sim;
 
 /* cells is HEAP, not static file scope - each of the two callers below
  * mallocs its own FIZZ_W * FIZZ_H (480 byte) grid and frees it before
@@ -16121,17 +16126,17 @@ static sand_t  fizz_sim;
  * memory budget. */
 static void acid_fizz_fixture(uint8_t *cells)
 {
-    sand_init(&fizz_sim, cells, FIZZ_W, FIZZ_H, 5u);
-    sand_set_evaporates(&fizz_sim, 0);   /* isolate fizz - see the tests'
+    sand_init(&fx.fizz_sim, cells, FIZZ_W, FIZZ_H, 5u);
+    sand_set_evaporates(&fx.fizz_sim, 0);   /* isolate fizz - see the tests'
                                           * own comments for why */
     for (int y = 4; y < FIZZ_H; y++) {
         for (int x = 0; x < FIZZ_W; x++) {
-            sand_set(&fizz_sim, x, y, CELL_MAKE(MAT_SAND, 8));
+            sand_set(&fx.fizz_sim, x, y, CELL_MAKE(MAT_SAND, 8));
         }
     }
     for (int y = 0; y < 3; y++) {
         for (int x = 0; x < FIZZ_W; x++) {
-            sand_set(&fizz_sim, x, y, CELL_MAKE(MAT_ACID, MASS_MAX));
+            sand_set(&fx.fizz_sim, x, y, CELL_MAKE(MAT_ACID, MASS_MAX));
         }
     }
 }
@@ -16150,10 +16155,10 @@ static void test_acid_fizzes_while_it_eats(void)
      * only have come from the fizz. */
     bool fizzed = false;
     for (int i = 0; i < 300 && !fizzed; i++) {
-        sand_step(&fizz_sim, 0, 1000, 0);
+        sand_step(&fx.fizz_sim, 0, 1000, 0);
         for (int y = 0; y < FIZZ_H && !fizzed; y++) {
             for (int x = 0; x < FIZZ_W && !fizzed; x++) {
-                const uint8_t m = CELL_MATERIAL(sand_at(&fizz_sim, x, y));
+                const uint8_t m = CELL_MATERIAL(sand_at(&fx.fizz_sim, x, y));
                 fizzed = (m == MAT_SMOKE || m == MAT_GAS);
             }
         }
@@ -16188,10 +16193,10 @@ static void test_the_fizz_rises_out_of_the_acid(void)
      * floats. */
     int highest = FIZZ_H;
     for (int i = 0; i < 300; i++) {
-        sand_step(&fizz_sim, 0, 1000, 0);
+        sand_step(&fx.fizz_sim, 0, 1000, 0);
         for (int y = 0; y < FIZZ_H; y++) {
             for (int x = 0; x < FIZZ_W; x++) {
-                const uint8_t m = CELL_MATERIAL(sand_at(&fizz_sim, x, y));
+                const uint8_t m = CELL_MATERIAL(sand_at(&fx.fizz_sim, x, y));
                 if ((m == MAT_SMOKE || m == MAT_GAS) && y < highest) {
                     highest = y;
                 }
@@ -16231,7 +16236,6 @@ static void test_the_fizz_rises_out_of_the_acid(void)
  * which is not a safe margin for a fixed-seed assertion to depend on. */
 #define DILUTE_W 4000
 #define DILUTE_H 2
-static sand_t  dilute_sim;
 
 /* cells is HEAP, not static file scope - each caller mallocs its own
  * DILUTE_W * DILUTE_H (8000 byte) grid and frees it before its own
@@ -16240,14 +16244,14 @@ static sand_t  dilute_sim;
  * memory budget. */
 static void acid_water_dilute_fixture(uint8_t *cells)
 {
-    sand_init(&dilute_sim, cells, DILUTE_W, DILUTE_H, 7u);
-    sand_set_evaporates(&dilute_sim, 0);   /* isolate dilution from the
+    sand_init(&fx.dilute_sim, cells, DILUTE_W, DILUTE_H, 7u);
+    sand_set_evaporates(&fx.dilute_sim, 0);   /* isolate dilution from the
                                              * unrelated evaporates roll -
                                              * same reasoning as the fizz
                                              * fixture above */
     for (int x = 0; x < DILUTE_W; x++) {
-        sand_set(&dilute_sim, x, 0, CELL_MAKE(MAT_WATER, MASS_MAX));
-        sand_set(&dilute_sim, x, 1, CELL_MAKE(MAT_ACID, MASS_MAX));
+        sand_set(&fx.dilute_sim, x, 0, CELL_MAKE(MAT_WATER, MASS_MAX));
+        sand_set(&fx.dilute_sim, x, 1, CELL_MAKE(MAT_ACID, MASS_MAX));
     }
 }
 
@@ -16267,10 +16271,10 @@ static void test_acid_and_water_dilute_each_other(void)
      * sensitive to exactly which seed sand_init() above happens to use. */
     bool diluted = false;
     for (int i = 0; i < 10 && !diluted; i++) {
-        sand_step(&dilute_sim, 0, 1000, 0);
+        sand_step(&fx.dilute_sim, 0, 1000, 0);
         for (int x = 0; x < DILUTE_W && !diluted; x++) {
-            const uint8_t top = CELL_MATERIAL(sand_at(&dilute_sim, x, 0));
-            const uint8_t bot = CELL_MATERIAL(sand_at(&dilute_sim, x, 1));
+            const uint8_t top = CELL_MATERIAL(sand_at(&fx.dilute_sim, x, 0));
+            const uint8_t bot = CELL_MATERIAL(sand_at(&fx.dilute_sim, x, 1));
             diluted = (top != MAT_WATER) || (bot != MAT_ACID);
         }
     }
@@ -16310,13 +16314,13 @@ static void test_the_dilution_split_favours_neither_side(void)
     TEST_ASSERT_NOT_NULL_MESSAGE(dilute_cells,
         "acid/water dilution grid must fit in what the framebuffer leaves");
     acid_water_dilute_fixture(dilute_cells);
-    sand_step(&dilute_sim, 0, 1000, 0);
+    sand_step(&fx.dilute_sim, 0, 1000, 0);
 
     int water_wins = 0;
     int acid_wins  = 0;
     for (int x = 0; x < DILUTE_W; x++) {
-        const uint8_t top = CELL_MATERIAL(sand_at(&dilute_sim, x, 0));
-        const uint8_t bot = CELL_MATERIAL(sand_at(&dilute_sim, x, 1));
+        const uint8_t top = CELL_MATERIAL(sand_at(&fx.dilute_sim, x, 0));
+        const uint8_t bot = CELL_MATERIAL(sand_at(&fx.dilute_sim, x, 1));
         if (bot == MAT_WATER) {
             water_wins++;   /* the acid cell (row 1) became water */
         }
@@ -16391,21 +16395,20 @@ static void test_the_dilution_split_favours_neither_side(void)
  * stability). */
 #define SEPARATED_W 4000
 #define SEPARATED_H 2
-static sand_t  separated_dilute_sim;
 
 /* cells is HEAP, not static file scope - see acid_water_dilute_fixture's
  * own comment above for why. */
 static void acid_water_separated_fixture(uint8_t *cells)
 {
-    sand_init(&separated_dilute_sim, cells, SEPARATED_W, SEPARATED_H, 7u);
-    sand_set_evaporates(&separated_dilute_sim, 0);
+    sand_init(&fx.separated_dilute_sim, cells, SEPARATED_W, SEPARATED_H, 7u);
+    sand_set_evaporates(&fx.separated_dilute_sim, 0);
     for (int x = 0; x < SEPARATED_W; x++) {
         if (x % 2 == 0) {
-            sand_set(&separated_dilute_sim, x, 0, CELL_MAKE(MAT_WATER, MASS_MAX));
-            sand_set(&separated_dilute_sim, x, 1, CELL_MAKE(MAT_ACID, MASS_MAX));
+            sand_set(&fx.separated_dilute_sim, x, 0, CELL_MAKE(MAT_WATER, MASS_MAX));
+            sand_set(&fx.separated_dilute_sim, x, 1, CELL_MAKE(MAT_ACID, MASS_MAX));
         } else {
-            sand_set(&separated_dilute_sim, x, 0, GLASS);
-            sand_set(&separated_dilute_sim, x, 1, GLASS);
+            sand_set(&fx.separated_dilute_sim, x, 0, GLASS);
+            sand_set(&fx.separated_dilute_sim, x, 1, GLASS);
         }
     }
 }
@@ -16423,15 +16426,15 @@ static void test_water_winning_the_dilution_boils_the_water_cell_to_steam(void)
     TEST_ASSERT_NOT_NULL_MESSAGE(cells,
         "acid/water separated grid must fit in what the framebuffer leaves");
     acid_water_separated_fixture(cells);
-    sand_step(&separated_dilute_sim, 0, 1000, 0);
+    sand_step(&fx.separated_dilute_sim, 0, 1000, 0);
 
     int water_wins = 0, water_wins_with_steam = 0;
     for (int x = 0; x < SEPARATED_W; x += 2) {
-        if (CELL_MATERIAL(sand_at(&separated_dilute_sim, x, 1)) != MAT_WATER) {
+        if (CELL_MATERIAL(sand_at(&fx.separated_dilute_sim, x, 1)) != MAT_WATER) {
             continue; /* not a water-wins column - see the sibling test */
         }
         water_wins++;
-        if (CELL_MATERIAL(sand_at(&separated_dilute_sim, x, 0)) == MAT_STEAM) {
+        if (CELL_MATERIAL(sand_at(&fx.separated_dilute_sim, x, 0)) == MAT_STEAM) {
             water_wins_with_steam++;
         }
     }
@@ -16453,15 +16456,15 @@ static void test_acid_winning_the_dilution_boils_the_acid_cell_to_gas(void)
     TEST_ASSERT_NOT_NULL_MESSAGE(cells,
         "acid/water separated grid must fit in what the framebuffer leaves");
     acid_water_separated_fixture(cells);
-    sand_step(&separated_dilute_sim, 0, 1000, 0);
+    sand_step(&fx.separated_dilute_sim, 0, 1000, 0);
 
     int acid_wins = 0, acid_wins_with_gas = 0;
     for (int x = 0; x < SEPARATED_W; x += 2) {
-        if (CELL_MATERIAL(sand_at(&separated_dilute_sim, x, 0)) != MAT_ACID) {
+        if (CELL_MATERIAL(sand_at(&fx.separated_dilute_sim, x, 0)) != MAT_ACID) {
             continue; /* not an acid-wins column - see the sibling test */
         }
         acid_wins++;
-        if (CELL_MATERIAL(sand_at(&separated_dilute_sim, x, 1)) == MAT_GAS) {
+        if (CELL_MATERIAL(sand_at(&fx.separated_dilute_sim, x, 1)) == MAT_GAS) {
             acid_wins_with_gas++;
         }
     }
@@ -16500,17 +16503,16 @@ static void test_acid_winning_the_dilution_boils_the_acid_cell_to_gas(void)
  * safe. */
 #define OIL_DILUTE_W 400
 #define OIL_DILUTE_H 2
-static sand_t  oil_dilute_sim;
 
 /* cells is HEAP, not static file scope - see acid_water_dilute_fixture's
  * own comment above for why. */
 static void acid_oil_dilute_fixture(uint8_t *cells)
 {
-    sand_init(&oil_dilute_sim, cells, OIL_DILUTE_W, OIL_DILUTE_H, 11u);
-    sand_set_evaporates(&oil_dilute_sim, 0);
+    sand_init(&fx.oil_dilute_sim, cells, OIL_DILUTE_W, OIL_DILUTE_H, 11u);
+    sand_set_evaporates(&fx.oil_dilute_sim, 0);
     for (int x = 0; x < OIL_DILUTE_W; x++) {
-        sand_set(&oil_dilute_sim, x, 0, CELL_MAKE(MAT_OIL, MASS_MAX));
-        sand_set(&oil_dilute_sim, x, 1, CELL_MAKE(MAT_ACID, MASS_MAX));
+        sand_set(&fx.oil_dilute_sim, x, 0, CELL_MAKE(MAT_OIL, MASS_MAX));
+        sand_set(&fx.oil_dilute_sim, x, 1, CELL_MAKE(MAT_ACID, MASS_MAX));
     }
 }
 
@@ -16542,13 +16544,13 @@ static void test_oil_mostly_boils_off_into_gas_not_acid(void)
 
     int gas = 0, acid_spread = 0;
     for (int i = 0; i < 300; i++) {
-        sand_step(&oil_dilute_sim, 0, 1000, 0);
+        sand_step(&fx.oil_dilute_sim, 0, 1000, 0);
         for (int x = 0; x < OIL_DILUTE_W; x++) {
             if (done[x]) {
                 continue;
             }
-            const uint8_t m0 = CELL_MATERIAL(sand_at(&oil_dilute_sim, x, 0));
-            const uint8_t m1 = CELL_MATERIAL(sand_at(&oil_dilute_sim, x, 1));
+            const uint8_t m0 = CELL_MATERIAL(sand_at(&fx.oil_dilute_sim, x, 0));
+            const uint8_t m1 = CELL_MATERIAL(sand_at(&fx.oil_dilute_sim, x, 1));
             if (m0 == MAT_OIL || m1 == MAT_OIL) {
                 continue; /* not bitten yet - still a live sample */
             }
@@ -16607,13 +16609,13 @@ static void test_the_acid_that_ate_oil_can_die_in_a_single_bite(void)
 
     int died_outright = 0, chipped_by_one = 0;
     for (int i = 0; i < 300; i++) {
-        sand_step(&oil_dilute_sim, 0, 1000, 0);
+        sand_step(&fx.oil_dilute_sim, 0, 1000, 0);
         for (int x = 0; x < OIL_DILUTE_W; x++) {
             if (done[x]) {
                 continue;
             }
-            const cell_t c0 = sand_at(&oil_dilute_sim, x, 0);
-            const cell_t c1 = sand_at(&oil_dilute_sim, x, 1);
+            const cell_t c0 = sand_at(&fx.oil_dilute_sim, x, 0);
+            const cell_t c1 = sand_at(&fx.oil_dilute_sim, x, 1);
             if (CELL_MATERIAL(c0) == MAT_OIL || CELL_MATERIAL(c1) == MAT_OIL) {
                 continue; /* not bitten yet - still a live sample */
             }
@@ -16697,7 +16699,6 @@ static void test_acid_evaporates_into_gas_when_forced(void)
 #define DILUTE_POUR_H          50
 #define DILUTE_POUR_POOL_DEPTH 20
 #define DILUTE_POUR_STEPS      150
-static sand_t  dilute_pour_sim;
 
 /* cells is HEAP, not static file scope - see acid_water_dilute_fixture's
  * own comment above for why. Same seed every call, deliberately - an
@@ -16706,18 +16707,18 @@ static sand_t  dilute_pour_sim;
 static void
 acid_water_pour_fixture(uint8_t *cells, material_id_t pool)
 {
-    sand_init(&dilute_pour_sim, cells, DILUTE_POUR_W, DILUTE_POUR_H, 17u);
-    sand_set_evaporates(&dilute_pour_sim, 0); /* isolate the mass bias from
+    sand_init(&fx.dilute_pour_sim, cells, DILUTE_POUR_W, DILUTE_POUR_H, 17u);
+    sand_set_evaporates(&fx.dilute_pour_sim, 0); /* isolate the mass bias from
                                                 * the unrelated ambient
                                                 * evaporates roll - same
                                                 * reasoning as the other
                                                 * dilution fixtures above. */
     for (int x = 0; x < DILUTE_POUR_W; x++) {
-        sand_set(&dilute_pour_sim, x, DILUTE_POUR_H - 1, STONE);
+        sand_set(&fx.dilute_pour_sim, x, DILUTE_POUR_H - 1, STONE);
     }
     for (int y = DILUTE_POUR_H - 1 - DILUTE_POUR_POOL_DEPTH; y < DILUTE_POUR_H - 1; y++) {
         for (int x = 0; x < DILUTE_POUR_W; x++) {
-            sand_set(&dilute_pour_sim, x, y, CELL_MAKE(pool, MASS_MAX));
+            sand_set(&fx.dilute_pour_sim, x, y, CELL_MAKE(pool, MASS_MAX));
         }
     }
 }
@@ -16727,16 +16728,16 @@ pour_and_count(material_id_t tap, int *out_pool_mat, int *out_tap_mat)
 {
     for (int i = 0; i < DILUTE_POUR_STEPS; i++) {
         for (int x = 0; x < DILUTE_POUR_W; x++) {
-            sand_set(&dilute_pour_sim, x, 0, CELL_MAKE(tap, MASS_MAX));
+            sand_set(&fx.dilute_pour_sim, x, 0, CELL_MAKE(tap, MASS_MAX));
         }
-        sand_step(&dilute_pour_sim, 0, 1000, 0);
+        sand_step(&fx.dilute_pour_sim, 0, 1000, 0);
     }
 
     int pool_mat = 0, tap_mat = 0;
     const material_id_t pool = (tap == MAT_ACID) ? MAT_WATER : MAT_ACID;
     for (int y = 0; y < DILUTE_POUR_H - 1; y++) {
         for (int x = 0; x < DILUTE_POUR_W; x++) {
-            const uint8_t m = CELL_MATERIAL(sand_at(&dilute_pour_sim, x, y));
+            const uint8_t m = CELL_MATERIAL(sand_at(&fx.dilute_pour_sim, x, y));
             if (m == pool) {
                 pool_mat++;
             } else if (m == tap) {
@@ -16759,7 +16760,7 @@ pour_and_measure_tap_gain(material_id_t pool, material_id_t tap, int bias)
     TEST_ASSERT_NOT_NULL_MESSAGE(cells,
         "acid/water pour grid must fit in what the framebuffer leaves");
     acid_water_pour_fixture(cells, pool);
-    sand_set_acid_dilute_mass_bias(&dilute_pour_sim, bias);
+    sand_set_acid_dilute_mass_bias(&fx.dilute_pour_sim, bias);
 
     int pool_left, tap_now;
     pour_and_count(tap, &pool_left, &tap_now);
@@ -29237,7 +29238,6 @@ static void test_present_cost_against_the_thermal_shock_scene(void)
 
 #define BUBBLE_W 41
 #define BUBBLE_H 30
-static sand_t  bubble_sim;
 
 /* acid_bubble() (sand_reactions.c) replaced splash_displace()'s old "landed
  * hard on already-occupied liquid" trigger for acid, specifically because
@@ -29282,12 +29282,12 @@ static void test_acid_bubbles_do_not_favour_one_wall(void)
         "acid-bubble pool grid must fit in what the framebuffer leaves");
     TEST_ASSERT_NOT_NULL_MESSAGE(bubble_buf,
         "acid-bubble impulse queue must fit in what the framebuffer leaves");
-    sand_init(&bubble_sim, bubble_cells, BUBBLE_W, BUBBLE_H, 3u);
-    sand_enable_impulses(&bubble_sim, bubble_buf, 512);
+    sand_init(&fx.bubble_sim, bubble_cells, BUBBLE_W, BUBBLE_H, 3u);
+    sand_enable_impulses(&fx.bubble_sim, bubble_buf, 512);
 
     for (int y = POOL_TOP; y < BUBBLE_H; y++) {
         for (int x = 0; x < BUBBLE_W; x++) {
-            sand_set(&bubble_sim, x, y, CELL_MAKE(MAT_ACID, MASS_MAX));
+            sand_set(&fx.bubble_sim, x, y, CELL_MAKE(MAT_ACID, MASS_MAX));
         }
     }
 
@@ -29300,10 +29300,10 @@ static void test_acid_bubbles_do_not_favour_one_wall(void)
     int left_pops = 0, right_pops = 0;
     const int mid = BUBBLE_W / 2;
     for (int i = 0; i < 300; i++) {
-        sand_step(&bubble_sim, 0, 1000, 0);
+        sand_step(&fx.bubble_sim, 0, 1000, 0);
         for (int y = 0; y < POOL_TOP; y++) {
             for (int x = 0; x < BUBBLE_W; x++) {
-                if (CELL_MATERIAL(sand_at(&bubble_sim, x, y)) == MAT_ACID) {
+                if (CELL_MATERIAL(sand_at(&fx.bubble_sim, x, y)) == MAT_ACID) {
                     if (x < mid) {
                         left_pops++;
                     } else if (x > mid) {
@@ -29336,7 +29336,6 @@ static void test_acid_bubbles_do_not_favour_one_wall(void)
 #define SLEEPY_BLOCK_COLS ((BUBBLE_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
 #define SLEEPY_BLOCK_ROWS ((BUBBLE_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
 static uint8_t sleepy_bubble_blocks[SLEEPY_BLOCK_COLS * SLEEPY_BLOCK_ROWS];
-static sand_t  sleepy_bubble_sim;
 
 /* THE ACTUAL BUG A REAL DEVICE HIT, reported after acid_bubble() first
  * shipped living in move_liquid_grain() (sand_liquid.c): a real, calm
@@ -29381,13 +29380,13 @@ static void test_acid_bubbles_still_fire_once_the_block_is_asleep(void)
     TEST_ASSERT_NOT_NULL_MESSAGE(sleepy_bubble_buf,
         "sleepy acid-bubble impulse queue must fit in what the "
         "framebuffer leaves");
-    sand_init(&sleepy_bubble_sim, sleepy_bubble_cells, BUBBLE_W, BUBBLE_H, 3u);
-    sand_enable_sleeping(&sleepy_bubble_sim, sleepy_bubble_blocks);
-    sand_enable_impulses(&sleepy_bubble_sim, sleepy_bubble_buf, 512);
+    sand_init(&fx.sleepy_bubble_sim, sleepy_bubble_cells, BUBBLE_W, BUBBLE_H, 3u);
+    sand_enable_sleeping(&fx.sleepy_bubble_sim, sleepy_bubble_blocks);
+    sand_enable_impulses(&fx.sleepy_bubble_sim, sleepy_bubble_buf, 512);
 
     for (int y = POOL_TOP; y < BUBBLE_H; y++) {
         for (int x = 0; x < BUBBLE_W; x++) {
-            sand_set(&sleepy_bubble_sim, x, y, CELL_MAKE(MAT_ACID, MASS_MAX));
+            sand_set(&fx.sleepy_bubble_sim, x, y, CELL_MAKE(MAT_ACID, MASS_MAX));
         }
     }
     /* A GLASS LID over the whole surface while it settles - not load-
@@ -29402,16 +29401,16 @@ static void test_acid_bubbles_still_fire_once_the_block_is_asleep(void)
      * pool bubbling once uncovered is exactly the same claim the old,
      * chance-sensitive version of this test was after. */
     for (int x = 0; x < BUBBLE_W; x++) {
-        sand_set(&sleepy_bubble_sim, x, POOL_TOP - 1, GLASS);
+        sand_set(&fx.sleepy_bubble_sim, x, POOL_TOP - 1, GLASS);
     }
 
     bool asleep = false;
     for (int i = 0; i < 40 && !asleep; i++) {
-        sand_step(&sleepy_bubble_sim, 0, 1000, 0);
+        sand_step(&fx.sleepy_bubble_sim, 0, 1000, 0);
         asleep = true;
         for (int bx = 0; bx < SLEEPY_BLOCK_COLS && asleep; bx++) {
             for (int by = 0; by < SLEEPY_BLOCK_ROWS && asleep; by++) {
-                if (!sand_block_settled(&sleepy_bubble_sim, bx, by)) {
+                if (!sand_block_settled(&fx.sleepy_bubble_sim, bx, by)) {
                     asleep = false;
                 }
             }
@@ -29435,15 +29434,15 @@ static void test_acid_bubbles_still_fire_once_the_block_is_asleep(void)
      * this test's claim holds regardless of whether the lid's removal
      * happens to wake the block or not. */
     for (int x = 0; x < BUBBLE_W; x++) {
-        sand_erase(&sleepy_bubble_sim, x, POOL_TOP - 1, 0);
+        sand_erase(&fx.sleepy_bubble_sim, x, POOL_TOP - 1, 0);
     }
 
     int pops = 0;
     for (int i = 0; i < 300 && pops == 0; i++) {
-        sand_step(&sleepy_bubble_sim, 0, 1000, 0);
+        sand_step(&fx.sleepy_bubble_sim, 0, 1000, 0);
         for (int y = 0; y < POOL_TOP && pops == 0; y++) {
             for (int x = 0; x < BUBBLE_W; x++) {
-                if (CELL_MATERIAL(sand_at(&sleepy_bubble_sim, x, y)) == MAT_ACID) {
+                if (CELL_MATERIAL(sand_at(&fx.sleepy_bubble_sim, x, y)) == MAT_ACID) {
                     pops++;
                     break;
                 }
