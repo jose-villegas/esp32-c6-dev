@@ -824,12 +824,25 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  *
  * Measured, 32 seeds, cells of travel:
  *
- *     open air   12.5   (nothing displaced, so nothing charged)
- *     water      11.9   (charged nothing - as near air as makes no odds)
- *     dirt        0.8   (62 doubled twice, so ~250 a cell against 253)
+ *     open air   27.8   (nothing displaced, so nothing charged)
+ *     water      25.0   (charged nothing - as near air as makes no odds)
+ *     dirt        3.0
  *
- * Dirt stopping inside one cell is the point, not an overshoot: a chunk
- * should end up at the rim of a bank, not buried in it. */
+ * THESE ARE POST-MULTI-CELL NUMBERS AND THE EARLIER ONES WERE NOT. This
+ * comment carried 12.5 / 11.9 / 0.8 for a while, measured when an entry
+ * covered one cell a step; multi-cell travel then tripled every figure
+ * without anything here being re-measured, and the stale set reached a
+ * published PR before an architecture review caught it. Any number in
+ * this file that is not re-measured after a change to
+ * SAND_IMPULSE_CELLS_PER_STEP_DIVISOR is wrong by roughly that factor.
+ *
+ * 3.0 cells is ALSO not yet the intent. A chunk should stop at the rim of
+ * a bank, and it does not, because the hop budget is fixed before drag is
+ * charged and the loop has no energy exit - a mover spent on its first
+ * cell still takes the rest of its hops. See the review findings this
+ * comment is being read alongside; the fix is an energy exit beside the
+ * distance budget, after which this constant wants one fresh sweep rather
+ * than the value it inherited. */
 #define SAND_IMPULSE_DRAG_POWDER_SHIFT  2
 
 /* THE FLOOR BELOW WHICH A KIND_STATIC ENTRY IS SPENT, for the gravity-drift
