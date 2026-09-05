@@ -190,6 +190,7 @@
  *===========================================================================*/
 
 #include "sand_priv.h"
+#include "reaction_doc.h"
 
 /* The four cardinal directions a burning cell's reactions look in. Not
  * eight - diagonal spread felt too generous for a first version; widening
@@ -585,6 +586,7 @@ try_heat_transform_given(sand_t* s, int nx, int ny, int w, int h, size_t at, cel
          * Checked before the ramp roll so that a frosted pane meeting lava
          * breaks on contact, which is what makes "chill it, then heat it" a
          * thing the player can actually aim. */
+        REACTION_DOC(shatters_to, "if warmed while badly chilled");
         if (r->shatters_to != 0 && CELL_VARIANT(n) <= SAND_SHOCK_COLD) {
             crack_run(s, nx, ny, w, h, (material_id_t)CELL_MATERIAL(n), (material_id_t)r->shatters_to);
             return true;
@@ -665,6 +667,7 @@ try_heat_transform_given(sand_t* s, int nx, int ny, int w, int h, size_t at, cel
          * heat contact it ever gets, with no warning puff first - which is
          * the correct reading of "even stronger" besides: wet ore cracking
          * on first contact, not after a polite warning, is the point. */
+        REACTION_DOC(spoils_to, "if wet when heat reaches it");
         if (r->spoils_to != 0 &&
             (int)(rng_next(&s->rng) & 0xFF) < r->spoils_chance) {
             place_reacted(s, nx, ny, at, (material_id_t)r->spoils_to);
@@ -2552,6 +2555,7 @@ step_one_withering_cell(sand_t* s, int x, int y, int w, int h, const reaction_t*
      * MATERIAL_VARIANTS - 1: for wood that nibble is burn progress, and
      * its maximum is what "alight" means. Wood born this way would come
      * into the world on fire. */
+    REACTION_DOC(hardens_to, "if withering but still touching its own hardened trunk");
     if (attached) {
         place_cell(s, x, y, at, CELL_MAKE(r->hardens_to, 0));
         return true;
@@ -3075,6 +3079,7 @@ step_one_cold_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
          * enough when the neighbour is hot enough, and the roll that would
          * gate it is the same one that cools it - so rolling first usually
          * talked a pane down below the threshold instead of breaking it. */
+        REACTION_DOC(shatters_to, "if chilled while hot");
         if (temp >= SAND_SHOCK_HEAT && nr->shatters_to != 0) {
             crack_run(s, nx, ny, w, h, (material_id_t)CELL_MATERIAL(n), (material_id_t)nr->shatters_to);
             if (try_heat_transform(s, x, y, w, h)) {
