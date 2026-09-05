@@ -948,14 +948,27 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * (KIND_STATIC/KIND_POWDER movers only, matching drag's own scope just
  * above; any non-static displaced cell, powder or liquid alike).
  *
- * SAND_IMPULSE_TRANSFER_DIVISOR halves the mover's own post-drag `speed`
- * for the transferred entry - the same halving idiom SAND_CASCADE_SPEED_
- * DIVISOR already uses for a relay one hop removed from the hop that caused
- * it, reused here rather than inventing a second "how much does a follow-up
- * lose" shape. 2 is a STARTING FIGURE, not a measurement - same status as
- * SAND_IMPULSE_DRAG_POWDER_SHIFT and SAND_IMPULSE_BOUNCE_MIN_SPEED above,
- * picked from the existing idiom rather than a device sweep. */
-#define SAND_IMPULSE_TRANSFER_DIVISOR  1
+ * SAND_IMPULSE_TRANSFER_DIVISOR halves the speed the mover ARRIVED with -
+ * not what it has left, which is the whole point of capturing impact_speed
+ * before drag takes its cut (see the transfer site). The same halving idiom
+ * SAND_CASCADE_SPEED_DIVISOR already uses for a relay one hop removed from
+ * the hop that caused it, reused rather than inventing a second "how much
+ * does a follow-up lose" shape.
+ *
+ * BACK TO 2 AFTER A SPELL AT 1, and the reason is a rule rather than a
+ * taste. At 1 this is not a divisor at all: a struck cell inherits the
+ * mover's full arrival speed while the mover itself loses nearly all of it
+ * to drag, so every strike on a surface cell mints a fresh full-speed
+ * entry out of nothing. Nothing bounded that except the backward cone
+ * usually picking open air, where the ramp bleeds it out - a bound made of
+ * geometry and luck rather than of any rule written down, which an
+ * architecture review called out as an unstated invariant. At 2 a child can
+ * never carry more than half of what its parent arrived with, which is a
+ * conservation-shaped bound that holds whatever the geometry does.
+ *
+ * The cost is real and was accepted deliberately: ejecta sprays visibly
+ * less hard than at 1. That trade was made on device, not on the bench. */
+#define SAND_IMPULSE_TRANSFER_DIVISOR  2
 
 /* THE TRANSFER FLOOR - below this post-drag speed, a mover does not queue a
  * transfer at all, the same shape SAND_IMPULSE_BOUNCE_MIN_SPEED already
