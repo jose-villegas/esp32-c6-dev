@@ -2235,6 +2235,13 @@ void sand_set_lava_cooloff(sand_t *s, int chance);
  * radius of ONE - about five cells of flame, which is why a detonation
  * read as a flicker. 16 gives a core radius of 3, near thirty cells.
  *
+ * THEN 16 -> 12, swapping places with SAND_GUNPOWDER_BLAST_RADIUS
+ * (material.h) once gunpowder existed: the one material whose whole point
+ * is to go off should own the biggest reaction-driven blast on the board,
+ * and a lava burst is a side effect of a vessel, not a charge. Core radius
+ * 2 here now, about thirteen cells of flame - still well past the flicker
+ * that 8 gave.
+ *
  * Raising this rather than lowering SAND_EXPLODE_CORE_DIVISOR on purpose:
  * the divisor is shared by every explosion in the app and carries its own
  * measured tuning table, so moving it to fix one caller's fireball would
@@ -2246,7 +2253,7 @@ void sand_set_lava_cooloff(sand_t *s, int chance);
  * (SAND_LAVA_BURST_GATE) - and the disc still fits the impulse budget
  * without thinning, so this buys visibility without changing what the
  * blast is allowed to do. Starting point, tune on device. */
-#define SAND_LAVA_BURST_RADIUS   16
+#define SAND_LAVA_BURST_RADIUS   12
 
 /* Overrides SAND_LAVA_BURST_CHANCE for every lava cell alike - the same
  * shape as sand_set_lava_cooloff() just above, for the same reason: a

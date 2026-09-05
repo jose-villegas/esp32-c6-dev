@@ -413,7 +413,7 @@ code, or it would simply relight from an adjacent lit neighbour on the
 very next step.
 
 Only when a lit cell **burns out** - its countdown reaching `lit_from` -
-does the blast radius (`reaction_t.explodes`, 6 cells) get read at all:
+does the blast radius (`reaction_t.explodes`, 16 cells) get read at all:
 if it is one corner of a 2x2 whose other three cells (the board edge
 counts as not-lit) are also lit gunpowder, and the impulse buffer is
 live, it detonates (`sand_explode()`); otherwise it simply becomes an
