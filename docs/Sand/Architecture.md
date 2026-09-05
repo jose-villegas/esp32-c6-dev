@@ -488,9 +488,8 @@ breaks no behaviour and nothing else would notice.
   colour, same tight loop - but a TIME-VARYING one: each of the four cullet
   shades is a starting point on a shared colour cycle that a per-frame
   phase steps through, so a heap of broken glass shimmers even while every
-  cell's stored byte sits perfectly still, with a rare grain showing the
-  saturated version of its own cycle colour as a brief glint rather than
-  the pale one. It repaints on its own clock the same way the shine does
+  cell's stored byte sits perfectly still, with a rare grain flashing pure
+  white for one step as a glint. It repaints on its own clock the same way the shine does
   (`row_has_cullet[]`, `CULLET_PHASE_MS`, `app_sand.c`) - see
   docs/Sand/Shading-and-Colour.md's own section on it for the full
   mechanism.
