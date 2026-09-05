@@ -932,12 +932,15 @@ cool_off_chain(sand_t* s, int x, int y, int w, int h, uint8_t product, int chanc
 static inline cell_t soil_dry_out(cell_t c, uint8_t nearby_moisture)
 {
     /* soil_cell(), the table-driven form of CELL_SOIL() (material.h) -
-     * &reactions[CELL_MATERIAL(c)] rather than a hardcoded MAT_DIRT row,
-     * so this stays correct for whichever material actually called it
-     * (dirt today, the only one with `dries != 0`; see this function's own
-     * callers). Byte-identical to CELL_SOIL() for dirt, since dirt's
+     * reaction_of(c) rather than a hardcoded MAT_DIRT row, so this stays
+     * correct for whichever material actually called it. reaction_of(),
+     * NOT &reactions[CELL_MATERIAL(c)]: gunpowder's nibble is MAT_EXTENDED
+     * and its row lives in extended_reactions[], so the direct index read
+     * an all-zero row and a wet fuse drying one level landed on the LIT
+     * code instead (caught by test_wet_gunpowder_does_not_ignite_and_heat_
+     * dries_it_first). Byte-identical to CELL_SOIL() for dirt, since dirt's
      * `.tones`/`.moist_max` are SOIL_DRY_TONES/SOIL_MOISTURE_MAX exactly. */
-    return soil_cell(c, nearby_moisture, 0, &reactions[CELL_MATERIAL(c)]);
+    return soil_cell(c, nearby_moisture, 0, reaction_of(c));
 }
 
 _Static_assert(SOIL_DRY_TONES - 1 == SOIL_MOISTURE_MAX,
@@ -954,7 +957,7 @@ _Static_assert(SOIL_DRY_TONES - 1 == SOIL_MOISTURE_MAX,
 static inline cell_t soil_set_moisture(cell_t c, uint8_t new_moisture, uint8_t nearby_moisture)
 {
     return new_moisture != 0
-               ? with_moisture(c, new_moisture, &reactions[CELL_MATERIAL(c)])
+               ? with_moisture(c, new_moisture, reaction_of(c))
                : soil_dry_out(c, nearby_moisture);
 }
 

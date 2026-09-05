@@ -1551,7 +1551,7 @@ static inline uint8_t moisture_of(cell_t c, const reaction_t *r)
  * back to. */
 static inline cell_t with_moisture(cell_t c, uint8_t m, const reaction_t *r)
 {
-    const uint8_t code = (uint8_t)((uint8_t)(r->tones - 1u) + (m & r->moist_max));
+    const uint8_t code = (uint8_t)((uint8_t)(r->tones - 1u) + ((m) > r->moist_max ? r->moist_max : (m)));
     return cell_with_code(c, code);
 }
 
@@ -1563,8 +1563,8 @@ static inline cell_t soil_cell(cell_t identity, uint8_t tone, uint8_t m,
                                const reaction_t *r)
 {
     const uint8_t code =
-        (m != 0) ? (uint8_t)((uint8_t)(r->tones - 1u) + (m & r->moist_max))
-                 : (uint8_t)(tone & (uint8_t)(r->tones - 1u));
+        (m != 0) ? (uint8_t)((uint8_t)(r->tones - 1u) + ((m) > r->moist_max ? r->moist_max : (m)))
+                 : (uint8_t)((tone) >= r->tones ? (uint8_t)(r->tones - 1u) : (tone));
     return cell_with_code(identity, code);
 }
 

@@ -1761,8 +1761,11 @@ static const gfx_color_t palette[256] = {
     [GUNPOWDER_CELL(4)] = GFX_RGB(0x1F1011), /* moisture 2 */
     [GUNPOWDER_CELL(5)] = GFX_RGB(0x180E11), /* moisture 3 */
     [GUNPOWDER_CELL(6)] = GFX_RGB(0x120C12), /* moisture 4 */
-    [GUNPOWDER_CELL(7)] = GFX_RGB(0x0C0A12), /* moisture 5, saturated -
-                              * wet glossy blue-black */
+    [GUNPOWDER_CELL(7)] = GFX_RGB(0xFF8C2A), /* LIT (GUNPOWDER_LIT) - the
+                              * fuse itself, a hot ember orange near fire's
+                              * bright end, so a burning trail reads as
+                              * burning. Was a fifth moisture level before
+                              * REVISION 2 spent this code on the lit state */
 };
 
 /* Glass's SECOND colour: the same temperature, mixed halfway to the
