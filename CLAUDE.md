@@ -147,7 +147,10 @@ in `REQUIRES` (not gated on
 `CONFIG_LAUNCHER_SELFTEST`) — Kconfig-gated `REQUIRES` is evaluated before
 `CONFIG_*` exists and silently no-ops, which only breaks on a clean build
 directory. `build/` is release, `build.diag/` is diagnostics — separate
-directories so testing never reconfigures the normal build.
+directories so testing never reconfigures the normal build. Every
+`idf.py build` also runs `tools/check_static_ram.py` and fails if the
+framebuffer plus one grid would no longer fit in the device's contiguous
+heap.
 
 ### Testing (`docs/Testing-Guide.md`)
 
