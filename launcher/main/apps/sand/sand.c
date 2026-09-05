@@ -3084,6 +3084,31 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * entry just left, which is what actually turns one grain moving
          * into a connected chain advancing together - a piston, not a
          * single flying droplet. */
+        /* THE RAMP IS A COST PER CELL OF TRAVEL, NOT PER TICK OF THE CLOCK.
+         * The decay above this loop charges it once a step, which was the
+         * same thing back when a step WAS one cell. It is not any more, and
+         * leaving it there quietly tripled an entry's range: three cells for
+         * the price of one. Worse than the range was the SHAPE - speed
+         * barely fell across a flight, so nothing ever dropped out of the
+         * three-cell band into two and then one, and a throw that should
+         * arc read as a straight line. Charging the extra cells restores
+         * decay per unit distance, which is what the arc was always made of.
+         *
+         * Only the extra cells, and only for the ramp materials: the first
+         * cell was already paid for above, and water and acid decay
+         * geometrically on their own schedule (SAND_SPLASH_SPEED_DECAY_
+         * SHIFT) that the splash and cascade features are tuned around. An
+         * entry that moved once or not at all is untouched, so a blocked or
+         * spent entry ages exactly as it always has - the bounded-lifetime
+         * guarantee this file rests on does not move. */
+        if (moved > 1 && mat_id != MAT_WATER && mat_id != MAT_ACID) {
+            const unsigned extra =
+                (unsigned)entry.ramp * (unsigned)(moved - 1);
+            entry.speed = (entry.speed > extra)
+                              ? (uint8_t)(entry.speed - extra)
+                              : 0;
+        }
+
         if (moved > 0 &&
             (mat_id == MAT_WATER || mat_id == MAT_ACID) &&
             entry.speed >= SAND_CASCADE_MIN_SPEED * SAND_CASCADE_SPEED_DIVISOR &&
