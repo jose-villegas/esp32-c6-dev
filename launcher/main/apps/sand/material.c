@@ -12,15 +12,26 @@
  * `const`, so it lives in flash rather than RAM. Adding a material is a row.
  *===========================================================================*/
 
-const material_t materials[MATERIAL_MAX] = {
-    [MAT_EMPTY] =
+/* Each ordinary material is written ONCE and lands in both halves of its
+ * row pair - MATERIAL_ROW(id) and MATERIAL_ROW(id) + 1 - via this
+ * variadic macro, so material_of()'s `cell >> 3` finds the same row
+ * whichever way the top bit of a cell's low nibble happens to fall. The
+ * macro argument may itself contain commas (a struct initializer full of
+ * them) and span many lines with comments in it, same as every row below
+ * already did - see material.h's own comment on MATERIAL_ROWS for why the
+ * split exists at all. */
+#define TWIN_ROW(id, ...)                                                \
+    [MATERIAL_ROW(id)] = __VA_ARGS__, [MATERIAL_ROW(id) + 1] = __VA_ARGS__
+
+const material_t materials[MATERIAL_ROWS] = {
+    TWIN_ROW(MAT_EMPTY,
         {
             .name = "empty",
             .kind = KIND_NONE,
             .density = 0,
-        },
+        }),
 
-    [MAT_SAND] =
+    TWIN_ROW(MAT_SAND,
         {
             .name = "Sand",
             .kind = KIND_POWDER,
@@ -30,9 +41,9 @@ const material_t materials[MATERIAL_MAX] = {
             .slip = 96,
             .repose = 7, /* about 35 degrees, dry sand */
             .scatter = 40,
-        },
+        }),
 
-    [MAT_WATER] =
+    TWIN_ROW(MAT_WATER,
         {
 
             .name = "Water",
@@ -53,9 +64,9 @@ const material_t materials[MATERIAL_MAX] = {
                               * is exactly what every liquid did before
                               * this field had a second reader, so water's
                               * behaviour is unchanged by its arrival. */
-        },
+        }),
 
-    [MAT_STONE] =
+    TWIN_ROW(MAT_STONE,
         {
             .name = "Stone",
             .kind = KIND_STATIC,
@@ -63,9 +74,9 @@ const material_t materials[MATERIAL_MAX] = {
             .slip = 0,
             .repose = 0,
             .scatter = 0,
-        },
+        }),
 
-    [MAT_GAS] =
+    TWIN_ROW(MAT_GAS,
         {
             .name = "Gas",
             .kind = KIND_GAS,
@@ -145,9 +156,9 @@ const material_t materials[MATERIAL_MAX] = {
                                * dispersing faster/further than water
                                * levels, given both use the same
                                * equalise_*() mechanism. */
-        },
+        }),
 
-    [MAT_FIRE] =
+    TWIN_ROW(MAT_FIRE,
         {
             .name = "Fire",
             .kind = KIND_GAS, /* rises and disperses through the exact
@@ -206,9 +217,9 @@ const material_t materials[MATERIAL_MAX] = {
             .sight = 5,     /* noticeably tighter than gas's 16 -
                                 * "tighter instead of sparse". Starting
                                 * point, not final - tune on device */
-        },
+        }),
 
-    [MAT_WOOD] =
+    TWIN_ROW(MAT_WOOD,
         {
             .name = "Wood",
             .kind = KIND_STATIC, /* a log does not fall over or pile up
@@ -226,9 +237,9 @@ const material_t materials[MATERIAL_MAX] = {
                                      * here. */
             /* slip/repose/scatter/decay/mobility/sight all meaningless for a
          * KIND_STATIC material and left at zero, same as stone's own row. */
-        },
+        }),
 
-    [MAT_STEAM] =
+    TWIN_ROW(MAT_STEAM,
         {
             .name = "Steam",
             .kind = KIND_GAS, /* rises and disperses through the
@@ -323,9 +334,9 @@ const material_t materials[MATERIAL_MAX] = {
                                      * way fire's own 5 does. Starting
                                      * point, not final - tune on device
                                      * like every other constant here. */
-        },
+        }),
 
-    [MAT_SMOKE] =
+    TWIN_ROW(MAT_SMOKE,
         {
             .name = "Smoke",
             .kind = KIND_GAS, /* same pass as steam, gas and fire -
@@ -387,9 +398,9 @@ const material_t materials[MATERIAL_MAX] = {
                                      * holding a column. Starting point,
                                      * not final - tune on device like
                                      * every other constant here. */
-        },
+        }),
 
-    [MAT_OIL] =
+    TWIN_ROW(MAT_OIL,
         {
             .name = "Oil",
             .kind = KIND_LIQUID,
@@ -432,9 +443,9 @@ const material_t materials[MATERIAL_MAX] = {
             .slip = 255,
             .repose = 0,
             .scatter = 0,
-        },
+        }),
 
-    [MAT_LAVA] =
+    TWIN_ROW(MAT_LAVA,
         {
             .name = "Lava",
             .kind = KIND_LIQUID,
@@ -488,9 +499,9 @@ const material_t materials[MATERIAL_MAX] = {
                               * could collide. Immortal is also simply
                               * what lava should be: it cools by touching
                               * water, not by waiting. */
-        },
+        }),
 
-    [MAT_ACID] =
+    TWIN_ROW(MAT_ACID,
         {
             .name = "Acid",
             .kind = KIND_LIQUID,
@@ -512,9 +523,9 @@ const material_t materials[MATERIAL_MAX] = {
                               * read as heavier without behaving like oil.
                               * Starting point, not final - tune on device
                               * like every other constant here. */
-        },
+        }),
 
-    [MAT_GLASS] =
+    TWIN_ROW(MAT_GLASS,
         {
             .name = "Glass",
             .kind = KIND_STATIC,
@@ -526,9 +537,9 @@ const material_t materials[MATERIAL_MAX] = {
             .slip = 0,
             .repose = 0,
             .scatter = 0,
-        },
+        }),
 
-    [MAT_DIRT] =
+    TWIN_ROW(MAT_DIRT,
         {
             .name = "Dirt",
             .kind = KIND_POWDER,
@@ -545,9 +556,9 @@ const material_t materials[MATERIAL_MAX] = {
                               * read as soil rather than as brown sand */
             .scatter = 12, /* well under sand's 40 - it lands where it
                               * falls instead of skittering */
-        },
+        }),
 
-    [MAT_SNOW] =
+    TWIN_ROW(MAT_SNOW,
         {
             .name = "Snow",
             .kind = KIND_POWDER,
@@ -569,21 +580,44 @@ const material_t materials[MATERIAL_MAX] = {
                               * dropping straight, which is most of what
                               * makes it read as snow rather than as pale
                               * sand. */
-        },
+        }),
 
-    /* ONE row for all sixteen extended materials - see MAT_EXTENDED in
-     * material.h. The sweep reads this per cell per step and must not care
-     * which extended material a cell is, so they all move identically:
-     * they do not move at all, and nothing displaces them.
-     *
-     * That sharing is the whole trick, and also the whole limit. Anything
-     * that needs its own density, kind, slip, repose or scatter cannot
-     * live here and needs one of the ordinary slots. */
-    [MAT_EXTENDED] =
+    /* NIBBLE 15's TWO ROWS - not a TWIN_ROW, because the two halves are
+     * genuinely different materials now (see material.h's own comment on
+     * MATERIAL_ROWS). The lower row is ONE shared row for every extended
+     * STATIC - see MAT_EXTENDED in material.h. The sweep reads this per
+     * cell per step and must not care which static a cell is, so they all
+     * move identically: they do not move at all, and nothing displaces
+     * them. That sharing is the whole trick, and also the whole limit:
+     * anything that needs its own density, kind, slip, repose or scatter
+     * cannot live here. */
+    [MATERIAL_ROW(MAT_EXTENDED)] =
         {
             .name = "Extended", .kind = KIND_STATIC, .density = 200, /* stone's figure: undisplaceable, and it
                               * smothers a buried flame the way stone
                               * does */
+        },
+
+    /* GUNPOWDER'S physics - the upper row, reached whenever bit 3 of the
+     * cell's low nibble is set (GUNPOWDER_BASE, material.h). The one
+     * KIND_POWDER material an extended byte can be, which is the entire
+     * reason the split exists - see MATERIAL_ROWS's own comment.
+     *
+     * density 50: between sand's 60 and dirt's 62 above it, and above
+     * water/acid/lava (30/38/45) below it - so both grains of grit sink
+     * THROUGH a bed of powder (fine through fine, the way real sand does
+     * through gunpowder) while gunpowder itself sinks in every liquid on
+     * the board. slip/repose/scatter are starting points, not final - tune
+     * on device like every other constant here; see this branch's plan
+     * for the full rationale. */
+    [MATERIAL_ROW(MAT_EXTENDED) + 1] =
+        {
+            .name = "Gunpowder",
+            .kind = KIND_POWDER,
+            .density = 50,
+            .slip = 80,
+            .repose = 8,
+            .scatter = 30,
         },
 };
 
@@ -907,6 +941,14 @@ const reaction_t reactions[MATERIAL_MAX] = {
          * the gradient was a thing you watched disappear. At 2 it is
          * around 900, and the handover to the dry tones happens slowly
          * enough to read as soil drying out. */
+            .tones = SOIL_DRY_TONES,       /* the table-driven codec's own
+                              * copy of the fixed split above - see
+                              * reaction_t.tones's own comment
+                              * (material.h). MUST agree with
+                              * SOIL_DRY_TONES/SOIL_MOISTURE_MAX, which is
+                              * what test_dirt_moisture_macros_and_codec_
+                              * helpers_agree_on_every_byte pins. */
+            .moist_max = SOIL_MOISTURE_MAX,
             .soaks = 60,
             .dries = 2,
 
@@ -2685,24 +2727,39 @@ material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_col
  * This is where an extended material gets to be itself. The physics row
  * above is shared, so everything that distinguishes one from another lives
  * either here or in the palette. */
-static const char* const extended_names[MATERIAL_EXTENDED_COUNT] = {
+static const char* const extended_names[MATERIAL_EXTENDED_CODES] = {
     [MATX_ICE] = "Ice",
     [MATX_PLANT] = "Plant",
     [MATX_LEAF] = "Leaf",
     [MATX_METAL] = "Metal",
     [MATX_ROOT] = "Root",
+
+    /* GUNPOWDER: all eight codes 0xF8-0xFF (low nibble 8-15) name the same
+     * material - see GUNPOWDER_BASE, material.h. */
+    [8] = "Gunpowder",
+    [9] = "Gunpowder",
+    [10] = "Gunpowder",
+    [11] = "Gunpowder",
+    [12] = "Gunpowder",
+    [13] = "Gunpowder",
+    [14] = "Gunpowder",
+    [15] = "Gunpowder",
 };
 
 const char*
 material_name(cell_t c) {
-    if (cell_is_extended(c)) {
+    /* Tests the whole MAT_EXTENDED nibble, not cell_is_extended() - see
+     * reaction_of()'s own comment (material.h) for why this is the one
+     * other place that has to route both the static and gunpowder halves
+     * of the nibble into the same extended_names[] table. */
+    if (CELL_MATERIAL(c) == MAT_EXTENDED) {
         const char* n = extended_names[CELL_VARIANT(c)];
         return (n != NULL) ? n : "?";
     }
-    return materials[CELL_MATERIAL(c)].name;
+    return material_by_id((material_id_t)CELL_MATERIAL(c))->name;
 }
 
-const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
+const reaction_t extended_reactions[MATERIAL_EXTENDED_CODES] = {
 
     [MATX_ICE] =
         {
@@ -3042,7 +3099,30 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
          * never a budding or sprouting site - the whole of how it
          * spreads is `roots` above, cell eating cell. */
         },
+
+    /* GUNPOWDER'S REACTION ROW, shared by all eight low-nibble codes
+     * 0xF8-0xFF (see GUNPOWDER_BASE, material.h) the same way an ordinary
+     * material's row is shared by its TWIN_ROW pair above - one row, eight
+     * designators, so reaction_of() keeps its single-branch decode.
+     *
+     * PHASE 1: only the CODEC is real. `tones`/`moist_max` give gunpowder
+     * something to paint and shade against (three dry tones, five moisture
+     * levels - narrower than dirt's 8/7 because gunpowder has three bits
+     * to spend, not four - see GUNPOWDER_BASE). Every CHEMISTRY field -
+     * `soaks`, `flammability`, `dissolvable`, everything below `tones` in
+     * reaction_t - stays zero, so gunpowder is chemically inert until a
+     * later phase gives it a fuse. */
+#define GUNPOWDER_REACTION { .tones = 3, .moist_max = 5 }
+    [8] = GUNPOWDER_REACTION,
+    [9] = GUNPOWDER_REACTION,
+    [10] = GUNPOWDER_REACTION,
+    [11] = GUNPOWDER_REACTION,
+    [12] = GUNPOWDER_REACTION,
+    [13] = GUNPOWDER_REACTION,
+    [14] = GUNPOWDER_REACTION,
+    [15] = GUNPOWDER_REACTION,
 };
+#undef GUNPOWDER_REACTION
 
 const gfx_color_t*
 material_palette(void) {

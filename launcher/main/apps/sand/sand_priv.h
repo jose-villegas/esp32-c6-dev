@@ -206,7 +206,7 @@ static inline uint16_t liquid_mask(void)
 {
     uint16_t mask = 0;
     for (int m = 0; m < MATERIAL_MAX; m++) {
-        if (materials[m].kind == KIND_LIQUID) {
+        if (material_by_id((material_id_t)m)->kind == KIND_LIQUID) {
             mask |= (uint16_t)(1u << m);
         }
     }
@@ -794,13 +794,13 @@ static inline void latch_content_flags(sand_t *s, cell_t cell)
      * when a soaker has anything to do; a cell already holding moisture
      * arms it because drying has to outlive the puddle.
      *
-     * CELL_MOISTURE(), not the raw variant - a dry cell's variant is a
-     * TONE (material.h's own comment on soil's state split), and testing
-     * the whole nibble latched this for SOIL_DRY_TONES - 1 of every
-     * SOIL_DRY_TONES dry cells for good, arming the soak/dry pass forever
-     * on soil that was never wet at all. */
+     * moisture_of(), not the raw code - a dry cell's code is a TONE
+     * (material.h's own comment on the moisture codec), and testing the
+     * whole code latched this for `tones - 1` of every `tones` dry cells
+     * for good, arming the soak/dry pass forever on soil that was never wet
+     * at all. */
     if (mat->kind == KIND_LIQUID ||
-        (r->dries != 0 && CELL_MOISTURE(cell) != 0)) {
+        (r->dries != 0 && moisture_of(cell, r) != 0)) {
         s->may_have_moisture = true;
     }
 }

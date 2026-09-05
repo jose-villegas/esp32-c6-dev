@@ -40,12 +40,13 @@
 /* And how far it JUMPS each time, rather than stepping to the next
  * shade along. Walking the band one shade at a time put consecutive
  * pours two shades apart - about twenty points of luminance, which is
- * a layer you have to look for. Five is coprime with both 12 (sand's
- * dune band), 16 (snow's) and 8 (dirt's dry tones, SOIL_DRY_TONES), so
- * it still visits every shade before repeating, it just does not visit
- * them in order. Any span this stride has to serve belongs in that list:
- * a span sharing a factor with 5 would quietly stop reaching some of its
- * shades at all. */
+ * a layer you have to look for. Five is coprime with 12 (sand's dune
+ * band), 16 (snow's), 8 (dirt's dry tones, SOIL_DRY_TONES) and 3
+ * (gunpowder's dry tones, GUNPOWDER_REACTION's `.tones`), so it still
+ * visits every shade before repeating, it just does not visit them in
+ * order. Any span this stride has to serve belongs in that list: a span
+ * sharing a factor with 5 would quietly stop reaching some of its shades
+ * at all. */
 #define POUR_BAND_STRIDE 5u
 
 /* `band` is where in the shade band this pour is centred, worked out
@@ -58,14 +59,14 @@ static cell_t random_cell(sand_t *s, material_id_t material, int band)
 {
     /* A liquid's variant is an amount, not a shade, so a fresh cell is a full
      * one. Giving it a random level would be pouring random quantities. */
-    if (materials[material].kind == KIND_LIQUID) {
+    if (material_by_id(material)->kind == KIND_LIQUID) {
         return CELL_MAKE(material, MASS_MAX);
     }
     /* A transient material's variant is life remaining, not a shade either -
      * see material.h's top comment and the `decay` field it documents.
      * Fresh gas starts at full life so it fades from vivid to gone, rather
      * than spawning already partway decayed. */
-    if (materials[material].decay != 0) {
+    if (material_by_id(material)->decay != 0) {
         return CELL_MAKE(material, MATERIAL_VARIANTS - 1);
     }
     /* A heat-ramping material's variant is a TEMPERATURE, not a shade
@@ -102,13 +103,18 @@ static cell_t random_cell(sand_t *s, material_id_t material, int band)
      * uniformity to speak before this, and now speaks the way a dune
      * always could. */
     if (reactions[material].dries != 0) {
+        const reaction_t *r = &reactions[material];
         int tone = band + (int)rng_below(&s->rng, 3) - 1;
         if (tone < 0) {
             tone = 0;
-        } else if (tone >= SOIL_DRY_TONES) {
-            tone = SOIL_DRY_TONES - 1;
+        } else if (tone >= r->tones) {
+            tone = r->tones - 1;
         }
-        return CELL_SOIL(material, (uint8_t)tone, 0);
+        /* soil_cell(), the table-driven form of CELL_SOIL() - see
+         * material.h. Byte-identical for dirt (r->tones ==
+         * SOIL_DRY_TONES), and the form that keeps working if a second
+         * material ever sets `dries != 0`. */
+        return soil_cell(CELL_MAKE(material, 0), (uint8_t)tone, 0, r);
     }
     /* Not the whole range: sand keeps its top four shades for cullet, so
      * a painted dune can never accidentally contain grains that claim to
@@ -132,6 +138,28 @@ static cell_t random_cell(sand_t *s, material_id_t material, int band)
         shade = span - 1;
     }
     return CELL_MAKE(material, (uint8_t)shade);
+}
+
+/* GUNPOWDER'S own picker - random_cell() above cannot take it, because it
+ * is not a plain material_id_t: gunpowder's identity bits are the top five
+ * bits of the byte, not a nibble random_cell() could CELL_MAKE() from. Its
+ * variant is a dry TONE, exactly like dirt's own branch in random_cell()
+ * above (band +/- 1, clamped) - just over the narrower span gunpowder's
+ * three bits actually have room for (GUNPOWDER_REACTION's `.tones`, see
+ * material.c), and built through GUNPOWDER_CELL() instead of CELL_SOIL().
+ * `band` arrives already folded into that span - see
+ * material_shade_span_cell(), which sand_spawn_cell() uses for exactly
+ * this reason. */
+static cell_t random_gunpowder(sand_t *s, int band)
+{
+    const reaction_t *r = reaction_of(GUNPOWDER_BASE);
+    int tone = band + (int)rng_below(&s->rng, 3) - 1;
+    if (tone < 0) {
+        tone = 0;
+    } else if (tone >= r->tones) {
+        tone = r->tones - 1;
+    }
+    return GUNPOWDER_CELL((uint8_t)tone);
 }
 
 /*---------------------------------------------------------------------------
@@ -316,13 +344,15 @@ static bool try_spawn_one(sand_t *s, int x, int y, cell_t spec, int band)
      * helper sand_set() uses, because this list existing twice is what
      * let the brush and the setter disagree about snow.
      *
-     * An extended material is written exactly as given: its low nibble is
+     * An extended STATIC is written exactly as given: its low nibble is
      * its identity, so there is no variant for random_cell() to pick and
-     * picking one would change which material it is. */
-    const cell_t cell = cell_is_extended(spec)
-                        ? spec
-                        : random_cell(s, (material_id_t)CELL_MATERIAL(spec),
-                                      band);
+     * picking one would change which material it is. Gunpowder is neither
+     * a static nor a plain id - it gets its own picker, random_gunpowder(),
+     * for the tone its own three identity-adjacent bits actually hold. */
+    const cell_t cell = cell_is_extended(spec)  ? spec
+                        : cell_is_gunpowder(spec) ? random_gunpowder(s, band)
+                                                  : random_cell(s, (material_id_t)CELL_MATERIAL(spec),
+                                                                band);
     s->cells[y * s->w + x] = cell;
     latch_content_flags(s, cell);
     mark_move(s, x, y, x, y);
@@ -338,8 +368,11 @@ int sand_spawn_cell(sand_t *s, int cx, int cy, int radius, cell_t spec)
 {
     int filled = 0;
     const int r2 = radius * radius;
-    /* Once for the whole brushful - see random_cell(). */
-    const int span = MATERIAL_SHADE_SPAN((material_id_t)CELL_MATERIAL(spec));
+    /* Once for the whole brushful - see random_cell(). material_shade_span_
+     * cell(), not the plain id-only macro, because `spec` may be gunpowder
+     * (whose span is 3, read off its own reaction row) rather than a
+     * material_id_t CELL_MATERIAL() could safely extract a span for. */
+    const int span = material_shade_span_cell(spec);
     const int band = (int)(((s->pour_phase >> POUR_BAND_SHIFT) *
                             POUR_BAND_STRIDE) % (unsigned)span);
 
@@ -1435,7 +1468,7 @@ static void compute_driven(bool driven[MATERIAL_MAX][2], const int *slide_a,
                            const int *slide_b, int gx, int gy)
 {
     for (int m = 0; m < MATERIAL_MAX; m++) {
-        const int repose = materials[m].repose;
+        const int repose = material_by_id((material_id_t)m)->repose;
         driven[m][0] = driven_by_gravity(slide_a[0], slide_a[1], gx, gy, repose);
         driven[m][1] = driven_by_gravity(slide_b[0], slide_b[1], gx, gy, repose);
     }
@@ -2175,12 +2208,11 @@ static void impulse_charge_displacement(sand_t *s, impulse_t *entry,
     const int w = s->w;
     const size_t old_index = entry->index;
     const cell_t displaced = s->cells[new_index];
-    const uint8_t mat_id = CELL_MATERIAL(entry->cell);
     const uint8_t impact_speed = entry->speed;
 
     if (!CELL_IS_EMPTY(displaced) &&
-        (materials[mat_id].kind == KIND_STATIC ||
-         materials[mat_id].kind == KIND_POWDER)) {
+        (material_of(entry->cell)->kind == KIND_STATIC ||
+         material_of(entry->cell)->kind == KIND_POWDER)) {
         const uint8_t drag = impulse_drag_of(displaced);
         entry->speed = (entry->speed > drag) ? (uint8_t)(entry->speed - drag)
                                               : 0;
@@ -2524,7 +2556,7 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * falling" to "still has outward energy left", which is
          * backwards - the whole point is that it keeps falling well
          * after the outward push has spent itself. */
-        if (materials[mat_id].kind == KIND_STATIC) {
+        if (material_of(entry.cell)->kind == KIND_STATIC) {
             const int gx = (int)((unsigned)entry.index % (unsigned)w);
             const int gy = (int)((unsigned)entry.index / (unsigned)w);
             int gcand[3][2];
@@ -2811,7 +2843,7 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * test_a_chunk_stacked_on_an_in_flight_chunk_waits_instead_of_
          * settling_and_both_eventually_land (suite_sand.c). */
         if (!rolled_move) {
-            if (materials[mat_id].kind == KIND_STATIC) {
+            if (material_of(entry.cell)->kind == KIND_STATIC) {
                 const int rx = (int)((unsigned)entry.index % (unsigned)w);
                 const int ry = (int)((unsigned)entry.index / (unsigned)w);
                 int rcand[3][2];
@@ -2864,7 +2896,7 @@ static void step_impulses(sand_t *s, int dx, int dy)
                         }
                     }
                 }
-            } else if (materials[mat_id].kind == KIND_POWDER &&
+            } else if (material_of(entry.cell)->kind == KIND_POWDER &&
                        entry.speed >= SAND_IMPULSE_BOUNCE_MIN_SPEED) {
                 /* A THROWN GRAIN GETS THE SAME "STILL AIRBORNE, DON'T
                  * SETTLE" TREATMENT A THROWN CHUNK ALREADY GETS, ABOVE -
@@ -3060,8 +3092,8 @@ static void step_impulses(sand_t *s, int dx, int dy)
                  * wall mostly intact. */
                 if (mat_id == MAT_WATER || mat_id == MAT_ACID) {
                     entry.dir = (entry.dir + 4) & 7;
-                } else if ((materials[mat_id].kind == KIND_STATIC ||
-                            materials[mat_id].kind == KIND_POWDER) &&
+                } else if ((material_of(entry.cell)->kind == KIND_STATIC ||
+                            material_of(entry.cell)->kind == KIND_POWDER) &&
                            entry.speed >= SAND_IMPULSE_BOUNCE_MIN_SPEED) {
                     const int normal = blocker_normal(s, x, y, entry.dir);
                     const int reflected = (normal < 0)

@@ -5518,7 +5518,7 @@ static void test_the_brush_and_the_setter_agree_about_every_material(void)
 
         char why[96];
         snprintf(why, sizeof why,
-                 "brush and setter disagree about %s", materials[m].name);
+                 "brush and setter disagree about %s", material_by_id((material_id_t)m)->name);
         TEST_ASSERT_EQUAL_MESSAGE(s.may_have_liquid,      b_liquid, why);
         TEST_ASSERT_EQUAL_MESSAGE(s.may_have_gas,         b_gas,    why);
         TEST_ASSERT_EQUAL_MESSAGE(s.may_have_burning,     b_burn,   why);
@@ -5953,7 +5953,7 @@ static void test_an_edge_shows_less_temperature_than_the_body(void)
                  "%s: an edge must travel less than the body between rest "
                  "and full heat, or the outline changes with the "
                  "temperature and the shape stops reading",
-                 materials[m].name);
+                 material_by_id((material_id_t)m)->name);
 
         TEST_ASSERT_TRUE_MESSAGE(colour_gap(rest_edge, hot_edge) <
                                  colour_gap(rest_body, hot_body), why);
@@ -5990,7 +5990,7 @@ static void test_each_material_is_painted_the_way_it_should_be(void)
                 material_colours(c, 0u, 0u, 255u, col);
 
             char why[128];
-            snprintf(why, sizeof why, "%s variant %d", materials[m].name, v);
+            snprintf(why, sizeof why, "%s variant %d", material_by_id((material_id_t)m)->name, v);
 
             if (m == MAT_GLASS) {
                 TEST_ASSERT_EQUAL_MESSAGE(MATERIAL_HATCHED, pat, why);
@@ -6006,7 +6006,7 @@ static void test_each_material_is_painted_the_way_it_should_be(void)
                  * than as fire. */
                 TEST_ASSERT_EQUAL_MESSAGE(
                     v == 0 ? MATERIAL_SPECKLED : MATERIAL_FLAT, pat, why);
-            } else if (materials[m].kind == KIND_LIQUID) {
+            } else if (material_by_id((material_id_t)m)->kind == KIND_LIQUID) {
                 /* mask 0 here (this loop never passes anything else), so
                  * this is the INTERIOR case - see material_colours()'s own
                  * comment on why that paints the full body colour rather
@@ -7831,7 +7831,7 @@ static void test_every_liquid_interior_is_exactly_the_body_colour_when_saturated
                  "%s's deepest interior cell must paint EXACTLY the plain "
                  "body colour, with no shift left at all, now that every "
                  "liquid shares the same saturating shade-index mechanism",
-                 materials[id].name);
+                 material_by_id((material_id_t)id)->name);
         TEST_ASSERT_EQUAL_MESSAGE(body, col[0], why);
     }
 }
@@ -10100,7 +10100,7 @@ static void test_only_water_foams(void)
                      "%s at maximum rim curvature must paint exactly what "
                      "it painted before foam existed, at hash %u - only "
                      "water may foam",
-                     materials[id].name, hash);
+                     material_by_id((material_id_t)id)->name, hash);
             TEST_ASSERT_EQUAL_MESSAGE(plain, col[0], why);
         }
     }
@@ -10744,7 +10744,7 @@ static void test_cover_primitive_matches_the_exhaustive_shape_table(void)
     sand_clear(&s);
     const int cx = W / 2, cy = H / 2;
     sand_set(&s, cx, cy, CELL_MAKE(MAT_LAVA, MASS_MAX));
-    const uint8_t density = materials[MAT_LAVA].density;
+    const uint8_t density = material_by_id((material_id_t)MAT_LAVA)->density;
 
     for (int g = 0; g < 8; g++) {
         const int *grav = ring_dir(g);
@@ -11136,7 +11136,7 @@ static void test_a_powder_lands_on_a_powder_but_sinks_in_a_liquid(void)
         for (int y = H - 4; y < H - 1; y++) {
             for (int x = 0; x < W; x++) {
                 sand_set(&s, x, y,
-                         materials[bed].kind == KIND_LIQUID
+                         material_by_id((material_id_t)bed)->kind == KIND_LIQUID
                              ? CELL_MAKE(bed, MASS_MAX) : CELL_MAKE(bed, 4));
             }
         }
@@ -11191,8 +11191,8 @@ static void test_a_powder_lands_on_a_powder_but_sinks_in_a_liquid(void)
 
         char why[160];
         snprintf(why, sizeof why,
-                 "%s dropped on %s should %s", materials[dropped].name,
-                 materials[bed].name,
+                 "%s dropped on %s should %s", material_by_id((material_id_t)dropped)->name,
+                 material_by_id((material_id_t)bed)->name,
                  cases[k].sinks ? "sink through it - density decides fluids"
                                 : "land on top of it - grains do not pass "
                                   "through grains");
@@ -15379,25 +15379,25 @@ static void test_metal_shine_does_not_vary_between_cells(void)
 static void test_the_air_agrees_about_weight_speed_and_lifetime(void)
 {
     /* Lighter rises faster. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(materials[MAT_SMOKE].density,
-        materials[MAT_STEAM].density, "steam must be lighter than smoke");
-    TEST_ASSERT_LESS_THAN_MESSAGE(materials[MAT_GAS].density,
-        materials[MAT_SMOKE].density, "smoke must be lighter than gas");
+    TEST_ASSERT_LESS_THAN_MESSAGE(material_by_id((material_id_t)MAT_SMOKE)->density,
+        material_by_id((material_id_t)MAT_STEAM)->density, "steam must be lighter than smoke");
+    TEST_ASSERT_LESS_THAN_MESSAGE(material_by_id((material_id_t)MAT_GAS)->density,
+        material_by_id((material_id_t)MAT_SMOKE)->density, "smoke must be lighter than gas");
 
-    TEST_ASSERT_GREATER_THAN_MESSAGE(materials[MAT_SMOKE].mobility,
-        materials[MAT_STEAM].mobility, "steam must move faster than smoke");
-    TEST_ASSERT_GREATER_THAN_MESSAGE(materials[MAT_GAS].mobility,
-        materials[MAT_SMOKE].mobility, "smoke must move faster than gas");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(material_by_id((material_id_t)MAT_SMOKE)->mobility,
+        material_by_id((material_id_t)MAT_STEAM)->mobility, "steam must move faster than smoke");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(material_by_id((material_id_t)MAT_GAS)->mobility,
+        material_by_id((material_id_t)MAT_SMOKE)->mobility, "smoke must move faster than gas");
 
     /* And the lighter it is, the sooner it is gone: decay is a chance to
      * tick DOWN, so a bigger figure is a shorter life. */
-    TEST_ASSERT_LESS_OR_EQUAL_INT_MESSAGE(materials[MAT_SMOKE].decay,
-        materials[MAT_STEAM].decay,
+    TEST_ASSERT_LESS_OR_EQUAL_INT_MESSAGE(material_by_id((material_id_t)MAT_SMOKE)->decay,
+        material_by_id((material_id_t)MAT_STEAM)->decay,
         "steam must not fade FASTER than smoke - equal or slower is fine, "
         "steam's own decay has moved either way over time, just not "
         "reversed past smoke's entirely");
-    TEST_ASSERT_GREATER_THAN_MESSAGE(materials[MAT_GAS].decay,
-        materials[MAT_SMOKE].decay,
+    TEST_ASSERT_GREATER_THAN_MESSAGE(material_by_id((material_id_t)MAT_GAS)->decay,
+        material_by_id((material_id_t)MAT_SMOKE)->decay,
         "and smoke sooner than gas - the heaviest, slowest thing in the "
         "air must be the last to go, or a pocket of it cannot be built "
         "with");
@@ -15726,11 +15726,12 @@ static void test_every_material_has_a_palette_block(void)
                  "%s (id %d) has %d of %d palette entries set - a block "
                  "that is missing or misaligned renders black, and black "
                  "is not an error anyone sees as one",
-                 materials[m].name, m, set, MATERIAL_VARIANTS);
+                 material_by_id((material_id_t)m)->name, m, set,
+                 MATERIAL_VARIANTS);
         TEST_ASSERT_EQUAL_INT_MESSAGE(MATERIAL_VARIANTS, set, why);
     }
 
-    /* And the extended range, whose entries are one per material rather
+    /* And the extended STATICS, whose entries are one per material rather
      * than a block each - the same failure, one level down. */
     for (int k = 0; k < MATERIAL_EXTENDED_COUNT; k++) {
         char why[128];
@@ -15738,6 +15739,18 @@ static void test_every_material_has_a_palette_block(void)
                  "extended material %d (cell 0x%02X) has no colour", k,
                  (unsigned)MATX(k));
         TEST_ASSERT_NOT_EQUAL_MESSAGE(0, pal[MATX(k)], why);
+    }
+
+    /* And GUNPOWDER's half of the same nibble - see GUNPOWDER_BASE
+     * (material.h). Phase 1 leaves these on the shared magenta placeholder
+     * (material.c's palette tail already reaches 0xFF), which is enough to
+     * satisfy "not black"; Phase 2 gives them real colours. */
+    for (int v = 0; v < 8; v++) {
+        char why[128];
+        snprintf(why, sizeof why,
+                 "gunpowder variant %d (cell 0x%02X) has no colour", v,
+                 (unsigned)GUNPOWDER_CELL(v));
+        TEST_ASSERT_NOT_EQUAL_MESSAGE(0, pal[GUNPOWDER_CELL(v)], why);
     }
 }
 
@@ -15762,7 +15775,7 @@ static void test_ice_is_its_own_colour(void)
                 char why[128];
                 snprintf(why, sizeof why,
                          "ice shares a colour with %s variant %d",
-                         materials[m].name, v);
+                         material_by_id((material_id_t)m)->name, v);
                 TEST_FAIL_MESSAGE(why);
             }
         }
@@ -15792,6 +15805,26 @@ static void test_an_extended_material_survives_being_painted(void)
         TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_EXTENDED, CELL_MATERIAL(got), why);
         TEST_ASSERT_EQUAL_INT_MESSAGE(k, CELL_VARIANT(got), why);
     }
+
+    /* GUNPOWDER'S identity is being gunpowder AT ALL - unlike a static's
+     * low nibble, its low THREE bits are a TONE (random_gunpowder(),
+     * sand.c), not a second material to preserve byte-exact, so a paint
+     * may pick any of the three dry tones without that being the bug this
+     * test exists to catch. What must never happen is a gunpowder spec
+     * coming back as an extended STATIC or an ordinary material - see
+     * test_painted_gunpowder_starts_dry_in_one_of_three_tones for the tone
+     * distribution itself. */
+    for (int v = 0; v < 8; v++) {
+        sand_clear(&s);
+        sand_spawn_cell(&s, W / 2, H / 2, 0, GUNPOWDER_CELL(v));
+        const cell_t got = sand_at(&s, W / 2, H / 2);
+
+        char why[96];
+        snprintf(why, sizeof why,
+                 "gunpowder spec 0x%02X came back as 0x%02X",
+                 (unsigned)GUNPOWDER_CELL(v), got);
+        TEST_ASSERT_TRUE_MESSAGE(cell_is_gunpowder(got), why);
+    }
 }
 
 /* They share one physics row, and that is the deal.
@@ -15814,19 +15847,41 @@ static void test_every_extended_material_shares_one_physics_row(void)
         "the shared row has to be an inert solid - anything that moves "
         "needs its own physics, which is exactly what the extended range "
         "cannot give it");
+
+    /* GUNPOWDER shares ITS OWN one row across all eight of its codes - the
+     * same deal as the statics above, one level up: material_of() still
+     * decodes nothing finer than "which half of nibble 15" (MATERIAL_ROWS,
+     * material.h), so gunpowder's eight tones move identically to each
+     * other too. That row is a SEPARATE row from the statics' - the whole
+     * point of the split - and it is the one KIND_POWDER extended-range
+     * physics gets. */
+    const material_t *powder = material_of(GUNPOWDER_CELL(0));
+    for (int v = 0; v < 8; v++) {
+        char why[96];
+        snprintf(why, sizeof why, "gunpowder variant %d", v);
+        TEST_ASSERT_EQUAL_PTR_MESSAGE(powder, material_of(GUNPOWDER_CELL(v)),
+                                      why);
+    }
+    TEST_ASSERT_NOT_EQUAL_PTR_MESSAGE(first, powder,
+        "gunpowder must NOT read the statics' shared row - that is the "
+        "entire reason the hot table grew a second row for nibble 15");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(KIND_POWDER, powder->kind,
+        "gunpowder is the one extended-range material that moves");
 }
 
 /* Same fact as the test above, asserted again on purpose - this one exists
  * for a different reader. The rule deciding which materials may be
  * emitters (see sand_add_emitter() in sand.h) is KIND_POWDER/LIQUID/GAS
  * may, KIND_STATIC may not - a static source would bury itself on its
- * first step and jam forever. That rule has to ask material_of(c)->kind,
- * and material_of() deliberately does not decode the extended range (see
- * material.h), so Ice, Plant, Leaf and Metal all answer that question
- * through this one shared row. The derivation gives the right answer
- * TODAY only because every extended material happens to be static - it is
- * not a per-material fact, and a future flowing extended material would be
- * silently misclassified as ineligible to emit.
+ * first step and jam forever. That rule has to ask material_of(c)->kind.
+ *
+ * Since the hot table split (MATERIAL_ROWS, material.h), material_of() DOES
+ * tell gunpowder apart from an extended static - they are different rows
+ * now. Ice, Plant, Leaf, Metal and Root still answer the emitter question
+ * through ONE shared row, and that row still has to stay KIND_STATIC for
+ * the derivation below to hold for them; gunpowder answers through its OWN
+ * row, which is KIND_POWDER on purpose - it is the one extended-range
+ * material meant to emit.
  *
  * This cannot be a _Static_assert: materials[] is `extern const`, so its
  * contents are not a constant expression the preprocessor or compiler can
@@ -15836,13 +15891,25 @@ static void test_every_extended_material_shares_one_physics_row(void)
  * assumption exists. */
 static void test_the_extended_row_being_static_is_what_emitter_eligibility_leans_on(void)
 {
-    TEST_ASSERT_EQUAL_INT_MESSAGE(KIND_STATIC, materials[MAT_EXTENDED].kind,
+    TEST_ASSERT_EQUAL_INT_MESSAGE(KIND_STATIC,
+        material_by_id(MAT_EXTENDED)->kind,
         "the emitter-eligibility rule (KIND_POWDER/LIQUID/GAS may emit, "
         "KIND_STATIC may not) reads this row via material_of(), which "
-        "cannot tell one extended material from another - if this ever "
-        "stops being KIND_STATIC, that rule must be revisited PER "
-        "extended material rather than left to derive an answer from a "
-        "row shared by all sixteen");
+        "cannot tell one STATIC from another - if this ever stops being "
+        "KIND_STATIC, that rule must be revisited PER extended material "
+        "rather than left to derive an answer from a row shared by all "
+        "eight");
+    TEST_ASSERT_FALSE_MESSAGE(material_can_emit(MATX(MATX_ICE)),
+        "a static must not be emitter-eligible");
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(KIND_POWDER,
+        material_of(GUNPOWDER_CELL(0))->kind,
+        "gunpowder is the one extended-range material meant to emit, and "
+        "its own row - not the statics' - is what material_can_emit() "
+        "actually reads for it now that the two are separate rows");
+    TEST_ASSERT_TRUE_MESSAGE(material_can_emit(GUNPOWDER_CELL(0)),
+        "gunpowder must be emitter-eligible, unlike every other "
+        "extended-range byte");
 }
 
 /* But they get their own reactions, which is the point of the range. */
@@ -15856,6 +15923,141 @@ static void test_extended_materials_get_their_own_reactions(void)
         "and an extended material that has not been defined must not "
         "inherit the reactions of one that has - they are separate rows, "
         "not one shared row like the physics");
+}
+
+/* Every ordinary material's row was written ONCE (material.c's TWIN_ROW
+ * macro) and has to land in BOTH halves of its row pair - variant 0 hashes
+ * to MATERIAL_ROW(id), variant 15 to MATERIAL_ROW(id) + 1 (cell >> 3 turns
+ * on the top bit of the low nibble - see MATERIAL_ROWS, material.h) - and
+ * material_of() must return the identical row either way, or a grain of
+ * the same material could quietly behave differently depending on which
+ * half of its shade band it happened to be painted into. */
+static void test_every_ordinary_material_has_identical_twin_rows(void)
+{
+    for (int id = 0; id < MAT_EXTENDED; id++) {
+        const material_t *lo = material_of(CELL_MAKE(id, 0));
+        const material_t *hi = material_of(CELL_MAKE(id, 15));
+        char why[64];
+        snprintf(why, sizeof why, "material id %d (%s)",
+                 id, material_by_id((material_id_t)id)->name);
+        TEST_ASSERT_EQUAL_MEMORY_MESSAGE(lo, hi, sizeof(*lo), why);
+    }
+}
+
+/* NIBBLE 15's TWO ROWS, checked directly against the byte ranges that
+ * define them (GUNPOWDER_BASE, material.h): every byte 0xF0-0xF7 must
+ * read as an extended STATIC and nothing else, every byte 0xF8-0xFF must
+ * read as GUNPOWDER and nothing else, and the two must never agree with
+ * each other about which is which - that partition is the entire point
+ * of splitting the hot table by `cell >> 3` instead of `cell >> 4`. */
+static void test_the_extended_half_rows_are_static_and_powder(void)
+{
+    for (int v = 0; v < 8; v++) {
+        const cell_t stat = MATX(v);
+        char why[48];
+        snprintf(why, sizeof why, "static code %d", v);
+        TEST_ASSERT_TRUE_MESSAGE(cell_is_extended(stat), why);
+        TEST_ASSERT_FALSE_MESSAGE(cell_is_gunpowder(stat), why);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(KIND_STATIC, material_of(stat)->kind, why);
+    }
+    for (int v = 0; v < 8; v++) {
+        const cell_t pow = GUNPOWDER_CELL(v);
+        char why[48];
+        snprintf(why, sizeof why, "gunpowder code %d", v);
+        TEST_ASSERT_FALSE_MESSAGE(cell_is_extended(pow), why);
+        TEST_ASSERT_TRUE_MESSAGE(cell_is_gunpowder(pow), why);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(KIND_POWDER, material_of(pow)->kind, why);
+    }
+}
+
+/* THE MACROS AND THE TABLE-DRIVEN HELPERS MUST AGREE, for every one of
+ * dirt's sixteen possible bytes - this is what makes it safe to leave
+ * CELL_MOISTURE()/CELL_WITH_MOISTURE()/CELL_SOIL() in place for the many
+ * existing tests that already use them while the ENGINE (sand_reactions.c,
+ * sand_priv.h, sand.c) reads through moisture_of()/with_moisture()/
+ * soil_cell() instead (material.h). If the two ever disagreed, dirt's own
+ * behaviour would fork depending on which path happened to touch a cell. */
+static void test_dirt_moisture_macros_and_codec_helpers_agree_on_every_byte(void)
+{
+    const reaction_t *r = &reactions[MAT_DIRT];
+    const cell_t base = CELL_MAKE(MAT_DIRT, 0);
+
+    for (int v = 0; v < MATERIAL_VARIANTS; v++) {
+        const cell_t c = CELL_MAKE(MAT_DIRT, v);
+        char why[64];
+        snprintf(why, sizeof why, "dirt variant %d", v);
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE((uint8_t)CELL_MOISTURE(c),
+            moisture_of(c, r), why);
+    }
+
+    for (int m = 1; m <= SOIL_MOISTURE_MAX; m++) {
+        char why[64];
+        snprintf(why, sizeof why, "moisture level %d", m);
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(CELL_WITH_MOISTURE(base, (uint8_t)m),
+            with_moisture(base, (uint8_t)m, r), why);
+    }
+
+    for (int tone = 0; tone < SOIL_DRY_TONES; tone++) {
+        char why[64];
+        snprintf(why, sizeof why, "dry tone %d", tone);
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(CELL_SOIL(MAT_DIRT, tone, 0),
+            soil_cell(base, (uint8_t)tone, 0, r), why);
+    }
+    for (int m = 1; m <= SOIL_MOISTURE_MAX; m++) {
+        char why[64];
+        snprintf(why, sizeof why, "soil built wet at moisture %d", m);
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(CELL_SOIL(MAT_DIRT, 0, m),
+            soil_cell(base, 0, (uint8_t)m, r), why);
+    }
+}
+
+/* PAINTED GUNPOWDER: dry TONE, never moisture - the same claim
+ * test_new_dirt_starts_dry_in_a_random_tone makes for dirt, extended to
+ * gunpowder's narrower three-tone codec and its own picker
+ * (random_gunpowder(), sand.c) instead of random_cell(). Several pours,
+ * the pour clock jumped between them the way
+ * test_consecutive_dirt_pours_land_on_different_bands does, because one
+ * pour's own +/-1 jitter around a single band is not guaranteed to visit
+ * every one of only three tones by itself. */
+static void test_painted_gunpowder_starts_dry_in_one_of_three_tones(void)
+{
+    fixture();
+    sand_clear(&s);
+
+    const uint8_t tones = reaction_of(GUNPOWDER_BASE)->tones;
+    bool seen[8];
+    memset(seen, 0, sizeof seen);
+    int distinct = 0;
+
+    for (int i = 0; i < W * H / 2; i++) {
+        s.pour_phase = (uint32_t)i << 6; /* one POUR_BAND_SHIFT tick per pour -
+                                          * see sand.c, not exposed here */
+        sand_spawn_cell(&s, i % W, i / W, 0, GUNPOWDER_CELL(0));
+        const cell_t c = sand_at(&s, i % W, i / W);
+
+        TEST_ASSERT_TRUE_MESSAGE(cell_is_gunpowder(c),
+            "a gunpowder spec must come back as gunpowder");
+
+        const uint8_t code = (uint8_t)(c & 0x07);
+        char why[64];
+        snprintf(why, sizeof why, "gunpowder code %d", code);
+        /* code >= tones would be a MOISTURE level - see material.h's
+         * moisture codec comment - and a freshly poured grain arriving
+         * already wet is exactly the bug random_cell()'s own dirt branch
+         * exists to avoid, now on gunpowder's picker instead. */
+        TEST_ASSERT_TRUE_MESSAGE(code < tones, why);
+        if (!seen[code]) {
+            seen[code] = true;
+            distinct++;
+        }
+    }
+
+    char why[128];
+    snprintf(why, sizeof why,
+             "only %d of %d dry tones appeared over %d pours - "
+             "random_gunpowder() should eventually visit all of them",
+             distinct, tones, W * H / 2);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(tones, distinct, why);
 }
 
 /* Ice does what it exists for: it cracks hot glass, and it stays put.
@@ -16839,7 +17041,7 @@ static void test_a_little_acid_cannot_eat_an_unlimited_amount(void)
 static void test_every_liquid_declares_a_mobility(void)
 {
     for (int m = 0; m < MATERIAL_MAX; m++) {
-        if (materials[m].kind != KIND_LIQUID) {
+        if (material_by_id((material_id_t)m)->kind != KIND_LIQUID) {
             continue;
         }
         char msg[160];
@@ -16847,8 +17049,8 @@ static void test_every_liquid_declares_a_mobility(void)
                  "%s is a liquid and must set its own `mobility` - leaving "
                  "it unset does not read as an error, it reads as a very "
                  "viscous liquid, which is how it lasts",
-                 materials[m].name);
-        TEST_ASSERT_NOT_EQUAL_MESSAGE(0, materials[m].mobility, msg);
+                 material_by_id((material_id_t)m)->name);
+        TEST_ASSERT_NOT_EQUAL_MESSAGE(0, material_by_id((material_id_t)m)->mobility, msg);
     }
 }
 
@@ -18777,7 +18979,7 @@ static void test_dry_dirt_smelting_reaches_both_metal_and_stone(void)
  * above kept passing right through the regression.
  *
  * Fire rises and burns itself out in around forty steps
- * (materials[MAT_FIRE].decay), so exactly like
+ * (material_by_id((material_id_t)MAT_FIRE)->decay), so exactly like
  * test_a_fire_held_long_enough_melts_glass_to_lava it has to be
  * re-placed every step rather than dropped once and left unattended. */
 static void test_a_held_flame_smelts_dirt_as_lava_does(void)
@@ -18915,7 +19117,7 @@ static void test_sand_still_becomes_glass_beside_the_new_dirt_branch(void)
 
 /* Steps until MAT_STEAM appears past a `wall_len`-cell wall of
  * `wall_cell`, heated by an immortal LAVA source rather than fire. Fire
- * decays away in around forty steps (materials[MAT_FIRE].decay), which
+ * decays away in around forty steps (material_by_id((material_id_t)MAT_FIRE)->decay), which
  * would cap how many attempts a slow conductor ever gets and confuse
  * "does it conduct at all" with "did the fire survive long enough to
  * find out". Lava never decays (`decay` MUST stay 0 - see its own row
@@ -20237,7 +20439,7 @@ static void test_an_emitter_and_sand_spawn_cell_agree_about_every_material(void)
                  "byte is the unresolved placeholder (variant 0) rather "
                  "than spawned's, the emitter is writing the brush's raw "
                  "byte instead of resolving it",
-                 materials[m].name);
+                 material_by_id((material_id_t)m)->name);
         TEST_ASSERT_EQUAL_UINT8_MESSAGE(spawned, emitted, why);
     }
 }
@@ -22049,7 +22251,7 @@ static void plow_build(sand_t *g, uint8_t *cells, impulse_t *buf, int buf_max,
     }
 
     enum { DIR_RIGHT = 2 };
-    if (materials[mover].kind == KIND_STATIC) {
+    if (material_by_id((material_id_t)mover)->kind == KIND_STATIC) {
         sand_impulse_dislodge(g, 1, 0, DIR_RIGHT, 255, SAND_IMPULSE_SPEED_RAMP);
     } else {
         sand_impulse(g, 1, 0, DIR_RIGHT, 255);
@@ -29741,6 +29943,10 @@ void run_sand_suite(void)
     RUN_TEST(test_every_extended_material_shares_one_physics_row);
     RUN_TEST(test_the_extended_row_being_static_is_what_emitter_eligibility_leans_on);
     RUN_TEST(test_extended_materials_get_their_own_reactions);
+    RUN_TEST(test_every_ordinary_material_has_identical_twin_rows);
+    RUN_TEST(test_the_extended_half_rows_are_static_and_powder);
+    RUN_TEST(test_dirt_moisture_macros_and_codec_helpers_agree_on_every_byte);
+    RUN_TEST(test_painted_gunpowder_starts_dry_in_one_of_three_tones);
     RUN_TEST(test_ice_cracks_hot_glass_and_stays_where_it_is_put);
     RUN_TEST(test_stone_heats_up_next_to_lava);
     RUN_TEST(test_water_cools_hot_stone_back_to_room_temperature);
