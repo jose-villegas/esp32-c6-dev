@@ -323,14 +323,34 @@ typedef enum {
  * uniform colour; and the top of a ramp is still on that ramp, so
  * "brightest sand" and "sand" are the same warm tan a shade apart. The
  * cullet band is a different HUE - pale and cool, the colour of ground
- * glass rather than of beach - and it varies inside itself.
+ * glass rather than of beach.
  *
- * It is also permanent, which is the nice part: sand's shade never
- * changes, so a heap keeps the memory of having been a window, and mixing
- * it into an ordinary dune leaves the two visibly distinguishable. */
+ * The SHADE is still permanent, which is what makes cullet permanent at
+ * all: sand's stored nibble never changes, so a heap keeps the memory of
+ * having been a window, and mixing it into an ordinary dune leaves the two
+ * visibly distinguishable. What the shade MEANS is not fixed any more,
+ * though - it used to simply name one of four fixed pale colours. Now it
+ * names which QUARTER of a shared, slowly-advancing colour cycle a grain
+ * starts at (material_set_cullet_phase(), material_colours()'s own MAT_SAND
+ * case, both material.c), so a heap of cullet keeps shimmering through
+ * several pale tints at once, offset a quarter-cycle apart, without one
+ * byte of the simulation ever being touched to do it. */
 #define SAND_DUNE_SHADES    12
 #define SAND_CULLET_BASE    SAND_DUNE_SHADES
 #define SAND_CULLET_SHADES  (MATERIAL_VARIANTS - SAND_CULLET_BASE)
+
+/* How many steps the cullet colour cycle has - see cullet_cycle[] and
+ * material_colours()'s own MAT_SAND case, both material.c, for the array
+ * this sizes and the arithmetic that walks it. Public (not local to
+ * material.c) because host tests need to name it too - see suite_sand.c's
+ * own cullet phase tests - rather than re-deriving 16 as a magic number
+ * that could silently drift from the real constant on a retune.
+ *
+ * A power of two, so material_colours() wraps the index with a mask rather
+ * than a per-cell modulo, and a multiple of SAND_CULLET_SHADES, so each of
+ * the four cullet shades lands on an exact quarter-turn of the cycle - both
+ * enforced by material.c's own _Static_assert, next to the array. */
+#define CULLET_CYCLE_LEN 16
 
 /* How many shades a freshly PAINTED grain may pick from. Everything else
  * gets the whole range; sand stops short of its reserved band, which is
@@ -1536,3 +1556,19 @@ void material_shine_direction(int gx, int gy, int *ux_q8, int *uy_q8);
  * for and how it is mixed into the foam dither - it is not simply added to
  * the hash, and the reason why is written there. */
 void material_set_foam_phase(unsigned phase);
+
+/* Called once per frame, before painting, with a value that climbs steadily
+ * over real time - see app_sand.c's own CULLET_PHASE_MS for how it derives
+ * one from dt_ms. Exactly the same shape as material_set_foam_phase() just
+ * above, and deliberately a THIRD, separate call rather than folded into
+ * either of the other two: this is a fact about a different clock, ticking
+ * at a different rate, feeding a different material - a test sweeping
+ * cullet's phase must not have to also feed a gravity vector or a foam
+ * phase, and vice versa.
+ *
+ * See material_colours()'s own MAT_SAND case for what the phase means -
+ * which quarter-turn of the shared cullet_cycle[] (material.c) each cullet
+ * shade currently reads as - and material.h's own rewritten comment on
+ * SAND_CULLET_BASE for why the shade no longer names one fixed colour by
+ * itself. */
+void material_set_cullet_phase(unsigned phase);
