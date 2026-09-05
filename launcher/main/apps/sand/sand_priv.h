@@ -687,10 +687,11 @@ static inline uint8_t impulse_drag_of(cell_t displaced)
     const material_t *m = material_of(displaced);
     unsigned d = (unsigned)m->density >> SAND_IMPULSE_DRAG_SHIFT;
 
+    if (m->kind == KIND_LIQUID) {
+        return 0u;   /* a fluid parts around a mover - see the constants */
+    }
     if (m->kind == KIND_POWDER) {
         d <<= SAND_IMPULSE_DRAG_POWDER_SHIFT;
-    } else if (m->kind == KIND_LIQUID) {
-        d >>= SAND_IMPULSE_DRAG_LIQUID_SHIFT;
     }
     return (uint8_t)(d > 255u ? 255u : d);
 }

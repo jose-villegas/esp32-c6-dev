@@ -1947,7 +1947,16 @@ static inline bool can_impulse_enter_gravity_ward(cell_t target, cell_t mover,
                                                   uint8_t speed)
 {
     if (speed < SAND_IMPULSE_SINK_MIN_SPEED) {
-        return CELL_IS_EMPTY(target);
+        /* Spent. Packed grain holds it up - that is the whole point, a
+         * chunk should come to rest near the rim rather than working its
+         * way to the bottom of a bank. A LIQUID does not: a fluid parts
+         * around a solid whether or not the solid still has energy, and on
+         * device a chunk stalled mid-pool read as wrong where sinking to
+         * the floor had always looked right. So the exhausted case asks
+         * about the medium, and only powder (and a wall, via
+         * can_impulse_enter()'s own refusal) stops it. */
+        return CELL_IS_EMPTY(target) ||
+               material_of(target)->kind == KIND_LIQUID;
     }
     return can_impulse_enter(target, mover);
 }
@@ -2722,6 +2731,18 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * carry their own geometric decay (SAND_SPLASH_SPEED_DECAY_SHIFT)
          * and the splash/cascade feature is tuned around it. Saturating at
          * 0, same idiom as the ramp two hundred lines up. */
+        /* THE SPEED IT ARRIVED WITH, captured before drag takes its cut -
+         * this is what the TRANSFER below is owed, and reading `entry.speed`
+         * there instead was a real bug rather than a detail. Momentum handed
+         * to the medium is what the mover LOST, so deriving the throw from
+         * what it has LEFT gets the relationship exactly backwards: the
+         * harder a medium resists, the less it would fling. Every round that
+         * strengthened drag was quietly strangling the ejecta, and at
+         * powder's present cost a full-speed impactor would keep 5 of 253 -
+         * under the transfer gate, so a bank would have thrown nothing at
+         * all, ever. */
+        const uint8_t impact_speed = entry.speed;
+
         if (!CELL_IS_EMPTY(displaced) &&
             (materials[mat_id].kind == KIND_STATIC ||
              materials[mat_id].kind == KIND_POWDER)) {
@@ -2793,13 +2814,13 @@ static void step_impulses(sand_t *s, int dx, int dy)
         if (!CELL_IS_EMPTY(displaced) &&
             (materials[mat_id].kind == KIND_STATIC ||
              materials[mat_id].kind == KIND_POWDER) &&
-            entry.speed >= SAND_IMPULSE_TRANSFER_MIN_SPEED &&
+            impact_speed >= SAND_IMPULSE_TRANSFER_MIN_SPEED &&
             deferred_count < SAND_CASCADE_MAX_PER_STEP) {
             impulse_t *t = &deferred[deferred_count++];
             t->index = (uint16_t)at;
             t->cell  = displaced;
             t->dir   = (uint8_t)((entry.dir + 3 + rng_below(&s->rng, 3)) & 7);
-            t->speed = (uint8_t)(entry.speed / SAND_IMPULSE_TRANSFER_DIVISOR);
+            t->speed = (uint8_t)(impact_speed / SAND_IMPULSE_TRANSFER_DIVISOR);
         }
 
         /* CASCADE - see this array's own top comment for why this only

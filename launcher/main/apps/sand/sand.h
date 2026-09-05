@@ -758,26 +758,25 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * around it, so widening to them would move two tuned features at once. */
 #define SAND_IMPULSE_DRAG_SHIFT  0
 
-/* Per-kind adjustments on top of the density-derived cost above, applied by
- * impulse_drag_of() (sand.c). Density alone made a bank of dirt read as too
- * soft and a pool as too stiff AT THE SAME TIME, which no single shift can
- * fix - the two media do not just differ in how much they resist, they
- * differ in shape. Packed grain jams against itself and stops a chunk in a
- * couple of layers; a fluid parts around it and lets it sink a good way
- * before the energy runs out.
+/* Per-kind adjustment on top of the density-derived cost above, applied by
+ * impulse_drag_of() (sand_priv.h). Density alone gave both media the same
+ * SHAPE of resistance, which is the thing that was wrong: packed grain jams
+ * against itself and stops a mover dead, while a fluid parts around one and
+ * barely slows it. So powder multiplies, and LIQUID CHARGES NOTHING AT ALL -
+ * a liquid mover was always exempt, and now a liquid MEDIUM is too, which
+ * puts a chunk falling into a pool back to exactly the behaviour it had
+ * before any of this existed. That was the device call: sinking to the floor
+ * had always looked right, so there was nothing here for drag to fix.
  *
- * At these figures, cost per cell of travel including the plain ramp:
+ * Measured, 32 seeds, cells of travel:
  *
- *     dirt / sand   62 or 60, doubled     ~126   about 2 cells
- *     water         30, halved             ~17   about 15 cells
- *     lava          45, halved             ~24   about 10 cells
+ *     open air   12.5   (nothing displaced, so nothing charged)
+ *     water      11.9   (charged nothing - as near air as makes no odds)
+ *     dirt        0.8   (62 doubled twice, so ~250 a cell against 253)
  *
- * Both are device-tuned, not derived - the dirt figure is what "it should
- * only reach the first few layers" turned out to mean, and the liquid one
- * is what kept a chunk sinking the way it looked right doing before this
- * whole mechanism existed. */
-#define SAND_IMPULSE_DRAG_POWDER_SHIFT  1
-#define SAND_IMPULSE_DRAG_LIQUID_SHIFT  1
+ * Dirt stopping inside one cell is the point, not an overshoot: a chunk
+ * should end up at the rim of a bank, not buried in it. */
+#define SAND_IMPULSE_DRAG_POWDER_SHIFT  2
 
 /* THE FLOOR BELOW WHICH A KIND_STATIC ENTRY IS SPENT, for the gravity-drift
  * move AND the settled check right after it in step_impulses() (sand.c,
