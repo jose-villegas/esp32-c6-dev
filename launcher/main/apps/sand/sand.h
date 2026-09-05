@@ -804,27 +804,44 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * adjustment, if one is ever needed, is a new constant scoped to that kind,
  * not this one reopened.
  *
- * Measured, 32 seeds, cells of travel:
+ * RE-SWEPT AGAINST THE ENERGY EXIT (step_impulses()'s hop loop, sand.c),
+ * not inherited from the distance-only-budget regime the 3.0 figure above
+ * was measured under. This constant's own comment carried 12.5 / 11.9 /
+ * 0.8 once (one cell a step), then 27.8 / 25.0 / 3.0 (multi-cell travel,
+ * no energy exit) - both stale the moment the loop that produced them
+ * changed again, which is exactly why this number gets re-measured rather
+ * than trusted to still be right. Swept over the shift itself, 32 seeds,
+ * cells of travel (plow_total_distance(), suite_sand.c), air and water
+ * unaffected by this constant at any value (air displaces nothing; water
+ * is KIND_LIQUID and impulse_drag_of() charges liquids nothing regardless
+ * of shift), so only dirt moves:
  *
- *     open air   27.8   (nothing displaced, so nothing charged)
- *     water      25.0   (charged nothing - as near air as makes no odds)
- *     dirt        3.0
+ *     shift   air    water   dirt
+ *     0       27.8   25.0    3.81   (identity - the pre-powder-drag figure)
+ *     1       27.8   25.0    1.88
+ *     2       27.8   25.0    0.91   <- kept
+ *     3       27.8   25.0    0.81
+ *     4       27.8   25.0    0.81
+ *     5       27.8   25.0    0.81
+ *     6       27.8   25.0    0.81
+ *     8       27.8   25.0    0.81
  *
- * THESE ARE POST-MULTI-CELL NUMBERS AND THE EARLIER ONES WERE NOT. This
- * comment carried 12.5 / 11.9 / 0.8 for a while, measured when an entry
- * covered one cell a step; multi-cell travel then tripled every figure
- * without anything here being re-measured, and the stale set reached a
- * published PR before an architecture review caught it. Any number in
- * this file that is not re-measured after a change to
- * SAND_IMPULSE_CELLS_PER_STEP_DIVISOR is wrong by roughly that factor.
- *
- * 3.0 cells is ALSO not yet the intent. A chunk should stop at the rim of
- * a bank, and it does not, because the hop budget is fixed before drag is
- * charged and the loop has no energy exit - a mover spent on its first
- * cell still takes the rest of its hops. See the review findings this
- * comment is being read alongside; the fix is an energy exit beside the
- * distance budget, after which this constant wants one fresh sweep rather
- * than the value it inherited. */
+ * KEPT AT 2, THE SHIPPED VALUE - not carried over unexamined, but
+ * reconfirmed against the loop that actually governs it now: 0.91 cells is
+ * the closest any candidate gets to the stated intent ("stop at the rim",
+ * roughly one) without already being on the far side of it. Shift 3 and
+ * every value above it plateau at 0.81 - dirt's density (62), doubled
+ * three times or more, already exceeds a single hop's own speed budget
+ * before the energy exit even has to fire twice, so further shifting buys
+ * nothing: the loop is stopping on hop 0 regardless. Shift 1 (1.88) is the
+ * only candidate closer to "two cells" than to "one", and shift 0 (3.81 -
+ * worse than the OLD, energy-exit-less 3.0 figure, since a full-speed
+ * entry with dirt's UNSHIFTED cost of 62 a cell needs four hops rather
+ * than one to exhaust its own energy budget) is the pre-powder-drag
+ * baseline, kept in the table only to show the shape the sweep moves
+ * across, not as a candidate. See
+ * test_a_thrown_chunk_stops_near_the_rim_of_a_dirt_bank (suite_sand.c) for
+ * the pin this figure is checked against. */
 #define SAND_IMPULSE_DRAG_POWDER_SHIFT  2
 
 /* THE FLOOR BELOW WHICH A KIND_STATIC ENTRY IS SPENT, for the gravity-drift
