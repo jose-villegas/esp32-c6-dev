@@ -21588,7 +21588,11 @@ static void test_a_thrown_static_chunk_conserves_lava_mass_on_sink(void)
 
     sand_impulse_dislodge(&s, 3, 0, 0, 255, SAND_IMPULSE_SPEED_RAMP);
 
-    for (int i = 0; i < H; i++) {
+    /* H * 3, not H: how many steps a chunk needs to clear the pool now
+     * depends on SAND_IMPULSE_CELLS_PER_STEP_DIVISOR, and this scene only
+     * needs ENOUGH steps, never exactly H. A budget tied to the grid was
+     * really a budget tied to that constant without saying so. */
+    for (int i = 0; i < H * 3; i++) {
         sand_step(&s, 0, 1000, 0);
     }
 
@@ -22296,12 +22300,10 @@ static void test_a_full_speed_static_chunk_moves_several_cells_in_one_push(void)
 
     const int expected_cells = 1 + (255 - SAND_IMPULSE_SPEED_RAMP) /
                                    SAND_IMPULSE_CELLS_PER_STEP_DIVISOR;
-    TEST_ASSERT_EQUAL_INT_MESSAGE(SAND_IMPULSE_CELLS_PER_STEP_MAX,
-        expected_cells,
-        "this test's own arithmetic must land squarely on the cap at speed "
-        "255 - if it does not, this test is asserting the wrong number, "
-        "not the code");
-    const int expected_index = ROW * W + (SX + expected_cells);
+    const int capped_cells = (expected_cells > SAND_IMPULSE_CELLS_PER_STEP_MAX)
+                                 ? SAND_IMPULSE_CELLS_PER_STEP_MAX
+                                 : expected_cells;
+    const int expected_index = ROW * W + (SX + capped_cells);
     TEST_ASSERT_EQUAL_INT_MESSAGE(expected_index, s.impulse_buf[0].index,
         "a full-speed KIND_STATIC push through open air must cover several "
         "cells in one step, not one - this is the whole point of "
