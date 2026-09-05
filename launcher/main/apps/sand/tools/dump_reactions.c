@@ -370,6 +370,16 @@ static const field_doc_t field_docs[] = {
     FRATE(soaks,    GRP_WET, "soaks up anything wet that touches it"),
     F(soaks_to,     GRP_WET, FK_TARGET, NULL),
     FRATE(dries,    GRP_WET, "dries out all by itself"),
+    /* `soil` (D1, GUNPOWDER_FIXES.md section 7): which materials a plant
+     * or root treats as ground - dirt alone, today - not the same
+     * question `dries` answers ("does this have a moisture codec at
+     * all"), which gunpowder also answers yes to without being soil. No
+     * emit_*() function prints it as a value; pred_soil() (this file's
+     * Decoding section) reads it directly to build soil_names, the same
+     * shape as `tones`/`moist_max` just below - a row is needed here only
+     * to keep this file's byte-count gate (the _Static_assert above)
+     * satisfied. */
+    F(soil,         GRP_WET, FK_FLAG, NULL),
     /* `tones`/`moist_max` are the moisture CODEC's shape (see
      * reaction_t.tones's own comment in material.h) - how many low bits of
      * a material's variant are dry tones versus moisture levels, not a
@@ -870,6 +880,15 @@ static const adverb_exception_t ADVERB_EXCEPTIONS[] = {
       "PER ADJACENT HEAT SOURCE, so an interior cell with only one hot "
       "neighbour waits on the cells ahead of it first - the single-"
       "steady-partner ladder cannot see that queuing effect." },
+    { GUNPOWDER_CELL(2), "soaked_chance", "slowly",
+      "GUNPOWDER_REACTION.soaked_chance = 8 (material.c) falls silent "
+      "under the ladder above (it is above RATE_SLOW_CUTOFF), but the "
+      "row's own comment calls it \"uncommon, rolled only once already "
+      "fully soaked - it lingers wet a good while first\", and the commit "
+      "that set it (\"soaked gunpowder turns to oil at 8 in 256, not 3 - "
+      "too rare to see\") measured the earlier value of 3 as needing a "
+      "raise just to be OBSERVABLE at all - the opposite of ordinary "
+      "speed." },
 };
 
 /* Looks up an override for (field_name, cell) - the only two things an
@@ -1189,8 +1208,20 @@ static void material_hex(uint8_t v, char *buf, size_t cap)
 {
     const cell_t base = (v >= (uint8_t)(MAT_EXTENDED << 4))
                              ? (cell_t)v : CELL_MAKE(v, 0);
+    /* base >= (MAT_EXTENDED << 4), NOT cell_is_extended(base) - that test
+     * NARROWED to the static half only once gunpowder split the other
+     * half off (material.h's own comment on cell_is_extended(), "every
+     * existing caller already meant statics only" - this one does not).
+     * A gunpowder byte (0xF8-0xFF) already IS a resolved swatch the same
+     * way a static one is; testing it against the now-statics-only
+     * cell_is_extended() silently fell through to the "ordinary material"
+     * branch below instead, reading MAT_EXTENDED's own representative
+     * variant - some other extended byte entirely, not gunpowder's real
+     * colour at all. Confirmed by direct instrumentation: Gunpowder's
+     * legend swatch printed #101010 (an unrelated extended byte) before
+     * this fix, not GUNPOWDER_CELL(2)'s real #421408-ish red. */
     const cell_t swatch =
-        cell_is_extended(base)
+        (base >= (cell_t)(MAT_EXTENDED << 4))
             ? base
             : CELL_MAKE(CELL_MATERIAL(base),
                         representative_variant(
@@ -1265,6 +1296,14 @@ static const legibility_override_t LEGIBILITY_OVERRIDES[] = {
     { MATX(MATX_PLANT),     "#526529", "#54682A" },
     { MATX(MATX_LEAF),      "#6BB23A", "#63A435" },
     { MATX(MATX_ROOT),      "#BDA68C", "#AC8F6F" },
+    /* Added once material_hex()'s own cell_is_extended()-vs-gunpowder bug
+     * (this file's own comment on that function) was fixed and the raw
+     * value it recovers for GUNPOWDER_CELL(2) - the mid dry tone
+     * build_rows() uses as gunpowder's swatch - stopped being some other
+     * extended byte entirely: #421408 clears 3:1 against light easily
+     * (15.7:1) but fails badly against dark (1.2:1, both colours nearly
+     * black) - computed the same way as every row above. */
+    { GUNPOWDER_CELL(2),    "#421408", "#B03515" },
 };
 
 /* legible_hex()'s search below - it is a linear scan of a table with
@@ -1514,14 +1553,15 @@ static char heat_sources[256];
  * wetting_liquids above. */
 static char quenching_liquids[256];
 
-/* The material(s) `dries != 0` selects - see pred_dries()'s own comment
- * for why that is the right predicate. Dirt and Gunpowder both, now that
- * gunpowder has a moisture codec of its own (material.c's
- * GUNPOWDER_REACTION) - sized like the 256-byte lists above rather than
- * the old 64, which fit only one coloured name and silently truncated
- * mid-span the moment a second one joined it. Coloured, like the lists
- * above - replaces the hardcoded word "soil" wherever it appeared as
- * prose glue rather than a real field value. */
+/* The material(s) `soil != 0` selects - see pred_soil()'s own comment for
+ * why that is the right predicate (not `dries`, which gunpowder's own
+ * moisture codec now also sets, material.c's GUNPOWDER_REACTION, without
+ * making gunpowder ground a root can use). Dirt alone, today - sized like
+ * the 256-byte lists above rather than the old 64, which fit only one
+ * coloured name and silently truncated mid-span the moment a second one
+ * joined it, in case that ever changes. Coloured, like the lists above -
+ * replaces the hardcoded word "soil" wherever it appeared as prose glue
+ * rather than a real field value. */
 static char soil_names[256];
 
 static void build_rows(void)
@@ -1731,13 +1771,22 @@ static void emit_burn(const reaction_t *r)
      *
      * Named quenching liquids, not the old generic "a quenching liquid" -
      * quenching_liquids mirrors neighbor_quenches() (sand_reactions.c)
-     * exactly (see pred_dries's neighbour, is_quenching_liquid(), and this
+     * exactly (see pred_soil's neighbour, is_quenching_liquid(), and this
      * file's own top comment on quenching_liquids). */
     if (r->burns != 0) {
         const char *quenched =
             (r->quench_to != 0) ? mat_span_v(r->quench_to) : "nothing";
         printf("- If %s touches it, it *turns into* %s.\n",
                quenching_liquids, quenched);
+    } else if (r->explodes != 0) {
+        /* Gunpowder, not wood - mirrors emit_pairwise_table()'s own
+         * `explodes != 0` fork just above (its own comment there): a
+         * doused fuse is written back SOAKED (with_moisture(), moist_max),
+         * not the plain unlit code wood resets to - "the fire just goes
+         * out" would be true of the flame but silently wrong about the
+         * fuse, which stays wet rather than merely dark. */
+        printf("- If %s touches it, it goes out - but stays soaked.\n",
+               quenching_liquids);
     } else {
         printf("- If %s touches it, the fire just goes out.\n",
                quenching_liquids);
@@ -1808,6 +1857,17 @@ static void emit_transform(const reaction_t *r, uint8_t cell)
                heat_sources,
                rate_gap(adverb_child("flaw_chance", r->flaw_chance)),
                mat_span_v(r->flaw_to), mat_span_v(r->heats_to));
+    } else if (r->heats_to == GUNPOWDER_LIT_CELL) {
+        /* `heats_to` resolving to the row's OWN lit cell is not a melt at
+         * all - see to_name()'s own GUNPOWDER_LIT_CELL special case just
+         * above in this file for the same distinction applied to the
+         * TARGET name ("Lit Gunpowder", not a no-op "Gunpowder"). Heat
+         * alone lighting a fuse reads as catching light, the same verb
+         * emit_ignite() already uses for the flame path - "melts into
+         * Lit Gunpowder" described a substance change that never
+         * happens. */
+        printf("- Next to %s, it%s *catches light* instead.\n", heat_sources,
+               rate_gap(adverb_cell_child("heat_chance", r->heat_chance, cell)));
     } else {
         printf("- Next to %s, it%s *melts* into %s.\n", heat_sources,
                rate_gap(adverb_cell_child("heat_chance", r->heat_chance, cell)),
@@ -1919,7 +1979,7 @@ static void emit_thaw(const reaction_t *r)
     }
 }
 
-static void emit_wet(const reaction_t *r)
+static void emit_wet(const reaction_t *r, uint8_t cell)
 {
     if (r->wets != 0) {
         /* The old colon-joined "Wets whatever it touches: things that
@@ -1967,11 +2027,18 @@ static void emit_wet(const reaction_t *r)
      * comment in material.h. The adverb trails the target, matching the
      * "becomes X, <adverb>" shape this pair asks for rather than the
      * pre-verb slot a frequency word takes above (soaked_chance is a
-     * FRATE, not a one-shot chance - see its own field_docs[] row). */
+     * FRATE, not a one-shot chance - see its own field_docs[] row).
+     * adverb_cell_child(), not adverb_child() - soaked_chance = 8 sits
+     * just above RATE_SLOW_CUTOFF (5) and falls silent under the plain
+     * ladder, but material.c's own GUNPOWDER_REACTION comment calls it
+     * "uncommon, rolled only once already fully soaked - it lingers wet a
+     * good while first", the same gap adverb_for()'s own top comment
+     * documents for sand's heat_chance - see the matching ADVERB_
+     * EXCEPTIONS row below. */
     if (r->soaked_to != 0) {
         printf("- Once it is fully soaked, it *turns into* %s%s.\n",
                mat_span_v(r->soaked_to),
-               rate_gap(adverb_child("soaked_chance", r->soaked_chance)));
+               rate_gap(adverb_cell_child("soaked_chance", r->soaked_chance, cell)));
     }
 }
 
@@ -2247,7 +2314,7 @@ static void emit_material_section(const char *name, const reaction_t *r,
     emit_cold(r);
     emit_warmth(r);
     emit_thaw(r);
-    emit_wet(r);
+    emit_wet(r, color_id);
     emit_acid(r);
     emit_evaporates(r);
     emit_condense(r);
@@ -2307,15 +2374,21 @@ static bool pred_wets_liquid(const mrow_t *row)
     return row->kind == KIND_LIQUID && row->r->wets != 0;
 }
 
-/* `dries != 0` is already the canonical "this variant can mean moisture"
- * marker - sand_reactions.c's own comment on the smelting wet-earth branch
- * says so explicitly, and the MOISTURE SPREADS block in that same file
- * relies on the identical test. Dirt is the only row this selects today
- * (Root has no `dries` of its own), so the derived list below reads
+/* `soil != 0` (reaction_t.soil, material.h) - GUNPOWDER IS NOT SOIL (D1,
+ * GUNPOWDER_FIXES.md section 7): `dries != 0` used to be this file's own
+ * stand-in for "is this ground a plant can use", back when dirt was the
+ * only material with a moisture codec at all - but gunpowder now sets
+ * `dries` too (its own moisture codec, material.c's GUNPOWDER_REACTION),
+ * so that test would read "wet Dirt or Gunpowder" into every root/sprout/
+ * grow sentence below, and a root has never been able to touch gunpowder.
+ * `soil` is the field the ENGINE itself gates plant/root sites on
+ * (find_water(), step_one_rooting_cell(), step_one_sprouting_cell(), all
+ * sand_reactions.c) - reading the same field here is what keeps this
+ * generator's prose from silently drifting away from what those sites
+ * actually do. Dirt alone sets it, so the derived list below reads
  * "dirt" wherever the per-material prose used to hardcode the word
- * "soil" - see the plan's own note on why a hardcoded word cannot track a
- * second moisture-bearing material if one is ever added. */
-static bool pred_dries(const mrow_t *row) { return row->r->dries != 0; }
+ * "soil". */
+static bool pred_soil(const mrow_t *row) { return row->r->soil != 0; }
 
 /* The two halves of the Legend's legibility note - which materials print
  * at a lightness-adjusted colour (LEGIBILITY_OVERRIDES has a row for their
@@ -2586,7 +2659,7 @@ static void emit_pairwise_table(void)
         }
         /* drinks: a THIRD cell changes (dirt at the root), not the
          * subject and not the liquid - see reaction_t.drinks. "dirt", not
-         * the old hardcoded "soil" - see pred_dries()'s own comment. */
+         * the old hardcoded "soil" - see pred_soil()'s own comment. */
         for (size_t j = 0; j < all_rows_count; j++) {
             if (all_rows[j].r->drinks == 0) continue;
             print_join_row(all_rows[i].name, all_rows[j].name,
@@ -3225,7 +3298,7 @@ static void emit_anatomy(void)
     }
 
     /* GRP_GROW - emit_grow(), the grows branch. "Wet DIRT", not the old
-     * hardcoded "wet soil" - see pred_dries()'s own comment and this
+     * hardcoded "wet soil" - see pred_soil()'s own comment and this
      * file's emit_grow(). Dirt is itself a material name now, so it gets
      * its own MARK_MATERIAL segment rather than folding into the verb
      * phrase the way "wet soil" once did. */
@@ -3302,7 +3375,7 @@ static void emit_anatomy(void)
 
     /* GRP_REGROW - emit_regrow(), the sprouts branch: sprouts, sprouts_to.
      * "Wet DIRT", not the old hardcoded "wet soil" - see the GRP_GROW
-     * example just above for the same fix, and pred_dries()'s comment. */
+     * example just above for the same fix, and pred_soil()'s comment. */
     {
         const mrow_t *row = find_row("Wood");
         const mrow_t *dirt = find_row("Dirt");
@@ -3413,7 +3486,7 @@ int main(int argc, char **argv)
     build_colored_list(pred_burns, " or ", heat_sources, sizeof(heat_sources));
     build_colored_list(is_quenching_liquid, " or ", quenching_liquids,
                         sizeof(quenching_liquids));
-    build_colored_list(pred_dries, " or ", soil_names, sizeof(soil_names));
+    build_colored_list(pred_soil, " or ", soil_names, sizeof(soil_names));
 
     /* The title ("# Reaction Table") and everything before this point in
      * the checked-in doc are hand-owned structural furniture, not this
