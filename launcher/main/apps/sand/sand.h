@@ -289,6 +289,13 @@ typedef struct {
     /* See sand_set_soak(). 0, the default, means nothing soaks. */
     int      soak;
 
+    /* How many fuse blasts (reaction_t.explodes, read at burn-out) have
+     * fired this step, reset at the top of every reactions pass and
+     * compared against SAND_GUNPOWDER_BLASTS_PER_STEP (sand_reactions.c).
+     * The one piece of per-step state the fuse model needs: it is what
+     * bounds a lit pile's burst cost per frame. */
+    uint8_t  fuse_blasts_this_step;
+
     /* Optional, caller-owned, h bytes: which rows changed since it was last
      * cleared. NULL disables tracking entirely. See sand_track_dirty_rows(). */
     uint8_t *dirty_rows;

@@ -563,7 +563,7 @@ typedef struct {
      * the cell becomes plain MAT_FIRE, the gas pocket's own fallback and
      * for the same reason (sand_explode() is a documented no-op with no
      * impulse buffer). See SAND_GUNPOWDER_BLAST_RADIUS's own comment
-     * above for why 6.
+     * above for why 12.
      *
      * REVISION: used to fire the instant ignition or heat touched the
      * cell (one blast per grain, or per boundary cell in the version
@@ -1382,16 +1382,18 @@ const char *material_name(cell_t c);
 #define GUNPOWDER_LIT_CELL GUNPOWDER_CELL(GUNPOWDER_LIT)
 
 /* GUNPOWDER'S BLAST RADIUS - read off `reaction_t.explodes` (see that
- * field's own comment) by try_ignite_given() and try_heat_transform_given()
- * (sand_reactions.c) in place of plain fire. Sized against the other two
- * radii this simulation already has, not invented fresh: the confined-gas
- * pocket detonates at SAND_GAS_IGNITE_BLAST_RADIUS 8 (sand_reactions.c),
- * the covered-lava burst at SAND_LAVA_BURST_RADIUS 16 (sand.h) - gunpowder
- * sits under both, a hand-charge rather than a vented gas pocket or a
- * buried reservoir. The CORE that actually becomes fire is always radius /
- * SAND_EXPLODE_CORE_DIVISOR (5, sand.h), so this yields a one-cell core for
- * all three. */
-#define SAND_GUNPOWDER_BLAST_RADIUS 6
+ * field's own comment) at burn-out, in step_one_burning_cell()
+ * (sand_reactions.c). Sized against the other two radii this simulation
+ * already has, not invented fresh: the confined-gas pocket detonates at
+ * SAND_GAS_IGNITE_BLAST_RADIUS 8 (sand_reactions.c), the covered-lava
+ * burst at SAND_LAVA_BURST_RADIUS 16 (sand.h). Gunpowder sits BETWEEN
+ * them, above gas: it started at 6, under both, and on the device the
+ * gas pocket then read as the more meaningful blast - wrong for the one
+ * material whose whole point is to go off. With blasts capped at one a
+ * step (SAND_GUNPOWDER_BLASTS_PER_STEP) the radius is what carries the
+ * punch. The CORE that becomes fire is radius / SAND_EXPLODE_CORE_DIVISOR
+ * (5, sand.h): two cells here, against one for the gas pocket. */
+#define SAND_GUNPOWDER_BLAST_RADIUS 12
 
 /* Whether this cell is gunpowder - the high nibble is MAT_EXTENDED AND bit
  * 3 of the low nibble is set. Every gunpowder byte, whatever its 3-bit

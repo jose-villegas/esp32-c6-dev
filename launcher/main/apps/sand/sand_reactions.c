@@ -4170,7 +4170,7 @@ lit_here(const sand_t* s, int nx, int ny, int w, int h, cell_t grain, const reac
 }
 
 static inline bool
-in_a_lit_two_by_two(const sand_t* s, int x, int y, int w, int h, cell_t grain) {
+find_lit_two_by_two(const sand_t* s, int x, int y, int w, int h, cell_t grain, int* out_dx, int* out_dy) {
     const reaction_t* r = reaction_of(grain);
     for (int dy = -1; dy <= 1; dy += 2) {
         if (!lit_here(s, x, y + dy, w, h, grain, r)) {
@@ -4178,12 +4178,41 @@ in_a_lit_two_by_two(const sand_t* s, int x, int y, int w, int h, cell_t grain) {
         }
         for (int dx = -1; dx <= 1; dx += 2) {
             if (lit_here(s, x + dx, y, w, h, grain, r) && lit_here(s, x + dx, y + dy, w, h, grain, r)) {
+                *out_dx = dx;
+                *out_dy = dy;
                 return true;
             }
         }
     }
     return false;
 }
+
+/* SPEND THE 2x2 THAT QUALIFIED. The three lit cells that made this a
+ * blast become fire before sand_explode() runs, rather than being left
+ * for its core fill to catch - which it does for the two cardinal ones
+ * (core radius is one cell) but never for the diagonal, at distance
+ * root-two, which the annulus then threw as a still-lit grain, free to
+ * land as the corner of some other 2x2 and blast again. One 2x2, one
+ * blast, and nothing lit leaves it. */
+static inline void
+spend_lit_two_by_two(sand_t* s, int x, int y, int w, int dx, int dy) {
+    const int px[3] = {x + dx, x, x + dx};
+    const int py[3] = {y, y + dy, y + dy};
+    for (int i = 0; i < 3; i++) {
+        const size_t at = (size_t)py[i] * (size_t)w + (size_t)px[i];
+        place_reacted(s, px[i], py[i], at, MAT_FIRE);
+    }
+}
+
+/* AT MOST THIS MANY FUSE BLASTS PER STEP, board-wide. A burn-out past the
+ * cap becomes plain fire, exactly as one that found no lit 2x2 does. This
+ * is what bounds a big pile's burst cost per frame outright, instead of
+ * leaving the stagger to the luck of independent burn-out rolls - and it
+ * IS the cadence now: a lit pile goes off one blast a step, for as many
+ * steps as it keeps presenting lit 2x2s. Board-wide rather than per pile
+ * because "per pile" would need a region walk, and one blast a frame is
+ * already more than the eye separates. */
+#define SAND_GUNPOWDER_BLASTS_PER_STEP 1
 
 /* One burning cell's turn, in priority order: burn down first (a cell
  * that vanishes this step gets no turn to react further - it cannot
@@ -4242,8 +4271,12 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
          * out of every 2x2 they were part of, so the next blast has to
          * come from a burn-out somewhere else in the pile. */
         if (rx->explodes != 0) {
-            REACTION_DOC(explodes, "at burn-out, if it is one corner of a 2x2 that is all lit");
-            if (s->impulse_buf != NULL && in_a_lit_two_by_two(s, x, y, w, h, grain)) {
+            REACTION_DOC(explodes, "at burn-out, if it is one corner of a 2x2 that is all lit, at most once a step");
+            int dx = 0, dy = 0;
+            if (s->impulse_buf != NULL && s->fuse_blasts_this_step < SAND_GUNPOWDER_BLASTS_PER_STEP &&
+                find_lit_two_by_two(s, x, y, w, h, grain, &dx, &dy)) {
+                s->fuse_blasts_this_step++;
+                spend_lit_two_by_two(s, x, y, w, dx, dy);
                 sand_explode(s, x, y, rx->explodes);
             } else {
                 place_reacted(s, x, y, at, MAT_FIRE);
@@ -5005,6 +5038,7 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
  * which way gravity points. */
 void
 sand_step_reactions(sand_t* s) {
+    s->fuse_blasts_this_step = 0;
     /* Dissolving is not a fire reaction and must not be gated behind one:
      * acid has to work on a board with no flame anywhere. */
     /* Heat is a third independent reason to run, not a rider on fire: glass

@@ -161,7 +161,7 @@ Typography carries the other three roles colour does not: *italic* is the verb d
 - *Catches* $\textcolor{#B19100}{\text{fire}}$ from $\textcolor{#B19100}{\text{fire}}$ or $\textcolor{#BF1B00}{\text{lava}}$.
 - It *turns into* $\textcolor{#101010}{\text{lit gunpowder}}$ instead.
 - Once it is on fire, it *burns down*.
-- Burning out, it *detonates* instead of simply going out - blasting a 6-cell radius, but only if it is one corner of a 2x2 that is still alight.
+- Burning out, it *detonates* instead of simply going out - blasting a 12-cell radius, but only if it is one corner of a 2x2 that is still alight.
 - If $\textcolor{#1863A3}{\text{water}}$ or $\textcolor{#2B6F08}{\text{acid}}$ touches it, the fire just goes out.
 - Next to $\textcolor{#B19100}{\text{fire}}$ or $\textcolor{#BF1B00}{\text{lava}}$, it *melts* into $\textcolor{#101010}{\text{lit gunpowder}}$.
 - It *soaks up* any $\textcolor{#1863A3}{\text{water}}$ it touches, and gets wetter.

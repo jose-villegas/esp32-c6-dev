@@ -603,11 +603,13 @@ const material_t materials[MATERIAL_ROWS] = {
      * KIND_POWDER material an extended byte can be, which is the entire
      * reason the split exists - see MATERIAL_ROWS's own comment.
      *
-     * density 50: between sand's 60 and dirt's 62 above it, and above
-     * water/acid/lava (30/38/45) below it - so both grains of grit sink
-     * THROUGH a bed of powder (fine through fine, the way real sand does
-     * through gunpowder) while gunpowder itself sinks in every liquid on
-     * the board. slip/repose/scatter are starting points, not final - tune
+     * density 50: under sand's 60 and dirt's 62, above water/acid/lava
+     * (30/38/45) - so gunpowder sinks in every liquid on the board, while
+     * sand and dirt rest ON it: a powder never sinks through another
+     * powder at rest (sand.c's own comment on why weight alone earns no
+     * such move), so the gap to sand only shows under an impulse, where a
+     * blast sorts the heavier grit out. Real black powder is lighter than
+     * quartz sand too. slip/repose/scatter are starting points, not final - tune
      * on device like every other constant here; see this branch's plan
      * for the full rationale. */
     [MATERIAL_ROW(MAT_EXTENDED) + 1] =

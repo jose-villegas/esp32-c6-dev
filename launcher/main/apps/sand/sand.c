@@ -176,6 +176,7 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->sweep_flip = false;
     s->liquid_flip = false;
     s->gas_flip   = false;
+    s->fuse_blasts_this_step = 0;
     /* The THIRD copy of this list, and the one that made the other two
      * hard to see. Four of the five flags were reset here by hand and
      * may_have_temperature was not, so a sand_t reused across tests
