@@ -21932,11 +21932,11 @@ static void test_an_ordinary_static_solid_still_does_not_sink_into_liquid_or_pow
  *
  * step_impulses() (sand.c) now charges extra `speed` loss at the move site,
  * per non-empty cell a KIND_STATIC mover displaces, proportional to that
- * cell's own `density` (SAND_IMPULSE_DRAG_SHIFT, sand.h) - a thrown wall
+ * cell's own `density` (impulse_drag_of(), sand_priv.h) - a thrown wall
  * chunk should cross a bank of dirt slower than it crosses open air, not
  * teleport through it at the same rate. KIND_STATIC only; see SAND_IMPULSE_
- * DRAG_SHIFT's own comment for why liquid and powder movers are out of
- * scope for this rung.
+ * DRAG_POWDER_SHIFT's own comment (sand.h) for why liquid and powder
+ * movers are out of scope for this rung.
  *
  * TWO SHAPES OF TEST, NOT ONE. The two below actually measure horizontal
  * distance travelled - the thing the feature exists to change, and the
@@ -21945,8 +21945,8 @@ static void test_an_ordinary_static_solid_still_does_not_sink_into_liquid_or_pow
  * tilted): averaged over PLOW_SEEDS seeds, because "a single run of a
  * chaotic scene is not evidence" is exactly as true here as it is there.
  * The two after that are single-step, single-displaced-cell pins on the
- * exact arithmetic (speed == 255 - SAND_IMPULSE_SPEED_RAMP - (density >>
- * SAND_IMPULSE_DRAG_SHIFT)) - asserting on s.impulse_buf[0].speed directly
+ * exact arithmetic (speed == 255 - SAND_IMPULSE_SPEED_RAMP - density) -
+ * asserting on s.impulse_buf[0].speed directly
  * is honest ONLY there, because for that one test the formula itself IS
  * the claim, not a stand-in for it.
  *
@@ -22141,7 +22141,7 @@ static void test_a_thrown_chunk_travels_less_far_through_dirt_than_through_water
  * comment at the transfer site) queues a second entry for the struck dirt
  * cell itself once this scene's own numbers clear SAND_IMPULSE_TRANSFER_
  * MIN_SPEED: the mover's post-drag speed here is 255 - SAND_IMPULSE_SPEED_
- * RAMP - (dirt's density >> SAND_IMPULSE_DRAG_SHIFT), comfortably above 64.
+ * RAMP - dirt's own density, comfortably above 64.
  * Entry 0 is still the mover - the deferred transfer is appended only AFTER
  * this loop's own compaction finishes (step_impulses()'s own top comment),
  * so it lands at entry 1, after everything this test actually pins. */
@@ -22177,16 +22177,17 @@ static void test_a_thrown_chunk_loses_speed_proportional_to_the_density_it_displ
                              impulse_drag_of(CELL_MAKE(MAT_DIRT, 0)));
     TEST_ASSERT_EQUAL_INT_MESSAGE(expected, s.impulse_buf[0].speed,
         "speed lost displacing a single dirt cell must equal exactly the "
-        "plain ramp plus (density >> SAND_IMPULSE_DRAG_SHIFT) - this is "
-        "the formula step_impulses() actually implements, not an "
+        "plain ramp plus impulse_drag_of()'s own density-derived cost - "
+        "this is the formula step_impulses() actually implements, not an "
         "inequality standing in for it");
 }
 
-/* THE SCOPE PIN, same one-step shape: a KIND_POWDER mover displacing the
- * same dirt cell must lose only the plain ramp, no drag term at all - see
- * SAND_IMPULSE_DRAG_SHIFT's own comment in sand.h for why powders are out
- * of scope for this rung. impulse_count is 2 for the same transfer reason
- * as the test just above - see its own comment. */
+/* THE SAME PIN, KIND_POWDER THIS TIME: a thrown grain pays the identical
+ * density-scaled drag a thrown chunk does - see SAND_IMPULSE_DRAG_POWDER_
+ * SHIFT's own comment in sand.h for when powders joined drag's scope (they
+ * were briefly out; this comment used to say so and was stale by the time
+ * this rung's own name says otherwise). impulse_count is 2 for the same
+ * transfer reason as the test just above - see its own comment. */
 static void test_a_thrown_powder_grain_pays_drag_displacing_dirt(void)
 {
     fixture();
@@ -22261,10 +22262,7 @@ static void test_a_thrown_liquid_grain_pays_no_drag_displacing_water(void)
      * the same way the ramp is for everything else. Derived from the
      * constants rather than restated, so retuning how far a step reaches
      * cannot quietly turn this pin into a different claim. */
-    int liquid_cells = 1 + (int)255 / SAND_IMPULSE_CELLS_PER_STEP_DIVISOR;
-    if (liquid_cells > SAND_IMPULSE_CELLS_PER_STEP_MAX) {
-        liquid_cells = SAND_IMPULSE_CELLS_PER_STEP_MAX;
-    }
+    const int liquid_cells = 1 + (int)255 / SAND_IMPULSE_CELLS_PER_STEP_DIVISOR;
     unsigned expect_speed = 255u;
     for (int c = 0; c < liquid_cells; c++) {
         expect_speed -= expect_speed >> SAND_SPLASH_SPEED_DECAY_SHIFT;
@@ -22346,10 +22344,7 @@ static void test_a_thrown_chunk_displacing_nothing_loses_only_the_plain_ramp(voi
      * there was nothing there to displace. */
     const int air_cells = 1 + (255 - SAND_IMPULSE_SPEED_RAMP) /
                               SAND_IMPULSE_CELLS_PER_STEP_DIVISOR;
-    const int air_capped = (air_cells > SAND_IMPULSE_CELLS_PER_STEP_MAX)
-                               ? SAND_IMPULSE_CELLS_PER_STEP_MAX
-                               : air_cells;
-    TEST_ASSERT_EQUAL_INT_MESSAGE(255 - SAND_IMPULSE_SPEED_RAMP * air_capped,
+    TEST_ASSERT_EQUAL_INT_MESSAGE(255 - SAND_IMPULSE_SPEED_RAMP * air_cells,
         s.impulse_buf[0].speed,
         "a chunk moving into an EMPTY cell must lose exactly the plain "
         "ramp and not one speck more - drag is charged per cell displaced, "
@@ -22489,10 +22484,7 @@ static void test_a_full_speed_static_chunk_moves_several_cells_in_one_push(void)
 
     const int expected_cells = 1 + (255 - SAND_IMPULSE_SPEED_RAMP) /
                                    SAND_IMPULSE_CELLS_PER_STEP_DIVISOR;
-    const int capped_cells = (expected_cells > SAND_IMPULSE_CELLS_PER_STEP_MAX)
-                                 ? SAND_IMPULSE_CELLS_PER_STEP_MAX
-                                 : expected_cells;
-    const int expected_index = ROW * W + (SX + capped_cells);
+    const int expected_index = ROW * W + (SX + expected_cells);
     TEST_ASSERT_EQUAL_INT_MESSAGE(expected_index, s.impulse_buf[0].index,
         "a full-speed KIND_STATIC push through open air must cover several "
         "cells in one step, not one - this is the whole point of "

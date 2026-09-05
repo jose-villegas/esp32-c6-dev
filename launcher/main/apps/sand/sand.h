@@ -729,8 +729,8 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * all. That roll's own meaning is UNCHANGED by this constant - it still
  * decides only whether the push happens this step, exactly as it always
  * has. What used to be fixed at exactly one cell per successful roll is
- * now 1 + speed / SAND_IMPULSE_CELLS_PER_STEP_DIVISOR, capped at
- * SAND_IMPULSE_CELLS_PER_STEP_MAX (below).
+ * now 1 + speed / SAND_IMPULSE_CELLS_PER_STEP_DIVISOR, uncapped - see
+ * "NO SEPARATE CAP" below for why a full-speed entry needs none.
  *
  * THE PROBLEM THIS FIXES: every displacing move in this file, before this
  * existed, advanced an entry exactly one cell per successful roll -
@@ -750,70 +750,37 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * test_a_stone_chunk_thrown_into_a_sand_bed_launches_sand_airborne
  * (suite_sand.c), which pins this exact scene and these exact figures.
  *
- * 64, SO A FULL-SPEED (255) ENTRY COVERS FOUR CELLS AND A SPENT ONE STILL
- * COVERS EXACTLY ONE, UNCHANGED - 1 + 255/64 = 4, and integer division
- * means anything under 64 rounds to 1 + 0 = 1, the same single cell every
- * entry already moved before this existed. THAT IS THE POINT, not a side
- * effect to work around: it is what keeps a slow-moving entry's own
- * behaviour, and every test written against the old one-cell-per-roll
- * design, byte-for-byte unchanged - see
+ * 104, SO A FULL-SPEED (255) ENTRY COVERS THREE CELLS AND A SPENT ONE
+ * STILL COVERS EXACTLY ONE, UNCHANGED - 1 + 255/104 = 3, and integer
+ * division means anything under 104 rounds to 1 + 0 = 1, the same single
+ * cell every entry already moved before this existed. THAT IS THE POINT,
+ * not a side effect to work around: it is what keeps a slow-moving
+ * entry's own behaviour, and every test written against the old
+ * one-cell-per-roll design, byte-for-byte unchanged - see
  * test_a_sub_divisor_speed_impulse_never_moves_more_than_one_cell_a_step
- * (suite_sand.c), which pins exactly this. */
+ * (suite_sand.c), which pins exactly this.
+ *
+ * NO SEPARATE CAP - there used to be one, SAND_IMPULSE_CELLS_PER_STEP_MAX,
+ * standing on its own so a future retune of this divisor could not
+ * silently move it too. An adversarial review of step_impulses() (bd
+ * esp32c6-w2h) measured what it was actually worth at this divisor's own
+ * shipped value: 1 + 255/104 = 3, always strictly under the cap's 4, at
+ * every speed a uint8_t can hold - the cap could never fire, so it was
+ * dead weight standing guard over nothing. Deleted rather than kept as
+ * insurance: a future divisor change that would make the cap matter again
+ * has to reintroduce it deliberately, with the same reasoning this
+ * paragraph records, not inherit a number nobody re-checked. */
 #define SAND_IMPULSE_CELLS_PER_STEP_DIVISOR  104
-
-/* THE CAP on the formula just above, as its OWN number rather than trusted
- * to fall out of the divisor by coincidence - the two happen to agree at
- * speed 255 today (1 + 255/64 = 4), but they answer different questions,
- * and a future retune of ONE (say, lowering the divisor to make a
- * moderate-speed entry cover more ground) must not silently move the
- * other along with it: at divisor 32 a full-speed entry would cover 1 +
- * 255/32 = 8 cells with no cap at all, and every cell of that crossing
- * still pays impulse_charge_displacement() and can still queue a TRANSFER
- * or a CASCADE entry (both already budgeted PER STEP by
- * SAND_CASCADE_MAX_PER_STEP, not per cell of one entry's own travel) - an
- * unbounded per-step distance is an unbounded amount of that same
- * per-step work charged to a single entry, not merely a faster-looking
- * throw. 4 is not independently swept, only checked against this rung's
- * own measurement: see SAND_IMPULSE_CELLS_PER_STEP_DIVISOR's own comment
- * for the before/after numbers this cap, at 4, actually produced. */
-#define SAND_IMPULSE_CELLS_PER_STEP_MAX  4
 
 /* EXTRA speed charged at the move site, on top of the ordinary ramp above,
  * per non-empty cell a KIND_STATIC or KIND_POWDER mover displaces - see
  * step_impulses()'s own comment at the charge site for why there rather
- * than folded into the ramp. The cost is `density >> this`, so a heavier
- * medium costs more: open air (nothing displaced) costs nothing, water (30)
- * costs 30, dirt or sand (60-62) cost 60-62 - at shift 0 the cost IS the
- * density, not a fraction of it. A SHIFT rather than a flat divide keeps
- * the cost a single-instruction saturating operation, the same idiom
- * SAND_SPLASH_SPEED_DECAY_SHIFT already uses elsewhere in this file.
- *
- * 0, MEASURED AGAINST DEVICE FEEDBACK, NOT PICKED FROM A TABLE - shift 2
- * (dirt/sand cost 15, water cost 7) was the starting figure this constant
- * shipped with, and a real throw against a real bank of sand on device
- * did not stop: a chunk at full speed still drove roughly 15 cells into a
- * bank before running out of speed at shift 2, plainly not "the first few
- * layers" the maintainer asked for. `density >> 0` is the identity - drag
- * IS the density, honestly - so dirt or sand (62 + the plain ramp's 2 = 64
- * a cell) spends the full 255 of speed in four cells, and water (30 + 2 =
- * 32 a cell) in about eight. Four and eight are the numbers this figure is
- * now judged against, not the table above.
- *
- * POWDERS WERE OUT AND ARE NOW IN, on device evidence. Scoping this to
- * KIND_STATIC movers first was deliberate - a thrown grain is what
- * sand_explode()'s own swept tuning measured, and a dislodged wall chunk
- * is not - but it also made the mechanism imperceptible in the app: a
- * static cell only ever enters flight when a blast rolls a density-scaled
- * dislodge against a wall, so almost everything a person actually watches
- * moving is a powder grain, and every one of those was still tunnelling.
- * Correct and invisible is not worth much. Liquids remain out, and for a
- * reason that has not changed: they carry their own geometric decay
- * (SAND_SPLASH_SPEED_DECAY_SHIFT) and the splash/cascade feature is tuned
- * around it, so widening to them would move two tuned features at once. */
-#define SAND_IMPULSE_DRAG_SHIFT  0
-
-/* Per-kind adjustment on top of the density-derived cost above, applied by
- * impulse_drag_of() (sand_priv.h). Density alone gave both media the same
+ * than folded into the ramp, and impulse_drag_of() (sand_priv.h) for the
+ * one place this is actually computed. The base cost IS `density`, no shift
+ * applied to it at all - open air (nothing displaced) costs nothing, water
+ * (30) costs 30, dirt or sand (60-62) cost 60-62 - and THIS constant is an
+ * additional per-kind adjustment on top of that, `density << this`, applied
+ * only for KIND_POWDER. Density alone gave every non-liquid medium the same
  * SHAPE of resistance, which is the thing that was wrong: packed grain jams
  * against itself and stops a mover dead, while a fluid parts around one and
  * barely slows it. So powder multiplies, and LIQUID CHARGES NOTHING AT ALL -
@@ -821,6 +788,21 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * puts a chunk falling into a pool back to exactly the behaviour it had
  * before any of this existed. That was the device call: sinking to the floor
  * had always looked right, so there was nothing here for drag to fix.
+ *
+ * USED TO BE TWO CONSTANTS - a general SAND_IMPULSE_DRAG_SHIFT applied to
+ * every non-liquid kind's density, and this one layered on top for
+ * KIND_POWDER only. The general shift shipped at 2 (dirt/sand cost 15,
+ * water cost 7) and a real throw against a real bank of sand on device did
+ * not stop at that figure: a chunk at full speed still drove roughly 15
+ * cells into a bank, plainly not "the first few layers" the maintainer
+ * asked for. Dropping it to 0 - `density >> 0` is the identity, drag IS the
+ * density, honestly - fixed that for KIND_STATIC, and an adversarial
+ * architecture review (bd esp32c6-w2h) later pointed out the shift, sitting
+ * at its own identity value, was adding a second lever over the same
+ * density with no effect left to have: folded away here rather than kept as
+ * a second constant with nothing left to say. A future STATIC-only
+ * adjustment, if one is ever needed, is a new constant scoped to that kind,
+ * not this one reopened.
  *
  * Measured, 32 seeds, cells of travel:
  *
@@ -853,7 +835,7 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * "open" means the way they once did before impulse_gravity_candidates()
  * unified the candidate list itself.
  *
- * WHY THIS HAS TO EXIST AT ALL: drag (SAND_IMPULSE_DRAG_SHIFT, above) only
+ * WHY THIS HAS TO EXIST AT ALL: drag (impulse_drag_of(), sand_priv.h) only
  * charges at the PUSH move site - a KIND_STATIC entry's unconditional
  * gravity-drift pays no drag at all, ever, by design ("gating this on
  * speed would tie 'still falling' to 'still has outward energy left', which
@@ -879,7 +861,7 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  *
  * THE KNOWN, CHOSEN TRADE: this floor is not kind-aware, so a spent chunk
  * now comes to rest inside a liquid too, not only a powder - roughly eight
- * cells down in water at SAND_IMPULSE_DRAG_SHIFT's new figure, rather than
+ * cells down in water at drag's own present figure, rather than
  * sinking all the way to the floor of a deep pool. The maintainer measured
  * liquid behaviour as already looking fine and chose this one simple rule
  * over a second, kind-aware version anyway - simplicity over splitting
@@ -954,8 +936,8 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * DIVISOR already uses for a relay one hop removed from the hop that caused
  * it, reused here rather than inventing a second "how much does a follow-up
  * lose" shape. 2 is a STARTING FIGURE, not a measurement - same status as
- * SAND_IMPULSE_DRAG_SHIFT and SAND_IMPULSE_BOUNCE_MIN_SPEED above, picked
- * from the existing idiom rather than a device sweep. */
+ * SAND_IMPULSE_DRAG_POWDER_SHIFT and SAND_IMPULSE_BOUNCE_MIN_SPEED above,
+ * picked from the existing idiom rather than a device sweep. */
 #define SAND_IMPULSE_TRANSFER_DIVISOR  1
 
 /* THE TRANSFER FLOOR - below this post-drag speed, a mover does not queue a
@@ -970,14 +952,14 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * whatever explosion or splash is already using it, and sand_impulse()
  * silently refuses once it is full - graceful, but silent. A chunk plowing
  * through a wide bank, uncapped, would queue one transfer per cell it
- * displaces; the shared per-step cap on the deferred array that carries
- * these (SAND_CASCADE_MAX_PER_STEP, this file - see step_impulses()'s own
- * comment on that array for why it now carries two kinds of follow-up, not
- * just cascade relays) is what actually protects the buffer, but this floor
- * is the first, cheaper gate: a plow through a LOW-density medium (most
- * cells pass the floor easily) still queues plenty, so both gates matter -
- * this one trims the faintest transfers before they even compete for the
- * per-step cap. */
+ * displaces; TRANSFER's own share of the deferred array's total capacity
+ * (SAND_CASCADE_TRANSFER_MAX_PER_STEP, this file - see SAND_CASCADE_MAX_
+ * PER_STEP's own comment for why that total is now split rather than one
+ * counter shared with the cascade relay) is what actually protects the
+ * buffer, but this floor is the first, cheaper gate: a plow through a
+ * LOW-density medium (most cells pass the floor easily) still queues
+ * plenty, so both gates matter - this one trims the faintest transfers
+ * before they even compete for the per-step cap. */
 #define SAND_IMPULSE_TRANSFER_MIN_SPEED  64
 
 /* sand_explode()'s OWN choice of what speed to hand every entry it queues -
@@ -1187,7 +1169,36 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * go. */
 #define SAND_CASCADE_SPEED_DIVISOR 2
 #define SAND_CASCADE_MIN_SPEED     1
+
+/* THE SHARED DEFERRED ARRAY'S TOTAL SIZE (step_impulses(), sand.c) - the
+ * physical capacity of `deferred[]`, not a per-mechanism budget any more.
+ * That array carries two unrelated kinds of follow-up (that array's own top
+ * comment in sand.c has the full account of why one array grew a second
+ * caller): a CASCADE relay, fired at most once per water/acid entry per
+ * step, and a TRANSFER, fired at most once per HOP of any entry's push -
+ * up to SAND_IMPULSE_CELLS_PER_STEP_DIVISOR's own multi-cell reach per
+ * entry per step. A single shared counter gating both against this one
+ * number let whichever kind queued first this step starve the other: an
+ * adversarial review (bd esp32c6-w2h) measured sixteen ploughing chunks
+ * filling every one of the 64 slots with transfers alone, in queue order,
+ * not by any physical difference between the two mechanisms - a cascade
+ * relay queued even one step later that same pass got nothing, regardless
+ * of how few cells of water were actually relaying.
+ *
+ * SPLIT EVENLY, INTO SAND_CASCADE_RELAY_MAX_PER_STEP and
+ * SAND_CASCADE_TRANSFER_MAX_PER_STEP below, each gating its own mechanism
+ * against its own half of this total - not because the two mechanisms fire
+ * at the same rate (they measurably do not: transfer's up-to-once-per-hop
+ * ceiling is the higher of the two), but because an even split is the
+ * simplest rule that guarantees BOTH mechanisms always get a real budget
+ * every step regardless of queue order, which is the actual bug this
+ * fixes - not "transfer deserves more slots than cascade", a claim nobody
+ * has swept evidence for yet. Revisit the split, not this total, if a
+ * future measurement shows one mechanism now starves inside its own half. */
 #define SAND_CASCADE_MAX_PER_STEP  64
+#define SAND_CASCADE_RELAY_MAX_PER_STEP     (SAND_CASCADE_MAX_PER_STEP / 2)
+#define SAND_CASCADE_TRANSFER_MAX_PER_STEP  (SAND_CASCADE_MAX_PER_STEP - \
+                                             SAND_CASCADE_RELAY_MAX_PER_STEP)
 
 /* ACID BUBBLES - see acid_bubble()'s own comment in sand_reactions.c for the
  * full account of what this replaced and why (2026-09-01): the old "landed
