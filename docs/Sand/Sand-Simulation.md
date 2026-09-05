@@ -49,13 +49,22 @@ purpose:
   boiler](#fire-chemistry-wood-embers-steam-and-a-working-boiler), and
   [`Adding-a-Material.md`](Adding-a-Material.md) for how each of these
   uses this.
+- **Gunpowder** (`KIND_POWDER`, but a nibble of its own): the low nibble
+  splits by its own TOP bit instead of naming a shade - `0xF8`-`0xFF` is
+  gunpowder, sharing material id 15 (`MAT_EXTENDED`) with the extended
+  statics below but claiming the other half of that nibble for a real
+  `KIND_POWDER` material. Its own remaining 3 bits are a state split like
+  dirt's, just narrower: codes 0-2 are dry tones, 3-6 are moisture 1-4,
+  and 7 is a burning STATE (`GUNPOWDER_LIT`) rather than one more
+  moisture level - see [Fire chemistry](#fire-chemistry-wood-embers-steam-and-a-working-boiler)'s
+  own gunpowder passage for what lit does.
 
 ## Materials are a flash-resident table, not code
 
-`materials[MATERIAL_MAX]` (`material.c`) is `const`, so it is memory-mapped
-from flash and costs **zero bytes of RAM** - confirmed via `idf.py size`,
-not assumed. Adding a material is a row in that table, not a branch in the
-movement code:
+`materials[MATERIAL_ROWS]` (`material.c`) is `const`, so it is
+memory-mapped from flash and costs **zero bytes of RAM** - confirmed via
+`idf.py size`, not assumed. Adding a material is a row in that table, not
+a branch in the movement code:
 
 ```c
 typedef struct {
@@ -68,8 +77,16 @@ typedef struct {
 } material_t;
 ```
 
-The table is padded to the full 16 the nibble can address
-(`MATERIAL_MAX = 16`), with the unused slots filled inert (`KIND_STATIC`,
+`MATERIAL_ROWS` is **32**, not 16 - doubled once gunpowder split material
+id 15's nibble in two (see the encoding diagram above): `material_of()`
+indexes this table by `cell >> 3` instead of the id nibble alone, so an
+ordinary material's id maps to TWO adjacent rows (`MATERIAL_ROW(id)` and
+`MATERIAL_ROW(id) + 1`), written once through a small variadic macro and
+landing in both, while extended statics (`0xF0`-`0xF7`) share one row and
+gunpowder (`0xF8`-`0xFF`) shares the other - so the hot table doubled in
+flash size (192 B to 384 B) but stayed the same one shift, one indexed
+load in the sweep. The table is still padded to the full range the index
+can address, with unused slots filled inert (`KIND_STATIC`,
 `density = 255`). That turns every lookup into a plain array index with no
 bounds check - worth doing because it happens several times per cell, per
 step, and a corrupt cell byte becomes an immovable block instead of
@@ -419,13 +436,19 @@ counts as not-lit) are also lit gunpowder, and the impulse buffer is
 live, it detonates (`sand_explode()`); otherwise it simply becomes an
 ordinary `MAT_FIRE` cell, the same no-buffer fallback the confined-gas
 blast already relies on, so a host test with impulses off still sees
-gunpowder burn down to fire like any other fuel. In a lit pile a blast
-takes the lit cells around it out of every 2x2 they belonged to - they are
-fire or flying grains by their own burn-out - so a thick pile's blasts
-land one at a time, spread across several frames by nothing more than
-each cell's own independent `burn_decay` roll, rather than one single
-blast on ignition. A one-wide trail or a lone lit cell never blasts at
-all - there is no lit 2x2 to be part of. The rule started as a fully-lit
+gunpowder burn down to fire like any other fuel. A thick pile's blasts
+land one at a time, spread across several frames, rather than one single
+blast on ignition or every qualifying 2x2 going off on the same step -
+guaranteed by `SAND_GUNPOWDER_BLASTS_PER_STEP` (1, board-wide,
+`sand_reactions.c`), a hard cap checked before `sand_explode()` is called
+and reset once per reactions pass, so at most one detonation fires
+however many 2x2s burn out qualifying together. A blast also takes the
+lit cells around it out of every 2x2 they belonged to - they are fire or
+flying grains by their own burn-out - which helps the same spreading-out
+along independently, but is a secondary effect of the geometry, not what
+bounds the cost: the cap does that. A one-wide trail or a lone lit cell
+never blasts at all - there is no lit 2x2 to be part of. The rule started
+as a fully-lit
 3x3 and was loosened after device testing: with independent burn-out
 rolls the neighbours lit before a cell are usually already fire when it
 goes, and blasts became rare enough to look broken. This replaced two
@@ -451,6 +474,20 @@ shape other saturation reactions already use. Acid dissolves gunpowder at
 the same rate it dissolves sand (`dissolvable = 200`); nothing about
 being explosive changes how a cell disappears once acid is what is
 touching it.
+
+**Gunpowder is not soil.** Every plant/root site that used to test
+`dries != 0` to mean "this is ground a root can use" - `find_water()`,
+`step_one_sprouting_cell()`, `step_one_budding_cell()`,
+`step_one_rooting_cell()`, `step_one_conducting_cell()`,
+`spend_soil_moisture()` - now tests a new field, `reaction_t.soil`,
+instead. Dirt sets `soil = 1`; gunpowder does not, even though it now has
+a moisture codec of its own and would otherwise have matched every one of
+those `dries != 0` checks. Moisture DIFFUSION between same-species cells
+and percolation still read `dries`, unchanged - that question ("can this
+variant mean wetness") and "is this ground" are genuinely different
+questions once more than one material can be wet, and a fuse sitting in
+a garden bed was never meant to be something a tree could root into,
+drink from, or drain moisture out of.
 
 Stone and glass bank heat in the low nibble their `KIND_STATIC` never
 otherwise needed (material.h's own comment on the low nibble's per-material
@@ -577,11 +614,20 @@ innermost cell does have a complete lid. See
 **`sand_explode()` fills a core of radius `radius / SAND_EXPLODE_CORE_
 DIVISOR` with fire before it queues a single flight entry** (see
 `SAND_EXPLODE_CORE_DIVISOR`'s own comment, sand.h). At `SAND_LAVA_BURST_
-RADIUS` (8, `SAND_GAS_IGNITE_BLAST_RADIUS`'s own figure - the only other
-reaction-driven burst that exists) and divisor 5, that core radius is 1 -
-so the `MAT_STONE` this feature just wrote at the centre is immediately
-overwritten by fresh fire. That is pinned, expected behaviour (see
+RADIUS` (12) and divisor 5, that core radius is 2 - so the `MAT_STONE`
+this feature just wrote at the centre is immediately overwritten by fresh
+fire. That is pinned, expected behaviour (see
 `test_buried_lava_bursts_into_stone_and_fire`, `suite_sand.c`), not a bug.
+`SAND_LAVA_BURST_RADIUS` started at `SAND_GAS_IGNITE_BLAST_RADIUS`'s own
+figure (8, the only other reaction-driven burst that existed at the
+time), was raised to 16 once a radius-8 burst read as a barely-visible
+flicker on device (core radius 1, about five cells of flame), then
+brought back down to 12 once gunpowder existed: the one material whose
+whole point is to go off (`SAND_GUNPOWDER_BLAST_RADIUS`, material.h)
+should own the biggest reaction-driven blast on the board, and a lava
+burst is a side effect of a vessel, not a charge - 12 still gives a core
+radius of 2, about thirteen cells of flame, well past the original
+flicker.
 
 Not gated on `sand_enable_impulses()` having been called: `sand_explode()`
 is a documented no-op without it, so with impulses off the cell simply

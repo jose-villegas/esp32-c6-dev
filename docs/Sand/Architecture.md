@@ -147,18 +147,41 @@ burn-out rolls are independent per cell, so by the time any cell burns
 out the neighbours lit before it are usually already fire, and a whole
 3x3 alight at once existed only in the brief window behind the fuse
 front. Three lit neighbours in one quadrant is what a lit pile actually
-presents at burn-out, and each blast's core and thrown grains remove the
-cells around it from every 2x2 they were part of, so a big pile's blasts
-still land one at a time across several frames rather than all at once. Two
-earlier designs - immediate detonation on ignition, then a boundary-only
-check - were measured on-device and dropped for costing the same or more;
-see [`Sand-Simulation.md`](Sand-Simulation.md#fire-chemistry-wood-embers-steam-and-a-working-boiler)
+presents at burn-out.
+
+A big pile's blasts still land one at a time across several frames rather
+than all landing on the same step, and the mechanism that actually
+guarantees that is `SAND_GUNPOWDER_BLASTS_PER_STEP` (1, board-wide,
+`sand_reactions.c`): a hard cap checked before `sand_explode()` is ever
+called, reset once per reactions pass, so at most one detonation fires no
+matter how many 2x2s burn out qualifying in the same step. Each blast's
+core and thrown grains removing the cells around it from every 2x2 they
+were part of helps too - a corner already consumed by an earlier blast
+this same step cannot also qualify a second one - but that is a secondary
+effect of the geometry, not what bounds the cost; the cap is what does.
+Two earlier designs - immediate detonation on ignition, then a
+boundary-only check - were measured on-device and dropped for costing the
+same or more; see
+[`Sand-Simulation.md`](Sand-Simulation.md#fire-chemistry-wood-embers-steam-and-a-working-boiler)
 for the full trigger and `soaked_to`/`soaked_chance` (saturated powder has
-a 3-in-256 chance per step to become a full `MAT_OIL` cell instead of
+an 8-in-256 chance per step to become a full `MAT_OIL` cell instead of
 drying out - the other field that fits none of these columns). Moisture
 damps the `flammability` roll itself (`f >>= 2 * moisture`, generic to any
 `dries != 0` material), which is why gunpowder needs no separate "is it
 wet" branch here.
+
+**Gunpowder is not soil.** A new `reaction_t` field, `soil` (nonzero:
+plants may root in, sprout from, drink from and conduct water into this
+material), replaces the old `dries != 0` test at every plant/root site
+that meant "this is soil" - `find_water()`, `step_one_sprouting_cell()`,
+`step_one_rooting_cell()`, `step_one_conducting_cell()`,
+`spend_soil_moisture()`. Dirt sets `soil = 1`; nobody else, gunpowder
+included, even though gunpowder now has a moisture codec of its own.
+`dries != 0` still means exactly what it always did - "this variant can
+mean moisture" - and moisture DIFFUSION between same-species cells and
+percolation keep reading it; only the narrower "is this ground a root can
+use" question moved to `soil`, because a fuse buried in a garden bed was
+never meant to be something a tree could water itself from.
 
 ### Heat that accumulates
 
