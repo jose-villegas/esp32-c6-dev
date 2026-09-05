@@ -15,6 +15,30 @@
  * file split without also risking a performance regression for it - see the
  * frame-budget tests in suite_sand.c, which is exactly what would catch it if
  * this ever stopped being true.
+ *
+ * THE REAL CRITERION FOR WHAT ELSE LIVES HERE, STATED HONESTLY: not every
+ * `static` helper in sand.c that could sit here (this header is app-internal
+ * and portable either way, so there is no layering reason it could not) does.
+ * blocker_normal(), reflect_off_normal() and impulse_drag_of() are here
+ * because a test needed to call them directly - suite_sand.c cannot reach a
+ * function `static` inside sand.c at all, only ones declared where it can
+ * include them, and this header is that place. can_impulse_enter(),
+ * can_impulse_enter_gravity_ward() and impulse_gravity_candidates() stay
+ * `static` in sand.c, right next to step_impulses(), because nothing has yet
+ * needed to drive one of them in isolation - every existing test reaches
+ * them through step_impulses()'s own observable behaviour instead. All six
+ * are equally pure - none touches anything this header's own functions do
+ * not already touch - so "pure enough to live here" was never the actual
+ * test being applied, whatever an earlier version of this comment implied.
+ * An adversarial architecture review (bd esp32c6-w2h) named this directly:
+ * the three left in sand.c are also the three with a documented history of
+ * their own two call sites quietly disagreeing about what they compute (see
+ * impulse_gravity_candidates()'s own comment in sand.c for that history) -
+ * exactly the kind of bug a direct test would have caught sooner. Moving
+ * them is not this fix: stating the true rule is, so the next helper this
+ * file's own history repeats on is moved (or not) on purpose, by whoever
+ * next needs to test it directly, rather than by a guess about purity that
+ * was never really what decided the first six.
  *===========================================================================*/
 #pragma once
 
@@ -672,23 +696,25 @@ covered_at(const sand_t *s, int x, int y, int w, int h, uint8_t density)
 }
 
 /* What one cell of `displaced` costs a mover ploughing through it - see
- * SAND_IMPULSE_DRAG_SHIFT and its two per-kind companions in sand.h.
+ * SAND_IMPULSE_DRAG_POWDER_SHIFT in sand.h.
  *
  * KIND MATTERS ON TOP OF DENSITY, on device evidence: packed grain jams
  * against itself and stops a chunk in a couple of layers, where a fluid
  * parts around one and lets it sink a good way in before it loses the
  * energy to keep going. Density alone gave both the same shape of
  * resistance, so a bank of dirt read as too soft and a pool as too stiff
- * at the same time - no single shift could fix both, which is what these
- * two exist to say. Saturating: a doubled density can exceed a byte, and
- * a cost above 255 means the same thing 255 does, since speed is one. */
+ * at the same time - no single number could fix both, which is what the
+ * KIND checks below exist to say: the base cost IS `density`, unshifted,
+ * for every non-liquid kind, and KIND_POWDER alone gets the extra shift on
+ * top. Saturating: a doubled density can exceed a byte, and a cost above
+ * 255 means the same thing 255 does, since speed is one. */
 static inline uint8_t impulse_drag_of(cell_t displaced)
 {
     const material_t *m = material_of(displaced);
-    unsigned d = (unsigned)m->density >> SAND_IMPULSE_DRAG_SHIFT;
+    unsigned d = (unsigned)m->density;
 
     if (m->kind == KIND_LIQUID) {
-        return 0u;   /* a fluid parts around a mover - see the constants */
+        return 0u;   /* a fluid parts around a mover - see the constant */
     }
     if (m->kind == KIND_POWDER) {
         d <<= SAND_IMPULSE_DRAG_POWDER_SHIFT;
