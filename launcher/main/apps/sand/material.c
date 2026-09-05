@@ -1279,6 +1279,21 @@ const reaction_t reactions[MATERIAL_MAX] = {
  * sixteen entries built in more than one piece. */
 #define SEG(lo, hi, i, n) GFX_RGB(LERP(lo, hi, ((i) * 15) / ((n) - 1)))
 
+/* A pastel is a pure hue with white mixed in, so undoing the mix means
+ * stretching each channel back out by its distance from white - the closer
+ * a channel already is to white, the less it moves, and a strong enough
+ * stretch drives it below zero, which the ternary clamps rather than lets
+ * wrap. Written as a ternary (not an if) so it stays a constant expression
+ * a static const array initializer can use.
+ *
+ * Worked example, k = CULLET_GLINT_STRETCH = 4 (see that constant's own
+ * comment for the other three): pale cyan CULLET_CYCLE_A 0xCFEAF2 becomes
+ * 0x3FABCB - still recognisably cyan (green and blue both stay above red),
+ * but the spread between channels nearly quadruples. */
+#define SAT_CH(rgb, shift, k)                                                                                         \
+    (255 - (k) * (255 - (((rgb) >> (shift)) & 0xFF)) < 0 ? 0 : 255 - (k) * (255 - (((rgb) >> (shift)) & 0xFF)))
+#define SATURATE(rgb, k) ((SAT_CH(rgb, 16, k) << 16) | (SAT_CH(rgb, 8, k) << 8) | SAT_CH(rgb, 0, k))
+
 /* Glass, whose variant is a TEMPERATURE rather than a shade, so this is a
  * temperature scale - with room temperature in the MIDDLE of it and two
  * different things happening on either side.
@@ -1465,11 +1480,29 @@ _Static_assert(SAND_AMBIENT_HEAT > 0 && SAND_AMBIENT_HEAT < SAND_SHOCK_HEAT && S
  * as four materials taking turns. A cycle that wandered into anything
  * saturated would stop looking like glass and start looking like confetti;
  * see test_cullet_stays_pale_at_every_phase in suite_sand.c, which exists
- * to catch exactly that on a retune. */
+ * to catch exactly that on a retune.
+ *
+ * The one deliberate exception is the GLINT (cullet_glint[] below): on the
+ * device the all-pale cycle read as too white, so a rare grain now shows
+ * the SATURATED version of its own cycle colour instead - the same hue,
+ * pushed all the way out from white - which is what makes ground glass
+ * glisten rather than just look pale. */
 #define CULLET_CYCLE_A 0xCFEAF2 /* pale cyan */
 #define CULLET_CYCLE_B 0xD8D0F0 /* lilac */
 #define CULLET_CYCLE_C 0xF0D6DC /* rose */
 #define CULLET_CYCLE_D 0xE2F0D2 /* mint */
+
+/* How hard cullet_glint[] (below) pushes a pale cycle colour away from
+ * white. 3 is softer (glints barely stand out from the pale cycle), 5 is
+ * harsher (glints toward primaries); 4 is what the anchors' own comment
+ * above and cullet_glint[]'s worked examples use. */
+#define CULLET_GLINT_STRETCH 4
+
+/* Odds a glinting roll (material_colours()'s own MAT_SAND case) hits, per
+ * cell per phase step - about one grain in 64. A mask, not a modulo, so it
+ * has to stay a power of two (asserted beside cullet_glint[] below); lower
+ * = more glints, and the request was for RARE, so this stays high. */
+#define CULLET_GLINT_ONE_IN 64
 
 #define SAND_CULLET_RAMP                                                                                               \
     GFX_RGB(CULLET_CYCLE_A), GFX_RGB(CULLET_CYCLE_B), GFX_RGB(CULLET_CYCLE_C), GFX_RGB(CULLET_CYCLE_D)
@@ -1491,15 +1524,42 @@ _Static_assert((CULLET_CYCLE_LEN & (CULLET_CYCLE_LEN - 1)) == 0,
 _Static_assert(CULLET_CYCLE_LEN % SAND_CULLET_SHADES == 0,
                "each cullet shade needs to land on an exact quarter-turn of the cycle");
 
+/* Same (lo, hi, t) triple, two colours: the pale cycle entry, and the
+ * SATURATEd version of that exact entry that cullet_glint[] uses below - so
+ * a glint is always the strong version of the very colour that grain is
+ * showing at that moment, never a triple typed out twice by hand. */
+#define CULLET_PALE(lo, hi, t)  GFX_RGB(LERP(lo, hi, t))
+#define CULLET_GLINT(lo, hi, t) GFX_RGB(SATURATE(LERP(lo, hi, t), CULLET_GLINT_STRETCH))
+
 static const gfx_color_t cullet_cycle[CULLET_CYCLE_LEN] = {
-    GFX_RGB(LERP(CULLET_CYCLE_A, CULLET_CYCLE_B, 0)), GFX_RGB(LERP(CULLET_CYCLE_A, CULLET_CYCLE_B, 4)),
-    GFX_RGB(LERP(CULLET_CYCLE_A, CULLET_CYCLE_B, 8)), GFX_RGB(LERP(CULLET_CYCLE_A, CULLET_CYCLE_B, 12)),
-    GFX_RGB(LERP(CULLET_CYCLE_B, CULLET_CYCLE_C, 0)), GFX_RGB(LERP(CULLET_CYCLE_B, CULLET_CYCLE_C, 4)),
-    GFX_RGB(LERP(CULLET_CYCLE_B, CULLET_CYCLE_C, 8)), GFX_RGB(LERP(CULLET_CYCLE_B, CULLET_CYCLE_C, 12)),
-    GFX_RGB(LERP(CULLET_CYCLE_C, CULLET_CYCLE_D, 0)), GFX_RGB(LERP(CULLET_CYCLE_C, CULLET_CYCLE_D, 4)),
-    GFX_RGB(LERP(CULLET_CYCLE_C, CULLET_CYCLE_D, 8)), GFX_RGB(LERP(CULLET_CYCLE_C, CULLET_CYCLE_D, 12)),
-    GFX_RGB(LERP(CULLET_CYCLE_D, CULLET_CYCLE_A, 0)), GFX_RGB(LERP(CULLET_CYCLE_D, CULLET_CYCLE_A, 4)),
-    GFX_RGB(LERP(CULLET_CYCLE_D, CULLET_CYCLE_A, 8)), GFX_RGB(LERP(CULLET_CYCLE_D, CULLET_CYCLE_A, 12)),
+    CULLET_PALE(CULLET_CYCLE_A, CULLET_CYCLE_B, 0), CULLET_PALE(CULLET_CYCLE_A, CULLET_CYCLE_B, 4),
+    CULLET_PALE(CULLET_CYCLE_A, CULLET_CYCLE_B, 8), CULLET_PALE(CULLET_CYCLE_A, CULLET_CYCLE_B, 12),
+    CULLET_PALE(CULLET_CYCLE_B, CULLET_CYCLE_C, 0), CULLET_PALE(CULLET_CYCLE_B, CULLET_CYCLE_C, 4),
+    CULLET_PALE(CULLET_CYCLE_B, CULLET_CYCLE_C, 8), CULLET_PALE(CULLET_CYCLE_B, CULLET_CYCLE_C, 12),
+    CULLET_PALE(CULLET_CYCLE_C, CULLET_CYCLE_D, 0), CULLET_PALE(CULLET_CYCLE_C, CULLET_CYCLE_D, 4),
+    CULLET_PALE(CULLET_CYCLE_C, CULLET_CYCLE_D, 8), CULLET_PALE(CULLET_CYCLE_C, CULLET_CYCLE_D, 12),
+    CULLET_PALE(CULLET_CYCLE_D, CULLET_CYCLE_A, 0), CULLET_PALE(CULLET_CYCLE_D, CULLET_CYCLE_A, 4),
+    CULLET_PALE(CULLET_CYCLE_D, CULLET_CYCLE_A, 8), CULLET_PALE(CULLET_CYCLE_D, CULLET_CYCLE_A, 12),
+};
+
+/* The GLINT table: the same sixteen cycle steps, each pushed out to its
+ * saturated extreme (SATURATE(), CULLET_GLINT_STRETCH) instead of left
+ * pale. Indexed identically to cullet_cycle[] above - material_colours()'s
+ * MAT_SAND case picks one table or the other for a given cell, it never
+ * mixes indices between them. Const, so this costs flash only, same as
+ * cullet_cycle[] itself. */
+_Static_assert((CULLET_GLINT_ONE_IN & (CULLET_GLINT_ONE_IN - 1)) == 0,
+               "the glint roll wraps with a mask below - it has to stay a power of two");
+
+static const gfx_color_t cullet_glint[CULLET_CYCLE_LEN] = {
+    CULLET_GLINT(CULLET_CYCLE_A, CULLET_CYCLE_B, 0), CULLET_GLINT(CULLET_CYCLE_A, CULLET_CYCLE_B, 4),
+    CULLET_GLINT(CULLET_CYCLE_A, CULLET_CYCLE_B, 8), CULLET_GLINT(CULLET_CYCLE_A, CULLET_CYCLE_B, 12),
+    CULLET_GLINT(CULLET_CYCLE_B, CULLET_CYCLE_C, 0), CULLET_GLINT(CULLET_CYCLE_B, CULLET_CYCLE_C, 4),
+    CULLET_GLINT(CULLET_CYCLE_B, CULLET_CYCLE_C, 8), CULLET_GLINT(CULLET_CYCLE_B, CULLET_CYCLE_C, 12),
+    CULLET_GLINT(CULLET_CYCLE_C, CULLET_CYCLE_D, 0), CULLET_GLINT(CULLET_CYCLE_C, CULLET_CYCLE_D, 4),
+    CULLET_GLINT(CULLET_CYCLE_C, CULLET_CYCLE_D, 8), CULLET_GLINT(CULLET_CYCLE_C, CULLET_CYCLE_D, 12),
+    CULLET_GLINT(CULLET_CYCLE_D, CULLET_CYCLE_A, 0), CULLET_GLINT(CULLET_CYCLE_D, CULLET_CYCLE_A, 4),
+    CULLET_GLINT(CULLET_CYCLE_D, CULLET_CYCLE_A, 8), CULLET_GLINT(CULLET_CYCLE_D, CULLET_CYCLE_A, 12),
 };
 
 #define SHADES(lo, hi)                                                                                                 \
@@ -2679,7 +2739,7 @@ material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_col
     }
 
     switch (CELL_MATERIAL(c)) {
-        case MAT_SAND:
+        case MAT_SAND: {
             /* ONE compare added to the measured shape MAT_EXTENDED's own
          * comment below describes (14%/26% through an inlining cliff for a
          * RESTRUCTURE) - this is not that, just one more leading equality
@@ -2695,15 +2755,33 @@ material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_col
          * the cycle's length turns that into the cycle's own index, adding
          * this frame's phase advances it, and the final mask wraps it back
          * into range instead of a modulo. See material.h's own rewritten
-         * comment on SAND_CULLET_BASE for what the shade means now. */
+         * comment on SAND_CULLET_BASE for what the shade means now.
+         *
+         * The rest of the cullet branch - everything from `i` down - is the
+         * rare GLINT on top of that, and ordinary sand never reaches it: it
+         * already left via the `break` above. */
             if (v < SAND_CULLET_BASE) {
                 break;
             }
-            out[0] = cullet_cycle[((v - SAND_CULLET_BASE) * (CULLET_CYCLE_LEN / SAND_CULLET_SHADES) + cullet_phase) &
-                                   (CULLET_CYCLE_LEN - 1)];
+            const unsigned i = ((v - SAND_CULLET_BASE) * (CULLET_CYCLE_LEN / SAND_CULLET_SHADES) + cullet_phase) &
+                                (CULLET_CYCLE_LEN - 1);
+
+            /* GLINT: rarely, show the SATURATED version of this exact cycle
+         * colour (cullet_glint[i], same index as cullet_cycle[i]) instead
+         * of the pale one - the near-white cycle read as too white on the
+         * device, and a sudden saturated grain among the pale ones is what
+         * makes ground glass glisten. The mix is water foam's own trick
+         * just above in this function (hash + phase * odd constant) rather
+         * than a fresh RNG, so the glinting set changes with cullet_phase -
+         * a different few grains each step, gone again the next - with no
+         * clock of its own inside this file. CULLET_GLINT_ONE_IN keeps it
+         * rare, as asked; see that constant's own comment to retune it. */
+            const bool glint = ((hash + cullet_phase * 0x9E37u) & (CULLET_GLINT_ONE_IN - 1)) == 0;
+            out[0] = glint ? cullet_glint[i] : cullet_cycle[i];
             out[1] = out[0];
             out[2] = out[0];
             return MATERIAL_FLAT;
+        }
         case MAT_EXTENDED:
             /* Switched on the low nibble, which for these is their identity
          * rather than a variant - see MATX(). Anything without a grain of
