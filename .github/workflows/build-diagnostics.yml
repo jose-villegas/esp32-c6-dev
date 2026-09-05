@@ -3,12 +3,31 @@ name: Build (Diagnostics)
 # Compiles the diagnostics/test variant for the esp32c6 target - the
 # firmware plus the on-device test suites (see
 # launcher/test/run_device_tests.sh, which builds this same config
-# locally: -B build.diag -D SDKCONFIG=build.diag/sdkconfig). This is a
-# meaningfully different config from the release build (CONFIG_LAUNCHER_-
+# locally: -B build.diag -D SDKCONFIG=build.diag/sdkconfig -D
+# SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.diag"). This is
+# a meaningfully different config from the release build (CONFIG_LAUNCHER_-
 # SELFTEST=y pulls in Unity and every suite), so it can break independently
 # of it - own workflow file, own badge, separate from build-release.yml
 # and host-tests.yml. See host-tests.yml's top comment for why these are
 # three files instead of one.
+#
+# -D SDKCONFIG_DEFAULTS is not optional here, even though -D SDKCONFIG is
+# already present. On a clean CI checkout build.diag/sdkconfig does not
+# exist yet, so idf.py generates it - and without -D SDKCONFIG_DEFAULTS
+# that generation falls back to the single base sdkconfig.defaults, never
+# merging sdkconfig.defaults.diag. The result carries neither
+# LAUNCHER_DEVELOPMENT nor LAUNCHER_SELFTEST and quietly builds a
+# release-shaped image under the build.diag/ name: it builds, it just
+# isn't diagnostics. That is exactly what happened here: this workflow
+# stayed green from 2026-09-04 while the real diagnostics configuration
+# failed to compile (seven -Werror=format errors in suite_sand.c, fixed in
+# "Let the diagnostics image compile again"), because it was never
+# actually building that configuration. See
+# launcher/tools/build_flash.sh's comment above its own idf.py call for
+# the sibling trap (missing -D SDKCONFIG instead, which reads the
+# PROJECT's own sdkconfig and is just as silent). List order matters here
+# too: the base defaults first, then the variant's, so the variant's
+# choices win where they overlap.
 
 on:
   push:
@@ -25,4 +44,4 @@ jobs:
           esp_idf_version: release-v5.5
           target: esp32c6
           path: launcher
-          command: idf.py -B build.diag -D SDKCONFIG=build.diag/sdkconfig build
+          command: idf.py -B build.diag -D SDKCONFIG=build.diag/sdkconfig -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.diag" build
