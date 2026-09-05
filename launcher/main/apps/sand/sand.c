@@ -2098,11 +2098,44 @@ static void impulse_charge_displacement(sand_t *s, impulse_t *entry,
 
     if (impact_speed >= SAND_IMPULSE_TRANSFER_MIN_SPEED &&
         *deferred_count < SAND_CASCADE_MAX_PER_STEP) {
+        /* ONLY THROW A CELL THAT HAS OPEN AIR TO BE THROWN INTO - the
+         * ejecta a person actually sees is the volume's SURFACE coming
+         * off it, and a cell deeper in has nowhere to go however hard it
+         * is hit. Queuing one anyway was most of why the spray read as
+         * barely there: the entry spent a slot of a per-step budget the
+         * surface cells were competing for, then wedged on its first
+         * move against the neighbour it was pointed at and did nothing
+         * visible. Checking first is also strictly CHEAPER than not - at
+         * most three reads here against a queued entry that costs a slot
+         * plus a full turn of the flight pass to discover the same thing.
+         *
+         * Starting the scan at a random arm of the cone rather than
+         * always the same one keeps a flat surface from throwing every
+         * one of its cells along an identical vector, which reads as a
+         * sheet lifting off rather than a spray. sand_at()'s off-grid
+         * STONE means the board edge is never chosen, so nothing is ever
+         * thrown out of the world. */
+        const int ex = (int)((unsigned)at_index % (unsigned)s->w);
+        const int ey = (int)((unsigned)at_index / (unsigned)s->w);
+        const int base = dir_for_transfer + 3;
+        const unsigned first = rng_below(&s->rng, 3);
+        int chosen = -1;
+
+        for (unsigned k = 0; k < 3u && chosen < 0; k++) {
+            const int cand = (base + (int)((first + k) % 3u)) & 7;
+            const int *cd = ring_dir(cand);
+            if (CELL_IS_EMPTY(sand_at(s, ex + cd[0], ey + cd[1]))) {
+                chosen = cand;
+            }
+        }
+        if (chosen < 0) {
+            return;   /* buried - no surface to leave by */
+        }
+
         impulse_t *t = &deferred[(*deferred_count)++];
         t->index = at_index;
         t->cell  = displaced;
-        t->dir   = (uint8_t)((dir_for_transfer + 3 +
-                             rng_below(&s->rng, 3)) & 7);
+        t->dir   = (uint8_t)chosen;
         t->speed = (uint8_t)(impact_speed / SAND_IMPULSE_TRANSFER_DIVISOR);
     }
 }
