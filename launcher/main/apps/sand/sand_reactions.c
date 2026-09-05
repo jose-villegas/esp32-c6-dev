@@ -3950,12 +3950,36 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
             const int water_wins_chance = SAND_ACID_DILUTE_TO_WATER_CHANCE
                                            + (water_backing - acid_backing) * mass_bias;
 
-            /* ONE roll, a three-way ladder - see SAND_ACID_DILUTE_EVAPORATE_CHANCE's
+            /* ONE roll, now a four-way ladder - see SAND_ACID_DILUTE_EVAPORATE_CHANCE's
              * own comment (sand.h) for why this replaced two independent
-             * rolls. */
+             * rolls, and SAND_ACID_DILUTE_SMOKE_CHANCE's own comment
+             * (sand.h) for why the smoke band sits ahead of every other
+             * band rather than folded into one of them: every band below
+             * keeps its own width and its own meaning, simply shifted up
+             * by however wide the smoke band is. */
             const int roll = (int)(rng_next(&s->rng) & 0xFF);
             const size_t self_at = (size_t)y * (size_t)w + (size_t)x;
-            if (roll < SAND_ACID_DILUTE_EVAPORATE_CHANCE) {
+            const int smoke_chance = (s->acid_dilute_smoke_chance >= 0)
+                                          ? s->acid_dilute_smoke_chance : SAND_ACID_DILUTE_SMOKE_CHANCE;
+            if (roll < smoke_chance) {
+                /* SAND_ACID_DILUTE_SMOKE_CHANCE (sand.h): the acid cell
+                 * boils off into MAT_SMOKE rather than its ordinary
+                 * MAT_GAS - deliberately a DIFFERENT material, so a
+                 * single cell of it poisons any 4x4 acid-rain pocket
+                 * (step_one_acid_rain_cell(), below) it ends up inside.
+                 * CARVED OUT OF THE EVAPORATE BAND, not added ahead of
+                 * the whole ladder. Added, it took its width out of the
+                 * acid-wins share at the bottom, which quietly weakened
+                 * how fast acid converts a pool - caught by
+                 * test_a_relentless_pour_of_acid_overwhelms_a_pool_of_
+                 * water, whose mass-bias signal it swamped. Carved, every
+                 * boundary below is exactly where it was and the only
+                 * thing that changes is what an evaporation YIELDS. It
+                 * also suppresses pockets harder for free: a 4x4 needs at
+                 * least two MAT_GAS, and this takes its width out of the
+                 * band that was the only source of them. */
+                place_reacted(s, x, y, self_at, MAT_SMOKE);
+            } else if (roll < SAND_ACID_DILUTE_EVAPORATE_CHANCE) {
                 /* Acid's own ambient-style boil-off, unrelated to who
                  * wins the water/acid split below - see this constant's
                  * own comment (sand.h). Only the acid cell is touched. */
