@@ -24257,7 +24257,8 @@ static void test_a_struck_water_cell_is_handed_impulse_in_a_backward_cone_from_t
         "the mover's own heading: a struck cell squeezes back out through "
         "the surface it was hit through, it does not get shoved further "
         "along the exact path that just hit it");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(mover_speed / SAND_IMPULSE_TRANSFER_DIVISOR,
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        (int)(((unsigned)mover_speed * SAND_IMPULSE_TRANSFER_KEEP) >> 8),
         s.impulse_buf[found].speed,
         "carrying exactly its share of the mover's own post-drag speed");
 }

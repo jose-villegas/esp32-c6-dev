@@ -2222,7 +2222,8 @@ static void impulse_charge_displacement(sand_t *s, impulse_t *entry,
                 t->index = (uint16_t)old_index;
                 t->cell  = displaced;
                 t->dir   = (uint8_t)chosen;
-                t->speed = (uint8_t)(impact_speed / SAND_IMPULSE_TRANSFER_DIVISOR);
+                t->speed = (uint8_t)(((unsigned)impact_speed *
+                                      SAND_IMPULSE_TRANSFER_KEEP) >> 8);
             }
             /* chosen < 0 means buried - no surface to leave by - so nothing
              * is queued, but the displacement below still happens: burial

@@ -948,27 +948,37 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * (KIND_STATIC/KIND_POWDER movers only, matching drag's own scope just
  * above; any non-static displaced cell, powder or liquid alike).
  *
- * SAND_IMPULSE_TRANSFER_DIVISOR halves the speed the mover ARRIVED with -
- * not what it has left, which is the whole point of capturing impact_speed
- * before drag takes its cut (see the transfer site). The same halving idiom
- * SAND_CASCADE_SPEED_DIVISOR already uses for a relay one hop removed from
- * the hop that caused it, reused rather than inventing a second "how much
- * does a follow-up lose" shape.
+ * SAND_IMPULSE_TRANSFER_KEEP is HOW MUCH OF THE ARRIVAL SPEED THE CHILD
+ * KEEPS, in 256ths - not what that speed is divided by. The arrival speed,
+ * not what the mover has left, which is the whole point of capturing
+ * impact_speed before drag takes its cut (see the transfer site).
  *
- * BACK TO 2 AFTER A SPELL AT 1, and the reason is a rule rather than a
- * taste. At 1 this is not a divisor at all: a struck cell inherits the
- * mover's full arrival speed while the mover itself loses nearly all of it
- * to drag, so every strike on a surface cell mints a fresh full-speed
- * entry out of nothing. Nothing bounded that except the backward cone
- * usually picking open air, where the ramp bleeds it out - a bound made of
- * geometry and luck rather than of any rule written down, which an
- * architecture review called out as an unstated invariant. At 2 a child can
- * never carry more than half of what its parent arrived with, which is a
- * conservation-shaped bound that holds whatever the geometry does.
+ * A KEEP FACTOR RATHER THAN A DIVISOR because an integer divisor can only
+ * express 1, 2, 3 - and the useful range turned out to sit between the
+ * first two. At 1 a strike hands over everything; at 2 it halves; on device
+ * the first was too strong and the second too weak, and there was no way to
+ * say so. In 256ths the whole range is reachable, using the same "in 256"
+ * vocabulary this file already speaks everywhere else, and a shift instead
+ * of a divide.
  *
- * The cost is real and was accepted deliberately: ejecta sprays visibly
- * less hard than at 1. That trade was made on device, not on the bench. */
-#define SAND_IMPULSE_TRANSFER_DIVISOR  2
+ *     keep 256   divisor 1.00   a 255 parent hands over 255
+ *     keep 213   divisor 1.20   a 255 parent hands over 212
+ *     keep 171   divisor 1.50   a 255 parent hands over 170
+ *     keep 128   divisor 2.00   a 255 parent hands over 127
+ *
+ * ANY VALUE BELOW 256 SATISFIES THE RULE THIS EXISTS FOR, which is worth
+ * being exact about because the review that raised it named 2 specifically.
+ * The problem at keep 256 is that a strike MINTS energy: the child carries
+ * the parent's full arrival speed while the parent loses nearly all of it
+ * to drag, so nothing bounds a chain except the backward cone usually
+ * finding open air - geometry and luck rather than a rule. Below 256 each
+ * generation is strictly smaller than the last, so a chain decays
+ * geometrically whatever the geometry does. 2 buys a faster decay, not the
+ * only bound; 1.2 is a weaker bound that is still a bound.
+ *
+ * 213 is a device figure, picked between a 1 that sprayed too hard and a 2
+ * that sprayed too softly. */
+#define SAND_IMPULSE_TRANSFER_KEEP  213
 
 /* THE TRANSFER FLOOR - below this post-drag speed, a mover does not queue a
  * transfer at all, the same shape SAND_IMPULSE_BOUNCE_MIN_SPEED already
