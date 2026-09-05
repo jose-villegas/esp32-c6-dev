@@ -759,7 +759,7 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * design, byte-for-byte unchanged - see
  * test_a_sub_divisor_speed_impulse_never_moves_more_than_one_cell_a_step
  * (suite_sand.c), which pins exactly this. */
-#define SAND_IMPULSE_CELLS_PER_STEP_DIVISOR  128
+#define SAND_IMPULSE_CELLS_PER_STEP_DIVISOR  104
 
 /* THE CAP on the formula just above, as its OWN number rather than trusted
  * to fall out of the divisor by coincidence - the two happen to agree at
