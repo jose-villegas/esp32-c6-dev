@@ -1267,6 +1267,14 @@ const reaction_t reactions[MATERIAL_MAX] = {
          * figure, kept: the burn did not change, only where it lives. */
             .burn_decay = 24,
 
+            /* Variant 0 is unlit, 1..15 lit - the whole codec, so this is
+             * just that fact written down for cell_is_burning()/
+             * tick_decay_at() (material.h/sand_priv.h) to read rather
+             * than assume. Spelled out explicitly rather than left at the
+             * zero-initialised default so a reader sees wood opted into
+             * this, the same reason gunpowder's row states its own 7. */
+            .lit_from = 1,
+
             .residue = 90, /* well above fire's 40: a whole log
                                    * finishing its burn is a bigger, more
                                    * definite event than a flame guttering
@@ -3133,57 +3141,80 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_CODES] = {
      *
      * The chemistry, field by field - the trigger sites themselves
      * (try_ignite_given(), try_heat_transform_given(), the wet-earth branch
-     * of the heat path, step_one_soaking_cell()) live in sand_reactions.c,
-     * not here; this row only says what the numbers are and why:
+     * of the heat path, step_one_soaking_cell(), step_one_burning_cell())
+     * live in sand_reactions.c, not here; this row only says what the
+     * numbers are and why:
      *
      *   flammability = 200   catches almost the instant a flame touches
      *                        it - the one trait a powder keg has to have
-     *   ignites_to = MAT_FIRE   no char state of its own, unlike wood -
-     *                        it either has not caught yet or it has gone up
-     *   explodes = SAND_GUNPOWDER_BLAST_RADIUS   the whole point: ignition
-     *                        detonates instead of lighting one grain - see
+     *   ignites_to = GUNPOWDER_LIT_CELL   a burning STATE like wood's, not
+     *                        an ordinary flame - lights the fuse rather
+     *                        than placing MAT_FIRE
+     *   heats_to = GUNPOWDER_LIT_CELL   heat alone - lava beside it, heat
+     *                        conducted through stone or metal - lights the
+     *                        same fuse with no flame required
+     *   heat_chance = 24     wood's own smoulder figure: conducted heat is
+     *                        a slower fuse than a direct flame
+     *   burn_decay = 32      the fuse's own burn rate - ~8 steps of lit
+     *                        life per cell on average (256/32), wood-ish
+     *                        but a touch quicker, since a single grain has
+     *                        far less of itself to get through than a log
+     *   lit_from = 7         GUNPOWDER_LIT - the one code that means "on
+     *                        fire" (material.h); codes below it are dry
+     *                        tones and moisture, never mistaken for embers
+     *   explodes = SAND_GUNPOWDER_BLAST_RADIUS   read ONLY at burn-out
+     *                        now (step_one_burning_cell()): a lit cell
+     *                        that finds all eight neighbours also lit
+     *                        detonates instead of quietly going out - see
      *                        that macro's own comment (material.h) for
-     *                        the radius
+     *                        the radius and REVISION 2's note on why
+     *                        ignition itself no longer reads this field
      *   needs_air = 0        catches through its own volume, not just an
      *                        exposed face - a buried charge is still one
      *   dissolvable = 200    same rate as sand and dirt (see dirt's own
      *                        row) - acid does not spare a powder charge
-     *   heats_to = MAT_FIRE   heat alone - lava beside it, heat conducted
-     *                        through stone or metal - sets it off with no
-     *                        flame required
-     *   heat_chance = 24     wood's own smoulder figure: conducted heat is
-     *                        a slower fuse than a direct flame
      *   soaks = 60           water wets it - moisture climbs, water is
      *                        consumed - dirt's own rate
      *   soaks_to = 0         stays gunpowder while it wets, only wetter,
      *                        same as dirt
      *   tones = 3            three dry tones - all the low bits gunpowder
      *                        can spare of nibble 15 (GUNPOWDER_BASE)
-     *   moist_max = 5        five moisture levels in what is left once
-     *                        the three tones are spent
+     *   moist_max = 4        four moisture levels in what is left once the
+     *                        three tones AND the lit code are spent - one
+     *                        fewer than section 2's five, the code that
+     *                        moisture level used to occupy is GUNPOWDER_LIT
+     *                        now
      *   dries = 1            far under dirt's 2 - a powder keg holds
      *                        water a long time once soaked
      *   soaked_to = MAT_OIL   saturated gunpowder eventually turns to
      *                        oil rather than staying wet and inert forever
      *   soaked_chance = 3    rare, and rolled only once already fully
      *                        soaked - it lingers wet a good while first
+     *   residue = 0          burning out never reaches the ordinary
+     *                        smoke-residue roll (step_one_burning_cell()
+     *                        returns from the `explodes != 0` branch
+     *                        first) - left at 0, spelled out, so that stays
+     *                        true even if the burn-out order ever changes
      */
 #define GUNPOWDER_REACTION                                                                                             \
     {                                                                                                                  \
         .flammability = 200,                                                                                           \
-        .ignites_to = MAT_FIRE,                                                                                        \
+        .ignites_to = GUNPOWDER_LIT_CELL,                                                                              \
+        .heats_to = GUNPOWDER_LIT_CELL,                                                                                \
+        .heat_chance = 24,                                                                                             \
+        .burn_decay = 32,                                                                                              \
+        .lit_from = GUNPOWDER_LIT,                                                                                     \
         .explodes = SAND_GUNPOWDER_BLAST_RADIUS,                                                                       \
         .needs_air = 0,                                                                                                \
         .dissolvable = 200,                                                                                            \
-        .heats_to = MAT_FIRE,                                                                                          \
-        .heat_chance = 24,                                                                                             \
         .soaks = 60,                                                                                                   \
         .soaks_to = 0,                                                                                                 \
         .tones = 3,                                                                                                    \
-        .moist_max = 5,                                                                                                \
+        .moist_max = 4,                                                                                                \
         .dries = 1,                                                                                                    \
         .soaked_to = MAT_OIL,                                                                                          \
         .soaked_chance = 3,                                                                                            \
+        .residue = 0,                                                                                                  \
     }
     [8] = GUNPOWDER_REACTION,
     [9] = GUNPOWDER_REACTION,

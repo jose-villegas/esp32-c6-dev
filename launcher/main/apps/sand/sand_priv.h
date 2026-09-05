@@ -848,27 +848,38 @@ static inline void mark_move(sand_t *s, int x0, int y0, int x1, int y1)
  *
  * Split out for materials whose variant is life but whose movement row
  * says decay 0 - wood, which is not a transient and must not be treated as
- * one by anything else, but does count down while it is burning. */
+ * one by anything else, but does count down while it is burning.
+ *
+ * Reads/writes through cell_code()/cell_with_code() (material.h), not
+ * CELL_VARIANT()/CELL_MAKE(), and burns out at `r->lit_from` rather than a
+ * hardcoded 1 - the general form gunpowder needs now that "lit" is not
+ * always the whole nibble counting down to zero. Byte-identical for wood
+ * (lit_from 1, and cell_code()/cell_with_code() agree with CELL_VARIANT()/
+ * CELL_MAKE() for every non-gunpowder byte): `life <= 1` is exactly what
+ * `life <= r->lit_from` reads as there. Takes the reaction row itself
+ * rather than a bare material id, so the burn-out threshold is read once
+ * from the same row the caller already loaded instead of re-deriving it
+ * here. */
 static inline bool tick_decay_at(sand_t *s, uint8_t *row, int x, int y,
-                                 cell_t *grain, uint8_t mat_id, int decay)
+                                 cell_t *grain, const reaction_t *r, int decay)
 {
     if (decay == 0) {
         return true;
     }
-    const uint32_t r = rng_next(&s->rng);
-    if ((int)(r & 0xFF) >= decay) {
+    const uint32_t roll = rng_next(&s->rng);
+    if ((int)(roll & 0xFF) >= decay) {
         return true;
     }
 
-    const uint8_t life = CELL_VARIANT(*grain);
-    if (life <= 1) {
+    const uint8_t life = cell_code(*grain);
+    if (life <= r->lit_from) {
         row[x] = CELL_EMPTY;
         mark_rows(s, y, y);
         wake_block_and_neighbors(s, x, y);
         return false;
     }
 
-    *grain = CELL_MAKE(mat_id, life - 1);
+    *grain = cell_with_code(*grain, (uint8_t)(life - 1));
     row[x] = *grain;
     mark_rows(s, y, y);
     return true;

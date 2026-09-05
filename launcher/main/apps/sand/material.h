@@ -548,15 +548,31 @@ typedef struct {
     uint8_t ignites_to;
 
     /* Zero (the default, "ordinary ignition") for every material but
-     * gunpowder. Nonzero is a BLAST RADIUS in cells: try_ignite_given(),
-     * right after the flammability roll passes, and
-     * try_heat_transform_given(), right before `yield = heats_to` would
-     * otherwise be placed, both read this and call sand_explode() instead
-     * of placing plain fire - see SAND_GUNPOWDER_BLAST_RADIUS's own
-     * comment above for why 6. With impulses disabled sand_explode() is a
-     * total no-op, so both call sites fall through to plain fire anyway -
-     * the gas pocket's own precedent, and for the same reason: a test with
-     * no impulse buffer must still see fire, not silence. */
+     * gunpowder. Nonzero is a BLAST RADIUS in cells, read in exactly ONE
+     * place now: the burn-out branch of step_one_burning_cell(), when a
+     * lit cell of this material's `burn_decay` countdown reaches
+     * `lit_from` and would otherwise simply vanish. Ignition itself
+     * (try_ignite_given(), try_heat_transform_given()) no longer reads
+     * this field at all - catching just writes the LIT code, through
+     * `ignites_to`/`heats_to` the same as any other burning material.
+     * Burning out then asks all_eight_neighbours_lit() (sand_reactions.c)
+     * whether every one of its eight neighbours is ALSO lit: if impulses
+     * are enabled and so, sand_explode() fires at this radius; otherwise
+     * the cell becomes plain MAT_FIRE, the gas pocket's own fallback and
+     * for the same reason (sand_explode() is a documented no-op with no
+     * impulse buffer). See SAND_GUNPOWDER_BLAST_RADIUS's own comment
+     * above for why 6.
+     *
+     * REVISION: used to fire the instant ignition or heat touched the
+     * cell (one blast per grain, or per boundary cell in the version
+     * after that). Measured on the device: a pile bursting cell by cell
+     * spent nearly every blast throwing gunpowder at gunpowder, which
+     * neither looks like anything nor does anything a plain flame
+     * running through the pile would not. A fuse that burns along the
+     * pile and only detonates where a whole 3x3 is alight at once - the
+     * model this field now describes - puts a blast only where the eye
+     * can see something move, and staggers a big pile's blasts across
+     * frames instead of landing them all in one. */
     uint8_t explodes;
 
     /* Nonzero: this material only catches where it TOUCHES AIR - a cell
@@ -610,6 +626,20 @@ typedef struct {
      * confused. `burns` means ALWAYS a heat source - fire, lava. This
      * means SOMETIMES, and the variant says when. */
     uint8_t burn_decay;
+
+    /* THE FIRST CODE THAT COUNTS AS LIT, for a `burn_decay` material -
+     * see cell_is_burning() and tick_decay_at() (this file), the two
+     * places that read it. Wood's variant IS its whole burn-progress
+     * counter, unlit at 0 and lit at every value above, so wood's row
+     * sets this to 1 and both of those functions read exactly as they
+     * did before this field existed (`CELL_VARIANT(c) != 0`,
+     * `life <= 1`). Gunpowder's low bits are not a burn counter below
+     * this threshold at all - codes 0-2 are dry tones, 3-6 are moisture
+     * levels - so its row sets this to 7 (GUNPOWDER_LIT), the single
+     * code that means "on fire", and nothing below it is ever mistaken
+     * for embers. A material with no `burn_decay` never reads this
+     * field either, so it needs no entry of its own. */
+    uint8_t lit_from;
 
     /* Chance in 256, per step, per burning neighbour, that heat crosses
      * ONE cell of this material - see conduct_heat() in
@@ -1340,6 +1370,15 @@ const char *material_name(cell_t c);
 #define GUNPOWDER_BASE ((cell_t)((MAT_EXTENDED << 4) | 0x08))
 #define GUNPOWDER_CELL(v) ((cell_t)(GUNPOWDER_BASE | ((v) & 0x07)))
 
+/* THE LIT CODE - the one gunpowder code above its moisture range (codes
+ * 0-2 dry, 3-6 moisture 1-4, see the reaction row's own comment,
+ * material.c) rather than one more moisture level, the way section 2's
+ * design once spent it. A cell at this code is on fire, the same
+ * standing wood's variant != 0 has always had - see reaction_t.lit_from.
+ */
+#define GUNPOWDER_LIT 7
+#define GUNPOWDER_LIT_CELL GUNPOWDER_CELL(GUNPOWDER_LIT)
+
 /* GUNPOWDER'S BLAST RADIUS - read off `reaction_t.explodes` (see that
  * field's own comment) by try_ignite_given() and try_heat_transform_given()
  * (sand_reactions.c) in place of plain fire. Sized against the other two
@@ -1392,6 +1431,36 @@ static inline bool material_can_emit(cell_t c)
     return kind == KIND_POWDER || kind == KIND_LIQUID || kind == KIND_GAS;
 }
 
+/* GENERIC CELL-CODE HELPERS. The sub-nibble value a cell's OWN material
+ * spends on shade, tone or moisture - "code" rather than "variant" because
+ * gunpowder does not get the whole nibble: it shares byte range 0xF0-0xFF
+ * with the extended statics by splitting on bit 3 (GUNPOWDER_BASE), so its
+ * code is only the low THREE bits. Everything else still has the whole
+ * nibble, exactly as CELL_VARIANT() already reads it.
+ *
+ * These exist so the moisture codec below (and anything else keyed off "the
+ * value this cell's variant is currently holding") can be written once and
+ * work for both dirt's four-bit codec and gunpowder's three-bit one,
+ * instead of the two needing separate copies of every helper. Defined here,
+ * ahead of reaction_of()/cell_is_burning() below, because cell_is_burning()
+ * itself now reads cell_code() (gunpowder's lit code is code 7, not
+ * variant != 0). */
+static inline uint8_t cell_code(cell_t c)
+{
+    return cell_is_gunpowder(c) ? (uint8_t)(c & 0x07) : CELL_VARIANT(c);
+}
+
+/* Keeps every identity bit - the material nibble, or gunpowder's whole top
+ * five bits - and replaces only the code. `v` is masked to whichever width
+ * this cell's own codec uses, the same way CELL_MAKE() already masks to
+ * four bits for an ordinary cell. */
+static inline cell_t cell_with_code(cell_t c, uint8_t v)
+{
+    return cell_is_gunpowder(c)
+               ? (cell_t)((c & 0xF8) | (v & 0x07))
+               : (cell_t)((c & 0xF0) | (v & 0x0F));
+}
+
 
 /* The reaction row for a cell, decoding the extended range.
  *
@@ -1427,34 +1496,7 @@ static inline const reaction_t *reaction_of(cell_t c)
 static inline bool cell_is_burning(cell_t c)
 {
     const reaction_t *r = reaction_of(c);
-    return r->burns != 0 || (r->burn_decay != 0 && CELL_VARIANT(c) != 0);
-}
-
-/* GENERIC CELL-CODE HELPERS. The sub-nibble value a cell's OWN material
- * spends on shade, tone or moisture - "code" rather than "variant" because
- * gunpowder does not get the whole nibble: it shares byte range 0xF0-0xFF
- * with the extended statics by splitting on bit 3 (GUNPOWDER_BASE), so its
- * code is only the low THREE bits. Everything else still has the whole
- * nibble, exactly as CELL_VARIANT() already reads it.
- *
- * These exist so the moisture codec below (and anything else keyed off "the
- * value this cell's variant is currently holding") can be written once and
- * work for both dirt's four-bit codec and gunpowder's three-bit one,
- * instead of the two needing separate copies of every helper. */
-static inline uint8_t cell_code(cell_t c)
-{
-    return cell_is_gunpowder(c) ? (uint8_t)(c & 0x07) : CELL_VARIANT(c);
-}
-
-/* Keeps every identity bit - the material nibble, or gunpowder's whole top
- * five bits - and replaces only the code. `v` is masked to whichever width
- * this cell's own codec uses, the same way CELL_MAKE() already masks to
- * four bits for an ordinary cell. */
-static inline cell_t cell_with_code(cell_t c, uint8_t v)
-{
-    return cell_is_gunpowder(c)
-               ? (cell_t)((c & 0xF8) | (v & 0x07))
-               : (cell_t)((c & 0xF0) | (v & 0x0F));
+    return r->burns != 0 || (r->burn_decay != 0 && cell_code(c) >= r->lit_from);
 }
 
 /* TABLE-DRIVEN MOISTURE, the general form of soil's own state split
@@ -1474,6 +1516,21 @@ static inline uint8_t moisture_of(cell_t c, const reaction_t *r)
 {
     const uint8_t code = cell_code(c);
     if (code < r->tones) {
+        return 0;
+    }
+    /* THE LIT CODE READS AS DRY, NOT SATURATED - `lit_from` (material.h),
+     * not one more moisture level. Gated on `lit_from != 0` (only a
+     * `burn_decay` material ever sets it) and checked before the moisture
+     * arithmetic below, which would otherwise clamp a code this high to
+     * moist_max exactly the way an ordinary out-of-range code does: harmless
+     * for dirt, whose own one spare code (15) is simply never produced, but
+     * gunpowder's spare code is GUNPOWDER_LIT and is asked about
+     * constantly. Reading a lit grain as "moisture == moist_max" would let
+     * try_heat_transform_given()'s wet-earth stage mistake it for damp soil
+     * the moment some OTHER neighbour tried to heat-transform onto it,
+     * driving a "moisture" level off a cell that has none and stepping on
+     * the lit state's own bits. */
+    if (r->lit_from != 0 && code >= r->lit_from) {
         return 0;
     }
     const uint8_t m = (uint8_t)(code - (uint8_t)(r->tones - 1u));
