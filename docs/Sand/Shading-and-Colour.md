@@ -514,17 +514,17 @@ against the darkest DUNE shade's own luminance rather than a fixed number,
 so it stays meaningful if the dune ramp itself is ever retuned.
 
 On the device the all-pale cycle read as too white, so one deliberate
-exception was added: rarely (`CULLET_GLINT_ONE_IN`, one grain in 64 per
-phase step), a cullet cell shows the SATURATED version of its own cycle
-colour instead of the pale one - the same hue pushed all the way out from
-white, by stretching each channel's distance from white by a factor
-(`SATURATE()`/`CULLET_GLINT_STRETCH`, material.c) - so a sudden pink, red,
-green or blue flashes among the near-white grains and is gone again next
-step, a different few grains each time. `cullet_glint[]` holds this
-saturated table alongside `cullet_cycle[]`, indexed identically; which
-grain glints is decided by the same hash-plus-phase mix water's foam
-dither uses, so the glinting set changes with the phase at no extra cost -
-no clock of its own, no per-cell state.
+exception was added: rarely (`CULLET_GLINT_ONE_IN`, one grain in 192 per
+phase step), a cullet cell flashes pure white (`CULLET_GLINT`, material.c)
+instead of its pale cycle colour - a facet catching the light - and is
+back to pale the next step, a different few grains each time. A saturated
+version of the grain's own colour was tried first and dropped the same day:
+on the panel a sudden pink or green read as a different material, while a
+white flash reads as light. Which grain glints is decided by the same
+hash-plus-phase mix water's foam dither uses, so the glinting set changes
+with the phase at no extra cost - no clock of its own, no per-cell state.
+The roll is a modulo rather than a mask so the odds need not be a power of
+two; ordinary sand never reaches it.
 
 The simulation genuinely does not change at all for this: `material_
 colours()` is purely a function of the cell byte plus whatever per-frame
