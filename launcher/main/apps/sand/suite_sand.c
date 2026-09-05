@@ -16410,13 +16410,6 @@ static void test_water_winning_the_dilution_boils_the_water_cell_to_steam(void)
     TEST_ASSERT_NOT_NULL_MESSAGE(cells,
         "acid/water separated grid must fit in what the framebuffer leaves");
     acid_water_separated_fixture(cells);
-    /* Voiding OFF for this pin. The byproduct can now be absent
-     * entirely (SAND_ACID_DILUTE_NO_BYPRODUCT_CHANCE, sand.h), which is a
-     * separate mechanism with its own test; what THIS one is about is that
-     * the winner and its byproduct are one outcome of one roll rather than
-     * two independent ones, and that claim is only observable when a
-     * byproduct is actually produced. */
-    sand_set_acid_dilute_no_byproduct(&separated_dilute_sim, 0);
     sand_step(&separated_dilute_sim, 0, 1000, 0);
 
     int water_wins = 0, water_wins_with_steam = 0;
@@ -16447,13 +16440,6 @@ static void test_acid_winning_the_dilution_boils_the_acid_cell_to_gas(void)
     TEST_ASSERT_NOT_NULL_MESSAGE(cells,
         "acid/water separated grid must fit in what the framebuffer leaves");
     acid_water_separated_fixture(cells);
-    /* Voiding OFF for this pin. The byproduct can now be absent
-     * entirely (SAND_ACID_DILUTE_NO_BYPRODUCT_CHANCE, sand.h), which is a
-     * separate mechanism with its own test; what THIS one is about is that
-     * the winner and its byproduct are one outcome of one roll rather than
-     * two independent ones, and that claim is only observable when a
-     * byproduct is actually produced. */
-    sand_set_acid_dilute_no_byproduct(&separated_dilute_sim, 0);
     sand_step(&separated_dilute_sim, 0, 1000, 0);
 
     int acid_wins = 0, acid_wins_with_gas = 0;
@@ -16697,18 +16683,7 @@ static void test_acid_evaporates_into_gas_when_forced(void)
 #define DILUTE_POUR_W          100
 #define DILUTE_POUR_H          50
 #define DILUTE_POUR_POOL_DEPTH 20
-/* 60, NOT 150. The bias this scene measures is a RATE difference, so it is
- * only visible while there is still pool left to convert - at 150 steps
- * both the biased and unbiased runs now finish the job and land on the
- * same number (4900 of a 100x50 grid), and a saturated scene cannot show a
- * rate. It reached saturation once acid/water dilution gained a chance to
- * leave NO byproduct (SAND_ACID_DILUTE_NO_BYPRODUCT_CHANCE, sand.h): the
- * vapour it used to leave occupied cells, and emptying them instead gives
- * the pour somewhere to flow, so the grid fills sooner. The mechanism
- * under test is untouched by that - the bias still shifts water_wins_chance
- * exactly as it did - so the window comes in rather than the assertion
- * coming down. */
-#define DILUTE_POUR_STEPS      60
+#define DILUTE_POUR_STEPS      150
 static sand_t  dilute_pour_sim;
 
 /* cells is HEAP, not static file scope - see acid_water_dilute_fixture's
