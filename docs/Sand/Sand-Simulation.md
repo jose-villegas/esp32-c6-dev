@@ -389,7 +389,39 @@ changes its *kind* (fuel igniting into a gas, a liquid boiling into one)
 has to latch that kind's `may_have_*` flag, and getting it wrong is
 invisible to almost every other test.
 
-### Water cools, and lava can lose ground it cannot get back without a pour
+**Gunpowder detonates instead of burning - `reaction_t.explodes`, a
+non-zero blast radius, is what tells `try_ignite_given()` and
+`try_heat_transform_given()` to call `sand_explode()` at that radius
+(6 cells) rather than place an ordinary `MAT_FIRE` cell.** Either trigger
+reaches it: a flame or hot lava touching dry powder ignites it in the
+usual way (`flammability` 200, so it catches almost every time it is
+rolled) and the ignition itself detonates; heat alone, with nothing
+burning yet - lava resting beside it, or heat conducted through stone or
+metal - reaches the same `explodes` check from the heat-transform path
+instead. Same fallback the confined-gas blast already relies on: with no
+impulse buffer live, `sand_explode()` is a documented no-op, so ignition
+simply falls through to plain fire - correct, since nothing else in the
+simulation throws grains without one either, and a host test with
+impulses off has to still see gunpowder catch fire like any other fuel.
+
+Moisture damps the ignition roll before it happens, generically, for any
+`dries != 0` material: `f >>= SAND_DAMP_IGNITION_SHIFT * moisture` (shift
+2), so gunpowder's 200-in-256 base chance runs 200 → 50 → 12 → 3 → 0 as
+its own moisture climbs from dry to saturated - a damp charge misfires
+more often than it should, and a fully wet one (moisture 4 and up) cannot
+ignite at all until something dries it out. Drying happens the same two
+ways wet earth already dries: heat driving a level off as steam (the
+existing wet-earth stage of `try_heat_transform_given()`, once it reads
+moisture through the generic `moisture_of()` helper rather than dirt's own
+macros), or simple time (`dries = 1`, half dirt's own rate of 2 - powder
+holds water longer than soil does). A saturated cell - moisture pinned at
+`moist_max` - additionally has a small chance per step
+(`soaked_to`/`soaked_chance`, 3 in 256) to give up being powder altogether
+and become a full `MAT_OIL` cell instead, the same "one grain plus its
+water becomes one liquid cell" shape other saturation reactions already
+use. Acid dissolves gunpowder at the same rate it dissolves sand
+(`dissolvable = 200`); nothing about being explosive changes how a cell
+disappears once acid is what is touching it.
 
 Stone and glass bank heat in the low nibble their `KIND_STATIC` never
 otherwise needed (material.h's own comment on the low nibble's per-material

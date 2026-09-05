@@ -203,6 +203,15 @@ antidote (attempt 10) stands: **keep control benchmarks in every
 capture** — when only the liquid numbers move, the cause is in the
 liquid path.
 
+Gunpowder (2026-09-05) doubled `materials[]` itself — 16 rows to 32,
+indexed by `cell >> 3` instead of `cell >> 4` — for the extended-range
+half-row split (`Architecture.md`'s "The material budget, and what is
+left"). `material_of()` reads that shift and is inlined into the hot
+path the pinned controls exercise, so this is not the surrounding-code
+churn the pin was built to survive - the controls' own compiled bytes
+changed. 5,907/6,002-3 has not been re-captured since; treat it as
+unpinned until it is.
+
 ### The inlining cliff
 
 ```mermaid

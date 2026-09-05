@@ -196,7 +196,7 @@ The current ladder, which any new material has to slot into somewhere:
 
 ```mermaid
 flowchart LR
-    E["empty\n0"] --> S["steam\n5"] --> K["smoke\n7"] --> G["gas\n10"] --> F["fire\n15"] --> SN["snow\n15"] --> X["oil\n22"] --> W["water\n30"] --> AC["acid\n38"] --> LV["lava\n45"] --> A["sand\n60"] --> D["wood/ember\n150"] --> T["stone / glass\n200"]
+    E["empty\n0"] --> S["steam\n5"] --> K["smoke\n7"] --> G["gas\n10"] --> F["fire\n15"] --> SN["snow\n15"] --> X["oil\n22"] --> W["water\n30"] --> AC["acid\n38"] --> LV["lava\n45"] --> GP["gunpowder\n50"] --> A["sand\n60"] --> DT["dirt\n62"] --> D["wood/ember\n150"] --> T["stone / glass\n200"]
 
     style E fill:#2a2a2a,color:#fff
     style S fill:#3d6b8a,color:#fff
@@ -210,11 +210,18 @@ flowchart LR
     style X fill:#a87a3d,color:#fff
     style LV fill:#8a3d3d,color:#fff
     style AC fill:#4a7c59,color:#fff
+    style GP fill:#a87a3d,color:#fff
+    style DT fill:#a87a3d,color:#fff
 ```
 
 Oil at 22 and lava at 45 straddle water deliberately: oil floats, lava
 sinks, and both fall out of one rule rather than any material-specific
-code.
+code. Gunpowder at 50 sits between lava and sand on purpose: it sinks in
+every liquid on the board (water 30, acid 38, lava 45), and sand (60) and
+dirt (62) both sink *through* it - fine grit falling through a coarser
+powder, the same displacement rule as everywhere else on this ladder, no
+gunpowder-specific code. Real black powder is lighter than quartz sand
+too, so the ladder position and the physical intuition happen to agree.
 
 Note which mechanism each kind goes through, because it decides whether
 a density relationship needs code at all. A **powder** moves via
@@ -302,11 +309,24 @@ SHADES(lo,hi)"]
 ```
 
 1. **`material.h`**: add the new `material_id_t` enum value, before
-   `MAT_COUNT`.
+   `MAT_COUNT`. **If no ordinary slot is free** - it currently is not; see
+   "The material budget, and what is left" in
+   [`Architecture.md`](Architecture.md) - a genuinely stateless material
+   still has a home behind `MATX(k)` (`k < MATERIAL_EXTENDED_COUNT`, 8, not
+   16 - gunpowder's split spent the other half of that nibble, see below).
+   A material that needs real `KIND_POWDER`/`KIND_LIQUID`/`KIND_GAS`
+   physics or a variant, and cannot wait for the extended range's
+   cold-pass tricks, is the harder case gunpowder's own half-row split
+   was built for - not a route to reuse casually, since it costs half of
+   whatever is left of the extended range and doubles the hot table
+   (`materials[]` → `MATERIAL_ROWS`, 32 rows, indexed by `cell >> 3`); read
+   the budget section before reaching for it a second time.
 2. **`material.c`**: add a `materials[]` row and a `palette[]` block. The
    block needs its own designator - `[MAT_YOURS * MATERIAL_VARIANTS] =`
    followed by `SHADES(lo, hi)` - which is what stops it depending on
-   where in the list it sits. `MATERIAL_MAX` stays 16 either way.
+   where in the list it sits. `MATERIAL_MAX` stays 16 either way - it
+   counts nibble values, not table rows, so it did not move even when
+   `materials[]` itself doubled for gunpowder's split.
 
    The designators are not decoration. The palette used to be positional,
    and twice a block added or removed in the middle shifted every block
@@ -319,7 +339,19 @@ SHADES(lo,hi)"]
    itself a heat source, it conducts heat, it smokes, it does something
    other than vanish when quenched, or it flares a flame - it also needs
    a row in the *second* table, `reaction_t reactions[]` (same header,
-   same file).
+   same file). Three more fields joined this table for gunpowder, and
+   apply to any material with `explodes`/`soaks`-style behaviour of its
+   own: `explodes` (a blast radius - non-zero means ignition or a heat
+   hit detonates the cell via `sand_explode()` instead of placing fire,
+   falling back to plain fire when the impulse buffer is not live);
+   `soaked_to`/`soaked_chance` (what a *saturated* cell - moisture at
+   `moist_max` - has a chance/256 per step of becoming instead, checked
+   only once the cell is actually full so an inert material with
+   `soaked_to = 0` never rolls); and `tones`/`moist_max`, which are
+   encoding, not reaction behaviour - they size the dry-tone/moisture
+   split a `dries != 0` material's variant reads (dirt: 8 tones, moisture
+   1-7; gunpowder: 3 tones, moisture 1-5, because its variant is only 3
+   bits wide).
 
    **An absent row is not neutral.** It is all-zero, and zero means
    something different for each field: never catches, never a heat
