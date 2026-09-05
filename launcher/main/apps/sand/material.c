@@ -3190,7 +3190,7 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_CODES] = {
      *                        water a long time once soaked
      *   soaked_to = MAT_OIL   saturated gunpowder eventually turns to
      *                        oil rather than staying wet and inert forever
-     *   soaked_chance = 3    rare, and rolled only once already fully
+     *   soaked_chance = 8    uncommon (was 3: too rare to see on the device), rolled only once already fully
      *                        soaked - it lingers wet a good while first
      *   residue = 0          burning out never reaches the ordinary
      *                        smoke-residue roll (step_one_burning_cell()
@@ -3215,7 +3215,7 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_CODES] = {
         .moist_max = 4,                                                                                                \
         .dries = 1,                                                                                                    \
         .soaked_to = MAT_OIL,                                                                                          \
-        .soaked_chance = 3,                                                                                            \
+        .soaked_chance = 8,                                                                                            \
         .residue = 0,                                                                                                  \
     }
     [8] = GUNPOWDER_REACTION,

@@ -166,7 +166,7 @@ Typography carries the other three roles colour does not: *italic* is the verb d
 - Next to $\textcolor{#B19100}{\text{fire}}$ or $\textcolor{#BF1B00}{\text{lava}}$, it *melts* into $\textcolor{#101010}{\text{lit gunpowder}}$.
 - It *soaks up* any $\textcolor{#1863A3}{\text{water}}$ it touches, and gets wetter.
 - It *dries out* **slowly**, all by itself.
-- Once it is fully soaked, it *turns into* $\textcolor{#636331}{\text{oil}}$ **slowly**.
+- Once it is fully soaked, it *turns into* $\textcolor{#636331}{\text{oil}}$.
 - It *gives in to* $\textcolor{#2B6F08}{\text{acid}}$ **a lot**.
 
 ## Pairwise reactions
