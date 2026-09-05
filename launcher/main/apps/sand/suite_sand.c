@@ -6000,8 +6000,14 @@ static void test_each_material_is_painted_the_way_it_should_be(void)
         for (int v = 0; v < MATERIAL_VARIANTS; v++) {
             const cell_t c = CELL_MAKE(m, v);
             gfx_color_t col[3] = { 0, 0, 0 };
+            /* hash 1, not 0: hash 0 at the rest phase (0, this file's
+             * default) is the one combination that glints cullet
+             * (material.c's MAT_SAND case, CULLET_GLINT_ONE_IN's own
+             * comment) - see suite_sand.c's CULLET GLINT tests for that
+             * roll on its own terms, checked deliberately rather than by
+             * accident here. */
             const material_pattern_t pat =
-                material_colours(c, 0u, 0u, 255u, col);
+                material_colours(c, 1u, 0u, 255u, col);
 
             char why[128];
             snprintf(why, sizeof why, "%s variant %d", materials[m].name, v);
@@ -6180,10 +6186,15 @@ static void test_cullet_shades_are_four_distinct_tints(void)
 {
     material_set_cullet_phase(0u);
 
+    /* hash 1, not 0 - hash 0 at phase 0 is the one combination
+     * CULLET_GLINT_ONE_IN's own roll (material.c's MAT_SAND case) turns
+     * into a glint, and this test wants the plain pale cycle, not the
+     * saturated exception to it. See the CULLET GLINT tests further down
+     * for that roll on its own terms. */
     gfx_color_t col[SAND_CULLET_SHADES][3];
     for (int i = 0; i < SAND_CULLET_SHADES; i++) {
         const material_pattern_t pat = material_colours(
-            CELL_MAKE(MAT_SAND, (uint8_t)(SAND_CULLET_BASE + i)), 0u, 0u,
+            CELL_MAKE(MAT_SAND, (uint8_t)(SAND_CULLET_BASE + i)), 1u, 0u,
             255u, col[i]);
         TEST_ASSERT_EQUAL_MESSAGE(MATERIAL_FLAT, pat,
             "cullet is a shade, not a pattern - it must stay flat");
@@ -6211,9 +6222,14 @@ static void test_cullet_changes_colour_as_the_phase_advances(void)
 {
     const cell_t c = CELL_MAKE(MAT_SAND, SAND_CULLET_BASE);
 
+    /* hash 1, not 0 - see test_cullet_shades_are_four_distinct_tints just
+     * above for why 0 is the wrong hash to probe the plain cycle with, and
+     * that this stays clear of the glint roll across every phase this loop
+     * visits (0..CULLET_CYCLE_LEN) is checked directly in the CULLET GLINT
+     * tests further down. */
     material_set_cullet_phase(0u);
     gfx_color_t at_phase_0[3];
-    material_colours(c, 0u, 0u, 255u, at_phase_0);
+    material_colours(c, 1u, 0u, 255u, at_phase_0);
 
     gfx_color_t prev[3];
     memcpy(prev, at_phase_0, sizeof prev);
@@ -6221,7 +6237,7 @@ static void test_cullet_changes_colour_as_the_phase_advances(void)
     for (unsigned phase = 1; phase <= CULLET_CYCLE_LEN; phase++) {
         gfx_color_t col[3];
         material_set_cullet_phase(phase);
-        material_colours(c, 0u, 0u, 255u, col);
+        material_colours(c, 1u, 0u, 255u, col);
 
         char why[64];
         snprintf(why, sizeof why,
@@ -6282,12 +6298,19 @@ static void test_cullet_never_dresses_as_beach(void)
                          dune[v]);
     }
 
+    /* hash 1, not 0, through the whole phase range this loop covers
+     * (0..CULLET_CYCLE_LEN-1) - see test_cullet_shades_are_four_distinct_
+     * tints above for why, and note this checks the PALE colour path only:
+     * a glint (the rare, deliberately SATURATED exception, material.c's
+     * MAT_SAND case) may legitimately be darker or lighter than a dune
+     * shade, and asserting against it here would be asserting a constraint
+     * the feature was never given. */
     for (unsigned phase = 0; phase < CULLET_CYCLE_LEN; phase++) {
         material_set_cullet_phase(phase);
         for (int i = 0; i < SAND_CULLET_SHADES; i++) {
             gfx_color_t col[3];
             material_colours(CELL_MAKE(MAT_SAND, (uint8_t)(SAND_CULLET_BASE + i)),
-                             0u, 0u, 255u, col);
+                             1u, 0u, 255u, col);
             for (int v = 0; v < SAND_DUNE_SHADES; v++) {
                 char why[112];
                 snprintf(why, sizeof why,
@@ -6315,18 +6338,215 @@ static void test_cullet_stays_pale_at_every_phase(void)
     const int darkest_dune_lum = panel_luminance(pal[CELL_MAKE(MAT_SAND, 0)]);
     const int pale_floor = darkest_dune_lum + 40;
 
+    /* hash 1, not 0, for the same reason as the other cullet-cycle tests
+     * above - see test_cullet_shades_are_four_distinct_tints. */
     for (unsigned phase = 0; phase < CULLET_CYCLE_LEN; phase++) {
         material_set_cullet_phase(phase);
         for (int i = 0; i < SAND_CULLET_SHADES; i++) {
             gfx_color_t col[3];
             material_colours(CELL_MAKE(MAT_SAND, (uint8_t)(SAND_CULLET_BASE + i)),
-                             0u, 0u, 255u, col);
+                             1u, 0u, 255u, col);
             const int lum = panel_luminance(col[0]);
             char why[96];
             snprintf(why, sizeof why,
                 "cullet shade %d at phase %u must stay pale (%d <= floor %d)",
                 i, phase, lum, pale_floor);
             TEST_ASSERT_TRUE_MESSAGE(lum > pale_floor, why);
+        }
+    }
+
+    material_set_cullet_phase(0u);
+}
+
+/*=============================================================================
+ * CULLET'S GLINT - the pale cycle above read as too white on the device, so
+ * material_colours()'s MAT_SAND case now shows the SATURATED version of a
+ * grain's own cycle colour (cullet_glint[], material.c) instead of the pale
+ * one, rarely (CULLET_GLINT_ONE_IN), for a different few grains every phase
+ * step. See CULLET_GLINT_STRETCH's and CULLET_GLINT_ONE_IN's own comments in
+ * material.c for the two knobs, and SATURATE()'s for the maths.
+ *===========================================================================*/
+
+/* RGB565 back to individual 8-bit channels - the same proportional unpack
+ * panel_luminance() below uses, just handing back the three channels
+ * instead of collapsing them into one number. Only the glint tests need
+ * that: every other test in this file already goes through
+ * panel_luminance() alone. */
+static void panel_channels(gfx_color_t c, int *r, int *g, int *b)
+{
+    const unsigned v = (unsigned)((c >> 8) | ((c & 0xFFu) << 8));
+    *r = (int)(((v >> 11) & 0x1Fu) * 255u / 31u);
+    *g = (int)(((v >> 5) & 0x3Fu) * 255u / 63u);
+    *b = (int)((v & 0x1Fu) * 255u / 31u);
+}
+
+/* Which of three channels is largest / smallest, as an index (0=R, 1=G,
+ * 2=B) rather than a value - what the hue test below actually compares,
+ * since "same hue" means the same channel stays on top and the same
+ * channel stays on the bottom, whatever the stretch does to the numbers in
+ * between. */
+static int chan_argmax3(int r, int g, int b)
+{
+    return (r >= g && r >= b) ? 0 : ((g >= b) ? 1 : 2);
+}
+static int chan_argmin3(int r, int g, int b)
+{
+    return (r <= g && r <= b) ? 0 : ((g <= b) ? 1 : 2);
+}
+
+/* A glint has to be RECOGNISABLY the colour it glinted from - the same hue,
+ * just no longer diluted with white - not some unrelated bright colour.
+ * Saturation is measured as the spread between a colour's largest and
+ * smallest channel (0 for grey, larger for a purer hue); hue is measured as
+ * which channel sits on top and which on the bottom. This searches hashes
+ * from 0 up, black-box, for the first one that actually glints at shade 12
+ * phase 0, rather than assuming the roll formula's shape. */
+static void test_a_cullet_glint_is_the_same_hue_saturated(void)
+{
+    material_set_cullet_phase(0u);
+
+    gfx_color_t pale[3];
+    material_colours(CELL_MAKE(MAT_SAND, SAND_CULLET_BASE), 1u, 0u, 255u, pale);
+
+    gfx_color_t glinting[3];
+    unsigned hash = 0u;
+    for (; hash < 4096u; hash++) {
+        material_colours(CELL_MAKE(MAT_SAND, SAND_CULLET_BASE), hash, 0u, 255u,
+                         glinting);
+        if (glinting[0] != pale[0]) {
+            break;
+        }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(hash < 4096u,
+        "no hash in 0..4095 made cullet shade 12 glint at phase 0 - is the "
+        "glint roll broken, or CULLET_GLINT_ONE_IN retuned far past 4096?");
+
+    int pr, pg, pb, gr, gg, gb;
+    panel_channels(pale[0], &pr, &pg, &pb);
+    panel_channels(glinting[0], &gr, &gg, &gb);
+
+    const int pale_spread = (pr > pg ? (pr > pb ? pr : pb) : (pg > pb ? pg : pb)) -
+                             (pr < pg ? (pr < pb ? pr : pb) : (pg < pb ? pg : pb));
+    const int glint_spread = (gr > gg ? (gr > gb ? gr : gb) : (gg > gb ? gg : gb)) -
+                              (gr < gg ? (gr < gb ? gr : gb) : (gg < gb ? gg : gb));
+    char why[128];
+    snprintf(why, sizeof why,
+        "a glint must be MORE saturated than the pale colour it replaces "
+        "(spread %d must exceed %d)", glint_spread, pale_spread);
+    TEST_ASSERT_TRUE_MESSAGE(glint_spread > pale_spread, why);
+
+    TEST_ASSERT_EQUAL_MESSAGE(chan_argmax3(pr, pg, pb), chan_argmax3(gr, gg, gb),
+        "a glint must keep the pale colour's dominant channel - same hue, "
+        "just stronger");
+    TEST_ASSERT_EQUAL_MESSAGE(chan_argmin3(pr, pg, pb), chan_argmin3(gr, gg, gb),
+        "a glint must keep the pale colour's weakest channel - same hue, "
+        "just stronger");
+
+    material_set_cullet_phase(0u);
+}
+
+/* RARE, as asked - not blinking. The design is one grain in
+ * CULLET_GLINT_ONE_IN (64); this checks a band around that (1/128..1/32)
+ * so a deliberate retune of the constant does not have to also edit this
+ * test, while a roll that stopped being rare (or stopped glinting at all)
+ * still fails it. */
+static void test_cullet_glints_are_rare(void)
+{
+    material_set_cullet_phase(0u);
+
+    gfx_color_t pale[3];
+    material_colours(CELL_MAKE(MAT_SAND, SAND_CULLET_BASE), 1u, 0u, 255u, pale);
+
+    const unsigned n = 4096u;
+    unsigned glints = 0u;
+    for (unsigned hash = 0u; hash < n; hash++) {
+        gfx_color_t col[3];
+        material_colours(CELL_MAKE(MAT_SAND, SAND_CULLET_BASE), hash, 0u, 255u,
+                         col);
+        if (col[0] != pale[0]) {
+            glints++;
+        }
+    }
+
+    char why[112];
+    snprintf(why, sizeof why,
+        "%u of %u cells glinted - expected roughly 1/64, want it between "
+        "1/128 and 1/32", glints, n);
+    TEST_ASSERT_TRUE_MESSAGE(glints >= n / 128u && glints <= n / 32u, why);
+
+    material_set_cullet_phase(0u);
+}
+
+/* Glistening, not blinking, means the SET of grains that glint has to move:
+ * the same heap of cullet should show different sparkle points from one
+ * phase step to the next, not the same handful of cells lit up forever.
+ * Checked as a symmetric difference over hashes 0..1023 between two
+ * adjacent phases - at least one hash has to glint at exactly one of the
+ * two. */
+static void test_cullet_glints_move_with_the_phase(void)
+{
+    const unsigned n = 1024u;
+
+    material_set_cullet_phase(0u);
+    gfx_color_t pale0[3];
+    material_colours(CELL_MAKE(MAT_SAND, SAND_CULLET_BASE), 1u, 0u, 255u, pale0);
+
+    material_set_cullet_phase(1u);
+    gfx_color_t pale1[3];
+    material_colours(CELL_MAKE(MAT_SAND, SAND_CULLET_BASE), 1u, 0u, 255u, pale1);
+
+    bool moved = false;
+    for (unsigned hash = 0u; hash < n && !moved; hash++) {
+        gfx_color_t col0[3], col1[3];
+        material_set_cullet_phase(0u);
+        material_colours(CELL_MAKE(MAT_SAND, SAND_CULLET_BASE), hash, 0u, 255u,
+                         col0);
+        material_set_cullet_phase(1u);
+        material_colours(CELL_MAKE(MAT_SAND, SAND_CULLET_BASE), hash, 0u, 255u,
+                         col1);
+
+        const bool glinted0 = col0[0] != pale0[0];
+        const bool glinted1 = col1[0] != pale1[0];
+        if (glinted0 != glinted1) {
+            moved = true;
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(moved,
+        "the glinting set at phase 0 must differ from phase 1 over hashes "
+        "0..1023 - a glint that never moved would be a blink, not a "
+        "glisten");
+
+    material_set_cullet_phase(0u);
+}
+
+/* The roll lives inside the `v >= SAND_CULLET_BASE` branch of MAT_SAND's
+ * case, which ordinary sand's `break` skips entirely before the roll is
+ * even computed - but that is an implementation fact, not something this
+ * suite should take on faith. This scans real hashes across ordinary sand
+ * to confirm it holds, the same way test_dune_sand_ignores_the_cullet_phase
+ * confirms the phase alone touches nothing outside the cullet band. */
+static void test_dune_sand_never_glints(void)
+{
+    const gfx_color_t *pal = material_palette();
+
+    static const unsigned phases_to_try[] = { 0u, 3u };
+    for (unsigned pi = 0; pi < sizeof phases_to_try / sizeof phases_to_try[0];
+         pi++) {
+        material_set_cullet_phase(phases_to_try[pi]);
+        for (int v = 0; v < SAND_DUNE_SHADES; v++) {
+            const gfx_color_t expect = pal[CELL_MAKE(MAT_SAND, (uint8_t)v)];
+            for (unsigned hash = 0u; hash < 256u; hash++) {
+                gfx_color_t col[3];
+                material_colours(CELL_MAKE(MAT_SAND, (uint8_t)v), hash, 0u,
+                                 255u, col);
+                char why[128];
+                snprintf(why, sizeof why,
+                    "dune shade %d, hash %u, phase %u must stay the plain "
+                    "palette colour - the glint roll must never reach "
+                    "ordinary sand", v, hash, phases_to_try[pi]);
+                TEST_ASSERT_EQUAL_MESSAGE(expect, col[0], why);
+            }
         }
     }
 
@@ -29946,6 +30166,10 @@ void run_sand_suite(void)
     RUN_TEST(test_dune_sand_ignores_the_cullet_phase);
     RUN_TEST(test_cullet_never_dresses_as_beach);
     RUN_TEST(test_cullet_stays_pale_at_every_phase);
+    RUN_TEST(test_a_cullet_glint_is_the_same_hue_saturated);
+    RUN_TEST(test_cullet_glints_are_rare);
+    RUN_TEST(test_cullet_glints_move_with_the_phase);
+    RUN_TEST(test_dune_sand_never_glints);
     RUN_TEST(test_a_liquid_body_paints_flat_inside);
     RUN_TEST(test_a_liquid_interior_is_shaded_by_depth);
     RUN_TEST(test_only_a_liquid_interior_reads_depth);
