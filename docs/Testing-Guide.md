@@ -102,6 +102,21 @@ build-flash-capture cycle to find — twice over, for both:
 
 Both numbers come from `launcher/tools/device_profiles/<chip>.sh`, selected
 by `$DEVICE_PROFILE` (default `esp32c6`), each carrying its own provenance.
+
+A third limit lives outside the host runner entirely, because neither a
+host malloc nor a host stack frame can see it: DIRAM is one pool behind
+`.data`/`.bss` *and* the heap, so the framebuffer and then a real-size sand
+grid need one contiguous block each, carved out of whatever the linker
+left. `launcher/tools/check_static_ram.py` predicts — arithmetic on the map
+file, not a reproduction — whether both still fit, and runs as a
+`POST_BUILD` step on every `idf.py build` (release, dev, diag alike), so a
+build that would not have booted fails on a laptop instead. Two of its
+constants are calibrated from real boot logs rather than derived: boot
+overhead (12,548 bytes taken by task stacks/drivers/gfx's own buffers
+before the framebuffer lands) and heap fragmentation (about 20 KiB of the
+post-framebuffer free heap that is never in the largest contiguous block)
+— see the script's header comment for the exact log lines each was pegged
+to, and re-peg them from a fresh boot if boot-time allocations change.
 Nothing hardcodes a chip's constants, so a second board is a new profile
 rather than an edit everywhere; a profile field that has never been
 measured is the literal `unmeasured`, and both loaders refuse to hand one

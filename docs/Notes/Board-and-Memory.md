@@ -119,7 +119,10 @@ convention: an app's own big buffers get malloc'd once and kept; anything
 optional (screenshots, debug overlays, future dev tooling) must be
 malloc'd-on-use and freed-after, never a permanent static, and must be
 checked with `idf.py -B build.dev size` / `build.diag size` — not just
-`build.release`, which does not even compile that code in.
+`build.release`, which does not even compile that code in. The build now
+refuses to link an image whose statics would leave no room for the
+framebuffer plus one grid, for exactly that reason — see
+`launcher/tools/check_static_ram.py`.
 
 ### Task stacks are not the heap
 
