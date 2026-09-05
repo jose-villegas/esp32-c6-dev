@@ -432,6 +432,130 @@ static inline int ring_of(int dx, int dy)
     return 0;   /* unreachable for a unit direction */
 }
 
+/* THE BLOCKING SURFACE'S APPROXIMATE NORMAL - the geometry half of the
+ * KIND_STATIC wall-bounce in step_impulses()'s blocked branch (sand.c). Looks
+ * at the three ring cells centred on the MOVER'S OWN direction of travel -
+ * `dir - 1`, `dir`, `dir + 1`, from (x, y) - the same three-cell arc shape
+ * cover_mask() (sand_priv.h) settled on, and for the same reason its own
+ * comment records: a hand-drawn stone wall bulges one cell past the one
+ * below it at every brush step, so a WIDER arc reads that bulge as a
+ * corner instead of the flat wall it actually is. Three, not five, here
+ * too - do not widen it without the same kind of evidence that comment
+ * documents.
+ *
+ * For every covering cell in the arc (KIND_STATIC only - sand_at()'s
+ * out-of-bounds-is-STONE convention folds the grid edge into this for
+ * free, which is deliberate, not an oversight: a chunk thrown at the edge
+ * of the board bounces off it exactly as it would off a real wall there),
+ * the surface is treated as pushing back along THAT cell's own negated
+ * unit vector - directly ahead pushes straight back, a diagonal neighbour
+ * pushes back-and-across.
+ *
+ * QUANTISED BY DOMINANCE, NOT BY SIGN - a first version of this took the
+ * sign of each summed component independently, and that degenerates for
+ * every DIAGONAL `dir`: the arc's centre cell (always covered, or this
+ * would never have been called - see the blocked branch's own precondition)
+ * contributes -1 to BOTH axes on a diagonal throw, and the two flanks
+ * (axis-aligned) can only ever add 0 or -1 to one axis each - never enough
+ * to flip a sign back across zero. So a sign-quantised sum for a diagonal
+ * `dir` is always exactly the mover's own reverse, whatever the two flanks
+ * look like - a diagonal-direction bounce could never glance, only ever
+ * reverse, which is wrong: a chunk skimming down-right across a flat floor
+ * (down AND down-right covered, right open) should glance up-right off it,
+ * not bounce straight back up-left as if it had hit a corner. Comparing the
+ * summed components' MAGNITUDES instead - the larger axis wins outright,
+ * both axes count only when they are close (within a factor of 2) - fixes
+ * this without abandoning integer arithmetic: for the flat-floor case above
+ * the vertical push (from two covering cells) dominates the horizontal
+ * push (from one), so the normal reads as pure "up" and the mover glances,
+ * exactly as it should.
+ *
+ * This is still a documented APPROXIMATION, not an exact nearest-of-8
+ * average, but it is the RIGHT approximation for a flat wall hit
+ * square-on: axis-aligned `dir` still always reverses (a flat wall's own
+ * normal has no other axis to weigh against), while diagonal `dir` can now
+ * genuinely glance when the arc is asymmetric. See
+ * test_blocker_normal_and_reflect_off_normal_match_the_exhaustive_arc_table
+ * (suite_sand.c) for the full 8-direction x 4-configuration ground truth
+ * this was checked against - do not touch the dominance rule below without
+ * updating that table alongside it.
+ *
+ * Returns -1 - "no normal, the caller falls through to the plain wait" -
+ * only when nothing in the arc is KIND_STATIC, or the summed push exactly
+ * cancels (kept as a guard; not observed to happen off a 3-cell arc). */
+static inline int blocker_normal(const sand_t *s, int x, int y, int dir)
+{
+    int sx = 0;
+    int sy = 0;
+    bool any = false;
+
+    for (int i = -1; i <= 1; i++) {
+        const int *d = ring_dir(dir + i);
+        const cell_t c = sand_at(s, x + d[0], y + d[1]);
+        if (CELL_IS_EMPTY(c) || material_of(c)->kind != KIND_STATIC) {
+            continue;
+        }
+        sx -= d[0];
+        sy -= d[1];
+        any = true;
+    }
+    if (!any) {
+        return -1;
+    }
+    if (sx == 0 && sy == 0) {
+        return -1;
+    }
+
+    const int ax = (sx < 0) ? -sx : sx;
+    const int ay = (sy < 0) ? -sy : sy;
+    const int sgn_x = (sx > 0) - (sx < 0);
+    const int sgn_y = (sy > 0) - (sy < 0);
+
+    int nx, ny;
+    if (ax >= 2 * ay) {
+        nx = sgn_x;
+        ny = 0;
+    } else if (ay >= 2 * ax) {
+        nx = 0;
+        ny = sgn_y;
+    } else {
+        nx = sgn_x;
+        ny = sgn_y;
+    }
+    return ring_of(nx, ny);
+}
+
+/* THE REFLECTION ITSELF - r = d*|n|^2 - 2*(d.n)*n, then sign-quantised back
+ * onto the ring the same way blocker_normal() above quantises its own sum.
+ * The |n|^2 factor is what lets this skip normalising `n` first: an
+ * axis-aligned normal has |n|^2 == 1 and a diagonal one has |n|^2 == 2, and
+ * scaling `d` by that factor before subtracting keeps the whole thing
+ * integer arithmetic with no square root. Dropping that factor would
+ * silently give every diagonal-normal bounce the wrong angle.
+ *
+ * Returns -1 - same "no real bounce, caller falls through to the plain
+ * wait" meaning as blocker_normal()'s own -1 - if the result sign-quantises
+ * to (0,0) (kept as a guard; should not happen for unit `d` and `n`) or
+ * lands back on the incoming direction itself, which would read as the
+ * mover tunnelling forward through the wall it just hit rather than
+ * rebounding off it. */
+static inline int reflect_off_normal(int dir, int normal)
+{
+    const int *d = ring_dir(dir);
+    const int *n = ring_dir(normal);
+    const int n2 = n[0] * n[0] + n[1] * n[1];
+    const int dn = d[0] * n[0] + d[1] * n[1];
+    const int rx = d[0] * n2 - 2 * dn * n[0];
+    const int ry = d[1] * n2 - 2 * dn * n[1];
+    const int qx = (rx > 0) - (rx < 0);
+    const int qy = (ry > 0) - (ry < 0);
+    if (qx == 0 && qy == 0) {
+        return -1;
+    }
+    const int r = ring_of(qx, qy);
+    return (r == dir) ? -1 : r;
+}
+
 /* Whether (nx, ny) is in bounds and holds something strictly denser than
  * `density`, and is not a liquid - a liquid never counts as covering
  * anything, whether the question is true burial (smothered(),
@@ -545,6 +669,31 @@ static inline bool
 covered_at(const sand_t *s, int x, int y, int w, int h, uint8_t density)
 {
     return cover_mask(s, x, y, w, h, density) == COVER_LID;
+}
+
+/* What one cell of `displaced` costs a mover ploughing through it - see
+ * SAND_IMPULSE_DRAG_SHIFT and its two per-kind companions in sand.h.
+ *
+ * KIND MATTERS ON TOP OF DENSITY, on device evidence: packed grain jams
+ * against itself and stops a chunk in a couple of layers, where a fluid
+ * parts around one and lets it sink a good way in before it loses the
+ * energy to keep going. Density alone gave both the same shape of
+ * resistance, so a bank of dirt read as too soft and a pool as too stiff
+ * at the same time - no single shift could fix both, which is what these
+ * two exist to say. Saturating: a doubled density can exceed a byte, and
+ * a cost above 255 means the same thing 255 does, since speed is one. */
+static inline uint8_t impulse_drag_of(cell_t displaced)
+{
+    const material_t *m = material_of(displaced);
+    unsigned d = (unsigned)m->density >> SAND_IMPULSE_DRAG_SHIFT;
+
+    if (m->kind == KIND_LIQUID) {
+        return 0u;   /* a fluid parts around a mover - see the constants */
+    }
+    if (m->kind == KIND_POWDER) {
+        d <<= SAND_IMPULSE_DRAG_POWDER_SHIFT;
+    }
+    return (uint8_t)(d > 255u ? 255u : d);
 }
 
 static inline void clear_content_flags(sand_t *s)
