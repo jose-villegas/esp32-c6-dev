@@ -22878,7 +22878,7 @@ static void test_a_chunk_bounces_off_the_grid_edge_instead_of_waiting_there_fore
         snprintf(msg, sizeof msg,
                  "seed %u: fixture check - the thrown chunk must still be "
                  "on the board somewhere above the floor row, not vanished",
-                 k);
+                 (unsigned)k);
         TEST_ASSERT_TRUE_MESSAGE(fx >= 0, msg);
         snprintf(msg, sizeof msg,
                  "seed %u: a chunk thrown at the grid edge must end up "
@@ -22886,7 +22886,7 @@ static void test_a_chunk_bounces_off_the_grid_edge_instead_of_waiting_there_fore
                  "waiting exactly there, unmoved, for the rest of its "
                  "(linear-ramped, ~128-step) flight, because "
                  "can_impulse_enter() reads the off-grid target as STONE "
-                 "and the plain wait never changes direction", k, EDGE_X);
+                 "and the plain wait never changes direction", (unsigned)k, EDGE_X);
         TEST_ASSERT_TRUE_MESSAGE(fx < EDGE_X, msg);
     }
 
@@ -22980,7 +22980,7 @@ static void test_a_chunk_thrown_into_a_closed_box_comes_to_rest(void)
                  "seed %u, throw direction %d: still rattling after "
                  "BOX_MAX_STEPS (%d) steps in a fully closed box - this is "
                  "the bounce-in-place pathology this rung must not reopen",
-                 k, dir, BOX_MAX_STEPS);
+                 (unsigned)k, dir, BOX_MAX_STEPS);
         TEST_ASSERT_EQUAL_INT_MESSAGE(0, s.impulse_count, msg);
     }
 }
@@ -23046,7 +23046,7 @@ static void test_a_chunk_dropped_on_flat_ground_still_settles_on_it(void)
         snprintf(msg, sizeof msg,
                  "seed %u: still airborne or bouncing after OPEN_MAX_STEPS "
                  "(%d) steps of an ordinary drop onto open, flat ground",
-                 k, OPEN_MAX_STEPS);
+                 (unsigned)k, OPEN_MAX_STEPS);
         TEST_ASSERT_EQUAL_INT_MESSAGE(0, g.impulse_count, msg);
 
         int landed_y = -1;
@@ -23058,7 +23058,7 @@ static void test_a_chunk_dropped_on_flat_ground_still_settles_on_it(void)
         snprintf(msg, sizeof msg,
                  "seed %u: the dropped chunk must rest directly on the "
                  "floor (row %d), not hover, sink through, or wander off "
-                 "sideways to a different row", k, OPEN_H - 2);
+                 "sideways to a different row", (unsigned)k, OPEN_H - 2);
         TEST_ASSERT_EQUAL_INT_MESSAGE(OPEN_H - 2, landed_y, msg);
     }
 
@@ -23133,13 +23133,13 @@ static void test_a_chunk_thrown_into_a_brush_drawn_wall_conserves_itself_and_set
         char msg[160];
         snprintf(msg, sizeof msg,
                  "seed %u: still rattling around the brush-drawn wall "
-                 "after WALL_MAX_STEPS (%d) steps", k, WALL_MAX_STEPS);
+                 "after WALL_MAX_STEPS (%d) steps", (unsigned)k, WALL_MAX_STEPS);
         TEST_ASSERT_EQUAL_INT_MESSAGE(0, g.impulse_count, msg);
 
         snprintf(msg, sizeof msg,
                  "seed %u: exactly one cell (the thrown chunk) must have "
                  "been added relative to the wall alone - a bounce must "
-                 "never create or destroy a cell", k);
+                 "never create or destroy a cell", (unsigned)k);
         TEST_ASSERT_EQUAL_INT_MESSAGE(before + 1, sand_count(&g), msg);
     }
 
