@@ -1470,13 +1470,18 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * at least two of
  * each.
  *
- * 5, DOWN FROM 8 ON DEVICE: acid rain fired often enough to read as a
- * standing feature of any vapour-rich scene rather than an occasional
- * one. Roughly a third off, which is what was asked for after watching
- * it - the yield and the roll were already balanced against each other
- * by the work above, so this moves the frequency without reopening any
- * of that. Still a bias rather than a measurement. */
-#define SAND_ACID_RAIN_CHANCE 5
+ * 1, THE FLOOR: the rarest a byte-wide roll can express without being
+ * off, since 0 disables the mechanism outright. Walked down 32 -> 8 -> 5
+ * -> 1 across device sessions. What made the low end usable was not this
+ * constant at all - at 8 and at 5 the scene still ran away, exactly as
+ * the paragraph above predicted it would, because rarer rolls do not
+ * reduce how many qualifying windows a vapour-rich scene offers. The loop
+ * was closed by starving the vapour instead
+ * (SAND_ACID_DILUTE_NO_BYPRODUCT_CHANCE, this file). With the supply
+ * fixed, the frequency was finally free to be a taste question, and the
+ * answer on device was "as rare as it goes" - acid rain reads better as
+ * something you occasionally catch happening than as weather. */
+#define SAND_ACID_RAIN_CHANCE 1
 
 /* QUENCHING A FLAME - acid putting out fire is not water's clean,
  * deterministic flash to steam (see step_one_burning_cell(),
