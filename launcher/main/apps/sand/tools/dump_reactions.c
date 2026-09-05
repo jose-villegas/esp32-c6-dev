@@ -221,12 +221,48 @@ typedef struct {
  * duration word anywhere in this array (a prior version used "almost
  * instantly" / "slowly" here, smuggling a time-to-wait word into a
  * chance-of-success question - the same category error the rate/frequency
- * split exists to prevent, just missed on this one field). */
+ * split exists to prevent, just missed on this one field).
+ *
+ * THESE ARE THE TECHNICAL WORDS - emit_anatomy() and emit_pairwise_table()
+ * read through these two arrays (via adverb()/adverb_cell()) and print
+ * exactly this vocabulary, unchanged, on purpose: both sections are
+ * documentation of the generator and the raw table for a maintainer, not
+ * player-facing prose, and this doc's own top note says so. The DEFAULT
+ * per-material section reads a SEPARATE, simpler pair - see
+ * frequency_words_child[]/ease_words_child[] and adverb_child()/
+ * adverb_cell_child() just below - so that one section can be worded for
+ * an early-elementary reader without silently rewording the two sections
+ * a maintainer actually reads this file's own vocabulary tables for. */
 static const char *const frequency_words[] = {
     "always", "mostly", "occasionally", "seldom",
 };
 static const char *const ease_words[] = {
     "outright", "handily", "adequately", "poorly",
+};
+
+/* The DEFAULT per-material section's own vocabulary - same four slots,
+ * same strict ordering, chosen for an early-elementary reader instead of
+ * for a maintainer. A simulated child reader (5-8 years old, see
+ * .claude/agents/child-reader.md) tested this doc's prose and did not
+ * know "handily", "adequately", "poorly", "seldom" or "occasionally" at
+ * all, on the one section of this file meant to be read by a five-year-
+ * old. These replace them with words that reader has, while still
+ * reading as clearly more/less than their neighbour with no other
+ * context needed (the same requirement frequency_words[]/ease_words[]
+ * above were built to satisfy) - and still fitting the same PRE-verb slot
+ * every frequency word sits in ("it **usually** leaves smoke") and the
+ * same trailing slot every ease word sits in ("gives in to acid **a
+ * lot**"): a simpler word dropped into an unchanged sentence frame around
+ * it was exactly the failure mode being fixed, so where a frame needed to
+ * move too, it did (see every emit_*() function below). Read ONLY through
+ * adverb_child()/adverb_cell_child() - never through plain adverb(), which
+ * stays wired to the technical arrays above for emit_anatomy() and
+ * emit_pairwise_table(). */
+static const char *const frequency_words_child[] = {
+    "always", "usually", "sometimes", "hardly ever",
+};
+static const char *const ease_words_child[] = {
+    "completely", "a lot", "a little", "hardly at all",
 };
 
 static const field_doc_t field_docs[] = {
@@ -242,7 +278,7 @@ static const field_doc_t field_docs[] = {
     FRATE(burn_decay, GRP_BURN, "burns down"),
     FCHANCE(residue,  GRP_BURN, "leaves smoke"),
     F(quench_to,    GRP_BURN, FK_TARGET, NULL),
-    FRATE(flare,     GRP_BURN, "licks flame into the air"),
+    FRATE(flare,     GRP_BURN, "sets fire to the empty spot next to it"),
 
     /* GRP_ACID (dissolves/dissolvable/fizz all belong to the acid pair,
      * whichever side of it this row is on - see emit_acid()). `dissolves`
@@ -251,12 +287,12 @@ static const field_doc_t field_docs[] = {
      * dissolve happens - `dissolvable`'s own comment in material.h is
      * explicit that it is "the chance an ATTEMPT to dissolve succeeds",
      * i.e. conditional on an attempt, not a rate in its own right. */
-    FRATE(dissolves,    GRP_ACID, "dissolves an adjacent cell"),
+    FRATE(dissolves,    GRP_ACID, "eats through whatever is next to it"),
     /* `dissolvable` asks "how WELL does acid do here", not "how often" -
      * see its own comment just above emit_acid() - so it renders through
      * ease_words[] rather than the frequency_words[] every other FCHANCE()
      * row gets. */
-    FCHANCE_VOCAB(dissolvable, GRP_ACID, "dissolves in acid", ease_words),
+    FCHANCE_VOCAB(dissolvable, GRP_ACID, "gives in to acid", ease_words),
     FCHANCE(fizz,        GRP_ACID, "leaves smoke"),
     /* Pre-existing gap, unrelated to whatever else changed in this table
      * recently: `evaporates` never had a field_docs row at all, so this
@@ -265,14 +301,14 @@ static const field_doc_t field_docs[] = {
      * left for the next person. Genuine per-step rate, no partner or
      * condition required - the same shape as `dries` elsewhere in this
      * file (FRATE(dries, GRP_WET, ...)), not a one-shot FCHANCE. */
-    FRATE(evaporates,   GRP_ACID, "spontaneously evaporates into gas"),
+    FRATE(evaporates,   GRP_ACID, "turns into gas all by itself"),
 
     /* GRP_CONDENSE - the inverse of evaporation: a 2x2 block of one
      * material collapsing into a single cell of another. Genuine
      * per-step rate, gated on a 2x2 neighbourhood match rather than a
      * partner or a prior roll - the same shape as `dissolves`, not a
      * one-shot FCHANCE. */
-    FRATE(condenses,    GRP_CONDENSE, "condenses"),
+    FRATE(condenses,    GRP_CONDENSE, "turns into"),
     F(condenses_to,     GRP_CONDENSE, FK_TARGET, NULL),
 
     /* GRP_TRANSFORM. `flaw_chance` is a one-shot chance conditioned on
@@ -298,26 +334,26 @@ static const field_doc_t field_docs[] = {
 
     /* GRP_TEMPERATURE */
     FRATE(heat_ramp, GRP_TEMPERATURE, "holds heat"),
-    FRATE(cools,      GRP_TEMPERATURE, "drains back to ambient"),
+    FRATE(cools,      GRP_TEMPERATURE, "cools back down"),
 
     /* GRP_COLD / GRP_WARMTH / GRP_THAW - each one field */
     FRATE(chills,   GRP_COLD,   "chills whatever it touches"),
-    FRATE(conducts, GRP_TEMPERATURE, "passes heat on"),
+    FRATE(conducts, GRP_TEMPERATURE, "passes heat along"),
     FRATE(boils,    GRP_TEMPERATURE, "boils"),
     F(boils_to,     GRP_TEMPERATURE, FK_TARGET, NULL),
     FRATE(warms,    GRP_WARMTH, "warms whatever it touches"),
-    FRATE(thaws,    GRP_THAW,   "melts in any liquid it touches"),
+    FRATE(thaws,    GRP_THAW,   "melts when anything wet touches it"),
 
     /* GRP_WET - the wetting family, see the plan's own section on it */
     F(wets,         GRP_WET, FK_FLAG, NULL),
-    FRATE(soaks,    GRP_WET, "soaks up a wetting liquid it touches"),
+    FRATE(soaks,    GRP_WET, "soaks up anything wet that touches it"),
     F(soaks_to,     GRP_WET, FK_TARGET, NULL),
-    FRATE(dries,    GRP_WET, "dries back out"),
+    FRATE(dries,    GRP_WET, "dries out all by itself"),
 
     /* GRP_GROW */
-    FRATE(grows,    GRP_GROW, "grows into wet soil"),
-    FRATE(falls,    GRP_GROW, "falls under gravity"),
-    FRATE(withers,  GRP_GROW, "withers away"),
+    FRATE(grows,    GRP_GROW, "grows up into wet soil"),
+    FRATE(falls,    GRP_GROW, "falls down"),
+    FRATE(withers,  GRP_GROW, "dries up and dies"),
 
     /* GRP_HARDEN - becoming wood, and what that moment leaves behind.
      * `harden_chance`, `canopy` and `holds_line` are each a one-shot
@@ -330,25 +366,31 @@ static const field_doc_t field_docs[] = {
     F(sheltered_by,   GRP_GROW,   FK_TARGET,    NULL), /* modifies withers,
                                                         * not hardening -
                                                         * see emit_grow() */
-    FCHANCE(canopy,   GRP_HARDEN, "leafs its crown"),
+    FCHANCE(canopy,   GRP_HARDEN, "grows leaves on top"),
     F(canopy_to,      GRP_HARDEN, FK_TARGET,    NULL),
     F(trunk_girth,    GRP_HARDEN, FK_COUNT_MAG, NULL),
-    FCHANCE(holds_line, GRP_HARDEN, "holds its own line"),
+    FCHANCE(holds_line, GRP_HARDEN, "keeps growing the same way it started"),
 
     /* GRP_REGROW - new growth from a finished trunk, and drinking */
     FRATE(sprouts,  GRP_REGROW, "sprouts foliage"),
     F(sprouts_to,   GRP_REGROW, FK_TARGET, NULL),
     FRATE(buds,     GRP_REGROW, "buds new growth"),
     F(buds_to,      GRP_REGROW, FK_TARGET, NULL),
-    FRATE(drinks,   GRP_REGROW, "drinks through its roots"),
+    FRATE(drinks,   GRP_REGROW, "sends water down through its roots"),
 
     /* `roots` is not rolled independently every step the way `sprouts`
      * and `buds` above are - it only rolls once GROWING, BUDDING or
      * SPROUTING has already spent a level of soil moisture this same
      * step (spend_soil_moisture(), sand_reactions.c), so it is a
      * one-shot chance conditioned on that spend, the same shape as
-     * `residue` or `flaw_chance` - FCHANCE, not FRATE. */
-    FCHANCE(roots,  GRP_REGROW, "roots into the soil it drinks from"),
+     * `residue` or `flaw_chance` - FCHANCE, not FRATE. That reading is
+     * only true on a GROWER's own row, though - see reaction_t.roots's
+     * own comment in material.h: on ROOT's own row this same field means
+     * a root cell converting a moist dirt neighbour into more root,
+     * nothing to do with growing/budding/sprouting at all. emit_regrow()
+     * checks which row it is printing and picks the true wording for
+     * each - see its own comment. */
+    FCHANCE(roots,  GRP_REGROW, "turns the spot into root"),
     F(roots_to,     GRP_REGROW, FK_TARGET, NULL),
 
     /* GRP_SHATTER */
@@ -816,6 +858,50 @@ static const char *adverb_cell(const char *field_name, uint8_t v, uint8_t cell)
 {
     const char *ov = adverb_exception_for(field_name, cell);
     return (ov != NULL) ? ov : adverb(field_name, v);
+}
+
+/* adverb(), but reading frequency_words_child[]/ease_words_child[] instead
+ * of the technical frequency_words[]/ease_words[] - see those arrays' own
+ * comment for why a separate pair exists at all. Every per-material
+ * emit_*() function below (emit_ignite() through emit_shatter()) calls
+ * this instead of adverb(); emit_pairwise_table() and emit_anatomy() keep
+ * calling adverb()/adverb_cell() directly and are unaffected by whatever
+ * words live in the child arrays.
+ *
+ * `fd->chance_vocab != NULL` is used here only as a BOOLEAN - "does this
+ * field want the ease ladder instead of the frequency one" - never
+ * dereferenced as a pointer to the technical ease_words[] array itself;
+ * the child ease ladder is selected by name (ease_words_child) once that
+ * boolean is true. `dissolvable` is the only row that sets chance_vocab
+ * today (see FCHANCE_VOCAB in field_docs[]), so this is exactly the same
+ * one-field special case adverb() itself makes, just resolved into a
+ * different array. */
+static const char *adverb_child(const char *field_name, uint8_t v)
+{
+    const field_doc_t *fd = field_doc(field_name);
+    if (fd->adverb_override != NULL) {
+        return fd->adverb_override;
+    }
+    if (fd->scale == SCALE_CHANCE) {
+        if (v == 0) return "never";
+        const char *const *vocab = (fd->chance_vocab != NULL)
+                                        ? ease_words_child : frequency_words_child;
+        return (v == 255) ? vocab[0] : vocab[chance_bucket_for(v)];
+    }
+    return adverb_for(v);
+}
+
+/* adverb_child(), but checking ADVERB_EXCEPTIONS first - the per-material
+ * section's counterpart to adverb_cell(). The rate ladder itself
+ * (adverb_for()) is untouched by the child/technical vocabulary split (see
+ * frequency_words_child[]'s own comment: only the two SCALE_CHANCE
+ * vocabularies fork, not "slowly"/"instantly"/"never"), so an override
+ * word like sand's "slowly" reads identically through either path. */
+static const char *adverb_cell_child(const char *field_name, uint8_t v,
+                                     uint8_t cell)
+{
+    const char *ov = adverb_exception_for(field_name, cell);
+    return (ov != NULL) ? ov : adverb_child(field_name, v);
 }
 
 /* Decode a TARGET field's raw byte the way place_reacted() (sand_reactions.c)
@@ -1430,8 +1516,7 @@ static void emit_ignite(const reaction_t *r, uint8_t self_id)
 {
     if (r->flammability == 0) return;
 
-    const char *adv = adverb("flammability", r->flammability);
-    const char *air = r->needs_air ? ", only where it touches air" : "";
+    const char *adv = adverb_child("flammability", r->flammability);
 
     /* heat_sources names the same `burns != 0` materials
      * emit_pairwise_table() already joins into "Fire / Lava" for this exact
@@ -1464,48 +1549,72 @@ static void emit_ignite(const reaction_t *r, uint8_t self_id)
      *   resolves to a third material - the fuel chars into something else
      *   entirely. Nothing hits this today, but the shape is real: a
      *   slower fuel could leave behind ash or coal instead of relighting
-     *   as itself. */
+     *   as itself.
+     *
+     * Reworded for an early-elementary reader (see this file's own
+     * ADVERB_EXCEPTIONS-adjacent notes and the module-level pass this
+     * belongs to): "burns in place" and "charring to" both read as plain
+     * English to an adult but were never tested against a five-year-old,
+     * so "keeps burning right where it is" and "turns into" replace them -
+     * same claims, plainer verbs, and the coloured $\textcolor{}{}$ name is
+     * untouched either way. Each of the three branches used to fold its
+     * extra clause onto the "Catches fire..." sentence with a trailing
+     * "and" (and needs_air's clause besides, for oil) - re-reading this as
+     * the child-reader persona (.claude/agents/child-reader.md) flagged
+     * that combination as running long enough to blur the beginning by the
+     * end, so every extra fact now gets its own short sentence instead. */
     if (r->ignites_to == 0 || r->ignites_to == MAT_FIRE) {
-        printf("- *Catches* %s%s from %s%s.\n", mat_span_v(MAT_FIRE),
-               rate_gap(adv), heat_sources, air);
+        printf("- *Catches* %s%s from %s.\n", mat_span_v(MAT_FIRE),
+               rate_gap(adv), heat_sources);
     } else if (r->ignites_to == self_id) {
-        /* "burns in place" - shorter than the old "burns where it stands,
-         * rather than flaring away", and the same claim: burning is a
-         * STATE of this material (see the comment above), so it stays put
-         * rather than becoming a flame that floats off on its own. */
-        printf("- *Catches* %s%s from %s%s, and burns in place.\n",
-               mat_span_v(MAT_FIRE), rate_gap(adv), heat_sources, air);
+        printf("- *Catches* %s%s from %s.\n", mat_span_v(MAT_FIRE),
+               rate_gap(adv), heat_sources);
+        printf("- It keeps burning right where it is.\n");
     } else {
-        printf("- *Catches* %s%s from %s%s, *charring to* %s.\n",
-               mat_span_v(MAT_FIRE), rate_gap(adv), heat_sources, air,
+        printf("- *Catches* %s%s from %s.\n", mat_span_v(MAT_FIRE),
+               rate_gap(adv), heat_sources);
+        printf("- It *turns into* %s instead.\n",
                mat_span_v(r->ignites_to));
+    }
+    if (r->needs_air != 0) {
+        printf("- But only where it can touch air.\n");
     }
 }
 
+/* Rewritten as several short sentences rather than one long one built out
+ * of commas and a semicolon - a semicolon, or a sentence carrying more than
+ * one "and", is exactly where the child-reader pass (see the module-level
+ * comment this belongs to) lost track of what a bullet was even about. Each
+ * `if` below now ends its own clause with a period instead of feeding the
+ * next `if`'s printf() a dangling comma, which is the only structural
+ * change here - the conditions and the values they read are untouched. */
 static void emit_burn(const reaction_t *r)
 {
     if (r->burns == 0 && r->burn_decay == 0) return;
 
     if (r->burns != 0) {
-        printf("- Is a heat source in its own right");
+        printf("- Makes its own heat, all the time.\n");
     } else {
-        printf("- Once alight, *burns down*%s",
-               rate_gap(adverb("burn_decay", r->burn_decay)));
+        printf("- Once it is on fire, it *burns down*%s.\n",
+               rate_gap(adverb_child("burn_decay", r->burn_decay)));
     }
     if (r->flare != 0) {
-        printf(", and *licks flame into an empty neighbour*%s",
-               rate_gap(adverb("flare", r->flare)));
+        printf("- It *sets fire to* the empty spot next to it%s.\n",
+               rate_gap(adverb_child("flare", r->flare)));
     }
     if (r->residue != 0) {
         /* `residue` is a one-shot chance at the moment a burn finishes,
-         * not a per-step rate - adverb() always returns a frequency word
+         * not a per-step rate - adverb_child() always returns a frequency word
          * for it (chance-scale fields never fall silent - see
          * frequency_words[]'s own comment), so rate_gap() never collapses
          * this one to nothing in practice; it is still routed through the
          * same helper as every other rate/frequency mention for one
-         * consistent bold treatment. */
-        printf(";%s *leaves* %s when it burns out",
-               rate_gap(adverb("residue", r->residue)),
+         * consistent bold treatment. Placed right after "It" (pre-verb),
+         * the same slot every other frequency word in this file sits in -
+         * see frequency_words[]'s own comment on why that slot was
+         * chosen. */
+        printf("- It%s *leaves* %s when it burns out.\n",
+               rate_gap(adverb_child("residue", r->residue)),
                mat_span_v(MAT_SMOKE));
     }
 
@@ -1525,11 +1634,12 @@ static void emit_burn(const reaction_t *r)
     if (r->burns != 0) {
         const char *quenched =
             (r->quench_to != 0) ? mat_span_v(r->quench_to) : "nothing";
-        printf(". Touched by %s, *becomes* %s", quenching_liquids, quenched);
+        printf("- If %s touches it, it *turns into* %s.\n",
+               quenching_liquids, quenched);
     } else {
-        printf(". Touched by %s, simply goes out", quenching_liquids);
+        printf("- If %s touches it, the fire just goes out.\n",
+               quenching_liquids);
     }
-    printf(".\n");
 }
 
 static void emit_transform(const reaction_t *r, uint8_t cell)
@@ -1550,8 +1660,8 @@ static void emit_transform(const reaction_t *r, uint8_t cell)
          * and reads fine whether or not a future banked reaction's product
          * happens to be a heat source too, so it is not a glass-specific
          * branch. */
-        printf("- Under long heat from %s, *melts* to %s.\n", heat_sources,
-               mat_span_v(r->heats_to));
+        printf("- If %s stays next to it a long time, it *melts* into "
+               "%s.\n", heat_sources, mat_span_v(r->heats_to));
     } else if (r->heat_chance == 0) {
         /* `melts` alone: heats_to reachable ONLY through direct contact
          * with lava - not a flame, not an ember, not heat through a wall.
@@ -1560,30 +1670,51 @@ static void emit_transform(const reaction_t *r, uint8_t cell)
          * molten rock; see reaction_t.melts. Named as "lava" rather than
          * through heat_sources on purpose - heat_sources is every burning
          * material, and naming them all here would state the exact
-         * opposite of what this field means. */
+         * opposite of what this field means.
+         *
+         * Split into two short sentences rather than one sentence with a
+         * dash-set-off aside ("Touching lava - and lava only, never a
+         * flame - becomes fire") - the aside was the one construction the
+         * child-reader pass flagged as breaking a sentence's flow even
+         * when every word in it was already simple. */
         if (r->melts == 0) return;
-        printf("- Touching %s - and %s only, never a flame - "
-               "*becomes* %s%s.\n",
-               mat_span_v(MAT_LAVA), mat_span_v(MAT_LAVA),
-               mat_span_v(r->heats_to),
-               rate_gap(adverb_cell("melts", r->melts, cell)));
+        printf("- If %s touches it, it *turns into* %s%s.\n",
+               mat_span_v(MAT_LAVA), mat_span_v(r->heats_to),
+               rate_gap(adverb_cell_child("melts", r->melts, cell)));
+        /* "flame", not "fire" - `heats_to` happens to BE the fire
+         * material for Root today, and this sentence is naming the
+         * generic thing that will NOT trigger this (an ordinary flame),
+         * not the material - using the plain word instead of the
+         * material's own coloured name keeps that distinction clean and
+         * avoids leaving a bare, uncoloured mention of a legend name
+         * sitting in the prose. */
+        printf("- A flame alone will not do this. It has to be %s.\n",
+               mat_span_v(MAT_LAVA));
+    } else if (r->flaw_to != 0) {
+        /* flaw_chance is a SECOND roll conditioned on the FIRST one
+         * already succeeding (see flaw_to's own comment in material.h) -
+         * not a separate reaction. Two consecutive "- It ___s." lines
+         * cannot say that: "It melts into metal." then "It usually turns
+         * into clumps of stone instead of metal." reads as a flat
+         * contradiction no matter how the second sentence is worded,
+         * which is exactly what the child-reader pass caught. One
+         * sentence, naming the actual (usually flawed) outcome up front,
+         * says the true thing without needing the reader to reconcile two
+         * lines against each other. */
+        printf("- Next to %s, it%s *turns into* clumps of %s instead of "
+               "%s.\n",
+               heat_sources,
+               rate_gap(adverb_child("flaw_chance", r->flaw_chance)),
+               mat_span_v(r->flaw_to), mat_span_v(r->heats_to));
     } else {
-        printf("- Beside %s, *melts* to %s%s.\n", heat_sources,
-               mat_span_v(r->heats_to),
-               rate_gap(adverb_cell("heat_chance", r->heat_chance, cell)));
+        printf("- Next to %s, it%s *melts* into %s.\n", heat_sources,
+               rate_gap(adverb_cell_child("heat_chance", r->heat_chance, cell)),
+               mat_span_v(r->heats_to));
         if (r->melts != 0) {
-            printf("  Touching %s directly, *melts*%s instead.\n",
+            printf("- If %s touches it directly, it%s *melts* right away "
+                   "instead.\n",
                    mat_span_v(MAT_LAVA),
-                   rate_gap(adverb_cell("melts", r->melts, cell)));
-        }
-        if (r->flaw_to != 0) {
-            /* Same trigger as the clause just printed - the SAME roll,
-             * not a second one - so this reads as a qualifier on it
-             * rather than a separate reaction. */
-            printf("  *Comes out as* %s%s instead, in clumped runs rather "
-                   "than an even speckle.\n",
-                   mat_span_v(r->flaw_to),
-                   rate_gap(adverb("flaw_chance", r->flaw_chance)));
+                   rate_gap(adverb_cell_child("melts", r->melts, cell)));
         }
     }
 }
@@ -1591,7 +1722,7 @@ static void emit_transform(const reaction_t *r, uint8_t cell)
 static void emit_spoils(const reaction_t *r)
 {
     if (r->spoils_to == 0) return;
-    printf("- *Spoils* into %s %s.\n", mat_span_v(r->spoils_to),
+    printf("- It *turns into* %s %s.\n", mat_span_v(r->spoils_to),
            cause_marked("spoils_to", 0));
 }
 
@@ -1605,20 +1736,27 @@ static void emit_temperature(const reaction_t *r)
      * which is a different claim from "this material has no ramp" - so the
      * phrase is dropped rather than printed with adverb_for(0). */
     if (r->heat_ramp != 0) {
-        printf("- *Holds heat*%s", rate_gap(adverb("heat_ramp", r->heat_ramp)));
+        printf("- It *holds heat*%s.\n",
+               rate_gap(adverb_child("heat_ramp", r->heat_ramp)));
         if (r->conducts != 0) {
-            printf(" and *passes it on*%s",
-                   rate_gap(adverb("conducts", r->conducts)));
+            printf("- It also *passes heat along*%s.\n",
+                   rate_gap(adverb_child("conducts", r->conducts)));
         }
         if (r->cools != 0) {
-            printf(", *draining back to ambient*%s once nothing is "
-                   "heating it", rate_gap(adverb("cools", r->cools)));
+            /* "ambient" (a word the child-reader pass had never heard)
+             * meant "back to how it started" - `cools` only runs once
+             * nothing is still heating the cell, so "again" (it was cool
+             * before, and goes back to being cool) says the same thing
+             * without the word "normal", which the same re-read flagged
+             * as an extra, slightly abstract word this sentence does not
+             * need. */
+            printf("- Once nothing is heating it, it *cools back down*%s "
+                   "again.\n", rate_gap(adverb_child("cools", r->cools)));
         }
     } else {
-        printf("- *Passes heat on*%s, without banking any of it itself",
-               rate_gap(adverb("conducts", r->conducts)));
+        printf("- It *passes heat along*%s, but it never gets hot "
+               "itself.\n", rate_gap(adverb_child("conducts", r->conducts)));
     }
-    printf(".\n");
 }
 
 /* Its own function rather than folded into emit_temperature() just above:
@@ -1630,22 +1768,31 @@ static void emit_boils(const reaction_t *r)
 {
     if (r->boils == 0) return;
     const uint8_t boils_to = r->boils_to ? r->boils_to : MAT_STEAM;
-    printf("- Once conducted heat reaches it, *boils* into %s%s.\n",
-           mat_span_v(boils_to), rate_gap(adverb("boils", r->boils)));
+    /* "Conducted heat reaches it" meant "it gets hot enough", whether that
+     * heat arrived straight from a flame or through a conductor a few
+     * cells thick - "gets hot enough" says the same thing without naming
+     * the mechanism a five-year-old does not need. */
+    printf("- Once it gets hot enough, it *boils* into %s%s.\n",
+           mat_span_v(boils_to), rate_gap(adverb_child("boils", r->boils)));
 }
 
 static void emit_cold(const reaction_t *r)
 {
     if (r->chills == 0) return;
     printf("- *Chills whatever it touches*%s.\n",
-           rate_gap(adverb("chills", r->chills)));
+           rate_gap(adverb_child("chills", r->chills)));
 }
 
 static void emit_warmth(const reaction_t *r)
 {
     if (r->warms == 0) return;
-    printf("- *Warms whatever it touches*%s, without igniting or "
-           "quenching anything.\n", rate_gap(adverb("warms", r->warms)));
+    /* The old "without igniting or quenching anything" was a caveat ruling
+     * out two side effects a reader has no reason to expect in the first
+     * place - true, but not something a child needs told, and it also
+     * used both jargon words ("igniting"/"quenching") this pass exists to
+     * remove. Cut rather than translated. */
+    printf("- *Warms whatever it touches*%s.\n",
+           rate_gap(adverb_child("warms", r->warms)));
 }
 
 static void emit_thaw(const reaction_t *r)
@@ -1654,21 +1801,32 @@ static void emit_thaw(const reaction_t *r)
     /* `thaws` shares its product with GRP_TRANSFORM's `heats_to` - the
      * liquid-contact roll in sand_reactions.c writes the same target
      * field the heat-contact roll does, so naming it here is the field's
-     * actual behaviour, not redundant prose borrowed from another group. */
+     * actual behaviour, not redundant prose borrowed from another group.
+     *
+     * "any liquid" became "anything wet" - the child-reader pass was not
+     * sure "liquid" did not mean a drink, and `thaws` really does mean any
+     * liquid on the board, not just the named wetting liquid(s), so this
+     * keeps that true breadth without the word. */
     if (r->heats_to != 0) {
-        printf("- *Melts in any liquid it touches*%s, becoming %s.\n",
-               rate_gap(adverb("thaws", r->thaws)), mat_span_v(r->heats_to));
+        printf("- If anything wet touches it, it *melts*%s, turning into "
+               "%s.\n",
+               rate_gap(adverb_child("thaws", r->thaws)), mat_span_v(r->heats_to));
     } else {
-        printf("- *Melts in any liquid it touches*%s.\n",
-               rate_gap(adverb("thaws", r->thaws)));
+        printf("- If anything wet touches it, it *melts*%s.\n",
+               rate_gap(adverb_child("thaws", r->thaws)));
     }
 }
 
 static void emit_wet(const reaction_t *r)
 {
     if (r->wets != 0) {
-        printf("- *Wets* whatever it touches: things that soak will draw "
-               "it in.\n");
+        /* The old colon-joined "Wets whatever it touches: things that
+         * soak will draw it in" was one long sentence built from two
+         * ideas - split into two short ones, and "things that soak" (a
+         * reference to `soaks` elsewhere in this same table) becomes
+         * "thirsty things", which needs no cross-reference to understand. */
+        printf("- It *makes things wet*. Thirsty things will soak it "
+               "up.\n");
     }
     if (r->soaks != 0) {
         /* `soaks` only ever fires beside a wetting liquid - see
@@ -1677,90 +1835,145 @@ static void emit_wet(const reaction_t *r)
          * wetting_liquids, not "any liquid" (that claim is `thaws`'s
          * alone; see this file's comment on wetting_liquids). */
         if (r->soaks_to != 0) {
-            printf("- *Soaks up* any %s it touches%s, becoming %s "
-                   "once it takes a unit in.\n",
-                   wetting_liquids, rate_gap(adverb("soaks", r->soaks)),
+            /* "once it takes a unit in" -> "once it has soaked up
+             * enough" - `unit` is an internal accounting word with
+             * nothing for a reader to picture; "enough" says the same
+             * true thing (there is a threshold) without it. */
+            printf("- It *soaks up* any %s it touches%s, and turns into "
+                   "%s once it has soaked up enough.\n",
+                   wetting_liquids, rate_gap(adverb_child("soaks", r->soaks)),
                    mat_span_v(r->soaks_to));
         } else {
-            printf("- *Soaks up* any %s it touches%s, growing wetter "
-                   "(its own moisture rises) rather than changing into "
-                   "anything.\n", wetting_liquids,
-                   rate_gap(adverb("soaks", r->soaks)));
+            /* The old parenthetical "(its own moisture rises)" and the
+             * trailing "rather than changing into anything" were both
+             * there to contrast this row against the soaks_to!=0 case
+             * just above - a true distinction, but not one a child needs
+             * spelled out on every material's own heading; the plain
+             * fact ("gets wetter") is enough on its own. "wetter" over
+             * "more wet": the comparative a child would actually say. */
+            printf("- It *soaks up* any %s it touches%s, and gets "
+                   "wetter.\n", wetting_liquids,
+                   rate_gap(adverb_child("soaks", r->soaks)));
         }
     }
     if (r->dries != 0) {
-        printf("- *Dries back out*%s, on its own, with no partner "
-               "needed.\n", rate_gap(adverb("dries", r->dries)));
+        printf("- It *dries out*%s, all by itself.\n",
+               rate_gap(adverb_child("dries", r->dries)));
     }
 }
 
 static void emit_acid(const reaction_t *r)
 {
     if (r->dissolves != 0) {
-        printf("- *Dissolves an adjacent cell*%s",
-               rate_gap(adverb("dissolves", r->dissolves)));
+        /* "an adjacent cell" -> "whatever is next to it" - `cell` was the
+         * single worst-scoring word in the child-reader pass this section
+         * is built from (read as "jail" or "a phone", never as a grid
+         * square), so every use of it in this file's printed prose is
+         * gone; naming the neighbour by what it IS ("whatever is next to
+         * it") needs no grid vocabulary at all. */
+        printf("- It%s *eats through* whatever is next to it.\n",
+               rate_gap(adverb_child("dissolves", r->dissolves)));
         if (r->fizz != 0) {
             /* `fizz` is a one-shot chance on the cell just eaten, not a
-             * rate - adverb() always returns a frequency word for it
-             * (chance-scale fields never fall silent), and "leaving smoke
-             * behind" stays unmarked glue rather than a second verb mark
-             * in the same clause. */
-            printf(",%s leaving %s behind",
-                   rate_gap(adverb("fizz", r->fizz)),
+             * rate - adverb_child() always returns a frequency word for it
+             * (chance-scale fields never fall silent), placed pre-verb
+             * ("It hardly ever leaves..."), the same slot every other
+             * frequency word in this file uses. Its own sentence now,
+             * rather than a comma tacked onto the clause above. */
+            printf("- It%s *leaves* %s behind when it does.\n",
+                   rate_gap(adverb_child("fizz", r->fizz)),
                    mat_span_v(MAT_SMOKE));
         }
-        printf(".\n");
     }
     if (r->dissolvable != 0) {
         /* `dissolvable` is the chance a single ATTEMPT to dissolve THIS
          * material succeeds (see its own comment in material.h) - an EASE
-         * question, not a frequency one, so adverb() reads it through
+         * question, not a frequency one, so adverb_child() reads it through
          * ease_words[] rather than frequency_words[] (see field_docs[]'s
-         * FCHANCE_VOCAB row for this field) and the material stays the
-         * subject: "Dissolves in acid handily", not the fronted-adverb
-         * "Mostly gives way to acid". */
-        printf("- *Dissolves in* %s%s.\n", mat_span_v(MAT_ACID),
-               rate_gap(adverb("dissolvable", r->dissolvable)));
+         * FCHANCE_VOCAB row for this field). "Gives in to" keeps the
+         * material as the subject the way the old "Dissolves in acid"
+         * did (see this field's own comment above on why fronting the
+         * adverb instead would answer a question nobody asked), while
+         * also being an ACTIVE verb rather than the passive "is dissolved
+         * by acid" the child-reader pass flagged as harder at the same
+         * vocabulary level. */
+        printf("- It *gives in to* %s%s.\n", mat_span_v(MAT_ACID),
+               rate_gap(adverb_child("dissolvable", r->dissolvable)));
     }
 }
 
 static void emit_evaporates(const reaction_t *r)
 {
     if (r->evaporates == 0) return;
-    printf("- *Spontaneously evaporates into* %s%s - unconditional, no "
-           "heat or neighbour required.\n",
-           mat_span_v(MAT_GAS), rate_gap(adverb("evaporates", r->evaporates)));
+    /* "unconditional, no heat or neighbour required" was there to rule
+     * out a cause a reader might otherwise assume - fair for an adult
+     * audience, but "all by itself" already carries that same claim (no
+     * outside trigger) for a child, so the explicit ruling-out is cut
+     * rather than translated. "Spontaneously" is gone for the same
+     * reason: "all by itself" says what it meant. */
+    printf("- It *turns into* %s%s all by itself.\n", mat_span_v(MAT_GAS),
+           rate_gap(adverb_child("evaporates", r->evaporates)));
 }
 
 static void emit_condense(const reaction_t *r)
 {
     if (r->condenses == 0 || r->condenses_to == 0) return;
-    printf("- A 2x2 block of it%s *condenses* into a single cell of %s.\n",
-           rate_gap(adverb("condenses", r->condenses)),
+    /* "A 2x2 block of it condenses into a single cell of X" was grid math
+     * standing in for "some of it comes together and turns into something
+     * else" - this says that plainly instead, with no cell count and no
+     * board-coordinate language. "Comes together" over "gathers": a
+     * re-read as the child-reader persona flagged "gathers" as a word it
+     * was not sure it had, where "comes together" is a phrase used freely
+     * in games and cartoons at this age. */
+    printf("- When enough of it comes together in one spot, it%s *turns "
+           "into* %s.\n",
+           rate_gap(adverb_child("condenses", r->condenses)),
            mat_span_v(r->condenses_to));
 }
 
 static void emit_grow(const reaction_t *r)
 {
     if (r->grows != 0) {
-        printf("- *Grows into wet* %s%s, against gravity, spending a "
-               "level of that %s's moisture per cell.\n",
-               soil_names, rate_gap(adverb("grows", r->grows)), soil_names);
+        /* "against gravity" -> "up" (this game already treats gravity as
+         * simply "down" everywhere else in ordinary play - see `falls`
+         * just below), and "spending a level of that soil's moisture per
+         * cell" -> "using up a bit of the soil's water" - `moisture` was
+         * an unknown word, `soil` genuinely holds water in child terms
+         * the same way a sponge does, and `per cell` was grid-accounting
+         * a reader does not need to track. One sentence for the action,
+         * one for its cost, rather than both folded into a single
+         * eighteen-word sentence - a re-read as the child-reader persona
+         * (.claude/agents/child-reader.md) is exactly where a sentence
+         * that long starts to blur its own beginning by the end. */
+        printf("- It *grows up* into wet %s%s.\n", soil_names,
+               rate_gap(adverb_child("grows", r->grows)));
+        printf("- Growing uses up a bit of the %s's water.\n", soil_names);
     }
     if (r->falls != 0) {
-        printf("- *Falls under gravity*%s when there is empty space "
-               "beneath it.\n", rate_gap(adverb("falls", r->falls)));
+        printf("- It *falls down*%s when there is empty space below it.\n",
+               rate_gap(adverb_child("falls", r->falls)));
     }
     if (r->withers != 0) {
+        /* "Withers away" -> "dries up and dies" - the same fact, but
+         * concrete rather than a word ("withers") this pass could not
+         * confirm a five-year-old has. The sheltered_by branch used to
+         * chain a second condition onto the same sentence with "unless" -
+         * stacking "if X" with "unless Y" is a harder logical shape than
+         * a young reader needs ("unless" is a less familiar connective
+         * than "if" or "but"), and a re-read as the child-reader persona
+         * flagged the whole sentence (19 words, one "and", one comma) as
+         * running long by the end. Split into two plain sentences
+         * instead: the rule, then the safe exception as its own "but". */
         if (r->sheltered_by != 0) {
-            printf("- *Withers away*%s if it cannot reach water through "
-                   "its own roots and is not touching %s.\n",
-                   rate_gap(adverb("withers", r->withers)),
+            printf("- It *dries up and dies*%s if it cannot get water "
+                   "through its roots.\n",
+                   rate_gap(adverb_child("withers", r->withers)));
+            printf("- But it is safe if it is touching %s.\n",
                    mat_span_v(r->sheltered_by));
         } else {
-            printf("- *Withers away*%s if it cannot reach water through "
-                   "its own roots.\n",
-                   rate_gap(adverb("withers", r->withers)));
+            printf("- It *dries up and dies*%s if it cannot get water "
+                   "through its roots.\n",
+                   rate_gap(adverb_child("withers", r->withers)));
         }
     }
 }
@@ -1770,47 +1983,73 @@ static void emit_harden(const reaction_t *r)
     if (r->hardens_to == 0) return;
     /* `harden_chance`, `holds_line` and `canopy` are each a one-shot
      * decision made once, at the moment a run hardens - not a per-step
-     * rate against a partner - so adverb() gives each a frequency word
-     * ("mostly", "occasionally", ...) here, and each is phrased before its
-     * verb ("mostly hardens") rather than after ("hardens mostly"), which
-     * is the reading a frequency word wants. */
-    printf("- A straight run of %u cells%s *hardens* into %s",
+     * rate against a partner - so adverb_child() gives each a frequency word
+     * ("usually", "sometimes", ...) here, and each is phrased before its
+     * verb ("usually hardens") rather than after ("hardens usually"),
+     * which is the reading a frequency word wants.
+     *
+     * This used to be ONE sentence built out of two commas, an "and", and
+     * a semicolon ("A straight run of 6 cells occasionally hardens into
+     * wood, up to 2 cells wider at the foot than at the tip, and mostly a
+     * limb holds its own direction ...; the hardened body counts as part
+     * of wood") - the single worst-scoring sentence in the child-reader
+     * pass this rewrite is built from, four ideas in one breath. Each
+     * `if` below now gets its own short sentence instead. `cells` becomes
+     * `spots` throughout (a grid square a reader can picture without grid
+     * vocabulary), `foot`/`tip` become `bottom`/`top`, and `counts as
+     * part of` becomes `becomes part of ... too`. */
+    printf("- If it grows straight for %u spots in a row, it%s *turns "
+           "into* %s.\n",
            (unsigned)r->harden_run,
-           rate_gap(adverb("harden_chance", r->harden_chance)),
+           rate_gap(adverb_child("harden_chance", r->harden_chance)),
            mat_span_v(r->hardens_to));
     if (r->trunk_girth != 0) {
-        printf(", up to %u cells wider at the foot than at the tip",
+        printf("- The bottom can be up to %u spots wider than the top.\n",
                (unsigned)r->trunk_girth);
     }
     if (r->holds_line != 0) {
-        printf(", and%s a limb holds its own direction (rather than "
-               "bending back toward gravity)",
-               rate_gap(adverb("holds_line", r->holds_line)));
+        printf("- Its branches%s keep growing the same way they started, "
+               "instead of curving back down.\n",
+               rate_gap(adverb_child("holds_line", r->holds_line)));
     }
     if (r->clings_to != 0) {
-        printf("; the hardened body counts as part of %s",
+        printf("- Once it turns hard, it *becomes part of* %s too.\n",
                mat_span_v(r->clings_to));
     }
-    printf(".\n");
     if (r->canopy != 0 && r->canopy_to != 0) {
-        printf("- The moment it hardens, it also%s *leafs its crown* with "
-               "%s, one candidate space at a time.\n",
-               rate_gap(adverb("canopy", r->canopy)),
+        /* "one candidate space at a time" described the placement
+         * ALGORITHM (try one space, roll, try the next), an
+         * implementation detail rather than something that changes what
+         * a player actually sees - cut rather than translated, same as
+         * emit_warmth()'s cut clause above. "crown" -> "top", the word a
+         * child already uses for the top of a tree. */
+        printf("- As soon as it turns hard, it also%s *grows* %s on "
+               "top.\n",
+               rate_gap(adverb_child("canopy", r->canopy)),
                mat_span_v(r->canopy_to));
     }
 }
 
-static void emit_regrow(const reaction_t *r)
+static void emit_regrow(const reaction_t *r, uint8_t cell)
 {
     if (r->sprouts != 0 && r->sprouts_to != 0) {
-        printf("- Standing in wet %s, *sprouts* %s beside itself%s.\n",
-               soil_names, mat_span_v(r->sprouts_to),
-               rate_gap(adverb("sprouts", r->sprouts)));
+        printf("- If it is standing in wet %s, it%s *sprouts* %s next to "
+               "itself.\n",
+               soil_names, rate_gap(adverb_child("sprouts", r->sprouts)),
+               mat_span_v(r->sprouts_to));
     }
     if (r->buds != 0 && r->buds_to != 0) {
-        printf("- Once already in leaf and able to reach water, *buds* "
-               "new %s beside itself%s.\n",
-               mat_span_v(r->buds_to), rate_gap(adverb("buds", r->buds)));
+        /* "already in leaf" was an idiom the child-reader pass could not
+         * parse at all - "has leaves" says the same thing in words it
+         * has. An earlier version of this clause split the two
+         * conditions and the result into three separate sentences
+         * ("It already has leaves. It can reach water. Now it buds..."),
+         * which read as choppier and harder to follow than one plain
+         * "once X and Y" sentence - three short fragments in a row is its
+         * own kind of complexity, not the absence of it. */
+        printf("- Once it has leaves and can reach water, it%s *buds* "
+               "new %s next to itself.\n",
+               rate_gap(adverb_child("buds", r->buds)), mat_span_v(r->buds_to));
     }
     if (r->drinks != 0) {
         /* Same wetting-liquid gate as `soaks` - step_one_drinking_cell()
@@ -1825,16 +2064,47 @@ static void emit_regrow(const reaction_t *r)
          * the drinker itself without saying why the sentence was even
          * under this material. This says where the water actually goes
          * instead. */
-        printf("- Touching %s, *passes it down to* %s at its roots%s.\n",
-               wetting_liquids, soil_names,
-               rate_gap(adverb("drinks", r->drinks)));
+        printf("- If %s touches it, it%s *sends the water down* to %s at "
+               "its roots.\n",
+               wetting_liquids, rate_gap(adverb_child("drinks", r->drinks)),
+               soil_names);
     }
     if (r->roots != 0 && r->roots_to != 0) {
-        printf("- Spending its own %s moisture to grow, bud or sprout,%s "
-               "*roots into* %s it drinks from, welding that cell into "
-               "%s.\n",
-               soil_names, rate_gap(adverb("roots", r->roots)), soil_names,
-               mat_span_v(r->roots_to));
+        /* `roots` means two different things depending on whose row this
+         * is - see this field's own field_docs[] comment, and
+         * reaction_t.roots in material.h. On a GROWER (wood, plant), it
+         * fires off spending soil moisture to grow/bud/sprout. On ROOT's
+         * OWN row, there is no growing/budding/sprouting at all: a root
+         * cell just spreads into a moist soil neighbour. The old single
+         * template ("Spending its own dirt moisture to grow, bud or
+         * sprout, ... roots into dirt it drinks from, welding that cell
+         * into root") printed the GROWER story on every row, which was
+         * already wrong for Root's own heading before this pass ever
+         * touched it - `cell` (this row's own MATX()/material id, passed
+         * in from emit_material_section()) is enough to tell the two
+         * readings apart, so this now prints the true one for each. */
+        if (cell == MATX(MATX_ROOT)) {
+            printf("- If it touches wet %s, it%s *turns* that spot into "
+                   "more %s.\n",
+                   soil_names, rate_gap(adverb_child("roots", r->roots)),
+                   mat_span_v(r->roots_to));
+        } else {
+            /* The old three-item list ("growing, budding, or sprouting")
+             * carried two commas in one sentence - exactly the shape the
+             * child-reader persona (.claude/agents/child-reader.md) flags
+             * as losing track partway through. Growing, budding and
+             * sprouting are all, in child terms, the plant growing a new
+             * part, so this names the one umbrella idea instead of the
+             * three field names that happen to trigger it - still true,
+             * since every one of those three IS the plant growing
+             * something new. */
+            printf("- Growing new parts uses up some of the %s's water.\n",
+                   soil_names);
+            printf("- When that happens, it%s *turns* the spot under it "
+                   "into %s.\n",
+                   rate_gap(adverb_child("roots", r->roots)),
+                   mat_span_v(r->roots_to));
+        }
     }
 }
 
@@ -1846,7 +2116,7 @@ static void emit_shatter(const reaction_t *r)
      * badly chilled". Index 1 (the OTHER threshold, "if chilled while hot")
      * belongs to emit_pairwise_table()'s chills/shatters_to row instead;
      * see that function's own comment. */
-    printf("- *Shatters* into %s %s.\n", mat_span_v(r->shatters_to),
+    printf("- It *shatters* into %s %s.\n", mat_span_v(r->shatters_to),
            cause_marked("shatters_to", 0));
 }
 
@@ -1870,7 +2140,7 @@ static void emit_material_section(const char *name, const reaction_t *r,
     emit_condense(r);
     emit_grow(r);
     emit_harden(r);
-    emit_regrow(r);
+    emit_regrow(r, color_id);
     emit_shatter(r);
 }
 

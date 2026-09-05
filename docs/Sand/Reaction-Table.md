@@ -25,20 +25,22 @@ Typography carries the other three roles colour does not: *italic* is the verb d
 
 ### Sand
 
-- Beside $\textcolor{#B19100}{\text{fire}}$ or $\textcolor{#BF1B00}{\text{lava}}$, *melts* to $\textcolor{#296984}{\text{glass}}$ **slowly**.
-- *Soaks up* any $\textcolor{#1863A3}{\text{water}}$ it touches, becoming $\textcolor{#846542}{\text{dirt}}$ once it takes a unit in.
-- *Dissolves in* $\textcolor{#2B6F08}{\text{acid}}$ **handily**.
+- Next to $\textcolor{#B19100}{\text{fire}}$ or $\textcolor{#BF1B00}{\text{lava}}$, it **slowly** *melts* into $\textcolor{#296984}{\text{glass}}$.
+- It *soaks up* any $\textcolor{#1863A3}{\text{water}}$ it touches, and turns into $\textcolor{#846542}{\text{dirt}}$ once it has soaked up enough.
+- It *gives in to* $\textcolor{#2B6F08}{\text{acid}}$ **a lot**.
 
 ### Water
 
-- Once conducted heat reaches it, *boils* into $\textcolor{#2D96FF}{\text{steam}}$.
-- *Wets* whatever it touches: things that soak will draw it in.
-- *Dissolves in* $\textcolor{#2B6F08}{\text{acid}}$ **handily**.
+- Once it gets hot enough, it *boils* into $\textcolor{#2D96FF}{\text{steam}}$.
+- It *makes things wet*. Thirsty things will soak it up.
+- It *gives in to* $\textcolor{#2B6F08}{\text{acid}}$ **a lot**.
 
 ### Stone
 
-- *Holds heat* and *passes it on*, *draining back to ambient* **slowly** once nothing is heating it.
-- *Dissolves in* $\textcolor{#2B6F08}{\text{acid}}$ **adequately**.
+- It *holds heat*.
+- It also *passes heat along*.
+- Once nothing is heating it, it *cools back down* **slowly** again.
+- It *gives in to* $\textcolor{#2B6F08}{\text{acid}}$ **a little**.
 
 ### Gas
 
@@ -46,99 +48,119 @@ Typography carries the other three roles colour does not: *italic* is the verb d
 
 ### Fire
 
-- Is a heat source in its own right; **seldom** *leaves* $\textcolor{#84796B}{\text{smoke}}$ when it burns out. Touched by $\textcolor{#1863A3}{\text{water}}$ or $\textcolor{#2B6F08}{\text{acid}}$, *becomes* $\textcolor{#2D96FF}{\text{steam}}$.
+- Makes its own heat, all the time.
+- It **hardly ever** *leaves* $\textcolor{#84796B}{\text{smoke}}$ when it burns out.
+- If $\textcolor{#1863A3}{\text{water}}$ or $\textcolor{#2B6F08}{\text{acid}}$ touches it, it *turns into* $\textcolor{#2D96FF}{\text{steam}}$.
 
 ### Wood
 
-- *Catches* $\textcolor{#B19100}{\text{fire}}$ from $\textcolor{#B19100}{\text{fire}}$ or $\textcolor{#BF1B00}{\text{lava}}$, and burns in place.
-- Once alight, *burns down*, and *licks flame into an empty neighbour*; **occasionally** *leaves* $\textcolor{#84796B}{\text{smoke}}$ when it burns out. Touched by $\textcolor{#1863A3}{\text{water}}$ or $\textcolor{#2B6F08}{\text{acid}}$, simply goes out.
-- *Dissolves in* $\textcolor{#2B6F08}{\text{acid}}$ **handily**.
-- Standing in wet $\textcolor{#846542}{\text{dirt}}$, *sprouts* $\textcolor{#63A435}{\text{leaf}}$ beside itself.
-- Once already in leaf and able to reach water, *buds* new $\textcolor{#54682A}{\text{plant}}$ beside itself.
-- Touching $\textcolor{#1863A3}{\text{water}}$, *passes it down to* $\textcolor{#846542}{\text{dirt}}$ at its roots.
-- Spending its own $\textcolor{#846542}{\text{dirt}}$ moisture to grow, bud or sprout, **seldom** *roots into* $\textcolor{#846542}{\text{dirt}}$ it drinks from, welding that cell into $\textcolor{#AC8F6F}{\text{root}}$.
+- *Catches* $\textcolor{#B19100}{\text{fire}}$ from $\textcolor{#B19100}{\text{fire}}$ or $\textcolor{#BF1B00}{\text{lava}}$.
+- It keeps burning right where it is.
+- Once it is on fire, it *burns down*.
+- It *sets fire to* the empty spot next to it.
+- It **sometimes** *leaves* $\textcolor{#84796B}{\text{smoke}}$ when it burns out.
+- If $\textcolor{#1863A3}{\text{water}}$ or $\textcolor{#2B6F08}{\text{acid}}$ touches it, the fire just goes out.
+- It *gives in to* $\textcolor{#2B6F08}{\text{acid}}$ **a lot**.
+- If it is standing in wet $\textcolor{#846542}{\text{dirt}}$, it *sprouts* $\textcolor{#63A435}{\text{leaf}}$ next to itself.
+- Once it has leaves and can reach water, it *buds* new $\textcolor{#54682A}{\text{plant}}$ next to itself.
+- If $\textcolor{#1863A3}{\text{water}}$ touches it, it *sends the water down* to $\textcolor{#846542}{\text{dirt}}$ at its roots.
+- Growing new parts uses up some of the $\textcolor{#846542}{\text{dirt}}$'s water.
+- When that happens, it **hardly ever** *turns* the spot under it into $\textcolor{#AC8F6F}{\text{root}}$.
 
 ### Steam
 
-- *Warms whatever it touches*, without igniting or quenching anything.
-- A 2x2 block of it **slowly** *condenses* into a single cell of $\textcolor{#1863A3}{\text{water}}$.
+- *Warms whatever it touches*.
+- When enough of it comes together in one spot, it **slowly** *turns into* $\textcolor{#1863A3}{\text{water}}$.
 
 ### Smoke
 
-- *Warms whatever it touches*, without igniting or quenching anything.
+- *Warms whatever it touches*.
 
 ### Oil
 
-- *Catches* $\textcolor{#B19100}{\text{fire}}$ from $\textcolor{#B19100}{\text{fire}}$ or $\textcolor{#BF1B00}{\text{lava}}$, only where it touches air.
-- *Dissolves in* $\textcolor{#2B6F08}{\text{acid}}$ **poorly**.
+- *Catches* $\textcolor{#B19100}{\text{fire}}$ from $\textcolor{#B19100}{\text{fire}}$ or $\textcolor{#BF1B00}{\text{lava}}$.
+- But only where it can touch air.
+- It *gives in to* $\textcolor{#2B6F08}{\text{acid}}$ **hardly at all**.
 
 ### Lava
 
-- Is a heat source in its own right, and *licks flame into an empty neighbour*. Touched by $\textcolor{#1863A3}{\text{water}}$ or $\textcolor{#2B6F08}{\text{acid}}$, *becomes* $\textcolor{#5A6573}{\text{stone}}$.
+- Makes its own heat, all the time.
+- It *sets fire to* the empty spot next to it.
+- If $\textcolor{#1863A3}{\text{water}}$ or $\textcolor{#2B6F08}{\text{acid}}$ touches it, it *turns into* $\textcolor{#5A6573}{\text{stone}}$.
 
 ### Acid
 
-- Once conducted heat reaches it, *boils* into $\textcolor{#5CA532}{\text{gas}}$ **instantly**.
-- *Dissolves an adjacent cell*, **seldom** leaving $\textcolor{#84796B}{\text{smoke}}$ behind.
-- *Spontaneously evaporates into* $\textcolor{#5CA532}{\text{gas}}$ **slowly** - unconditional, no heat or neighbour required.
+- Once it gets hot enough, it *boils* into $\textcolor{#5CA532}{\text{gas}}$ **instantly**.
+- It *eats through* whatever is next to it.
+- It **hardly ever** *leaves* $\textcolor{#84796B}{\text{smoke}}$ behind when it does.
+- It *turns into* $\textcolor{#5CA532}{\text{gas}}$ **slowly** all by itself.
 
 ### Glass
 
-- Under long heat from $\textcolor{#B19100}{\text{fire}}$ or $\textcolor{#BF1B00}{\text{lava}}$, *melts* to $\textcolor{#BF1B00}{\text{lava}}$.
-- *Holds heat* and *passes it on*, *draining back to ambient* **slowly** once nothing is heating it.
-- *Shatters* into $\textcolor{#C58834}{\text{sand}}$ ***if warmed while badly chilled***.
+- If $\textcolor{#B19100}{\text{fire}}$ or $\textcolor{#BF1B00}{\text{lava}}$ stays next to it a long time, it *melts* into $\textcolor{#BF1B00}{\text{lava}}$.
+- It *holds heat*.
+- It also *passes heat along*.
+- Once nothing is heating it, it *cools back down* **slowly** again.
+- It *shatters* into $\textcolor{#C58834}{\text{sand}}$ ***if warmed while badly chilled***.
 
 ### Snow
 
-- Beside $\textcolor{#B19100}{\text{fire}}$ or $\textcolor{#BF1B00}{\text{lava}}$, *melts* to $\textcolor{#1863A3}{\text{water}}$.
+- Next to $\textcolor{#B19100}{\text{fire}}$ or $\textcolor{#BF1B00}{\text{lava}}$, it *melts* into $\textcolor{#1863A3}{\text{water}}$.
 - *Chills whatever it touches*.
-- *Melts in any liquid it touches* **slowly**, becoming $\textcolor{#1863A3}{\text{water}}$.
+- If anything wet touches it, it *melts* **slowly**, turning into $\textcolor{#1863A3}{\text{water}}$.
 
 ### Dirt
 
-- Beside $\textcolor{#B19100}{\text{fire}}$ or $\textcolor{#BF1B00}{\text{lava}}$, *melts* to $\textcolor{#7B8694}{\text{metal}}$.
-  *Comes out as* $\textcolor{#5A6573}{\text{stone}}$ **mostly** instead, in clumped runs rather than an even speckle.
-- *Spoils* into $\textcolor{#C58834}{\text{sand}}$ ***if wet when heat reaches it***.
-- *Soaks up* any $\textcolor{#1863A3}{\text{water}}$ it touches, growing wetter (its own moisture rises) rather than changing into anything.
-- *Dries back out* **slowly**, on its own, with no partner needed.
-- *Dissolves in* $\textcolor{#2B6F08}{\text{acid}}$ **handily**.
+- Next to $\textcolor{#B19100}{\text{fire}}$ or $\textcolor{#BF1B00}{\text{lava}}$, it **usually** *turns into* clumps of $\textcolor{#5A6573}{\text{stone}}$ instead of $\textcolor{#7B8694}{\text{metal}}$.
+- It *turns into* $\textcolor{#C58834}{\text{sand}}$ ***if wet when heat reaches it***.
+- It *soaks up* any $\textcolor{#1863A3}{\text{water}}$ it touches, and gets wetter.
+- It *dries out* **slowly**, all by itself.
+- It *gives in to* $\textcolor{#2B6F08}{\text{acid}}$ **a lot**.
 
 ### Ice
 
-- Beside $\textcolor{#B19100}{\text{fire}}$ or $\textcolor{#BF1B00}{\text{lava}}$, *melts* to $\textcolor{#1863A3}{\text{water}}$.
+- Next to $\textcolor{#B19100}{\text{fire}}$ or $\textcolor{#BF1B00}{\text{lava}}$, it *melts* into $\textcolor{#1863A3}{\text{water}}$.
 - *Chills whatever it touches*.
-- *Melts in any liquid it touches* **slowly**, becoming $\textcolor{#1863A3}{\text{water}}$.
+- If anything wet touches it, it *melts* **slowly**, turning into $\textcolor{#1863A3}{\text{water}}$.
 
 ### Plant
 
 - *Catches* $\textcolor{#B19100}{\text{fire}}$ from $\textcolor{#B19100}{\text{fire}}$ or $\textcolor{#BF1B00}{\text{lava}}$.
-- *Dissolves in* $\textcolor{#2B6F08}{\text{acid}}$ **handily**.
-- *Grows into wet* $\textcolor{#846542}{\text{dirt}}$, against gravity, spending a level of that $\textcolor{#846542}{\text{dirt}}$'s moisture per cell.
-- *Falls under gravity* when there is empty space beneath it.
-- *Withers away* **slowly** if it cannot reach water through its own roots.
-- A straight run of 6 cells **occasionally** *hardens* into $\textcolor{#825830}{\text{wood}}$, up to 2 cells wider at the foot than at the tip, and **mostly** a limb holds its own direction (rather than bending back toward gravity); the hardened body counts as part of $\textcolor{#825830}{\text{wood}}$.
-- The moment it hardens, it also **occasionally** *leafs its crown* with $\textcolor{#63A435}{\text{leaf}}$, one candidate space at a time.
-- Touching $\textcolor{#1863A3}{\text{water}}$, *passes it down to* $\textcolor{#846542}{\text{dirt}}$ at its roots.
-- Spending its own $\textcolor{#846542}{\text{dirt}}$ moisture to grow, bud or sprout, **seldom** *roots into* $\textcolor{#846542}{\text{dirt}}$ it drinks from, welding that cell into $\textcolor{#AC8F6F}{\text{root}}$.
+- It *gives in to* $\textcolor{#2B6F08}{\text{acid}}$ **a lot**.
+- It *grows up* into wet $\textcolor{#846542}{\text{dirt}}$.
+- Growing uses up a bit of the $\textcolor{#846542}{\text{dirt}}$'s water.
+- It *falls down* when there is empty space below it.
+- It *dries up and dies* **slowly** if it cannot get water through its roots.
+- If it grows straight for 6 spots in a row, it **sometimes** *turns into* $\textcolor{#825830}{\text{wood}}$.
+- The bottom can be up to 2 spots wider than the top.
+- Its branches **usually** keep growing the same way they started, instead of curving back down.
+- Once it turns hard, it *becomes part of* $\textcolor{#825830}{\text{wood}}$ too.
+- As soon as it turns hard, it also **sometimes** *grows* $\textcolor{#63A435}{\text{leaf}}$ on top.
+- If $\textcolor{#1863A3}{\text{water}}$ touches it, it *sends the water down* to $\textcolor{#846542}{\text{dirt}}$ at its roots.
+- Growing new parts uses up some of the $\textcolor{#846542}{\text{dirt}}$'s water.
+- When that happens, it **hardly ever** *turns* the spot under it into $\textcolor{#AC8F6F}{\text{root}}$.
 
 ### Leaf
 
 - *Catches* $\textcolor{#B19100}{\text{fire}}$ from $\textcolor{#B19100}{\text{fire}}$ or $\textcolor{#BF1B00}{\text{lava}}$.
-- *Dissolves in* $\textcolor{#2B6F08}{\text{acid}}$ **handily**.
-- *Withers away* **slowly** if it cannot reach water through its own roots and is not touching $\textcolor{#825830}{\text{wood}}$.
-- Touching $\textcolor{#1863A3}{\text{water}}$, *passes it down to* $\textcolor{#846542}{\text{dirt}}$ at its roots.
+- It *gives in to* $\textcolor{#2B6F08}{\text{acid}}$ **a lot**.
+- It *dries up and dies* **slowly** if it cannot get water through its roots.
+- But it is safe if it is touching $\textcolor{#825830}{\text{wood}}$.
+- If $\textcolor{#1863A3}{\text{water}}$ touches it, it *sends the water down* to $\textcolor{#846542}{\text{dirt}}$ at its roots.
 
 ### Metal
 
-- *Passes heat on*, without banking any of it itself.
-- *Dissolves in* $\textcolor{#2B6F08}{\text{acid}}$ **poorly**.
+- It *passes heat along*, but it never gets hot itself.
+- It *gives in to* $\textcolor{#2B6F08}{\text{acid}}$ **hardly at all**.
 
 ### Root
 
-- Touching $\textcolor{#BF1B00}{\text{lava}}$ - and $\textcolor{#BF1B00}{\text{lava}}$ only, never a flame - *becomes* $\textcolor{#B19100}{\text{fire}}$.
-- *Dissolves in* $\textcolor{#2B6F08}{\text{acid}}$ **handily**.
-- *Withers away* **slowly** if it cannot reach water through its own roots and is not touching $\textcolor{#825830}{\text{wood}}$.
-- Spending its own $\textcolor{#846542}{\text{dirt}}$ moisture to grow, bud or sprout, **seldom** *roots into* $\textcolor{#846542}{\text{dirt}}$ it drinks from, welding that cell into $\textcolor{#AC8F6F}{\text{root}}$.
+- If $\textcolor{#BF1B00}{\text{lava}}$ touches it, it *turns into* $\textcolor{#B19100}{\text{fire}}$.
+- A flame alone will not do this. It has to be $\textcolor{#BF1B00}{\text{lava}}$.
+- It *gives in to* $\textcolor{#2B6F08}{\text{acid}}$ **a lot**.
+- It *dries up and dies* **slowly** if it cannot get water through its roots.
+- But it is safe if it is touching $\textcolor{#825830}{\text{wood}}$.
+- If it touches wet $\textcolor{#846542}{\text{dirt}}$, it **hardly ever** *turns* that spot into more $\textcolor{#AC8F6F}{\text{root}}$.
 
 ## Pairwise reactions
 
