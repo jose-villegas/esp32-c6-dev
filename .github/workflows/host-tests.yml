@@ -17,3 +17,4 @@ jobs:
       - uses: actions/checkout@v4
       - run: bash launcher/test/run_tests.sh
       - run: bash launcher/main/apps/sand/tools/report_reactions.sh --check
+      - run: python3 launcher/tools/check_static_ram.py --self-test
