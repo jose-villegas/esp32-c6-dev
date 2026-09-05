@@ -1505,9 +1505,11 @@ void material_set_gravity(int gx, int gy);
  * gravity - what turns paint_row_n()'s HATCHED shine band from a fixed
  * diagonal into one that tracks the way the board is held.
  *
- * MINUS gravity, same convention liquid_spec's highlight above uses: the
- * shine sweeps toward wherever up currently is, the same direction real
- * light would slide across a tilted reflective surface.
+ * MINUS gravity, same convention liquid_spec's highlight above uses, then
+ * turned 45 degrees to the left as seen on the panel: the shine sweeps
+ * toward wherever up currently is, leaning, so its bands cross gravity at
+ * a slant instead of lying flat across it. See material.c for why the
+ * slant was added and how the turn folds into the arithmetic.
  *
  * Pure and stateless, unlike material_set_gravity() - there is no per-cell
  * table to fill ahead of a hot loop, just two numbers the caller reads once

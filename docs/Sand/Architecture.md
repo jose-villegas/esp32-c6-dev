@@ -499,13 +499,16 @@ breaks no behaviour and nothing else would notice.
   one every eight pixels each way, over three colours: the body, a quiet
   **grain** that does not move or care about gravity, and a brighter
   **shine** that does both. The shine is a band that travels on a clock
-  AND sweeps along whichever direction gravity currently points - a Q8
-  unit vector (`material_shine_direction()`) recomputed once a frame and
-  projected onto each pixel, so tilting the board visibly rotates which
-  way the band runs rather than merely picking between two fixed
-  diagonals. That binary version is what an earlier attempt tried first,
-  and it never became visible: two diagonals differing only in which way
-  they lean was too fine a difference for the eye to catch on this grid.
+  AND sweeps against gravity, turned 45 degrees to the left on the panel -
+  a Q8 unit vector (`material_shine_direction()`) recomputed once a frame
+  and projected onto each pixel, so tilting the board visibly rotates
+  which way the band runs rather than merely picking between two fixed
+  diagonals. The 45-degree lean is deliberate: with the sweep pointing
+  straight up gravity, the bands lay exactly across it, and on the device
+  a slant was wanted instead. That binary version is what an earlier
+  attempt tried first, and it never became visible: two diagonals
+  differing only in which way they lean was too fine a difference for the
+  eye to catch on this grid.
   Movement was what finally sold it as a surface catching light rather
   than a texture printed on one; a continuously rotating angle is the
   second attempt at making direction read too, layered on top of the

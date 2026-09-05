@@ -477,9 +477,11 @@ The project had separately wanted a gravity-oriented shine for glass and,
 for a while, had not managed to land one - **that has since shipped**,
 independently, as `material_shine_direction()`: a pure, stateless function
 returning a Q8 unit vector (minus gravity, the same convention
-`liquid_spec[]` uses) that turns glass and metal's `MATERIAL_HATCHED`
-band from a fixed diagonal into one that sweeps with the tilt. Two
-different mechanisms solving related problems - `liquid_spec[]` is a
+`liquid_spec[]` uses, then turned 45 degrees left on the panel so the
+bands lean across gravity rather than lying flat against it) that turns
+glass and metal's `MATERIAL_HATCHED` band from a fixed diagonal into one
+that sweeps with the tilt. Two different mechanisms solving related
+problems - `liquid_spec[]` is a
 precomputed per-mask table read by index, this is two numbers computed
 once a frame and carried straight into the hatch's own per-pixel walk -
 worth comparing both before reaching for either as a template for a third

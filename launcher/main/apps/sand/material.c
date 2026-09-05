@@ -2145,10 +2145,14 @@ material_set_gravity(int gx, int gy) {
  * why it is a separate, stateless function rather than another table filled
  * alongside liquid_spec[] above.
  *
- * Same MINUS-gravity unit vector material_set_gravity() computes for the
- * specular table, just handed back to the caller instead of dotted against
- * a fixed set of edge normals - a travelling shine has no mask of edge bits
- * to look one up by, only a direction to sweep along. */
+ * Starts from the same MINUS-gravity unit vector material_set_gravity()
+ * computes for the specular table, then turns it an eighth of a turn to
+ * the LEFT as seen on the panel. Sweeping straight up gravity laid the
+ * bands exactly across it, and seen on the device a 45-degree slant was
+ * wanted instead (2026-09-05).
+ * Screen y grows downward, so a left turn there is (x, y) -> (x + y, y - x)
+ * over sqrt 2, and 181/256 is that 1/sqrt 2 - the whole rotation folds into
+ * the two products below with nothing further to normalise. */
 void
 material_shine_direction(int gx, int gy, int *ux_q8, int *uy_q8) {
     const int len = im_len(gx, gy);
@@ -2157,8 +2161,8 @@ material_shine_direction(int gx, int gy, int *ux_q8, int *uy_q8) {
         *uy_q8 = 181;
         return;
     }
-    *ux_q8 = (-gx * 256) / len;
-    *uy_q8 = (-gy * 256) / len;
+    *ux_q8 = (-(gx + gy) * 181) / len;
+    *uy_q8 = ((gx - gy) * 181) / len;
 }
 
 /*=============================================================================
