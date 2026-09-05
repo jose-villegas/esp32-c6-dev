@@ -3354,7 +3354,7 @@ step_one_tempered_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cons
 /* How hard moisture damps a flammability roll in try_ignite_given() below -
  * a right-shift per moisture LEVEL, not a flat penalty, so each further
  * level costs proportionally more of what is left: gunpowder's 200 goes
- * 200 -> 50 -> 12 -> 3 -> 0 across its four wet codes (moist_max 5), damp
+ * 200 -> 50 -> 12 -> 3 -> 0 across its four wet codes (moist_max 4), damp
  * powder misfires far more often than dry, wet powder is inert outright,
  * and only heat driving the moisture back down (try_heat_transform_given()'s
  * wet-earth stage) or time makes it catch again. A shift rather than a
@@ -4134,16 +4134,24 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
     return false;
 }
 
-/* Whether every one of (x, y)'s eight neighbours - cardinal AND diagonal -
- * is a lit cell of the SAME species as `grain`. The gate step_one_burning_
- * cell()'s burn-out branch reads to decide whether a fuse ends in a blast
- * or in plain fire (see reaction_t.explodes's own comment, material.h):
- * one blast per fully-lit 3x3, not one per grain.
+/* Whether (x, y) is one corner of a 2x2 block whose other three cells are
+ * lit cells of the SAME species as `grain` - any of the four 2x2 squares
+ * that contain it will do. The gate step_one_burning_cell()'s burn-out
+ * branch reads to decide whether a fuse ends in a blast or in plain fire
+ * (see reaction_t.explodes's own comment, material.h).
+ *
+ * 2x2, NOT 3x3. The first version asked for all eight neighbours lit, and
+ * on the device blasts became rare to the point of looking broken: burn-out
+ * rolls are independent per cell, so by the time any one cell burns out,
+ * the neighbours that were lit before it usually already are fire - a
+ * fully-lit 3x3 exists only in the brief window between the fuse front
+ * passing and the first burn-out behind it. Three lit neighbours in one
+ * quadrant is the smallest shape that still says "a body of powder, not a
+ * trail", and it is what a lit pile actually presents at burn-out time.
+ * Cheaper too: at most four cells looked at per quadrant, with an early out.
  *
  * OFF-BOARD COUNTS AS NOT LIT. The board edge is never the inside of a
- * pile, so a lit cell sitting against it can never see all eight and never
- * detonates there - the intended reading, not a bounds-check afterthought
- * (see test_a_lit_cell_at_the_board_edge_never_detonates, suite_sand.c).
+ * pile (see test_a_lit_cell_at_the_board_edge_never_detonates, suite_sand.c).
  *
  * same_species(), not a raw material compare - gunpowder shares its high
  * nibble with the extended statics (GUNPOWDER_BASE, material.h), and a
@@ -4153,25 +4161,28 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
  * row anyway once same_species() has already agreed, so there is nothing
  * left to re-derive - just the one threshold compare. */
 static inline bool
-all_eight_neighbours_lit(const sand_t* s, int x, int y, int w, int h, cell_t grain) {
+lit_here(const sand_t* s, int nx, int ny, int w, int h, cell_t grain, const reaction_t* r) {
+    if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+        return false;
+    }
+    const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
+    return same_species(n, grain) && cell_code(n) >= r->lit_from;
+}
+
+static inline bool
+in_a_lit_two_by_two(const sand_t* s, int x, int y, int w, int h, cell_t grain) {
     const reaction_t* r = reaction_of(grain);
-    for (int dy = -1; dy <= 1; dy++) {
-        for (int dx = -1; dx <= 1; dx++) {
-            if (dx == 0 && dy == 0) {
-                continue;
-            }
-            const int nx = x + dx;
-            const int ny = y + dy;
-            if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
-                return false;
-            }
-            const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
-            if (!same_species(n, grain) || cell_code(n) < r->lit_from) {
-                return false;
+    for (int dy = -1; dy <= 1; dy += 2) {
+        if (!lit_here(s, x, y + dy, w, h, grain, r)) {
+            continue;
+        }
+        for (int dx = -1; dx <= 1; dx += 2) {
+            if (lit_here(s, x + dx, y, w, h, grain, r) && lit_here(s, x + dx, y + dy, w, h, grain, r)) {
+                return true;
             }
         }
     }
-    return true;
+    return false;
 }
 
 /* One burning cell's turn, in priority order: burn down first (a cell
@@ -4216,23 +4227,23 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
          * cell and woke it - everything below only decides what, if
          * anything, is left in its place. `grain` still holds the byte
          * that was there a moment ago (neither helper touches the local,
-         * only row[x]), which is what lets all_eight_neighbours_lit()
+         * only row[x]), which is what lets in_a_lit_two_by_two()
          * below ask "was this a lit cell of MY species" without having
          * to have cached that separately. */
         /* THE FUSE REACHES ITS END. `explodes` is read HERE now, only
          * here (see its own comment, material.h) - not at ignition. A
-         * lit cell that finds every one of its eight neighbours also lit
-         * detonates; anything less - a lone cell, a thin trail, the
-         * pile's own already-fired-and-now-plain-fire neighbours -
-         * just burns out to plain fire instead, exactly like an
-         * ordinary flame guttering. That is what staggers a big pile's
-         * blasts across several steps rather than landing them all in
-         * one: the first cell to see eight lit neighbours blasts: its
-         * neighbours are fire or in flight one step later, so nothing
-         * else in that 3x3 ever sees eight again. */
+         * lit cell that is one corner of a still-lit 2x2 detonates;
+         * anything less - a lone cell, a one-wide trail, the pile's own
+         * already-fired-and-now-plain-fire neighbours - just burns out
+         * to plain fire instead, exactly like an ordinary flame
+         * guttering. That is what staggers a big pile's blasts across
+         * several steps rather than landing them all in one: each
+         * blast's core and thrown grains take the lit cells around it
+         * out of every 2x2 they were part of, so the next blast has to
+         * come from a burn-out somewhere else in the pile. */
         if (rx->explodes != 0) {
-            REACTION_DOC(explodes, "at burn-out, if every one of its eight neighbours is also lit");
-            if (s->impulse_buf != NULL && all_eight_neighbours_lit(s, x, y, w, h, grain)) {
+            REACTION_DOC(explodes, "at burn-out, if it is one corner of a 2x2 that is all lit");
+            if (s->impulse_buf != NULL && in_a_lit_two_by_two(s, x, y, w, h, grain)) {
                 sand_explode(s, x, y, rx->explodes);
             } else {
                 place_reacted(s, x, y, at, MAT_FIRE);

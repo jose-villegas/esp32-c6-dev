@@ -276,9 +276,30 @@ static const field_doc_t field_docs[] = {
      * and emit_burn(). */
     F(burns,        GRP_BURN, FK_FLAG,   NULL),
     FRATE(burn_decay, GRP_BURN, "burns down"),
+    /* THE FIRST CODE THAT COUNTS AS LIT (reaction_t.lit_from, material.h) -
+     * encoding, not a reaction: it tells cell_is_burning()/tick_decay_at()
+     * where a burn_decay material's low bits switch from "not yet lit" to
+     * "counting down", the same shape as tones/moist_max further down
+     * (GRP_WET). No emit_*() function reads it, so it is silent for every
+     * material, wood included; this row exists only to keep the byte-count
+     * gate (the _Static_assert above) satisfied. */
+    F(lit_from,     GRP_BURN, FK_COUNT_MAG, NULL),
     FCHANCE(residue,  GRP_BURN, "leaves smoke"),
     F(quench_to,    GRP_BURN, FK_TARGET, NULL),
     FRATE(flare,     GRP_BURN, "sets fire to the empty spot next to it"),
+    /* Zero (ordinary burn-out) for every material but gunpowder; nonzero
+     * is a BLAST RADIUS IN CELLS, read only at the moment a burn_decay
+     * cell's own countdown reaches `lit_from` and would otherwise simply
+     * vanish - see reaction_t.explodes's own comment in material.h and its
+     * REACTION_DOC() call at that read site in step_one_burning_cell()
+     * (sand_reactions.c). No longer read at ignition (emit_ignite() below
+     * is unchanged from before gunpowder existed) - catching just lights
+     * the fuse, the same as any other burn_decay material, and only the
+     * FINAL step of that burn ever asks whether to blast instead of
+     * simply going out. A plain magnitude, not a chance/256, so
+     * FK_COUNT_MAG; emit_burn() prints it only when nonzero - silent for
+     * every material but gunpowder. */
+    F(explodes,     GRP_BURN, FK_COUNT_MAG, "detonates"),
 
     /* GRP_ACID (dissolves/dissolvable/fizz all belong to the acid pair,
      * whichever side of it this row is on - see emit_acid()). `dissolves`
@@ -349,6 +370,24 @@ static const field_doc_t field_docs[] = {
     FRATE(soaks,    GRP_WET, "soaks up anything wet that touches it"),
     F(soaks_to,     GRP_WET, FK_TARGET, NULL),
     FRATE(dries,    GRP_WET, "dries out all by itself"),
+    /* `tones`/`moist_max` are the moisture CODEC's shape (see
+     * reaction_t.tones's own comment in material.h) - how many low bits of
+     * a material's variant are dry tones versus moisture levels, not a
+     * reaction at all. No emit_*() function reads either one, so they
+     * print nothing for any material; FK_COUNT_MAG is the closest real
+     * kind (a magnitude, not a chance/256), and a row is needed here only
+     * to keep this file's byte-count gate (the _Static_assert above)
+     * satisfied. */
+    F(tones,        GRP_WET, FK_COUNT_MAG, NULL),
+    F(moist_max,    GRP_WET, FK_COUNT_MAG, NULL),
+    /* `soaked_to`/`soaked_chance`: what a fully SATURATED cell becomes, and
+     * how often that roll succeeds - a genuine per-step rate rolled while
+     * the cell stays saturated (see step_one_soaking_cell(), sand_
+     * reactions.c), the same shape as `dries` just above, so FRATE rather
+     * than a one-shot FCHANCE. Zero soaked_to (every material but
+     * gunpowder) means the pair never fires and emit_wet() stays silent. */
+    F(soaked_to,         GRP_WET, FK_TARGET, NULL),
+    FRATE(soaked_chance, GRP_WET, "turns into"),
 
     /* GRP_GROW */
     FRATE(grows,    GRP_GROW, "grows up into wet soil"),
@@ -912,6 +951,17 @@ static const char *adverb_cell_child(const char *field_name, uint8_t v,
  * wrong today. */
 static const char *to_name(uint8_t v)
 {
+    /* GUNPOWDER_LIT_CELL is what ignites_to/heats_to actually hold for
+     * gunpowder (material.c's GUNPOWDER_REACTION) - material_name() would
+     * read it back as plain "Gunpowder", which prints as a no-op ("becomes
+     * Gunpowder") for what is really the fuse catching. Named ahead of the
+     * general extended-cell-spec branch below rather than folded into
+     * extended_names[] (material.c) itself, which every OTHER caller of
+     * material_name() - the palette test, the brush label - needs to keep
+     * reading as plain "Gunpowder". */
+    if (v == GUNPOWDER_LIT_CELL) {
+        return "Lit Gunpowder";
+    }
     if (v >= (uint8_t)(MAT_EXTENDED << 4)) {
         return material_name((cell_t)v);
     }
@@ -1007,7 +1057,9 @@ typedef struct {
                         * comment. */
 } mrow_t;
 
-static mrow_t all_rows[(MAT_COUNT - 1) + MATERIAL_EXTENDED_COUNT];
+/* +1 for gunpowder: one row for all eight low-nibble codes 0xF8-0xFF, not
+ * one per code - see build_rows()'s own comment on why. */
+static mrow_t all_rows[(MAT_COUNT - 1) + MATERIAL_EXTENDED_COUNT + 1];
 static size_t all_rows_count;
 
 /* "#rrggbb" plus the NUL, the fixed width every material_hex() output (and
@@ -1463,10 +1515,14 @@ static char heat_sources[256];
 static char quenching_liquids[256];
 
 /* The material(s) `dries != 0` selects - see pred_dries()'s own comment
- * for why that is the right predicate. Dirt alone today. Coloured, like
- * the lists above - replaces the hardcoded word "soil" wherever it
- * appeared as prose glue rather than a real field value. */
-static char soil_names[64];
+ * for why that is the right predicate. Dirt and Gunpowder both, now that
+ * gunpowder has a moisture codec of its own (material.c's
+ * GUNPOWDER_REACTION) - sized like the 256-byte lists above rather than
+ * the old 64, which fit only one coloured name and silently truncated
+ * mid-span the moment a second one joined it. Coloured, like the lists
+ * above - replaces the hardcoded word "soil" wherever it appeared as
+ * prose glue rather than a real field value. */
+static char soil_names[256];
 
 static void build_rows(void)
 {
@@ -1494,6 +1550,33 @@ static void build_rows(void)
         all_rows[all_rows_count].color_id = MATX(k);
         all_rows_count++;
     }
+
+    /* Gunpowder: one row, not eight. All eight low-nibble codes 0xF8-0xFF
+     * share one GUNPOWDER_REACTION row (material.c) and one name,
+     * "Gunpowder" (extended_names[]) - the loop above only ever walks
+     * k < MATERIAL_EXTENDED_COUNT (the statics half, 0xF0-0xF7), so it
+     * never reaches this half at all and this is the only place that adds
+     * it. Looping k = 8..15 instead and printing eight identical rows
+     * would repeat the exact same per-material section eight times over
+     * for no new information - the physics IS the same row, by
+     * construction (see GUNPOWDER_BASE, material.h). `extended_reactions[8]`
+     * is that row (any of 8..15 would do; 8 is GUNPOWDER_BASE's own low
+     * bits). `material_of(GUNPOWDER_BASE)` reads the real KIND_POWDER
+     * physics row rather than material_by_id(MAT_EXTENDED)'s KIND_STATIC
+     * one the loop above uses - the two nibble-15 halves now have
+     * different kinds (see material_of()'s own comment on why the hot
+     * table doubled), so reusing the statics' kind here would be wrong.
+     * `color_id` is GUNPOWDER_CELL(2), the mid dry tone brush_color()
+     * (app_sand.c) actually paints - the swatch this doc's colour section
+     * shows should be the one a player would really see land on the
+     * panel, the same reasoning representative_variant() applies to every
+     * ordinary material's swatch. */
+    all_rows[all_rows_count].name     = "Gunpowder";
+    all_rows[all_rows_count].r        = &extended_reactions[8];
+    all_rows[all_rows_count].kind     = (material_kind_t)material_of(GUNPOWDER_BASE)->kind;
+    all_rows[all_rows_count].self_id  = MAT_EXTENDED;
+    all_rows[all_rows_count].color_id = GUNPOWDER_CELL(2);
+    all_rows_count++;
 }
 
 static bool row_is_empty(const reaction_t *r)
@@ -1571,6 +1654,14 @@ static void emit_ignite(const reaction_t *r, uint8_t self_id)
                rate_gap(adv), heat_sources);
         printf("- It keeps burning right where it is.\n");
     } else {
+        /* Also gunpowder's own path: `ignites_to` is GUNPOWDER_LIT_CELL, a
+         * whole extended cell spec rather than a plain material id, so
+         * this branch reads as "turns into lit gunpowder" - see to_name()'s
+         * own comment for why that spec gets a name of its own instead of
+         * material_name()'s plain "Gunpowder" (which would read as a
+         * no-op). Catching only lights the fuse now - see reaction_t.
+         * explodes's own comment in material.h for why the blast itself
+         * moved out of this function entirely, into emit_burn(). */
         printf("- *Catches* %s%s from %s.\n", mat_span_v(MAT_FIRE),
                rate_gap(adv), heat_sources);
         printf("- It *turns into* %s instead.\n",
@@ -1597,6 +1688,17 @@ static void emit_burn(const reaction_t *r)
     } else {
         printf("- Once it is on fire, it *burns down*%s.\n",
                rate_gap(adverb_child("burn_decay", r->burn_decay)));
+    }
+    if (r->explodes != 0) {
+        /* Zero for every material but gunpowder - see reaction_t.explodes's
+         * own comment in material.h. Read only at burn-out now (the fuse
+         * model), not at ignition, so this bullet belongs here rather than
+         * in emit_ignite() - catching just lights it, same as any other
+         * burn_decay material; this is the one extra thing that happens
+         * when the burn finally runs out instead of simply guttering. */
+        printf("- Burning out, it *detonates* instead of simply going "
+               "out - blasting a %u-cell radius, but only if it is one "
+               "corner of a 2x2 that is still alight.\n", (unsigned)r->explodes);
     }
     if (r->flare != 0) {
         printf("- It *sets fire to* the empty spot next to it%s.\n",
@@ -1859,6 +1961,17 @@ static void emit_wet(const reaction_t *r)
     if (r->dries != 0) {
         printf("- It *dries out*%s, all by itself.\n",
                rate_gap(adverb_child("dries", r->dries)));
+    }
+    /* `soaked_to`/`soaked_chance`: zero soaked_to (every material but
+     * gunpowder) means this never fires - see reaction_t.soaked_to's own
+     * comment in material.h. The adverb trails the target, matching the
+     * "becomes X, <adverb>" shape this pair asks for rather than the
+     * pre-verb slot a frequency word takes above (soaked_chance is a
+     * FRATE, not a one-shot chance - see its own field_docs[] row). */
+    if (r->soaked_to != 0) {
+        printf("- Once it is fully soaked, it *turns into* %s%s.\n",
+               mat_span_v(r->soaked_to),
+               rate_gap(adverb_child("soaked_chance", r->soaked_chance)));
     }
 }
 
@@ -2403,8 +2516,19 @@ static void emit_pairwise_table(void)
         join_names(is_quenching_liquid, " / ", qbuf, sizeof(qbuf));
         if (all_rows[i].r->burn_decay != 0) {
             /* burn_decay path: quench_to is never read - see emit_burn()'s
-             * own comment on step_one_burning_cell(). */
-            print_join_row(all_rows[i].name, qbuf, "itself, unlit",
+             * own comment on step_one_burning_cell(). That path itself
+             * forks in one more way now: an ordinary burn_decay material
+             * (wood) resets to the plain unlit code (variant 0), but
+             * gunpowder (`explodes != 0`) is written back through
+             * with_moisture() as SOAKED instead - a doused fuse is wet,
+             * not merely unlit, or it would relight off the very neighbour
+             * that just quenched it. See step_one_burning_cell()'s own
+             * comment on that branch (sand_reactions.c) for why gunpowder
+             * is the one material this fork exists for. */
+            const char *becomes = (all_rows[i].r->explodes != 0)
+                                       ? "itself, soaked"
+                                       : "itself, unlit";
+            print_join_row(all_rows[i].name, qbuf, becomes,
                            "on contact",
                            "quench_to is not read on this path");
         } else {

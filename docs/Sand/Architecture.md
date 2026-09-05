@@ -136,16 +136,20 @@ burning or nothing inside a pile ever goes off), and quenching it with
 water writes moisture at `moist_max` (soaked) rather than the unlit code,
 or it would relight from an adjacent lit cell on the very next step.
 
-Only at **burn-out** does `explodes` (blast radius, 6) get read: if every
-one of the cell's eight neighbours is also lit gunpowder and the impulse
-buffer is live, it detonates (`sand_explode()`); otherwise it becomes an
-ordinary `MAT_FIRE` cell, the same no-buffer fallback the confined-gas
-blast already relies on. That neighbour check is what keeps a thin trail
-or a lone lit cell from ever blasting - only a pile thick enough that a
-cell's whole 3x3 catches before the first one burns out does, and even
-then only the first cell to burn out sees eight lit neighbours; the ones
-around it are fire or in flight by their own turn, so a big pile's blasts
-land one at a time across several frames rather than all at once. Two
+Only at **burn-out** does `explodes` (blast radius, 6) get read: if the
+cell is one corner of a 2x2 whose other three cells are also lit gunpowder
+and the impulse buffer is live, it detonates (`sand_explode()`); otherwise
+it becomes an ordinary `MAT_FIRE` cell, the same no-buffer fallback the
+confined-gas blast already relies on. That neighbour check is what keeps a
+one-wide trail or a lone lit cell from ever blasting. A fully-lit 3x3 was
+asked for first and made blasts rare enough on the device to look broken:
+burn-out rolls are independent per cell, so by the time any cell burns
+out the neighbours lit before it are usually already fire, and a whole
+3x3 alight at once existed only in the brief window behind the fuse
+front. Three lit neighbours in one quadrant is what a lit pile actually
+presents at burn-out, and each blast's core and thrown grains remove the
+cells around it from every 2x2 they were part of, so a big pile's blasts
+still land one at a time across several frames rather than all at once. Two
 earlier designs - immediate detonation on ignition, then a boundary-only
 check - were measured on-device and dropped for costing the same or more;
 see [`Sand-Simulation.md`](Sand-Simulation.md#fire-chemistry-wood-embers-steam-and-a-working-boiler)

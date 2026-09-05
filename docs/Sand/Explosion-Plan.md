@@ -628,8 +628,9 @@ a fourth bit. Ignition and the qualifying heat hit write that lit code
 instead of blasting; a lit cell is a heat source like a burning log
 (ignites neighbours, so a trail burns along; counts down its own
 `burn_decay`, 32); only at burn-out does `reaction_t.explodes` (radius 6)
-get read, and only if all eight neighbours are also lit gunpowder and
-impulses are enabled - otherwise the cell becomes plain fire. A pile still
+get read, and only if the cell is one corner of a 2x2 that is all lit
+gunpowder and impulses are enabled - otherwise the cell becomes plain
+fire (a whole lit 3x3 was tried first and proved too rare to see). A pile still
 chain-detonates over several steps, exactly as this paragraph predicted,
 but now for the reason it names: a counter on the cell, not merely
 neighbour propagation racing to keep up. Full mechanism in

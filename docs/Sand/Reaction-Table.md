@@ -7,9 +7,9 @@ See docs/Sand/Reaction-Doc-Generator-Plan.md for the design this follows. Every 
 
 Every material name below is coloured - this list doubles as the key: whatever colour a name gets here is the colour that same name gets in every bullet that follows.
 
-$\textcolor{#C58834}{\text{sand}}$, $\textcolor{#1863A3}{\text{water}}$, $\textcolor{#5A6573}{\text{stone}}$, $\textcolor{#5CA532}{\text{gas}}$, $\textcolor{#B19100}{\text{fire}}$, $\textcolor{#825830}{\text{wood}}$, $\textcolor{#2D96FF}{\text{steam}}$, $\textcolor{#84796B}{\text{smoke}}$, $\textcolor{#636331}{\text{oil}}$, $\textcolor{#BF1B00}{\text{lava}}$, $\textcolor{#2B6F08}{\text{acid}}$, $\textcolor{#296984}{\text{glass}}$, $\textcolor{#6099CC}{\text{snow}}$, $\textcolor{#846542}{\text{dirt}}$, $\textcolor{#16A0CC}{\text{ice}}$, $\textcolor{#54682A}{\text{plant}}$, $\textcolor{#63A435}{\text{leaf}}$, $\textcolor{#7B8694}{\text{metal}}$, $\textcolor{#AC8F6F}{\text{root}}$
+$\textcolor{#C58834}{\text{sand}}$, $\textcolor{#1863A3}{\text{water}}$, $\textcolor{#5A6573}{\text{stone}}$, $\textcolor{#5CA532}{\text{gas}}$, $\textcolor{#B19100}{\text{fire}}$, $\textcolor{#825830}{\text{wood}}$, $\textcolor{#2D96FF}{\text{steam}}$, $\textcolor{#84796B}{\text{smoke}}$, $\textcolor{#636331}{\text{oil}}$, $\textcolor{#BF1B00}{\text{lava}}$, $\textcolor{#2B6F08}{\text{acid}}$, $\textcolor{#296984}{\text{glass}}$, $\textcolor{#6099CC}{\text{snow}}$, $\textcolor{#846542}{\text{dirt}}$, $\textcolor{#16A0CC}{\text{ice}}$, $\textcolor{#54682A}{\text{plant}}$, $\textcolor{#63A435}{\text{leaf}}$, $\textcolor{#7B8694}{\text{metal}}$, $\textcolor{#AC8F6F}{\text{root}}$, $\textcolor{#101010}{\text{gunpowder}}$
 
-These colours are lightness-adjusted from the device's exact palette wherever the raw value fails a 3:1 WCAG contrast floor against GitHub's light and dark page backgrounds (hue and saturation are left alone - only lightness moves, and only as far as it has to): Sand, Water, Gas, Fire, Wood, Steam, Oil, Lava, Acid, Snow, Ice, Plant, Leaf, Root. Everything else - Stone, Smoke, Glass, Dirt, Metal - already clears 3:1 on its own and prints its exact, unadjusted device value; see LEGIBILITY_OVERRIDES in this file's own source for the raw/adjusted pair behind each one. `emit_anatomy()`'s own material list further down uses the raw values throughout, on purpose - it is documenting the actual palette, not standing in as this page's key.
+These colours are lightness-adjusted from the device's exact palette wherever the raw value fails a 3:1 WCAG contrast floor against GitHub's light and dark page backgrounds (hue and saturation are left alone - only lightness moves, and only as far as it has to): Sand, Water, Gas, Fire, Wood, Steam, Oil, Lava, Acid, Snow, Ice, Plant, Leaf, Root. Everything else - Stone, Smoke, Glass, Dirt, Metal, Gunpowder - already clears 3:1 on its own and prints its exact, unadjusted device value; see LEGIBILITY_OVERRIDES in this file's own source for the raw/adjusted pair behind each one. `emit_anatomy()`'s own material list further down uses the raw values throughout, on purpose - it is documenting the actual palette, not standing in as this page's key.
 
 The pairwise table further down stays plain text, with no colour at all, deliberately: every coloured name on this page is inline LaTeX (`$\textcolor{}{}$`), and that has only ever been confirmed to render inside running prose on GitHub, never inside a markdown TABLE CELL - so this generator does not colour table cells on an unverified assumption.
 
@@ -55,10 +55,10 @@ Typography carries the other three roles colour does not: *italic* is the verb d
 - It **sometimes** *leaves* $\textcolor{#84796B}{\text{smoke}}$ when it burns out.
 - If $\textcolor{#1863A3}{\text{water}}$ or $\textcolor{#2B6F08}{\text{acid}}$ touches it, the fire just goes out.
 - It *gives in to* $\textcolor{#2B6F08}{\text{acid}}$ **a lot**.
-- If it is standing in wet $\textcolor{#846542}{\text{dirt}}$, it *sprouts* $\textcolor{#63A435}{\text{leaf}}$ next to itself.
+- If it is standing in wet $\textcolor{#846542}{\text{dirt}}$ or $\textcolor{#101010}{\text{gunpowder}}$, it *sprouts* $\textcolor{#63A435}{\text{leaf}}$ next to itself.
 - Once it has leaves and can reach water, it *buds* new $\textcolor{#54682A}{\text{plant}}$ next to itself.
-- If $\textcolor{#1863A3}{\text{water}}$ touches it, it *sends the water down* to $\textcolor{#846542}{\text{dirt}}$ at its roots.
-- Growing new parts uses up some of the $\textcolor{#846542}{\text{dirt}}$'s water.
+- If $\textcolor{#1863A3}{\text{water}}$ touches it, it *sends the water down* to $\textcolor{#846542}{\text{dirt}}$ or $\textcolor{#101010}{\text{gunpowder}}$ at its roots.
+- Growing new parts uses up some of the $\textcolor{#846542}{\text{dirt}}$ or $\textcolor{#101010}{\text{gunpowder}}$'s water.
 - When that happens, it **hardly ever** *turns* the spot under it into $\textcolor{#AC8F6F}{\text{root}}$.
 
 ### Steam
@@ -121,8 +121,8 @@ Typography carries the other three roles colour does not: *italic* is the verb d
 
 - *Catches* $\textcolor{#B19100}{\text{fire}}$ from $\textcolor{#B19100}{\text{fire}}$ or $\textcolor{#BF1B00}{\text{lava}}$.
 - It *gives in to* $\textcolor{#2B6F08}{\text{acid}}$ **a lot**.
-- It *grows up* into wet $\textcolor{#846542}{\text{dirt}}$.
-- Growing uses up a bit of the $\textcolor{#846542}{\text{dirt}}$'s water.
+- It *grows up* into wet $\textcolor{#846542}{\text{dirt}}$ or $\textcolor{#101010}{\text{gunpowder}}$.
+- Growing uses up a bit of the $\textcolor{#846542}{\text{dirt}}$ or $\textcolor{#101010}{\text{gunpowder}}$'s water.
 - It *falls down* when there is empty space below it.
 - It *dries up and dies* **slowly** if it cannot get water through its roots.
 - If it grows straight for 6 spots in a row, it **sometimes** *turns into* $\textcolor{#825830}{\text{wood}}$.
@@ -130,8 +130,8 @@ Typography carries the other three roles colour does not: *italic* is the verb d
 - Its branches **usually** keep growing the same way they started, instead of curving back down.
 - Once it turns hard, it *becomes part of* $\textcolor{#825830}{\text{wood}}$ too.
 - As soon as it turns hard, it also **sometimes** *grows* $\textcolor{#63A435}{\text{leaf}}$ on top.
-- If $\textcolor{#1863A3}{\text{water}}$ touches it, it *sends the water down* to $\textcolor{#846542}{\text{dirt}}$ at its roots.
-- Growing new parts uses up some of the $\textcolor{#846542}{\text{dirt}}$'s water.
+- If $\textcolor{#1863A3}{\text{water}}$ touches it, it *sends the water down* to $\textcolor{#846542}{\text{dirt}}$ or $\textcolor{#101010}{\text{gunpowder}}$ at its roots.
+- Growing new parts uses up some of the $\textcolor{#846542}{\text{dirt}}$ or $\textcolor{#101010}{\text{gunpowder}}$'s water.
 - When that happens, it **hardly ever** *turns* the spot under it into $\textcolor{#AC8F6F}{\text{root}}$.
 
 ### Leaf
@@ -140,7 +140,7 @@ Typography carries the other three roles colour does not: *italic* is the verb d
 - It *gives in to* $\textcolor{#2B6F08}{\text{acid}}$ **a lot**.
 - It *dries up and dies* **slowly** if it cannot get water through its roots.
 - But it is safe if it is touching $\textcolor{#825830}{\text{wood}}$.
-- If $\textcolor{#1863A3}{\text{water}}$ touches it, it *sends the water down* to $\textcolor{#846542}{\text{dirt}}$ at its roots.
+- If $\textcolor{#1863A3}{\text{water}}$ touches it, it *sends the water down* to $\textcolor{#846542}{\text{dirt}}$ or $\textcolor{#101010}{\text{gunpowder}}$ at its roots.
 
 ### Metal
 
@@ -154,7 +154,20 @@ Typography carries the other three roles colour does not: *italic* is the verb d
 - It *gives in to* $\textcolor{#2B6F08}{\text{acid}}$ **a lot**.
 - It *dries up and dies* **slowly** if it cannot get water through its roots.
 - But it is safe if it is touching $\textcolor{#825830}{\text{wood}}$.
-- If it touches wet $\textcolor{#846542}{\text{dirt}}$, it **hardly ever** *turns* that spot into more $\textcolor{#AC8F6F}{\text{root}}$.
+- If it touches wet $\textcolor{#846542}{\text{dirt}}$ or $\textcolor{#101010}{\text{gunpowder}}$, it **hardly ever** *turns* that spot into more $\textcolor{#AC8F6F}{\text{root}}$.
+
+### Gunpowder
+
+- *Catches* $\textcolor{#B19100}{\text{fire}}$ from $\textcolor{#B19100}{\text{fire}}$ or $\textcolor{#BF1B00}{\text{lava}}$.
+- It *turns into* $\textcolor{#101010}{\text{lit gunpowder}}$ instead.
+- Once it is on fire, it *burns down*.
+- Burning out, it *detonates* instead of simply going out - blasting a 6-cell radius, but only if it is one corner of a 2x2 that is still alight.
+- If $\textcolor{#1863A3}{\text{water}}$ or $\textcolor{#2B6F08}{\text{acid}}$ touches it, the fire just goes out.
+- Next to $\textcolor{#B19100}{\text{fire}}$ or $\textcolor{#BF1B00}{\text{lava}}$, it *melts* into $\textcolor{#101010}{\text{lit gunpowder}}$.
+- It *soaks up* any $\textcolor{#1863A3}{\text{water}}$ it touches, and gets wetter.
+- It *dries out* **slowly**, all by itself.
+- Once it is fully soaked, it *turns into* $\textcolor{#636331}{\text{oil}}$ **slowly**.
+- It *gives in to* $\textcolor{#2B6F08}{\text{acid}}$ **a lot**.
 
 ## Pairwise reactions
 
@@ -172,20 +185,24 @@ Generated by walking the RATE field that drives each reaction and branching on i
 | Acid | Leaf | nothing (seldom smoke) | — / handily | both rolls must pass |
 | Acid | Metal | nothing (seldom smoke) | — / poorly | both rolls must pass |
 | Acid | Root | nothing (seldom smoke) | — / handily | both rolls must pass |
+| Acid | Gunpowder | nothing (seldom smoke) | — / handily | both rolls must pass |
 | Gas | Fire / Lava | Fire | instantly |  |
 | Wood | Fire / Lava | Wood, alight | — |  |
 | Oil | Fire / Lava | Fire | — | only where it touches air |
 | Plant | Fire / Lava | Fire | — |  |
 | Leaf | Fire / Lava | Fire | — |  |
+| Gunpowder | Fire / Lava | Lit Gunpowder | — |  |
 | Sand | Fire / Lava | Glass | — | or through a conductor |
 | Glass | Fire / Lava | Lava | under long heat (banked) | or through a conductor |
 | Snow | Fire / Lava | Water | — | or through a conductor |
 | Dirt | Fire / Lava | Metal | — | or through a conductor |
 | Ice | Fire / Lava | Water | — | or through a conductor |
 | Root | Lava | Fire | — | direct contact only - not fire, not through a conductor |
+| Gunpowder | Fire / Lava | Lit Gunpowder | — | or through a conductor |
 | Fire | Water / Acid | Steam | on contact |  |
 | Wood | Water / Acid | itself, unlit | on contact | quench_to is not read on this path |
 | Lava | Water / Acid | Stone | on contact |  |
+| Gunpowder | Water / Acid | itself, soaked | on contact | quench_to is not read on this path |
 | Snow | Stone | Stone, one heat level cooler | — |  |
 | Snow | Glass | Glass, one heat level cooler | — |  |
 | Snow | Glass | Sand | if chilled while hot | only if B is hot enough when A touches it |
@@ -194,10 +211,12 @@ Generated by walking the RATE field that drives each reaction and branching on i
 | Ice | Glass | Sand | if chilled while hot | only if B is hot enough when A touches it |
 | Water | Sand | Dirt | — | the liquid pays a unit of its own mass |
 | Water | Dirt | Dirt, +1 moisture | — | no material change - soaks_to is 0 |
+| Water | Gunpowder | Gunpowder, +1 moisture | — | no material change - soaks_to is 0 |
 | Water | Wood | the dirt at B's root, +1 moisture | — | B itself is unchanged - a third cell changes |
 | Water | Plant | the dirt at B's root, +1 moisture | — | B itself is unchanged - a third cell changes |
 | Water | Leaf | the dirt at B's root, +1 moisture | — | B itself is unchanged - a third cell changes |
 | Dirt | (none - self-driven) | Dirt, -1 moisture | slowly |  |
+| Gunpowder | (none - self-driven) | Gunpowder, -1 moisture | slowly |  |
 | Snow | Water / Oil / Lava / Acid | Water | slowly | any liquid counts, not water alone |
 | Ice | Water / Oil / Lava / Acid | Water | slowly | any liquid counts, not water alone |
 
@@ -211,7 +230,7 @@ Colour means exactly one thing on this page: this word is a material. Every mate
 
 **Materials**
 
-$\textcolor{#D6A663}{\text{Sand}}$, $\textcolor{#10416B}{\text{Water}}$, $\textcolor{#5A6573}{\text{Stone}}$, $\textcolor{#CEEBBD}{\text{Gas}}$, $\textcolor{#FFE363}{\text{Fire}}$, $\textcolor{#5A3D21}{\text{Wood}}$, $\textcolor{#F7FBFF}{\text{Steam}}$, $\textcolor{#84796B}{\text{Smoke}}$, $\textcolor{#101008}{\text{Oil}}$, $\textcolor{#8C1400}{\text{Lava}}$, $\textcolor{#296908}{\text{Acid}}$, $\textcolor{#296984}{\text{Glass}}$, $\textcolor{#E6EFF7}{\text{Snow}}$, $\textcolor{#846542}{\text{Dirt}}$, $\textcolor{#B5E7F7}{\text{Ice}}$, $\textcolor{#526529}{\text{Plant}}$, $\textcolor{#6BB23A}{\text{Leaf}}$, $\textcolor{#7B8694}{\text{Metal}}$, $\textcolor{#BDA68C}{\text{Root}}$
+$\textcolor{#D6A663}{\text{Sand}}$, $\textcolor{#10416B}{\text{Water}}$, $\textcolor{#5A6573}{\text{Stone}}$, $\textcolor{#CEEBBD}{\text{Gas}}$, $\textcolor{#FFE363}{\text{Fire}}$, $\textcolor{#5A3D21}{\text{Wood}}$, $\textcolor{#F7FBFF}{\text{Steam}}$, $\textcolor{#84796B}{\text{Smoke}}$, $\textcolor{#101008}{\text{Oil}}$, $\textcolor{#8C1400}{\text{Lava}}$, $\textcolor{#296908}{\text{Acid}}$, $\textcolor{#296984}{\text{Glass}}$, $\textcolor{#E6EFF7}{\text{Snow}}$, $\textcolor{#846542}{\text{Dirt}}$, $\textcolor{#B5E7F7}{\text{Ice}}$, $\textcolor{#526529}{\text{Plant}}$, $\textcolor{#6BB23A}{\text{Leaf}}$, $\textcolor{#7B8694}{\text{Metal}}$, $\textcolor{#BDA68C}{\text{Root}}$, $\textcolor{#101010}{\text{Gunpowder}}$
 
 These are the device's exact palette values, not colours chosen for legibility - deliberately, so the doc and the panel never disagree. That means a few names above sit near the ends of the range on purpose: the palest materials (snow, sand) wash out against a light background, and the darkest (stone) washes out against a dark one. If a name anywhere in this section is hard to read, that is the palette speaking, not a rendering bug.
 
@@ -318,3 +337,60 @@ $\textcolor{#296984}{\text{Glass}}$: *Shatters* into $\textcolor{#D6A663}{\text{
 
 
 <!-- END GENERATED -->
+
+## Gunpowder's fuse: what the table above cannot express
+
+Four mechanics live entirely at a read site in `sand_reactions.c`, on no
+`reaction_t` field this generator can walk - see this doc's own top note and
+`report_reactions.sh`'s comment on why the generated region stops at the
+marker above rather than guessing at them.
+
+**Moisture damps ignition, generically.** `try_ignite_given()` right-shifts
+the flammability roll by `SAND_DAMP_IGNITION_SHIFT` (2) bits *per moisture
+level*, not by a flat amount - so each further level of wetness costs
+proportionally more of what is left. Gunpowder's flammability of 200 runs
+200 -> 50 -> 12 -> 3 -> 0 across its four wet codes (`moist_max` 4): damp
+powder misfires far more often than dry, and fully saturated powder is
+inert outright - the roll is rejected *before it is ever drawn*, so a
+scene that never wets gunpowder stays bit-identical. Only heat driving the
+moisture back down first (`try_heat_transform_given()`'s wet-earth stage)
+or drying out over time makes it catch again. This is not gunpowder-
+specific: any material with a moisture codec (`dries != 0`) pays the same
+curve.
+
+**Burning out checks for a lit 2x2, with an impulse-buffer fallback to
+fire.** A lit gunpowder cell (code 7, `GUNPOWDER_LIT`) is a heat source
+like any `burn_decay` material and counts down the same way. When its own
+countdown reaches `lit_from` and would otherwise simply vanish,
+`step_one_burning_cell()` asks `in_a_lit_two_by_two()` whether the cell is
+one corner of any 2x2 square whose other three cells are also lit
+gunpowder - off-board counts as NOT lit. If so *and* the simulation has an
+impulse buffer (`s->impulse_buf != NULL`), the cell detonates via
+`sand_explode()` at `SAND_GUNPOWDER_BLAST_RADIUS` (6); otherwise - a lone
+cell, a one-wide trail, impulses disabled entirely - it just becomes plain
+`MAT_FIRE`, the same fallback the confined-gas pocket already relies on
+for the same reason (`sand_explode()` is a documented no-op with no
+impulse buffer). A fully-lit 3x3 was the first rule and made blasts rare
+enough on the device to look broken: burn-out rolls are independent per
+cell, so the neighbours lit before a cell are usually fire by the time it
+goes. Three lit neighbours in one quadrant is what a lit pile actually
+presents at burn-out. Blasts still stagger across frames rather than
+landing all in one, because each blast's core and thrown grains take the
+lit cells around it out of every 2x2 they were part of.
+
+**Quenching a lit fuse leaves it soaked, not merely unlit.** Water or acid
+touching a *lit* gunpowder cell does not reset it to the plain unlit dry
+tone the way a burning log resets to unlit wood - it is written through
+`with_moisture()` to fully saturated instead. A doused fuse is wet, and
+resetting it to dry-and-unlit would put it right back at the front of the
+flammability curve above, ready to relight off whatever neighbour just wet
+it.
+
+**A buried fuse is never smothered.** `smothered()` - the "buried on all
+four sides" check that puts an ordinary fire or ember out - is skipped
+outright for any material with `explodes != 0`. Gunpowder carries its own
+oxidiser, unlike wood or a candle, which both need outside air to keep
+burning; without this exception a fuse buried in the middle of its own
+pile would smother before it ever reached burn-out, and no blast could
+ever happen at the one place a pile actually has eight lit neighbours to
+trigger one.

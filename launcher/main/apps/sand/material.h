@@ -555,9 +555,11 @@ typedef struct {
      * (try_ignite_given(), try_heat_transform_given()) no longer reads
      * this field at all - catching just writes the LIT code, through
      * `ignites_to`/`heats_to` the same as any other burning material.
-     * Burning out then asks all_eight_neighbours_lit() (sand_reactions.c)
-     * whether every one of its eight neighbours is ALSO lit: if impulses
-     * are enabled and so, sand_explode() fires at this radius; otherwise
+     * Burning out then asks in_a_lit_two_by_two() (sand_reactions.c)
+     * whether the cell is one corner of a 2x2 that is all still lit: if
+     * impulses are enabled and so, sand_explode() fires at this radius
+     * (a fully-lit 3x3 was asked for first and made blasts rare enough
+     * to look broken - see that helper's own comment); otherwise
      * the cell becomes plain MAT_FIRE, the gas pocket's own fallback and
      * for the same reason (sand_explode() is a documented no-op with no
      * impulse buffer). See SAND_GUNPOWDER_BLAST_RADIUS's own comment
@@ -569,7 +571,7 @@ typedef struct {
      * spent nearly every blast throwing gunpowder at gunpowder, which
      * neither looks like anything nor does anything a plain flame
      * running through the pile would not. A fuse that burns along the
-     * pile and only detonates where a whole 3x3 is alight at once - the
+     * pile and only detonates where a 2x2 of it is alight at once - the
      * model this field now describes - puts a blast only where the eye
      * can see something move, and staggers a big pile's blasts across
      * frames instead of landing them all in one. */

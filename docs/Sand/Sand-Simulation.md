@@ -414,21 +414,24 @@ very next step.
 
 Only when a lit cell **burns out** - its countdown reaching `lit_from` -
 does the blast radius (`reaction_t.explodes`, 6 cells) get read at all:
-if every one of its eight neighbours (cardinal and diagonal; the board
-edge counts as not-lit) is also lit gunpowder, and the impulse buffer is
+if it is one corner of a 2x2 whose other three cells (the board edge
+counts as not-lit) are also lit gunpowder, and the impulse buffer is
 live, it detonates (`sand_explode()`); otherwise it simply becomes an
 ordinary `MAT_FIRE` cell, the same no-buffer fallback the confined-gas
 blast already relies on, so a host test with impulses off still sees
-gunpowder burn down to fire like any other fuel. In a lit pile only the
-first cell to burn out actually sees eight lit neighbours and blasts - by
-the time its neighbours reach their own burn-out they are fire or flying
-grains, so a thick pile's blasts land one at a time, spread across
-several frames by nothing more than each cell's own independent
-`burn_decay` roll, rather than one single blast on ignition. A thin trail
-or a lone lit cell never blasts at all - there just aren't eight lit
-neighbours to check. This replaced two earlier designs, both measured on
-the device and found no cheaper: an immediate per-cell blast on ignition,
-and later a boundary-only check: the fuse model above is what shipped.
+gunpowder burn down to fire like any other fuel. In a lit pile a blast
+takes the lit cells around it out of every 2x2 they belonged to - they are
+fire or flying grains by their own burn-out - so a thick pile's blasts
+land one at a time, spread across several frames by nothing more than
+each cell's own independent `burn_decay` roll, rather than one single
+blast on ignition. A one-wide trail or a lone lit cell never blasts at
+all - there is no lit 2x2 to be part of. The rule started as a fully-lit
+3x3 and was loosened after device testing: with independent burn-out
+rolls the neighbours lit before a cell are usually already fire when it
+goes, and blasts became rare enough to look broken. This replaced two
+earlier designs before that, both measured on the device and found no
+cheaper: an immediate per-cell blast on ignition, and later a
+boundary-only check: the fuse model above is what shipped.
 
 Moisture damps the ignition roll before it happens, generically, for any
 `dries != 0` material: `f >>= SAND_DAMP_IGNITION_SHIFT * moisture` (shift
