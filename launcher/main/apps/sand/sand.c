@@ -194,8 +194,6 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->acid_rain    = SAND_ACID_RAIN_DEFAULT;    /* see sand_set_acid_rain() */
     s->acid_dilute_mass_bias = SAND_ACID_DILUTE_MASS_BIAS_DEFAULT; /* see
                                           * sand_set_acid_dilute_mass_bias() */
-    s->acid_dilute_no_byproduct = SAND_ACID_DILUTE_NO_BYPRODUCT_DEFAULT; /* see
-                                          * sand_set_acid_dilute_no_byproduct() */
     /* The array itself need not be touched - every reader below goes
      * through emitter_count, so an entry past it is simply never looked
      * at, the same way sand_spawn_cell()'s clipped cells are never looked
@@ -1420,14 +1418,6 @@ void sand_set_acid_dilute_mass_bias(sand_t *s, int bias)
     s->acid_dilute_mass_bias = (bias < 0) ? SAND_ACID_DILUTE_MASS_BIAS_DEFAULT : bias;
 }
 
-void sand_set_acid_dilute_no_byproduct(sand_t *s, int chance)
-{
-    if (chance < 0) {
-        s->acid_dilute_no_byproduct = SAND_ACID_DILUTE_NO_BYPRODUCT_DEFAULT;
-    } else {
-        s->acid_dilute_no_byproduct = chance > 255 ? 255 : chance;
-    }
-}
 
 /* can_enter()/cell_open()/move_to() moved to sand_priv.h (still
  * static inline) - see that header's own comment for why the whole

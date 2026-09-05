@@ -116,9 +116,13 @@ produced. It also weakens contamination-style fixes, which work precisely
 because sixteen cells all have to be clean.
 
 So this is a behaviour change to measure on its own, after the refactor,
-against the same loop-termination metric used for
-`SAND_ACID_DILUTE_NO_BYPRODUCT_CHANCE`: live acid at step 400 and 800,
-and surviving water. Not to be folded into the refactor commit.
+against a loop-termination metric: live acid at step 400 and 800, and
+surviving water. Not to be folded into the refactor commit.
+
+Note that main's 2x2 redesign has already delivered most of this plan's
+premise - acid rain now shares the 2x2 window and the 4:1 ratio with steam
+condensation - so what remains to unify is narrower than when this was
+written.
 
 ## Recommendation
 

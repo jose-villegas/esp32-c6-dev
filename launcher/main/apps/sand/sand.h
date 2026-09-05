@@ -369,7 +369,6 @@ typedef struct {
     int      lava_burst;   /* see sand_set_lava_burst() */
     int      acid_rain;    /* see sand_set_acid_rain() */
     int      acid_dilute_mass_bias; /* see sand_set_acid_dilute_mass_bias() */
-    int      acid_dilute_no_byproduct; /* see sand_set_acid_dilute_no_byproduct() */
 
     /* Persistent point sources - see sand_add_emitter() below.
      *
@@ -1343,39 +1342,6 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * measured one - tune on device like every other constant here. */
 #define SAND_ACID_DILUTE_EVAPORATE_CHANCE 20
 
-/* Chance in 256 that an acid/water dilution leaves NO byproduct at all -
- * the cell that would have boiled off to vapour is simply emptied.
- *
- * WHICH SIDE WINS IS UNTOUCHED. The ladder is 20/256 evaporate, then 118
- * water-wins, then 118 acid-wins - an exact coin flip between the two
- * outside the evaporate band, and deliberately so. This is a SECOND,
- * independent roll layered on top: the winner still wins, and the loser
- * still becomes what it always became. Only the vapour can vanish. A first
- * attempt made it a band of the same ladder and that was wrong - a band
- * takes its width from one outcome, which changes how fast acid converts a
- * pool, tuning that SAND_ACID_DILUTE_TO_WATER_CHANCE and
- * SAND_ACID_DILUTE_MASS_BIAS already own. The mass-bias test caught it.
- *
- * IT EXISTS TO STARVE A LOOP. Acid meets water, dilution makes vapour,
- * vapour forms a qualifying 4x4, the pocket rains fresh acid, round again.
- * Reported from the device as endless acid rain and reproduced directly -
- * a water pool under an acid layer, 12 seeds, 800 steps:
- *
- *      chance   acid @400   acid @800   water left
- *           0       110.5        96.2          0.5
- *          32        80.2        68.1          0.2
- *          64        46.3        47.0         44.0
- *          96         1.3         0.0        223.4
- *         128         0.0         0.0        287.0
- *         192         0.0         0.0        288.7
- *
- * The water column is the clearer read: at 0 the acid consumes a 360-cell
- * pool down to nothing, which is the runaway seen from the other side. 128
- * over 96 for the same reason every other figure in this file was chosen
- * with headroom - 96 terminates but only just, 128 is dry half a run
- * earlier and costs about 13% of the vapour still on the board. Device-
- * tuned, not derived. */
-#define SAND_ACID_DILUTE_NO_BYPRODUCT_CHANCE 128
 
 
 
@@ -1470,15 +1436,8 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * to hold nothing but gas and steam, two of each. Starting bias, not a
  * measured one - tune on device like every other constant here.
  *
- * THE MECHANISM FIX THIS COMMENT ANTICIPATES HAS SINCE HAPPENED. At this
- * floor the scene still ran away on device - endless acid rain, live acid
- * plateauing instead of running dry - for exactly the reason given above:
- * a vapour-rich pocket offers many overlapping windows a per-window
- * constant cannot reach. What closed it was starving the vapour at its
- * source, SAND_ACID_DILUTE_NO_BYPRODUCT_CHANCE (this file), which gives an
- * acid/water dilution a chance to leave nothing behind at all. With the
- * supply fixed this constant stopped being a stability lever and became a
- * taste one, and the taste on device was this same floor. */
+ * Chance-in-256, checked only once a full 2x2 has already been confirmed
+ * to hold nothing but gas and steam, two of each. */
 #define SAND_ACID_RAIN_CHANCE 1
 
 /* QUENCHING A FLAME - acid putting out fire is not water's clean,
@@ -2256,20 +2215,6 @@ void sand_set_acid_dilute_mass_bias(sand_t *s, int bias);
  * per-material table figure to fall back to. */
 #define SAND_ACID_DILUTE_MASS_BIAS_DEFAULT (-1)
 
-/* Overrides SAND_ACID_DILUTE_NO_BYPRODUCT_CHANCE (above), the same chance-in-256
- * shape as sand_set_acid_rain() above and for the same reason: a sweep
- * measuring how many smoke cells a given chance costs, or a test pinning
- * the 0 control, needs to pick the value at runtime rather than rebuild
- * for every candidate. Clamped to [0, 255] like every other chance-in-256
- * setter in this file. */
-void sand_set_acid_dilute_no_byproduct(sand_t *s, int chance);
-
-/* The sentinel sand_set_acid_dilute_no_byproduct(s, chance < 0) restores,
- * and what sand_init() itself starts every sand_t at - "use
- * SAND_ACID_DILUTE_NO_BYPRODUCT_CHANCE", the same _DEFAULT naming SAND_ACID_
- * RAIN_DEFAULT uses for a constant with no per-material table figure to
- * fall back to. */
-#define SAND_ACID_DILUTE_NO_BYPRODUCT_DEFAULT (-1)
 
 /* How often a gas grain attempts its spontaneous rise/slide at all, as a
  * chance in 256 - see material.h's `mobility` field. 255, the default,
