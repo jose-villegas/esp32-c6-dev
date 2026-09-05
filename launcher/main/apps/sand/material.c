@@ -1442,8 +1442,6 @@ _Static_assert(SAND_AMBIENT_HEAT > 0 && SAND_AMBIENT_HEAT < SAND_SHOCK_HEAT && S
  * full 0-15 interpolation regardless of how many entries they have. */
 #define SAND_DUNE 0xB07430
 #define SAND_PALE 0xF2CE90
-#define CULLET_LO 0xB9D2CC
-#define CULLET_HI 0xF0FAF6
 
 #define SAND_DUNE_RAMP                                                                                                 \
     GFX_RGB(LERP(SAND_DUNE, SAND_PALE, 0)), GFX_RGB(LERP(SAND_DUNE, SAND_PALE, 1)),                                    \
@@ -1453,9 +1451,56 @@ _Static_assert(SAND_AMBIENT_HEAT > 0 && SAND_AMBIENT_HEAT < SAND_SHOCK_HEAT && S
         GFX_RGB(LERP(SAND_DUNE, SAND_PALE, 10)), GFX_RGB(LERP(SAND_DUNE, SAND_PALE, 12)),                              \
         GFX_RGB(LERP(SAND_DUNE, SAND_PALE, 13)), GFX_RGB(LERP(SAND_DUNE, SAND_PALE, 15))
 
+/* CULLET no longer owns four fixed colours - it owns four STARTING POINTS
+ * on a shared 16-step colour cycle (cullet_cycle[] below), one per shade in
+ * SAND_CULLET_BASE's band, a quarter-turn apart. These four anchors are the
+ * cycle's own corners, A -> B -> C -> D -> A, and are ALSO what the static
+ * palette row just below still uses at rest (phase 0) - the two have to
+ * agree, or a build that never calls material_set_cullet_phase() (a host
+ * test, say) would show a different cullet than a running frame does.
+ *
+ * All four are deliberately close in both hue and lightness - pale, cool,
+ * barely-there differences in tint rather than four distinguishable colours
+ * - because cullet's job is to read as ground glass catching the light, not
+ * as four materials taking turns. A cycle that wandered into anything
+ * saturated would stop looking like glass and start looking like confetti;
+ * see test_cullet_stays_pale_at_every_phase in suite_sand.c, which exists
+ * to catch exactly that on a retune. */
+#define CULLET_CYCLE_A 0xCFEAF2 /* pale cyan */
+#define CULLET_CYCLE_B 0xD8D0F0 /* lilac */
+#define CULLET_CYCLE_C 0xF0D6DC /* rose */
+#define CULLET_CYCLE_D 0xE2F0D2 /* mint */
+
 #define SAND_CULLET_RAMP                                                                                               \
-    GFX_RGB(LERP(CULLET_LO, CULLET_HI, 0)), GFX_RGB(LERP(CULLET_LO, CULLET_HI, 5)),                                    \
-        GFX_RGB(LERP(CULLET_LO, CULLET_HI, 10)), GFX_RGB(LERP(CULLET_LO, CULLET_HI, 15))
+    GFX_RGB(CULLET_CYCLE_A), GFX_RGB(CULLET_CYCLE_B), GFX_RGB(CULLET_CYCLE_C), GFX_RGB(CULLET_CYCLE_D)
+
+/* One full loop around the four anchors above, A -> B -> C -> D -> A, four
+ * LERP steps per segment (t = 0, 4, 8, 12 of 15). Stepping by
+ * CULLET_CYCLE_LEN / SAND_CULLET_SHADES (4) entries lands exactly on the
+ * next anchor - see material_colours()'s own MAT_SAND case for why that is
+ * what lets each cullet shade's starting phase be a plain quarter-turn
+ * rather than needing its own remainder arithmetic.
+ *
+ * CULLET_CYCLE_LEN itself lives in material.h, not here - see its own
+ * comment there for why (host tests need to name it too) - but the two
+ * properties it has to hold for THIS array to be safe are asserted here,
+ * beside the array, rather than at the definition a test can't see failing
+ * anyway. */
+_Static_assert((CULLET_CYCLE_LEN & (CULLET_CYCLE_LEN - 1)) == 0,
+               "the cycle wraps with a mask below - it has to stay a power of two");
+_Static_assert(CULLET_CYCLE_LEN % SAND_CULLET_SHADES == 0,
+               "each cullet shade needs to land on an exact quarter-turn of the cycle");
+
+static const gfx_color_t cullet_cycle[CULLET_CYCLE_LEN] = {
+    GFX_RGB(LERP(CULLET_CYCLE_A, CULLET_CYCLE_B, 0)), GFX_RGB(LERP(CULLET_CYCLE_A, CULLET_CYCLE_B, 4)),
+    GFX_RGB(LERP(CULLET_CYCLE_A, CULLET_CYCLE_B, 8)), GFX_RGB(LERP(CULLET_CYCLE_A, CULLET_CYCLE_B, 12)),
+    GFX_RGB(LERP(CULLET_CYCLE_B, CULLET_CYCLE_C, 0)), GFX_RGB(LERP(CULLET_CYCLE_B, CULLET_CYCLE_C, 4)),
+    GFX_RGB(LERP(CULLET_CYCLE_B, CULLET_CYCLE_C, 8)), GFX_RGB(LERP(CULLET_CYCLE_B, CULLET_CYCLE_C, 12)),
+    GFX_RGB(LERP(CULLET_CYCLE_C, CULLET_CYCLE_D, 0)), GFX_RGB(LERP(CULLET_CYCLE_C, CULLET_CYCLE_D, 4)),
+    GFX_RGB(LERP(CULLET_CYCLE_C, CULLET_CYCLE_D, 8)), GFX_RGB(LERP(CULLET_CYCLE_C, CULLET_CYCLE_D, 12)),
+    GFX_RGB(LERP(CULLET_CYCLE_D, CULLET_CYCLE_A, 0)), GFX_RGB(LERP(CULLET_CYCLE_D, CULLET_CYCLE_A, 4)),
+    GFX_RGB(LERP(CULLET_CYCLE_D, CULLET_CYCLE_A, 8)), GFX_RGB(LERP(CULLET_CYCLE_D, CULLET_CYCLE_A, 12)),
+};
 
 #define SHADES(lo, hi)                                                                                                 \
     GFX_RGB(LERP(lo, hi, 0)), GFX_RGB(LERP(lo, hi, 1)), GFX_RGB(LERP(lo, hi, 2)), GFX_RGB(LERP(lo, hi, 3)),            \
@@ -1477,7 +1522,15 @@ static const gfx_color_t palette[256] = {
      * the ramp rather than extending it: a paler warm tan is still tan,
      * and what says "this was a window" is the cool desaturated cast, not
      * the brightness. It is pulled towards frosted glass's own colour, so
-     * a pane and its wreckage are recognisably the same substance. */
+     * a pane and its wreckage are recognisably the same substance.
+     *
+     * These four entries are ONLY the phase-0 rest look now - anything that
+     * reads this table directly (material_palette(), a host test) sees each
+     * shade sitting on its own corner of cullet_cycle[] above; a live frame
+     * instead goes through material_colours()'s own MAT_SAND case, which
+     * steps that same shade around the cycle as material_set_cullet_phase()
+     * advances. The two are built from the same four anchors so they never
+     * read as two different cullets. */
     SAND_DUNE_RAMP,
     SAND_CULLET_RAMP,
     [MAT_WATER * MATERIAL_VARIANTS] = SHADES(0x77C4E8, 0x14406F), /* water - shallow is pale, deep is dark */
@@ -2331,6 +2384,22 @@ material_set_foam_phase(unsigned phase) {
     foam_phase = phase;
 }
 
+/* THIS FRAME'S CULLET PHASE - see material_set_cullet_phase() and its own
+ * comment in material.h for what it means and why it is a call of its own,
+ * separate from both material_set_gravity() and material_set_foam_phase():
+ * cullet runs on its own clock (CULLET_PHASE_MS, app_sand.c), unrelated to
+ * foam's, and a test sweeping one must not have to also feed the other.
+ * Zero until the first frame sets it, which paints every cullet shade at
+ * its own anchor colour (cullet_cycle[0], [4], [8], [12] - phase 0 exactly)
+ * - the same rest look SAND_CULLET_RAMP's own entries give anything that
+ * never advances a phase at all (a host test included). */
+static unsigned cullet_phase;
+
+void
+material_set_cullet_phase(unsigned phase) {
+    cullet_phase = phase;
+}
+
 /* How many of `mask`'s bits are set - the same manual bit-count
  * suite_icons.c's popcount16() uses, kept here rather than shared because
  * the two operate on different widths for different reasons and a shared
@@ -2614,6 +2683,31 @@ material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_col
     }
 
     switch (CELL_MATERIAL(c)) {
+        case MAT_SAND:
+            /* ONE compare added to the measured shape MAT_EXTENDED's own
+         * comment below describes (14%/26% through an inlining cliff for a
+         * RESTRUCTURE) - this is not that, just one more leading equality
+         * test the way metal's own check ahead of the ternary already is.
+         * Sand is the commonest material on the board, so the compare has
+         * to be the first thing here and this case may do nothing else.
+         *
+         * Below SAND_CULLET_BASE this is an ordinary dune shade - break to
+         * the flat palette fall-through below, unchanged from before this
+         * case existed. At or above it, `v` names which of the four cullet
+         * shades this grain is, i.e. which quarter-turn of cullet_cycle[]
+         * (material.c, above) it starts at - multiplying by a quarter of
+         * the cycle's length turns that into the cycle's own index, adding
+         * this frame's phase advances it, and the final mask wraps it back
+         * into range instead of a modulo. See material.h's own rewritten
+         * comment on SAND_CULLET_BASE for what the shade means now. */
+            if (v < SAND_CULLET_BASE) {
+                break;
+            }
+            out[0] = cullet_cycle[((v - SAND_CULLET_BASE) * (CULLET_CYCLE_LEN / SAND_CULLET_SHADES) + cullet_phase) &
+                                   (CULLET_CYCLE_LEN - 1)];
+            out[1] = out[0];
+            out[2] = out[0];
+            return MATERIAL_FLAT;
         case MAT_EXTENDED:
             /* Switched on the low nibble, which for these is their identity
          * rather than a variant - see MATX(). Anything without a grain of
