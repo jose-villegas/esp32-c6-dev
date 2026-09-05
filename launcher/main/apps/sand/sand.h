@@ -369,7 +369,7 @@ typedef struct {
     int      lava_burst;   /* see sand_set_lava_burst() */
     int      acid_rain;    /* see sand_set_acid_rain() */
     int      acid_dilute_mass_bias; /* see sand_set_acid_dilute_mass_bias() */
-    int      acid_dilute_smoke_chance; /* see sand_set_acid_dilute_smoke_chance() */
+    int      acid_dilute_no_byproduct; /* see sand_set_acid_dilute_no_byproduct() */
 
     /* Persistent point sources - see sand_add_emitter() below.
      *
@@ -1343,59 +1343,41 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * measured one - tune on device like every other constant here. */
 #define SAND_ACID_DILUTE_EVAPORATE_CHANCE 20
 
-/* SMOKE, NOT MORE VAPOUR - added to attack acid rain
- * (SAND_ACID_RAIN_CHANCE, below) from the supply side rather than its own
- * roll. That gate is EXACT-MATERIAL: step_one_acid_rain_cell()
- * (sand_reactions.c) requires every one of a 4x4 block to be MAT_STEAM or
- * MAT_GAS, at least two of each. Lowering SAND_ACID_RAIN_CHANCE itself
- * cannot fix a scene that fires it too often - see that constant's own
- * comment, which records dropping it as far as 1 not fixing an endless-
- * refill scene, because a vapour-rich board offers many independent
- * qualifying windows every single step; the roll's own odds don't change
- * how many windows get checked. This band instead spends a slice of the
- * SAME dilution roll to poison the vapour it produces: MAT_SMOKE is
- * KIND_GAS (material.c) but a DIFFERENT material id than MAT_GAS or
- * MAT_STEAM, so a single smoke cell inside a would-be 4x4 disqualifies
- * the whole block outright, on the very first mismatched cell
- * step_one_acid_rain_cell() looks at. Scattered contamination should cost
- * far more qualifying blocks than its own share of cells - a 16-cell
- * block needs every one of them clean - which is the effect this exists
- * to buy.
+/* Chance in 256 that an acid/water dilution leaves NO byproduct at all -
+ * the cell that would have boiled off to vapour is simply emptied.
  *
- * Deliberately placed AHEAD of SAND_ACID_DILUTE_EVAPORATE_CHANCE in the
- * ladder (step_one_dissolver_cell(), sand_reactions.c), not folded into
- * it or appended after the water/acid split: this is a NEW top band, so
- * every existing band keeps its own width and its own meaning and simply
- * shifts up the roll by however wide this one is - the water/acid split
- * still only ever contests the SAME remaining range it always has,
- * unaffected by anything above it. Checked first for the same reason
- * SAND_ACID_DILUTE_EVAPORATE_CHANCE's own comment gives for being checked
- * ahead of the split: a flat slice off the TOP of the full 256-wide roll
- * is exactly as likely for a lone drop as for a poured-on slab, where a
- * slice carved out of an already-adjusted range would not be.
+ * WHICH SIDE WINS IS UNTOUCHED. The ladder is 20/256 evaporate, then 118
+ * water-wins, then 118 acid-wins - an exact coin flip between the two
+ * outside the evaporate band, and deliberately so. This is a SECOND,
+ * independent roll layered on top: the winner still wins, and the loser
+ * still becomes what it always became. Only the vapour can vanish. A first
+ * attempt made it a band of the same ladder and that was wrong - a band
+ * takes its width from one outcome, which changes how fast acid converts a
+ * pool, tuning that SAND_ACID_DILUTE_TO_WATER_CHANCE and
+ * SAND_ACID_DILUTE_MASS_BIAS already own. The mass-bias test caught it.
  *
- * Only the acid cell is touched when this fires - boils into MAT_SMOKE
- * instead of its ordinary MAT_GAS, the water cell untouched - the same
- * shape SAND_ACID_DILUTE_EVAPORATE_CHANCE's own band already uses, since
- * this is the same kind of outcome (acid spent, nothing won) with a
- * different vapour left behind.
+ * IT EXISTS TO STARVE A LOOP. Acid meets water, dilution makes vapour,
+ * vapour forms a qualifying 4x4, the pocket rains fresh acid, round again.
+ * Reported from the device as endless acid rain and reproduced directly -
+ * a water pool under an acid layer, 12 seeds, 800 steps:
  *
- * 0, NOT a nonzero starting bias like its neighbours above: the control
- * value, chosen so this band is a dead branch (`roll < 0` never true)
- * until a measured value replaces it - see the sweep this shipped with,
- * plus the "acid rain never actually stops" device evidence measured
- * alongside it, docs/Sand/Reaction-Table.md's Acid | Water row, and this
- * file's own SAND_ACID_RAIN_CHANCE comment for the failure this measures
- * against. */
-#define SAND_ACID_DILUTE_SMOKE_CHANCE 16
+ *      chance   acid @400   acid @800   water left
+ *           0       110.5        96.2          0.5
+ *          32        80.2        68.1          0.2
+ *          64        46.3        47.0         44.0
+ *          96         1.3         0.0        223.4
+ *         128         0.0         0.0        287.0
+ *         192         0.0         0.0        288.7
+ *
+ * The water column is the clearer read: at 0 the acid consumes a 360-cell
+ * pool down to nothing, which is the runaway seen from the other side. 128
+ * over 96 for the same reason every other figure in this file was chosen
+ * with headroom - 96 terminates but only just, 128 is dry half a run
+ * earlier and costs about 13% of the vapour still on the board. Device-
+ * tuned, not derived. */
+#define SAND_ACID_DILUTE_NO_BYPRODUCT_CHANCE 128
 
-/* Carved OUT OF the evaporate band, so it can never be wider than it -
- * past that the band below reaches zero width and MAT_GAS stops being
- * produced by this path at all, which would take acid rain from too
- * frequent to impossible rather than to occasional. */
-_Static_assert(SAND_ACID_DILUTE_SMOKE_CHANCE < SAND_ACID_DILUTE_EVAPORATE_CHANCE,
-               "smoke is carved out of the evaporate band and must leave "
-               "room in it for MAT_GAS");
+
 
 /* OIL BOILS OFF, IT DOES NOT BREED MORE ACID - reported directly: a
  * whole pool of oil was ending up entirely acid. The old rule always
@@ -2270,20 +2252,20 @@ void sand_set_acid_dilute_mass_bias(sand_t *s, int bias);
  * per-material table figure to fall back to. */
 #define SAND_ACID_DILUTE_MASS_BIAS_DEFAULT (-1)
 
-/* Overrides SAND_ACID_DILUTE_SMOKE_CHANCE (above), the same chance-in-256
+/* Overrides SAND_ACID_DILUTE_NO_BYPRODUCT_CHANCE (above), the same chance-in-256
  * shape as sand_set_acid_rain() above and for the same reason: a sweep
  * measuring how many smoke cells a given chance costs, or a test pinning
  * the 0 control, needs to pick the value at runtime rather than rebuild
  * for every candidate. Clamped to [0, 255] like every other chance-in-256
  * setter in this file. */
-void sand_set_acid_dilute_smoke_chance(sand_t *s, int chance);
+void sand_set_acid_dilute_no_byproduct(sand_t *s, int chance);
 
-/* The sentinel sand_set_acid_dilute_smoke_chance(s, chance < 0) restores,
+/* The sentinel sand_set_acid_dilute_no_byproduct(s, chance < 0) restores,
  * and what sand_init() itself starts every sand_t at - "use
- * SAND_ACID_DILUTE_SMOKE_CHANCE", the same _DEFAULT naming SAND_ACID_
+ * SAND_ACID_DILUTE_NO_BYPRODUCT_CHANCE", the same _DEFAULT naming SAND_ACID_
  * RAIN_DEFAULT uses for a constant with no per-material table figure to
  * fall back to. */
-#define SAND_ACID_DILUTE_SMOKE_DEFAULT (-1)
+#define SAND_ACID_DILUTE_NO_BYPRODUCT_DEFAULT (-1)
 
 /* How often a gas grain attempts its spontaneous rise/slide at all, as a
  * chance in 256 - see material.h's `mobility` field. 255, the default,
