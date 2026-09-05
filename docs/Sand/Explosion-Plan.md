@@ -603,3 +603,24 @@ variant (to burn down as a fuse), which is exactly the criterion
 `Architecture.md` names for the last full-physics slot. That slot should
 be spent *after* this mechanic has been seen working, not before - if
 blasts read badly or cost too much, the slot is still banked.
+
+**Resolved, 2026-09-05.** The slot named above was already gone by the
+time gunpowder was built - dirt had spent it, and `Architecture.md`'s own
+"one ordinary slot free" text had gone stale without anyone noticing,
+which this note also corrects. What shipped instead: `MAT_EXTENDED`'s low
+nibble split by its own top bit, `0xF0`-`0xF7` staying the extended-statics
+doorway and `0xF8`-`0xFF` becoming gunpowder's own `KIND_POWDER` row with
+a real (3-bit) variant - `materials[]` doubled to `MATERIAL_ROWS` (32),
+indexed by `cell >> 3`, to make room for it. Full mechanism and costs
+(extended statics down to 8 codes, hot table to 384 B, controls unmeasured
+against it) in `Architecture.md`'s "The material budget, and what is
+left".
+
+The fuse this paragraph imagined did not ship either: by the maintainer's
+own spec, ignition is **immediate** - `sand_explode()` fires the moment
+`reaction_t.explodes` is read as true, in the same step as ignition or the
+qualifying heat hit, with no burn-down delay. A pile still chain-detonates
+over *several* steps regardless, because each blast's fire has to reach
+the next grain of powder on its own step before that grain's turn to
+ignite comes up - the fuse effect this paragraph wanted falls out of
+neighbour propagation, not a counter on the cell.
