@@ -1431,9 +1431,15 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * the chance worth tuning again. Chance-in-256, checked only once a full
  * 4x4 has already been confirmed to hold nothing but gas and steam with
  * at least two of
- * each. Starting bias, not a measured one - tune on device like every
- * other constant here. */
-#define SAND_ACID_RAIN_CHANCE 8
+ * each.
+ *
+ * 5, DOWN FROM 8 ON DEVICE: acid rain fired often enough to read as a
+ * standing feature of any vapour-rich scene rather than an occasional
+ * one. Roughly a third off, which is what was asked for after watching
+ * it - the yield and the roll were already balanced against each other
+ * by the work above, so this moves the frequency without reopening any
+ * of that. Still a bias rather than a measurement. */
+#define SAND_ACID_RAIN_CHANCE 5
 
 /* QUENCHING A FLAME - acid putting out fire is not water's clean,
  * deterministic flash to steam (see step_one_burning_cell(),
