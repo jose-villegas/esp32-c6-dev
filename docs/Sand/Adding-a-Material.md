@@ -354,7 +354,7 @@ SHADES(lo,hi)"]
    knows which codes mean lit); `explodes` (a blast radius - non-zero
    means the cell can detonate via `sand_explode()`, checked once it
    **burns out**, i.e. when its `burn_decay` countdown reaches
-   `lit_from`, and only if every one of its eight neighbours is also lit;
+   `lit_from`, and only if it is one corner of a 2x2 that is all lit;
    otherwise, or with no impulse buffer live, it becomes plain fire
    instead - ignition and heat write the *lit* code, they never detonate
    directly); `soaked_to`/`soaked_chance` (what a *saturated* cell -

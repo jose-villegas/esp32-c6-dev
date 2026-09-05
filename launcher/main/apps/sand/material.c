@@ -3164,7 +3164,7 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_CODES] = {
      *                        tones and moisture, never mistaken for embers
      *   explodes = SAND_GUNPOWDER_BLAST_RADIUS   read ONLY at burn-out
      *                        now (step_one_burning_cell()): a lit cell
-     *                        that finds all eight neighbours also lit
+     *                        that is one corner of a still-lit 2x2
      *                        detonates instead of quietly going out - see
      *                        that macro's own comment (material.h) for
      *                        the radius and REVISION 2's note on why
