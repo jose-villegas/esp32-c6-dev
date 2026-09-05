@@ -223,9 +223,10 @@ Oil at 22 and lava at 45 straddle water deliberately: oil floats, lava
 sinks, and both fall out of one rule rather than any material-specific
 code. Gunpowder at 50 sits between lava and sand on purpose: it sinks in
 every liquid on the board (water 30, acid 38, lava 45), and sand (60) and
-dirt (62) both sink *through* it - fine grit falling through a coarser
-powder, the same displacement rule as everywhere else on this ladder, no
-gunpowder-specific code. Real black powder is lighter than quartz sand
+dirt (62) rest on it rather than mixing in - a powder never sinks through
+another powder at rest here (see `sand.c`'s own comment on why weight alone
+earns no such move), so the gap to sand only matters under an impulse,
+where a blast sorts the heavier grit out. Real black powder is lighter than quartz sand
 too, so the ladder position and the physical intuition happen to agree.
 
 Note which mechanism each kind goes through, because it decides whether
