@@ -2849,174 +2849,230 @@ static void step_impulses(sand_t *s, int dx, int dy)
             continue;   /* settled - out of flight for good */
         }
 
-        const int x = (int)((unsigned)entry.index % (unsigned)w);
-        const int y = (int)((unsigned)entry.index / (unsigned)w);
-        const int *d = ring_dir(entry.dir);
-        const int nx = x + d[0];
-        const int ny = y + d[1];
+        /* HOW MANY CELLS THIS STEP'S PUSH ACTUALLY COVERS - see
+         * SAND_IMPULSE_CELLS_PER_STEP_DIVISOR's own comment in sand.h for
+         * the problem this solves (an impulse could never outrun gravity
+         * while every displacing move here advanced exactly one cell per
+         * successful roll). Computed ONCE, from the post-ramp `speed` the
+         * decay just above landed on - "how far this step's move reaches"
+         * is a property of the STEP, the same as the roll and the ramp
+         * are, not something re-derived per cell below. At any speed under
+         * the divisor this is exactly 1, the same single cell every entry
+         * already moved before this constant existed - see that constant's
+         * own comment for why that has to stay exact, and
+         * test_a_sub_divisor_speed_impulse_never_moves_more_than_one_cell_
+         * a_step (suite_sand.c) for the pin. */
+        const int push_cells =
+            1 + (int)entry.speed / SAND_IMPULSE_CELLS_PER_STEP_DIVISOR;
+        const int push_count = (push_cells > SAND_IMPULSE_CELLS_PER_STEP_MAX)
+                                   ? SAND_IMPULSE_CELLS_PER_STEP_MAX
+                                   : push_cells;
 
-        /* can_impulse_enter(), NOT a bare CELL_IS_EMPTY() check any more -
-         * see that function's own comment for why a flying grain now
-         * shoulders aside any non-static occupant instead of waiting on
-         * only a genuinely empty cell, EXCEPT a flying liquid against a
-         * non-liquid occupant (dirt, sand, ...), which still waits exactly
-         * as it did before displacement existed - see can_impulse_enter()'s
-         * own comment for the measured dirt-stirring bug that carve-out
-         * fixes. STATIC still blocks unconditionally, so containment still
-         * falls out of this one check with no raycast: a blast inside a
-         * sealed vessel throws its grains up to the wall and they wait
-         * there, exactly as before - only the packed interior on the way
-         * there stopped being a wall too. sand_at() reading out-of-bounds
-         * as STONE (KIND_STATIC) folds the grid edge into the same
-         * guarantee for free. */
-        const cell_t target = sand_at(s, nx, ny);
-        if (!can_impulse_enter(target, entry.cell)) {
-            /* Blocked means WAIT: keep the entry exactly as it is - same
-             * position, same direction, already-ramped speed and all - so
-             * it gets another turn next step rather than being dropped for
-             * something that may clear a moment later. Reached only for a
-             * true wall now, an excluded target, or the grid edge - see
-             * can_impulse_enter().
-             *
-             * WATER AND ACID BOUNCE INSTEAD OF JUST WAITING - a splash
-             * hitting a wall mid-flight should kick back off it, not stall
-             * against it for the rest of its (already-ramped) flight the
-             * way a chunk of solid debris plausibly would. Reversing `dir`
-             * to the opposite ring direction turns the remaining speed
-             * into a rebound rather than a wasted wait; if the opposite
-             * direction is ALSO blocked (a corner, a one-wide gap) this
-             * simply flips again next step, which reads as the droplet
-             * vibrating in place until its flight ages out - bounded by
-             * SAND_IMPULSE_SPEED_RAMP the same as any other entry, not a
-             * new failure mode. Every other material keeps the plain wait,
-             * unchanged - see splash_displace()'s own comment in
-             * sand_liquid.c for why this scope matches the splash feature
-             * itself, water and acid only.
-             *
-             * A THROWN CHUNK OR GRAIN REFLECTS TOO, off the blocking
-             * surface's approximate normal rather than a flat 180 - a wall
-             * chunk glancing off a floor should skid onward, not bounce
-             * straight back the way a droplet's flat flip above does.
-             * KIND_POWDER is in for the same reason it is in for drag: a
-             * blast against a wall puts far more sand in the air than it
-             * ever dislodges stone, and every one of those grains used to
-             * stall against the wall until its flight aged out.
-             * blocker_normal() (this file) reads the three-cell arc ahead of
-             * the mover for what it hit, reflect_off_normal() turns that
-             * into a new ring direction, and either returning -1 (no static
-             * neighbour found, or the reflection degenerates) leaves `entry`
-             * untouched below - the plain wait, same as ever.
-             *
-             * FLOORED AT SAND_IMPULSE_BOUNCE_MIN_SPEED and CHARGED
-             * RESTITUTION every time it fires - both mandatory, not polish;
-             * see that constant's own comment in sand.h for the
-             * bounce-in-place pathology an unfloored, undamped version of
-             * this reopens (step_impulses()'s own roll comment above
-             * records the history). Half the speed on a HEAD-ON reflection
-             * (the new direction is exactly opposite the old one - a wall
-             * met square-on), a quarter otherwise (a glancing hit, which
-             * should read as skidding onward, not braking hard). Costing a
-             * head-on bounce more is the physically right shape and the one
-             * that damps the worst case - repeated head-on bounces in a
-             * narrow gap - hardest, while leaving a chunk skidding along a
-             * wall mostly intact. */
-            if (mat_id == MAT_WATER || mat_id == MAT_ACID) {
-                entry.dir = (entry.dir + 4) & 7;
-            } else if ((materials[mat_id].kind == KIND_STATIC ||
-                        materials[mat_id].kind == KIND_POWDER) &&
-                       entry.speed >= SAND_IMPULSE_BOUNCE_MIN_SPEED) {
-                const int normal = blocker_normal(s, x, y, entry.dir);
-                const int reflected = (normal < 0)
-                                          ? -1
-                                          : reflect_off_normal(entry.dir, normal);
-                if (reflected >= 0) {
-                    const bool head_on =
-                        (reflected == ((entry.dir + 4) & 7));
-                    entry.dir = (uint8_t)reflected;
-                    entry.speed = head_on
-                        ? (uint8_t)(entry.speed >> 1)
-                        : (uint8_t)(entry.speed - (entry.speed >> 2));
+        /* Position and direction BEFORE any of this step's cells move -
+         * what the CASCADE block below (water/acid only, unchanged in
+         * every other respect) still measures against: "one step behind
+         * where this entry started ITS OWN MOVE THIS STEP", not behind
+         * wherever a multi-cell push happens to end up. See that block's
+         * own comment for why backward, not forward. */
+        const int x0 = (int)((unsigned)entry.index % (unsigned)w);
+        const int y0 = (int)((unsigned)entry.index / (unsigned)w);
+        const int *d0 = ring_dir(entry.dir);
+
+        /* How many of `push_count` cells this entry actually got to move
+         * through before either running out of budget or hitting
+         * something it could not enter - gates the CASCADE check below the
+         * same way a single-cell move's own success always did: fired only
+         * if the entry genuinely moved at least once this step, never for
+         * one that sat wedged against a wall on its very first attempt. */
+        int moved = 0;
+
+        for (int hop = 0; hop < push_count; hop++) {
+            const int x = (int)((unsigned)entry.index % (unsigned)w);
+            const int y = (int)((unsigned)entry.index / (unsigned)w);
+            const int *d = ring_dir(entry.dir);
+            const int nx = x + d[0];
+            const int ny = y + d[1];
+
+            /* can_impulse_enter(), NOT a bare CELL_IS_EMPTY() check any more -
+             * see that function's own comment for why a flying grain now
+             * shoulders aside any non-static occupant instead of waiting on
+             * only a genuinely empty cell, EXCEPT a flying liquid against a
+             * non-liquid occupant (dirt, sand, ...), which still waits exactly
+             * as it did before displacement existed - see can_impulse_enter()'s
+             * own comment for the measured dirt-stirring bug that carve-out
+             * fixes. STATIC still blocks unconditionally, so containment still
+             * falls out of this one check with no raycast: a blast inside a
+             * sealed vessel throws its grains up to the wall and they wait
+             * there, exactly as before - only the packed interior on the way
+             * there stopped being a wall too. sand_at() reading out-of-bounds
+             * as STONE (KIND_STATIC) folds the grid edge into the same
+             * guarantee for free. */
+            const cell_t target = sand_at(s, nx, ny);
+            if (!can_impulse_enter(target, entry.cell)) {
+                /* Blocked means WAIT, exactly as a single-cell move always
+                 * did: STOP MOVING FOR THIS STEP rather than skip ahead to
+                 * try a later cell of this step's own budget - the entry
+                 * keeps whatever position it already reached this step
+                 * (possibly its starting one, if this is the very first
+                 * hop), same direction, already-ramped speed and all, so it
+                 * gets another turn next step rather than being dropped for
+                 * something that may clear a moment later. Reached only for
+                 * a true wall now, an excluded target, or the grid edge -
+                 * see can_impulse_enter().
+                 *
+                 * WATER AND ACID BOUNCE INSTEAD OF JUST WAITING - a splash
+                 * hitting a wall mid-flight should kick back off it, not stall
+                 * against it for the rest of its (already-ramped) flight the
+                 * way a chunk of solid debris plausibly would. Reversing `dir`
+                 * to the opposite ring direction turns the remaining speed
+                 * into a rebound rather than a wasted wait; if the opposite
+                 * direction is ALSO blocked (a corner, a one-wide gap) this
+                 * simply flips again next step, which reads as the droplet
+                 * vibrating in place until its flight ages out - bounded by
+                 * SAND_IMPULSE_SPEED_RAMP the same as any other entry, not a
+                 * new failure mode. Every other material keeps the plain wait,
+                 * unchanged - see splash_displace()'s own comment in
+                 * sand_liquid.c for why this scope matches the splash feature
+                 * itself, water and acid only.
+                 *
+                 * A THROWN CHUNK OR GRAIN REFLECTS TOO, off the blocking
+                 * surface's approximate normal rather than a flat 180 - a wall
+                 * chunk glancing off a floor should skid onward, not bounce
+                 * straight back the way a droplet's flat flip above does.
+                 * KIND_POWDER is in for the same reason it is in for drag: a
+                 * blast against a wall puts far more sand in the air than it
+                 * ever dislodges stone, and every one of those grains used to
+                 * stall against the wall until its flight aged out.
+                 * blocker_normal() (this file) reads the three-cell arc ahead of
+                 * the mover for what it hit, reflect_off_normal() turns that
+                 * into a new ring direction, and either returning -1 (no static
+                 * neighbour found, or the reflection degenerates) leaves `entry`
+                 * untouched below - the plain wait, same as ever.
+                 *
+                 * FLOORED AT SAND_IMPULSE_BOUNCE_MIN_SPEED and CHARGED
+                 * RESTITUTION every time it fires - both mandatory, not polish;
+                 * see that constant's own comment in sand.h for the
+                 * bounce-in-place pathology an unfloored, undamped version of
+                 * this reopens (step_impulses()'s own roll comment above
+                 * records the history). Half the speed on a HEAD-ON reflection
+                 * (the new direction is exactly opposite the old one - a wall
+                 * met square-on), a quarter otherwise (a glancing hit, which
+                 * should read as skidding onward, not braking hard). Costing a
+                 * head-on bounce more is the physically right shape and the one
+                 * that damps the worst case - repeated head-on bounces in a
+                 * narrow gap - hardest, while leaving a chunk skidding along a
+                 * wall mostly intact. */
+                if (mat_id == MAT_WATER || mat_id == MAT_ACID) {
+                    entry.dir = (entry.dir + 4) & 7;
+                } else if ((materials[mat_id].kind == KIND_STATIC ||
+                            materials[mat_id].kind == KIND_POWDER) &&
+                           entry.speed >= SAND_IMPULSE_BOUNCE_MIN_SPEED) {
+                    const int normal = blocker_normal(s, x, y, entry.dir);
+                    const int reflected = (normal < 0)
+                                              ? -1
+                                              : reflect_off_normal(entry.dir, normal);
+                    if (reflected >= 0) {
+                        const bool head_on =
+                            (reflected == ((entry.dir + 4) & 7));
+                        entry.dir = (uint8_t)reflected;
+                        entry.speed = head_on
+                            ? (uint8_t)(entry.speed >> 1)
+                            : (uint8_t)(entry.speed - (entry.speed >> 2));
+                    }
                 }
+                break;
             }
-            s->impulse_buf[kept++] = entry;
-            continue;
+
+            const size_t at  = entry.index;
+            const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
+
+            /* A SWAP, not an overwrite - move_to()'s own trick (sand_priv.h),
+             * reused here for the same reason: whatever the mover is displacing
+             * (empty, same as always, or now a real occupant) takes the cell
+             * the mover is vacating, rather than that occupant's cell being
+             * blanked. Conservation needs nothing extra to hold: two cells that
+             * both already existed a moment ago simply trade places, so the
+             * grand total is untouched whichever of the two cases this was. */
+            const cell_t displaced = s->cells[nat];
+
+            /* MEDIUM DRAG AND TRANSFER - EVERY MOVER BUT A LIQUID, both now
+             * charged by impulse_charge_displacement() (this file, just above
+             * step_impulses()), the one place this loop's OTHER displacing move
+             * - the gravity-drift a few dozen lines up - charges the exact same
+             * two things for the exact same reason. See that function's own
+             * comment for the full history (why one shared body, not two sites
+             * quietly answering "what does displacing a cell cost" two
+             * different ways) and for SAND_IMPULSE_DRAG_SHIFT's own comment in
+             * sand.h for what the drag number itself means. Charged here, at
+             * the move site, rather than folded into the ramp above
+             * `rolled_move`'s own decay: open air (nothing displaced) must
+             * cost exactly nothing, so a flight through empty space stays
+             * byte-for-byte what it always was. Liquids pay no drag either
+             * way: they carry their own geometric decay
+             * (SAND_SPLASH_SPEED_DECAY_SHIFT) and the splash/cascade feature is
+             * tuned around it.
+             *
+             * CHARGED ONCE PER CELL OF THIS STEP'S TRAVEL, NOT ONCE PER STEP -
+             * `impact_speed` is re-read fresh at the top of every hop, after
+             * whatever the PREVIOUS cell's own drag already took, so a mover
+             * crossing several cells in one step pays for each one exactly as
+             * if it had taken one step per cell, the same total cost a
+             * multi-step crossing always charged. THE SPEED IT ARRIVED WITH,
+             * captured before THIS hop's own drag takes its cut - this is
+             * what the TRANSFER inside that call is owed, and reading
+             * `entry.speed` AFTER drag instead was a real bug rather than a
+             * detail. Momentum handed to the medium is what the mover LOST, so
+             * deriving the throw from what it has LEFT gets the relationship
+             * exactly backwards: the harder a medium resists, the less it
+             * would fling. Every round that strengthened drag was quietly
+             * strangling the ejecta, and at powder's present cost a
+             * full-speed impactor would keep 5 of 253 - under the transfer
+             * gate, so a bank would have thrown nothing at all, ever.
+             *
+             * `entry.dir` IS THE DIRECTION THIS DISPLACEMENT HAPPENED IN, at
+             * this site specifically - the push move only ever moves along the
+             * mover's own heading, unlike the drift's own swap, which is why
+             * the drift site has to work out its own `dir_for_transfer`
+             * instead of reusing `entry.dir` (see that function's own comment
+             * on the parameter). */
+            const uint8_t impact_speed = entry.speed;
+            impulse_charge_displacement(s, &entry, mat_id, displaced,
+                                        impact_speed, (uint16_t)at, entry.dir,
+                                        deferred, &deferred_count);
+
+            s->cells[nat] = entry.cell;
+            s->cells[at]  = displaced;
+            latch_content_flags(s, entry.cell);
+            /* The displaced occupant, if any, is not a fresh cell - it already
+             * existed on the board a moment ago, at `nat` - but every write
+             * owes the same bookkeeping regardless of whether what landed there
+             * is new, so this costs one more cheap latch rather than a special
+             * case for "not empty". Skipped only for the everyday case where
+             * there was nothing to displace at all. */
+            if (!CELL_IS_EMPTY(displaced)) {
+                latch_content_flags(s, displaced);
+            }
+            mark_move(s, x, y, nx, ny);
+
+            entry.index = (uint16_t)nat;
+            moved++;
         }
-
-        const size_t at  = entry.index;
-        const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
-
-        /* A SWAP, not an overwrite - move_to()'s own trick (sand_priv.h),
-         * reused here for the same reason: whatever the mover is displacing
-         * (empty, same as always, or now a real occupant) takes the cell
-         * the mover is vacating, rather than that occupant's cell being
-         * blanked. Conservation needs nothing extra to hold: two cells that
-         * both already existed a moment ago simply trade places, so the
-         * grand total is untouched whichever of the two cases this was. */
-        const cell_t displaced = s->cells[nat];
-
-        /* MEDIUM DRAG AND TRANSFER - EVERY MOVER BUT A LIQUID, both now
-         * charged by impulse_charge_displacement() (this file, just above
-         * step_impulses()), the one place this loop's OTHER displacing move
-         * - the gravity-drift a few dozen lines up - charges the exact same
-         * two things for the exact same reason. See that function's own
-         * comment for the full history (why one shared body, not two sites
-         * quietly answering "what does displacing a cell cost" two
-         * different ways) and for SAND_IMPULSE_DRAG_SHIFT's own comment in
-         * sand.h for what the drag number itself means. Charged here, at
-         * the move site, rather than folded into the ramp above
-         * `rolled_move`'s own decay: open air (nothing displaced) must
-         * cost exactly nothing, so a flight through empty space stays
-         * byte-for-byte what it always was. Liquids pay no drag either
-         * way: they carry their own geometric decay
-         * (SAND_SPLASH_SPEED_DECAY_SHIFT) and the splash/cascade feature is
-         * tuned around it.
-         *
-         * THE SPEED IT ARRIVED WITH, captured before this call's own drag
-         * takes its cut - this is what the TRANSFER inside that call is
-         * owed, and reading `entry.speed` AFTER drag instead was a real bug
-         * rather than a detail. Momentum handed to the medium is what the
-         * mover LOST, so deriving the throw from what it has LEFT gets the
-         * relationship exactly backwards: the harder a medium resists, the
-         * less it would fling. Every round that strengthened drag was
-         * quietly strangling the ejecta, and at powder's present cost a
-         * full-speed impactor would keep 5 of 253 - under the transfer
-         * gate, so a bank would have thrown nothing at all, ever.
-         *
-         * `entry.dir` IS THE DIRECTION THIS DISPLACEMENT HAPPENED IN, at
-         * this site specifically - the push move only ever moves along the
-         * mover's own heading, unlike the drift's own swap, which is why
-         * the drift site has to work out its own `dir_for_transfer`
-         * instead of reusing `entry.dir` (see that function's own comment
-         * on the parameter). */
-        const uint8_t impact_speed = entry.speed;
-        impulse_charge_displacement(s, &entry, mat_id, displaced,
-                                    impact_speed, (uint16_t)at, entry.dir,
-                                    deferred, &deferred_count);
-
-        s->cells[nat] = entry.cell;
-        s->cells[at]  = displaced;
-        latch_content_flags(s, entry.cell);
-        /* The displaced occupant, if any, is not a fresh cell - it already
-         * existed on the board a moment ago, at `nat` - but every write
-         * owes the same bookkeeping regardless of whether what landed there
-         * is new, so this costs one more cheap latch rather than a special
-         * case for "not empty". Skipped only for the everyday case where
-         * there was nothing to displace at all. */
-        if (!CELL_IS_EMPTY(displaced)) {
-            latch_content_flags(s, displaced);
-        }
-        mark_move(s, x, y, nx, ny);
 
         /* CASCADE - see this array's own top comment for why this only
          * COLLECTS a candidate rather than queuing one directly. WATER
          * and ACID only, matching splash_displace()'s own scope
          * (sand_liquid.c) - this exists to serve that feature, not as a
-         * general property of every impulse.
+         * general property of every impulse. Gated on `moved` rather than
+         * on whether the loop above ran out of budget or was cut short by a
+         * wall: what matters is whether this entry displaced anything at
+         * all this step, exactly the question a single-cell move always
+         * answered by reaching this point at all.
          *
-         * RELAYS BACKWARD, NOT FORWARD - checked one step BEHIND where
-         * this entry started (x, y - the position it just vacated - minus
-         * one more step in `d`, its own direction of travel), not one
-         * step past where it landed. The cell AHEAD of a mover is close
+         * RELAYS BACKWARD, NOT FORWARD - checked one step BEHIND where this
+         * entry started THIS STEP's OWN MOVE (x0, y0 - the position it
+         * occupied before its first hop above - minus one more step in
+         * `d0`, its own direction of travel), not one step past wherever a
+         * multi-cell push ended up. The cell AHEAD of a mover is close
          * to definitionally open (that is why the move just succeeded),
          * so checking there almost never finds anything to relay into -
          * tried first, and a straight test column pushed upward showed
@@ -3028,11 +3084,12 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * entry just left, which is what actually turns one grain moving
          * into a connected chain advancing together - a piston, not a
          * single flying droplet. */
-        if ((mat_id == MAT_WATER || mat_id == MAT_ACID) &&
+        if (moved > 0 &&
+            (mat_id == MAT_WATER || mat_id == MAT_ACID) &&
             entry.speed >= SAND_CASCADE_MIN_SPEED * SAND_CASCADE_SPEED_DIVISOR &&
             deferred_count < SAND_CASCADE_MAX_PER_STEP) {
-            const int rx = x - d[0];
-            const int ry = y - d[1];
+            const int rx = x0 - d0[0];
+            const int ry = y0 - d0[1];
             if ((unsigned)rx < (unsigned)w && (unsigned)ry < (unsigned)h) {
                 const cell_t relay_target =
                     s->cells[(size_t)ry * (size_t)w + (size_t)rx];
@@ -3047,7 +3104,7 @@ static void step_impulses(sand_t *s, int dx, int dy)
             }
         }
 
-        s->impulse_buf[kept].index = (uint16_t)nat;
+        s->impulse_buf[kept].index = entry.index;
         s->impulse_buf[kept].cell  = entry.cell;
         s->impulse_buf[kept].dir   = entry.dir;
         s->impulse_buf[kept].speed = entry.speed;

@@ -2957,7 +2957,17 @@ static void test_a_flying_water_grain_does_not_swap_into_dirt_in_its_path(void)
  * gravity-confound reason the test above goes straight down - here the
  * push direction ITSELF is sideways, so a floor is what keeps ordinary
  * gravity from pulling either cell out of the row before the impulse gets
- * to try its own move. */
+ * to try its own move.
+ *
+ * A WALL ONE CELL PAST OX, new alongside SAND_IMPULSE_CELLS_PER_STEP_
+ * DIVISOR (sand.h) - a full-speed push now covers several cells in one
+ * step (that constant's own comment), so without something to stop it
+ * there water swaps into the oil cell and immediately keeps going through
+ * the open air beyond, and this test's own poll (once per whole step, not
+ * per cell) never catches it AT rest on OX. The wall caps the push at
+ * exactly the one cell this test cares about - whether the swap into
+ * another liquid happens at all - without touching how far an unobstructed
+ * throw travels anywhere else. */
 static void test_a_flying_water_grain_still_displaces_another_liquid(void)
 {
     fixture();
@@ -2970,6 +2980,7 @@ static void test_a_flying_water_grain_still_displaces_another_liquid(void)
     }
     sand_set(&s, WX, ROW, WATER);
     sand_set(&s, OX, ROW, OIL);
+    sand_set(&s, OX + 1, ROW, STONE);
 
     sand_impulse(&s, WX, ROW, DIR_RIGHT, 255);
 
@@ -22153,6 +22164,150 @@ static void test_a_thrown_chunk_displacing_nothing_loses_only_the_plain_ramp(voi
         "before this rung existed");
 }
 
+/* --- Rung: multi-cell push, SAND_IMPULSE_CELLS_PER_STEP_DIVISOR -----------
+ *
+ * Before this rung, every displacing move in step_impulses() - the push
+ * roll's own move included - advanced an entry exactly one cell per
+ * successful roll, identical to how far the ordinary gravity sweep moves a
+ * falling grain in that same step. An impulse could therefore never outrun
+ * gravity: a horizontal throw sank at close to 45 degrees, and ejecta
+ * thrown off a powder volume could only ever reposition material, never
+ * visibly leave it. See SAND_IMPULSE_CELLS_PER_STEP_DIVISOR's own comment
+ * (sand.h) for the formula and the measured before/after numbers.
+ *
+ * TWO CLAIMS, TWO TESTS - a change like this is only really pinned by
+ * BOTH ends of it: the negative case (nothing changes below the divisor)
+ * right below, and the positive case (several cells at once, above it)
+ * just after. */
+
+#define SUBDIV_W 40
+#define SUBDIV_H 80
+#define SUBDIV_STEPS 60
+/* One under SAND_IMPULSE_CELLS_PER_STEP_DIVISOR - the highest speed that
+ * still computes 1 + speed / SAND_IMPULSE_CELLS_PER_STEP_DIVISOR == 1. */
+#define SUBDIV_SPEED (SAND_IMPULSE_CELLS_PER_STEP_DIVISOR - 1)
+
+/* THE NEGATIVE CASE, swept over many steps rather than pinned as a single
+ * arithmetic value: SUBDIV_SPEED is comfortably below SAND_IMPULSE_BOUNCE_
+ * MIN_SPEED and SAND_IMPULSE_TRANSFER_MIN_SPEED, so a one-step scene like
+ * the drag pins above would only ever exercise the plain, undramatic
+ * "roll then maybe move" path - which is exactly what needs sweeping,
+ * since a bug that let push_cells creep above 1 at low speed would not
+ * show up in a single sample. Run for SUBDIV_STEPS steps and check EVERY
+ * one of them: the mover must never move more than one cell in a single
+ * step, matching exactly what every entry already did before SAND_IMPULSE_
+ * CELLS_PER_STEP_DIVISOR existed.
+ *
+ * A FULL FLOOR keeps the KIND_STATIC gravity-drift (the "AIRBORNE SOLIDS
+ * FALL TOO" block, step_impulses(), sand.c) from ever touching X: gravity
+ * is straight down here, so the drift's own first candidate is always
+ * straight down too, and a floor spanning the grid's full width keeps that
+ * candidate open for every one of SUBDIV_STEPS steps (the grid is tall
+ * enough, SUBDIV_H, that the mover never gets anywhere near it) - so any
+ * horizontal movement observed below can only be this rung's own push,
+ * never the drift confusing the measurement the way it would near a floor
+ * or wall (see the diagonal-drift case test_an_energetic_static_chunk_
+ * over_a_powder_bank... exercises elsewhere in this file). ramp is passed
+ * as 0 so `speed`, and so push_cells, stays fixed at SUBDIV_SPEED for
+ * every step of the sweep - what is being pinned is the formula at one
+ * fixed speed, not its decay. */
+static void test_a_sub_divisor_speed_impulse_never_moves_more_than_one_cell_a_step(void)
+{
+    uint8_t *cells = malloc((size_t)SUBDIV_W * SUBDIV_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
+        "sub-divisor sweep grid must fit in what the framebuffer leaves");
+    /* Only ever one entry tracked (the lone mover, never near enough to a
+     * wall or the floor to spawn a TRANSFER or CASCADE follow-up) - a small
+     * stack array, not a grid-sized malloc(), same as this file's other
+     * single-mover scenes. */
+    impulse_t buf[8];
+
+    sand_t g;
+    memset(cells, 0, (size_t)SUBDIV_W * SUBDIV_H);
+    sand_init(&g, cells, SUBDIV_W, SUBDIV_H, 4242u);
+    sand_enable_impulses(&g, buf, 8);
+
+    enum { SX = 1, SY = 2, DIR_RIGHT = 2 };
+    for (int x = 0; x < SUBDIV_W; x++) {
+        sand_set(&g, x, SUBDIV_H - 1, STONE);
+    }
+    sand_set(&g, SX, SY, STONE);
+    sand_impulse_dislodge(&g, SX, SY, DIR_RIGHT, SUBDIV_SPEED, 0);
+
+    int prev_x = SX;
+    long total_moved = 0;
+    for (int i = 0; i < SUBDIV_STEPS; i++) {
+        sand_step(&g, 0, 1000, 0);
+
+        TEST_ASSERT_EQUAL_INT_MESSAGE(1, g.impulse_count,
+            "the mover must still be tracked every step of this sweep - it "
+            "starts far from the floor and every wall, so nothing here "
+            "should ever drop or settle it before SUBDIV_STEPS is up");
+
+        const int x = (int)((unsigned)g.impulse_buf[0].index %
+                            (unsigned)SUBDIV_W);
+        const int dx = x - prev_x;
+        char msg[192];
+        snprintf(msg, sizeof msg,
+                 "step %d: a speed-%d entry (one under SAND_IMPULSE_CELLS_"
+                 "PER_STEP_DIVISOR) moved %d cells in this one step - it "
+                 "must move at most one, exactly as every entry did before "
+                 "that constant existed", i, SUBDIV_SPEED, dx);
+        TEST_ASSERT_TRUE_MESSAGE(dx == 0 || dx == 1, msg);
+        total_moved += dx;
+        prev_x = x;
+    }
+
+    free(cells);
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, total_moved,
+        "the push roll must have succeeded at least once across "
+        "SUBDIV_STEPS steps at speed SUBDIV_SPEED, or this sweep never "
+        "actually exercised the one-cell-per-step path it claims to pin");
+}
+
+/* THE POSITIVE CASE - a full-speed push clears SEVERAL cells in a single
+ * step, the entire point of SAND_IMPULSE_CELLS_PER_STEP_DIVISOR. Same
+ * one-step, single-scene shape as the drag pins above (a full floor
+ * beneath keeps the KIND_STATIC gravity-drift from ever touching X, so any
+ * horizontal movement observed here is this rung's own push and nothing
+ * else) - open air ahead, so nothing is displaced and no TRANSFER entry
+ * gets queued alongside the mover (contrast the dirt-displacing pins
+ * above, whose impulse_count is 2 for exactly that reason). */
+static void test_a_full_speed_static_chunk_moves_several_cells_in_one_push(void)
+{
+    fixture();
+    sand_enable_impulses(&s, impulse_buf, W * H);
+
+    enum { ROW = 4, SX = 1, DIR_RIGHT = 2 };
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, ROW + 1, STONE);
+    }
+    sand_set(&s, SX, ROW, STONE);
+    sand_impulse_dislodge(&s, SX, ROW, DIR_RIGHT, 255, SAND_IMPULSE_SPEED_RAMP);
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, s.impulse_count,
+        "the single push roll here succeeds on the order of 99.6% of the "
+        "time at speed 255 - losing tracking on this one step means the "
+        "scene itself is broken, not that this run was merely unlucky, and "
+        "open air ahead means no TRANSFER entry should appear either");
+
+    const int expected_cells = 1 + (255 - SAND_IMPULSE_SPEED_RAMP) /
+                                   SAND_IMPULSE_CELLS_PER_STEP_DIVISOR;
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SAND_IMPULSE_CELLS_PER_STEP_MAX,
+        expected_cells,
+        "this test's own arithmetic must land squarely on the cap at speed "
+        "255 - if it does not, this test is asserting the wrong number, "
+        "not the code");
+    const int expected_index = ROW * W + (SX + expected_cells);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(expected_index, s.impulse_buf[0].index,
+        "a full-speed KIND_STATIC push through open air must cover several "
+        "cells in one step, not one - this is the whole point of "
+        "SAND_IMPULSE_CELLS_PER_STEP_DIVISOR (sand.h)");
+}
+
 /* --- Rung 2: reflection off solids, with restitution ----------------------
  *
  * step_impulses()'s blocked branch (sand.c) now turns a KIND_STATIC mover's
@@ -22617,21 +22772,27 @@ static void test_a_chunk_thrown_into_a_closed_box_comes_to_rest(void)
  * would put it (directly on the floor), within a bounded number of steps,
  * not just eventually.
  *
- * OPEN_MAX_STEPS (20) and the expected landing row are both measured, same
+ * OPEN_MAX_STEPS and the expected landing row are both measured, same
  * probe methodology as BOX_MAX_STEPS above: across 64 seeds this exact
  * scene (a lone floor at the bottom of a tall, otherwise open grid, mover
- * dropped from near the top at full speed) settled in 7 to 13 steps and
- * landed on OPEN_H - 2 - directly on the floor - every single time. 20 is
- * over 1.5x that measured worst case - and TIGHT ENOUGH TO MATTER: the
- * same probe with restitution's speed charge temporarily deleted (a
- * throwaway mutation, reverted immediately) rose to a 33-step worst case
- * over the same 64 seeds, so this bound is deliberately set below that
- * regressed figure rather than padded past it - a restitution regression
- * here trips this test, it does not just make the answer slower. */
+ * dropped from near the top at full speed) landed on OPEN_H - 2 - directly
+ * on the floor - every single time, whatever the settle time.
+ *
+ * RE-MEASURED, RAISED FROM 20 TO 52, alongside SAND_IMPULSE_CELLS_PER_
+ * STEP_DIVISOR (sand.h) - a chunk now reaches the floor in far fewer
+ * steps (this exact scene's fastest seed dropped from 7 to 4), but that is
+ * not the whole story: the ordinary per-step ramp still only sheds
+ * SAND_IMPULSE_SPEED_RAMP of speed per step regardless of how many cells
+ * that step covered, so arriving in fewer steps also means arriving with
+ * far more speed still on the clock - the reflection at the floor now has
+ * more to dissipate, and does so over more steps of its own, not fewer.
+ * The worst case in this same 64-seed sweep rose from 13 to 34 steps. 52
+ * is over 1.5x that new worst case, the same margin convention the old
+ * bound used over its own worst case. */
 #define OPEN_W 8
 #define OPEN_H 16
 #define OPEN_SEEDS 8
-#define OPEN_MAX_STEPS 20
+#define OPEN_MAX_STEPS 52
 
 static void test_a_chunk_dropped_on_flat_ground_still_settles_on_it(void)
 {
@@ -23057,66 +23218,53 @@ static void test_without_a_buffer_explode_does_nothing(void)
  * early version of this test gave every wall row a distinct variant to use
  * as a per-entry id and measured MORE distinct bytes appearing over a run
  * than were ever actually dislodged at explode time, purely from that
- * drift. Position survives this cleanly: an entry moves at most two cells
- * in one step (one push-roll move plus, for a KIND_STATIC mover, one more
- * unconditional gravity-drift move - both in step_impulses(), sand.c), and
- * this scene's few concurrent entries start several rows apart and diverge
- * in direction immediately, so nearest-position matching (RICOCHET_MATCH_
- * RADIUS, comfortably above that two-cell bound) never has to break a tie.
+ * drift. Position survives this cleanly, but RICOCHET_MATCH_RADIUS had to
+ * grow well past the raw per-step bound to keep doing so once entries
+ * started covering more ground per step (SAND_IMPULSE_CELLS_PER_STEP_
+ * DIVISOR, sand.h): the INSTANTANEOUS bound is SAND_IMPULSE_CELLS_PER_
+ * STEP_MAX + 1 cells in one step (5 at today's cap of 4 - a multi-cell
+ * push-roll move plus, for a KIND_STATIC mover, one more unconditional
+ * gravity-drift move, both in step_impulses(), sand.c), but this GREEDY,
+ * array-order tracker is not immune to a single early ambiguous link: once
+ * two candidates are plausibly close to the same lineage (far more likely
+ * now that several concurrently-flying entries cover 4-5x the ground per
+ * step they used to, closing the "several rows apart" gap this scene
+ * relies on faster than before), one wrong pick compounds every step after
+ * it, and recovering needs slack well beyond the instantaneous bound - a
+ * radius of 6 (5 + 1 slack, the same margin convention the old radius-3
+ * used over the old 2-cell bound) left 236 of the 100 seeds' candidates
+ * unmatched; 15 leaves none. MEASURED, NOT GUESSED: swept 6/8/10/12/15,
+ * unmatched counts of 236/156/60/28/0 - 15 is the smallest of those that
+ * actually clears every seed, not a round number picked to be safe.
  * Checked, not merely assumed: the measurement below counts entries that
  * ever failed to find any match at all (would mean a genuinely new impulse
  * got queued mid-run, which nothing in this liquid/gas/fire-free scene
- * should ever do) - zero, every seed.
+ * should ever do, OR that this tracker's own radius is still too tight) -
+ * zero, every seed, at RICOCHET_MATCH_RADIUS 15.
  *
- * MEASURED, SEEDS 1..100, this exact scene: 284 tracked stone entries
- * total. Of those, 150 (52.8%) changed direction at least once, 46 (16.2%)
- * at least twice, 1 (0.4%) three times, none four or more times - a
- * ricochet, not a single stop, but a short one. Restricted to the 106
- * entries that ever crossed the gap's own midline (evidence the flight was
- * real, not a graze near the near wall): 56 (52.8%) bounced at least once,
- * 6 (5.7%) at least twice, 1 (0.9%) three times. Restricted further to the
- * 51 that came within four cells of the FAR wall specifically: 49 (96.1%)
- * bounced at least once there, 1 (2.0%) twice, 1 (2.0%) three times, none
- * more. That is the maintainer's own prediction, not quite in the shape
- * expected, and working through why matters because it changes which knob
- * actually governs this scene. Restitution's OWN arithmetic
- * (SAND_IMPULSE_BOUNCE_MIN_SPEED's own comment, sand.h) says a purely
- * HEAD-ON entry can halve twice before the floor stops a third (255 ramped
- * once to 253, then 253 -> 126 -> 63, already under 64) - two bounces
- * available from restitution alone, with room to spare. But restitution
- * barely gets a turn here, because the 42-cell GAP ITSELF already spends
- * most of the budget before a bounce ever happens: SAND_IMPULSE_SPEED_RAMP
- * costs 2 every step and a flight covers roughly a cell a step, so one
- * crossing costs roughly 42 * 2 = 84 speed - not restitution's own ~128-
- * step full-tail figure, a small fraction of it, paid just getting there.
- * Worked through for a typical GLANCING hit (-25%, not -50%): 253 -> cross
- * the gap (-84) -> 169 -> bounce off the far wall (-25%) -> 127 -> cross
- * back (-84) -> 43, already under the 64 floor - ONE bounce, exactly what
- * 96.1% at >= 1 and 2.0% at >= 2 measures. THE RAMP SPENT CROSSING THE GAP
- * IS THE LIMITER, with the floor finishing it off once that crossing has
- * already spent most of the budget - restitution's own halving/quartering
- * rarely gets a second turn before the ramp alone has used up the room.
- * That also predicts bounce count scales with GAP WIDTH, not with
- * restitution: the same arithmetic (glancing hits, same starting speed) at
- * a 20-cell gap - 253 -> cross(-40) -> 213 -> bounce(-25%) -> 160 ->
- * cross(-40) -> 120 -> bounce(-25%) -> 90 -> cross(-40) -> 50 (stop) - gives
- * two bounces, and at 10 cells - 253 -> cross(-20) -> 233 -> bounce -> 175
- * -> cross(-20) -> 155 -> bounce -> 117 -> cross(-20) -> 97 -> bounce -> 73
- * -> cross(-20) -> 53 (stop) - gives three. Not measured at those widths,
- * arithmetic only, same status as the two paragraphs below - but it is the
- * gap-width lever this scene's own numbers actually point at, not the
- * restitution one.
+ * RE-MEASURED AFTER SAND_IMPULSE_CELLS_PER_STEP_DIVISOR (sand.h) LANDED -
+ * the arithmetic walkthrough this comment used to carry (a 42-cell gap
+ * costing 42 * SAND_IMPULSE_SPEED_RAMP speed to cross) assumed exactly one
+ * cell of travel per step, which is no longer true: a fast entry now
+ * crosses the same gap in roughly a quarter as many steps, so it arrives
+ * having paid roughly a quarter as much ramp - THE RAMP SPENT CROSSING THE
+ * GAP IS NO LONGER THE LIMITER IT WAS. SEEDS 1..100, this exact scene: 284
+ * tracked stone entries total (unchanged - the blast's own dislodge count
+ * has nothing to do with how far anything travels afterward), 160 (56.3%)
+ * changed direction at least once, 45 (15.8%) at least twice, 3 (1.1%)
+ * three times - see docs/Sand/Sand-Simulation.md for the before/after
+ * table this rung is judged against; a real shift in the >= 1 bucket (150
+ * before, 160 now) from entries that used to run out of ramp mid-gap and
+ * now cross with speed to spare.
  *
- * A GENTLER RESTITUTION, computed the same way (arithmetic only - nothing
- * here changes SAND_IMPULSE_BOUNCE_MIN_SPEED or the head-on/glancing split,
- * see this file's own top instruction not to): charging a head-on bounce
- * the same quarter a glancing one already pays would raise the worst case
- * from two bounces to the same five the glancing sequence above already
- * gets, since the two formulas would then be identical. A LOWER FLOOR,
- * same starting speed, head-on repeated: floor 32 gives 253 -> 126 -> 63 ->
- * 31 (stop) - three bounces, one more than today's 64; floor 16 gives one
- * more again, 253 -> 126 -> 63 -> 31 -> 15 (stop) - four. Left for the
- * maintainer to pick from, per this file's own top instruction. */
+ * THE OLD "GENTLER RESTITUTION" ARITHMETIC (a speculative exploration of
+ * lowering SAND_IMPULSE_BOUNCE_MIN_SPEED or equalising the head-on/glancing
+ * split, never acted on) is dropped rather than reworked here - it was
+ * built entirely on the now-stale one-cell-per-step gap-crossing cost
+ * above, and rederiving it against multi-cell travel is a separate
+ * exploration nobody has asked for. Nothing it discussed was ever changed
+ * by this rung: SAND_IMPULSE_BOUNCE_MIN_SPEED and the head-on/glancing
+ * split are exactly what they were. */
 #define RICOCHET_W 44
 #define RICOCHET_H 40
 #define RICOCHET_RADIUS 13
@@ -23124,7 +23272,7 @@ static void test_without_a_buffer_explode_does_nothing(void)
 #define RICOCHET_CY (RICOCHET_H / 2)
 #define RICOCHET_SEEDS 100
 #define RICOCHET_MAX_STEPS 300
-#define RICOCHET_MATCH_RADIUS 3
+#define RICOCHET_MATCH_RADIUS 15
 #define RICOCHET_MAX_TRACK 32
 
 typedef struct {
@@ -23460,6 +23608,156 @@ static void test_a_thrown_powder_grain_flings_dirt_out_of_the_bank_it_hits(void)
         "dirt bank never spreads on its own (measured zero with transfer's "
         "own gate hard-mutated off), so any cell found outside it was "
         "flung there by the transfer this rung adds");
+}
+
+/* --- MATERIAL ACTUALLY FLIES, NOW - SAND_IMPULSE_CELLS_PER_STEP_DIVISOR ---
+ *
+ * A DIFFERENT SIGNAL FROM THE EJECTA TESTS ABOVE, on purpose: "outside the
+ * bank's own footprint" (ejecta_count_outside(), above) counts a cell that
+ * merely relocated, however it got there or however briefly it was ever
+ * off the ground. AIRBORNE - every one of a cell's eight neighbours
+ * genuinely CELL_IS_EMPTY() at the instant sampled - is the stricter claim
+ * the maintainer actually asked for: material visibly FLYING, suspended in
+ * open air, not just shuffled sideways within a settling pile. Before this
+ * rung, every displacing move in step_impulses() advanced an entry exactly
+ * one cell per successful roll - identical to how far the ordinary gravity
+ * sweep moves a falling grain in the same step - so a thrown chunk could
+ * never outrun gravity: ejecta could reposition but not visibly leave the
+ * volume it came from.
+ *
+ * THE SCENE: an 8-cell-wide row of MAT_STONE, thrown together at a
+ * diagonal (down-right, dir 1 - "at an angle", not straight down or
+ * straight along the surface) into a settled MAT_SAND bed resting on a
+ * solid floor. Airborne sand is counted every step for AIRBORNE_STEPS,
+ * peak kept per seed, over AIRBORNE_SEEDS seeds.
+ *
+ * MEASURED, this exact scene, seeds 1..40: BEFORE this rung, 26 of 40
+ * seeds ever showed any airborne sand at all, peaking at 3 simultaneously
+ * airborne cells. AFTER, all 40 seeds show airborne sand, peaking at 8 -
+ * both more often and more of it at once. Different numbers from the
+ * maintainer's own hand-measured scene (12 of 40, peak 1, before) - a
+ * different bed/chunk/angle, not a discrepancy - but the same shape: a
+ * capped, modest peak before this rung existed no matter the scene, a
+ * clearly higher one after. */
+
+#define AIRBORNE_W 80
+#define AIRBORNE_H 40
+#define AIRBORNE_SEEDS 40
+#define AIRBORNE_STEPS 60
+#define AIRBORNE_SURFACE (AIRBORNE_H - 10)
+#define AIRBORNE_CHUNK_W 8
+#define AIRBORNE_CHUNK_X0 5
+#define AIRBORNE_CHUNK_Y (AIRBORNE_SURFACE - 6)
+
+/* Sand cells with all eight neighbours genuinely CELL_IS_EMPTY() - see
+ * this section's own top comment for why that is a stricter, more
+ * specific claim than "outside its original footprint". */
+static int airborne_sand_count(sand_t *g)
+{
+    int n = 0;
+    for (int y = 0; y < AIRBORNE_H; y++) {
+        for (int x = 0; x < AIRBORNE_W; x++) {
+            if (CELL_MATERIAL(sand_at(g, x, y)) != MAT_SAND) {
+                continue;
+            }
+            bool all_empty = true;
+            for (int dy = -1; dy <= 1 && all_empty; dy++) {
+                for (int dx = -1; dx <= 1; dx++) {
+                    if (dx == 0 && dy == 0) {
+                        continue;
+                    }
+                    if (!CELL_IS_EMPTY(sand_at(g, x + dx, y + dy))) {
+                        all_empty = false;
+                        break;
+                    }
+                }
+            }
+            if (all_empty) {
+                n++;
+            }
+        }
+    }
+    return n;
+}
+
+/* One seed: builds the scene, runs AIRBORNE_STEPS, returns the peak
+ * airborne-sand count seen at any single step. */
+static int airborne_bed_peak(uint8_t *cells, impulse_t *buf, uint32_t seed)
+{
+    sand_t g;
+    memset(cells, 0, (size_t)AIRBORNE_W * AIRBORNE_H);
+    sand_init(&g, cells, AIRBORNE_W, AIRBORNE_H, seed);
+    sand_enable_impulses(&g, buf, AIRBORNE_W * AIRBORNE_H);
+
+    for (int x = 0; x < AIRBORNE_W; x++) {
+        sand_set(&g, x, AIRBORNE_H - 1, STONE);
+    }
+    for (int y = AIRBORNE_SURFACE; y < AIRBORNE_H - 1; y++) {
+        for (int x = 0; x < AIRBORNE_W; x++) {
+            sand_set(&g, x, y, SAND_FIRST_SHADE);
+        }
+    }
+
+    enum { DIR_DOWN_RIGHT = 1 };
+    for (int k = 0; k < AIRBORNE_CHUNK_W; k++) {
+        sand_set(&g, AIRBORNE_CHUNK_X0 + k, AIRBORNE_CHUNK_Y, STONE);
+        sand_impulse_dislodge(&g, AIRBORNE_CHUNK_X0 + k, AIRBORNE_CHUNK_Y,
+                              DIR_DOWN_RIGHT, 255, SAND_IMPULSE_SPEED_RAMP);
+    }
+
+    int peak = 0;
+    for (int i = 0; i < AIRBORNE_STEPS; i++) {
+        sand_step(&g, 0, 1000, 0);
+        const int n = airborne_sand_count(&g);
+        if (n > peak) {
+            peak = n;
+        }
+    }
+    return peak;
+}
+
+static void test_a_stone_chunk_thrown_into_a_sand_bed_launches_sand_airborne(void)
+{
+    uint8_t *cells = malloc((size_t)AIRBORNE_W * AIRBORNE_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
+        "airborne-bed grid must fit in what the framebuffer leaves");
+    impulse_t *buf = malloc((size_t)(AIRBORNE_W * AIRBORNE_H) * sizeof *buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(buf,
+        "airborne-bed impulse queue must fit in what the framebuffer leaves");
+
+    int seeds_with_any = 0;
+    int peak = 0;
+    for (uint32_t seed = 1; seed <= (uint32_t)AIRBORNE_SEEDS; seed++) {
+        const int p = airborne_bed_peak(cells, buf, seed);
+        if (p > 0) {
+            seeds_with_any++;
+        }
+        if (p > peak) {
+            peak = p;
+        }
+    }
+
+    free(buf);
+    free(cells);
+
+    char msg[420];
+    snprintf(msg, sizeof msg,
+             "peak airborne sand across %d seeds was %d, seeds_with_any "
+             "%d/%d - this exact scene measured a peak of 3 (26/40 seeds "
+             "with any) before SAND_IMPULSE_CELLS_PER_STEP_DIVISOR existed "
+             "(sand.h) and a peak of 8 (40/40) after; the assertion sits "
+             "strictly between those two measured figures so this test "
+             "actually distinguishes the two, not merely confirms some "
+             "airborne sand exists at all",
+             AIRBORNE_SEEDS, peak, seeds_with_any, AIRBORNE_SEEDS);
+    /* 4, not 1 - see this section's own top comment for why the OLD code
+     * already clears a bar as low as 1 on this scene (a thrown chunk's own
+     * gravity-drift plus rung 1/2's ordinary bounce can separate two
+     * grains onto different steps even without this rung's multi-cell
+     * push), so a threshold that low would pass on unfixed code and prove
+     * nothing. 4 sits strictly between the measured 3 (before) and 8
+     * (after). */
+    TEST_ASSERT_GREATER_THAN_MESSAGE(4, peak, msg);
 }
 
 /* --- A THROWN GRAIN THAT HAS FLOWN A LONG WAY STILL EJECTS ON IMPACT ------
@@ -29420,6 +29718,8 @@ void run_sand_suite(void)
     RUN_TEST(test_a_thrown_liquid_grain_pays_no_drag_displacing_water);
     RUN_TEST(test_a_thrown_powder_grain_bounces_off_a_wall_instead_of_waiting);
     RUN_TEST(test_a_thrown_chunk_displacing_nothing_loses_only_the_plain_ramp);
+    RUN_TEST(test_a_sub_divisor_speed_impulse_never_moves_more_than_one_cell_a_step);
+    RUN_TEST(test_a_full_speed_static_chunk_moves_several_cells_in_one_push);
     RUN_TEST(test_blocker_normal_and_reflect_off_normal_match_the_exhaustive_arc_table);
     RUN_TEST(test_a_thrown_chunk_reverses_direction_bouncing_off_a_flat_floor);
     RUN_TEST(test_a_thrown_chunk_deflects_off_a_flat_floor_instead_of_reversing);
@@ -29434,6 +29734,7 @@ void run_sand_suite(void)
     RUN_TEST(test_without_a_buffer_explode_does_nothing);
     RUN_TEST(test_the_two_wall_explosion_scene_bounces_more_than_once_before_settling);
     RUN_TEST(test_a_thrown_powder_grain_flings_dirt_out_of_the_bank_it_hits);
+    RUN_TEST(test_a_stone_chunk_thrown_into_a_sand_bed_launches_sand_airborne);
     RUN_TEST(test_a_powder_grain_thrown_far_still_ejects_from_the_bank_it_hits);
     RUN_TEST(test_a_thrown_powder_grain_flings_water_out_of_the_pool_it_hits);
     RUN_TEST(test_a_struck_water_cell_is_handed_impulse_in_a_backward_cone_from_the_mover);

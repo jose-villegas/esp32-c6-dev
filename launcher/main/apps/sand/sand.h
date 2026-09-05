@@ -724,6 +724,60 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * first once it is. */
 #define SAND_IMPULSE_SPEED_RAMP  2
 
+/* HOW MANY CELLS THE PUSH MOVE COVERS IN ONE STEP, once the per-step roll
+ * (rolled_move, step_impulses(), sand.c) says this is a turn it moves at
+ * all. That roll's own meaning is UNCHANGED by this constant - it still
+ * decides only whether the push happens this step, exactly as it always
+ * has. What used to be fixed at exactly one cell per successful roll is
+ * now 1 + speed / SAND_IMPULSE_CELLS_PER_STEP_DIVISOR, capped at
+ * SAND_IMPULSE_CELLS_PER_STEP_MAX (below).
+ *
+ * THE PROBLEM THIS FIXES: every displacing move in this file, before this
+ * existed, advanced an entry exactly one cell per successful roll -
+ * identical to how far the ordinary gravity sweep moves a falling grain in
+ * that same step (SAND_IMPULSE_SPEED_RAMP's own comment above: "the
+ * vertical component is still exactly one cell per step, the whole time").
+ * An impulse could therefore never outrun gravity: a horizontal throw sank
+ * at close to 45 degrees, one cell of push for every one cell of fall, and
+ * ejecta thrown off a powder volume could only ever reposition material,
+ * never visibly leave it - nothing this engine threw ever moved sideways
+ * faster than gravity pulled it down. Measured, seeds 1..40, an 8-cell-wide
+ * stone chunk thrown at an angle into a settled sand bed: BEFORE this
+ * constant existed, 26 of 40 seeds ever produced any airborne sand (a bed
+ * cell with all eight neighbours empty) at all, peaking at 3 simultaneously
+ * airborne cells; AFTER, all 40 seeds show airborne sand, peaking at 8 -
+ * material rearranging became material visibly flying. See
+ * test_a_stone_chunk_thrown_into_a_sand_bed_launches_sand_airborne
+ * (suite_sand.c), which pins this exact scene and these exact figures.
+ *
+ * 64, SO A FULL-SPEED (255) ENTRY COVERS FOUR CELLS AND A SPENT ONE STILL
+ * COVERS EXACTLY ONE, UNCHANGED - 1 + 255/64 = 4, and integer division
+ * means anything under 64 rounds to 1 + 0 = 1, the same single cell every
+ * entry already moved before this existed. THAT IS THE POINT, not a side
+ * effect to work around: it is what keeps a slow-moving entry's own
+ * behaviour, and every test written against the old one-cell-per-roll
+ * design, byte-for-byte unchanged - see
+ * test_a_sub_divisor_speed_impulse_never_moves_more_than_one_cell_a_step
+ * (suite_sand.c), which pins exactly this. */
+#define SAND_IMPULSE_CELLS_PER_STEP_DIVISOR  64
+
+/* THE CAP on the formula just above, as its OWN number rather than trusted
+ * to fall out of the divisor by coincidence - the two happen to agree at
+ * speed 255 today (1 + 255/64 = 4), but they answer different questions,
+ * and a future retune of ONE (say, lowering the divisor to make a
+ * moderate-speed entry cover more ground) must not silently move the
+ * other along with it: at divisor 32 a full-speed entry would cover 1 +
+ * 255/32 = 8 cells with no cap at all, and every cell of that crossing
+ * still pays impulse_charge_displacement() and can still queue a TRANSFER
+ * or a CASCADE entry (both already budgeted PER STEP by
+ * SAND_CASCADE_MAX_PER_STEP, not per cell of one entry's own travel) - an
+ * unbounded per-step distance is an unbounded amount of that same
+ * per-step work charged to a single entry, not merely a faster-looking
+ * throw. 4 is not independently swept, only checked against this rung's
+ * own measurement: see SAND_IMPULSE_CELLS_PER_STEP_DIVISOR's own comment
+ * for the before/after numbers this cap, at 4, actually produced. */
+#define SAND_IMPULSE_CELLS_PER_STEP_MAX  4
+
 /* EXTRA speed charged at the move site, on top of the ordinary ramp above,
  * per non-empty cell a KIND_STATIC or KIND_POWDER mover displaces - see
  * step_impulses()'s own comment at the charge site for why there rather
