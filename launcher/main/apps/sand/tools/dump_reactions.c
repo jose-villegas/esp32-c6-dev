@@ -33,10 +33,13 @@
  * No hand-written PER-REACTION prose or guessed triggers: every rate/
  * frequency word is still the ladder's computed bucket (bar the one
  * checked exception), and every field whose real trigger is a condition
- * living at a read site in sand_reactions.c (not in the table) still
- * renders as a literal "[TODO: trigger]" rather than a guessed clause -
- * that plumbing is still future work, tracked in the plan's own "Phasing"
- * section, not something this pass fakes.
+ * living at a read site in sand_reactions.c (not in the table) prints
+ * exactly what that file's own REACTION_DOC(field, "why") annotation says
+ * at the point that decides it - see reaction_doc.h and this file's
+ * parse_reaction_docs()/cause_at() - never a clause guessed from the field
+ * name alone. A field whose trigger lives at a read site but has not yet
+ * been annotated that way is still future work, tracked in the plan's own
+ * "Phasing" section, not something this pass fakes.
  *
  * THE ONE PLACE THIS DEVIATES FROM THE PLAN'S OWN WORDING, ON PURPOSE
  *
@@ -55,6 +58,7 @@
  * that trips it. */
 
 #include <ctype.h>
+#include <errno.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -277,8 +281,9 @@ static const field_doc_t field_docs[] = {
      * FRATE. `spoils_to`/`spoils_chance` fire from a condition
      * (heat_chance succeeding on a WET cell) that lives entirely at the
      * read site in sand_reactions.c, not in this table - see this file's
-     * own top comment on shatters_to for why that gets the [TODO: trigger]
-     * treatment (emit_spoils()) rather than guessed prose. */
+     * REACTION_DOC/cause_at() machinery, and sand_reactions.c's own
+     * REACTION_DOC(spoils_to, ...) call, for where emit_spoils() gets its
+     * clause from rather than guessing it. */
     F(heats_to,     GRP_TRANSFORM, FK_TARGET, NULL),
     FRATE(heat_chance, GRP_TRANSFORM, "melts"),
     /* `melts` shares heats_to with heat_chance but answers to LAVA
@@ -421,6 +426,226 @@ static const field_doc_t *field_doc(const char *name)
     fprintf(stderr, "dump_reactions: field_doc(\"%s\") - no such field\n",
             name);
     exit(1);
+}
+
+/*-----------------------------------------------------------------------
+ * REACTION_DOC parsing - the cause clauses this file cannot derive from
+ * material.c's tables at all, because the condition that gates them lives
+ * entirely at a read site in sand_reactions.c (see shatters_to's two
+ * SAND_SHOCK_HEAT/SAND_SHOCK_COLD thresholds, and spoils_to's "only while
+ * the cell is still wet" gate - neither appears anywhere in reactions[]/
+ * extended_reactions[]).
+ *
+ * sand_reactions.c is read as TEXT here, never linked - see reaction_doc.h's
+ * own top comment for why that is not a reversal of "compile the tables, do
+ * not parse them" (that rule is about constant EXPRESSIONS needing the
+ * preprocessor; a string literal has nothing to evaluate, only to read back
+ * verbatim), and report_reactions.sh for how its path reaches this program.
+ *
+ * is_known_field() below deliberately duplicates field_doc()'s own lookup
+ * rather than calling it, because a bad field name here is not fatal in the
+ * way field_doc() assumes - it just refers to a REACTION_DOC() invocation
+ * (reported by number, `errno`/exit(1) same as the rest of this file) rather
+ * than a `%s` this program already trusts elsewhere.
+ *---------------------------------------------------------------------*/
+
+/* Comfortably more than the number of REACTION_DOC() calls sand_reactions.c
+ * carries today (three, as of this writing) - raise it if a future one
+ * trips the check in parse_reaction_docs(). */
+#define CAUSE_MAX        32
+#define CAUSE_FIELD_LEN  32
+#define CAUSE_TEXT_LEN   160
+
+typedef struct {
+    char field[CAUSE_FIELD_LEN];
+    char text[CAUSE_TEXT_LEN];
+} cause_t;
+
+static cause_t causes[CAUSE_MAX];
+static size_t causes_count;
+
+/* Every field name this file actually pulls a cause_at() clause out of -
+ * NOT every field with a trigger at a read site (hardens_to's own
+ * REACTION_DOC() in sand_reactions.c documents one, at its lignify branch
+ * in step_one_withering_cell(), but nothing in this file prints it, so it
+ * is deliberately absent here; adding a printed clause for it later means
+ * adding it to this list too). A trailing `has_cause` column on field_docs[]
+ * rows would say the same thing but forces every F()/FRATE()/FCHANCE() row
+ * in the whole table to grow a new argument for the sake of the two fields
+ * that need one - this small separate list costs far less churn for the
+ * same guarantee, checked by causes_are_complete() below exactly like a
+ * column would be. */
+static const char *const causes_expected[] = {
+    "shatters_to",
+    "spoils_to",
+};
+
+static bool is_known_field(const char *name)
+{
+    for (size_t i = 0; i < ARRAY_LEN(field_docs); i++) {
+        if (strcmp(field_docs[i].name, name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static char *read_whole_file(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (f == NULL) {
+        fprintf(stderr, "dump_reactions: cannot open %s: %s\n", path,
+                strerror(errno));
+        exit(1);
+    }
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fprintf(stderr, "dump_reactions: cannot seek %s\n", path);
+        exit(1);
+    }
+    const long size = ftell(f);
+    if (size < 0 || fseek(f, 0, SEEK_SET) != 0) {
+        fprintf(stderr, "dump_reactions: cannot size %s\n", path);
+        exit(1);
+    }
+    char *buf = malloc((size_t)size + 1);
+    if (buf == NULL) {
+        fprintf(stderr, "dump_reactions: out of memory reading %s (%ld "
+                "bytes)\n", path, size);
+        exit(1);
+    }
+    const size_t got = fread(buf, 1, (size_t)size, f);
+    fclose(f);
+    buf[got] = '\0';
+    return buf;
+}
+
+/* Scans `src` (sand_reactions.c's own text, from read_whole_file()) for
+ * every `REACTION_DOC(field, "literal")` invocation and records it in
+ * causes[]. Deliberately strict rather than forgiving - a REACTION_DOC()
+ * call this cannot parse the way reaction_doc.h documents it should fail
+ * the doc build loudly, not silently drop the clause it was meant to
+ * supply. */
+static void parse_reaction_docs(const char *path, const char *src)
+{
+    const char *p = src;
+    int invocation_no = 0;
+    while ((p = strstr(p, "REACTION_DOC(")) != NULL) {
+        invocation_no++;
+        p += strlen("REACTION_DOC(");
+        while (isspace((unsigned char)*p)) p++;
+        const char *field_start = p;
+        while (isalnum((unsigned char)*p) || *p == '_') p++;
+        const size_t field_len = (size_t)(p - field_start);
+        if (field_len == 0 || field_len >= CAUSE_FIELD_LEN) {
+            fprintf(stderr, "%s: REACTION_DOC #%d has no plain field name\n",
+                    path, invocation_no);
+            exit(1);
+        }
+        char field[CAUSE_FIELD_LEN];
+        memcpy(field, field_start, field_len);
+        field[field_len] = '\0';
+        while (isspace((unsigned char)*p)) p++;
+        if (*p != ',') {
+            fprintf(stderr, "%s: REACTION_DOC(%s, ...) #%d - expected ',' "
+                    "after the field name\n", path, field, invocation_no);
+            exit(1);
+        }
+        p++;
+        while (isspace((unsigned char)*p)) p++;
+        if (*p != '"') {
+            fprintf(stderr, "%s: REACTION_DOC(%s, ...) #%d - the second "
+                    "argument must be a plain string literal, not an "
+                    "expression\n", path, field, invocation_no);
+            exit(1);
+        }
+        p++;
+        char text[CAUSE_TEXT_LEN];
+        size_t tlen = 0;
+        while (*p != '"') {
+            if (*p == '\0' || *p == '\n') {
+                fprintf(stderr, "%s: REACTION_DOC(%s, ...) #%d - "
+                        "unterminated string literal\n", path, field,
+                        invocation_no);
+                exit(1);
+            }
+            if (*p == '\\' && p[1] != '\0') p++;
+            if (tlen + 1 >= CAUSE_TEXT_LEN) {
+                fprintf(stderr, "%s: REACTION_DOC(%s, ...) #%d - clause "
+                        "text longer than %d bytes\n", path, field,
+                        invocation_no, CAUSE_TEXT_LEN - 1);
+                exit(1);
+            }
+            text[tlen++] = *p++;
+        }
+        p++;
+        text[tlen] = '\0';
+        while (isspace((unsigned char)*p)) p++;
+        if (*p != ')') {
+            fprintf(stderr, "%s: REACTION_DOC(%s, ...) #%d - expected ')' "
+                    "right after the string literal (adjacent-literal "
+                    "concatenation is not supported here - write the "
+                    "clause as one literal)\n", path, field, invocation_no);
+            exit(1);
+        }
+        if (!is_known_field(field)) {
+            fprintf(stderr, "%s: REACTION_DOC(%s, ...) #%d - \"%s\" is not "
+                    "a field in field_docs[] (dump_reactions.c) - a typo, "
+                    "or field_docs[] needs a row for it\n", path, field,
+                    invocation_no, field);
+            exit(1);
+        }
+        if (causes_count >= CAUSE_MAX) {
+            fprintf(stderr, "%s: more than %d REACTION_DOC() invocations - "
+                    "raise CAUSE_MAX in dump_reactions.c\n", path,
+                    CAUSE_MAX);
+            exit(1);
+        }
+        snprintf(causes[causes_count].field, CAUSE_FIELD_LEN, "%s", field);
+        snprintf(causes[causes_count].text, CAUSE_TEXT_LEN, "%s", text);
+        causes_count++;
+    }
+}
+
+static size_t cause_count(const char *field)
+{
+    size_t n = 0;
+    for (size_t i = 0; i < causes_count; i++) {
+        if (strcmp(causes[i].field, field) == 0) n++;
+    }
+    return n;
+}
+
+/* The `index`-th REACTION_DOC() clause for `field`, in the order those
+ * calls appear in sand_reactions.c - callers rely on that source order to
+ * tell two clauses for the same field apart (see emit_shatter()'s and
+ * emit_pairwise_table()'s own comments on which index means which of
+ * shatters_to's two thresholds). */
+static const char *cause_at(const char *field, size_t index)
+{
+    size_t seen = 0;
+    for (size_t i = 0; i < causes_count; i++) {
+        if (strcmp(causes[i].field, field) != 0) continue;
+        if (seen == index) return causes[i].text;
+        seen++;
+    }
+    fprintf(stderr, "dump_reactions: cause_at(\"%s\", %zu) - fewer than "
+            "%zu clause(s) were found for this field\n", field, index,
+            index + 1);
+    exit(1);
+}
+
+static void causes_are_complete(void)
+{
+    bool ok = true;
+    for (size_t i = 0; i < ARRAY_LEN(causes_expected); i++) {
+        if (cause_count(causes_expected[i]) == 0) {
+            fprintf(stderr, "dump_reactions: field \"%s\" is expected to "
+                    "have a REACTION_DOC(...) in sand_reactions.c, but none "
+                    "was found\n", causes_expected[i]);
+            ok = false;
+        }
+    }
+    if (!ok) exit(1);
 }
 
 /*-----------------------------------------------------------------------
@@ -654,13 +879,20 @@ static const char *prose_name(const char *name)
     return buf;
 }
 
-#define CAUSE "[TODO: trigger]"
-/* CAUSE, already marked ***bold italic*** - the typography emit_anatomy()
- * gives it via MARK_CAUSE (see mark_t's own comment), applied directly for
- * every DEFAULT-section clause that prints the placeholder (emit_spoils(),
- * emit_shatter() - the only two `_to` fields whose real trigger lives at a
- * read site in sand_reactions.c rather than in this table). */
-#define CAUSE_MARKED "***" CAUSE "***"
+/* Wraps a cause_at() clause in the same ***bold italic*** typography
+ * emit_anatomy() gives it via MARK_CAUSE (see mark_t's own comment) -
+ * applied directly here for every DEFAULT-section clause that prints one
+ * (emit_spoils(), emit_shatter()), since neither of those goes through the
+ * seg_t/MARK_CAUSE machinery emit_anatomy()'s own examples use. Returns a
+ * pointer into a static buffer, same convention as prose_name() just above -
+ * safe under the same "never called twice in one statement" rule (grep
+ * cause_marked( to confirm before adding a call that would). */
+static const char *cause_marked(const char *field, size_t index)
+{
+    static char buf[CAUSE_TEXT_LEN + 8];
+    snprintf(buf, sizeof(buf), "***%s***", cause_at(field, index));
+    return buf;
+}
 
 /*-----------------------------------------------------------------------
  * One row's worth of rows (materials[] name + reactions[]/extended_
@@ -1360,7 +1592,7 @@ static void emit_spoils(const reaction_t *r)
 {
     if (r->spoils_to == 0) return;
     printf("- *Spoils* into %s %s.\n", mat_span_v(r->spoils_to),
-           CAUSE_MARKED);
+           cause_marked("spoils_to", 0));
 }
 
 static void emit_temperature(const reaction_t *r)
@@ -1609,8 +1841,13 @@ static void emit_regrow(const reaction_t *r)
 static void emit_shatter(const reaction_t *r)
 {
     if (r->shatters_to == 0) return;
+    /* Index 0: sand_reactions.c's first shatters_to REACTION_DOC(), at the
+     * hot-onto-cold branch of try_heat_transform_given() - "if warmed while
+     * badly chilled". Index 1 (the OTHER threshold, "if chilled while hot")
+     * belongs to emit_pairwise_table()'s chills/shatters_to row instead;
+     * see that function's own comment. */
     printf("- *Shatters* into %s %s.\n", mat_span_v(r->shatters_to),
-           CAUSE_MARKED);
+           cause_marked("shatters_to", 0));
 }
 
 static void emit_material_section(const char *name, const reaction_t *r,
@@ -1759,8 +1996,9 @@ static void emit_legend(void)
            "frequency word (silent, rather than printed, for the common "
            "case - see this file's own adverb_for()), and ***bold "
            "italic*** is a trigger clause that lives at a read site in "
-           "sand_reactions.c rather than in the table itself - today "
-           "always the literal `%s` placeholder.\n", CAUSE);
+           "sand_reactions.c rather than in the table itself, recovered "
+           "from that file's own REACTION_DOC() annotation at the point "
+           "that decides it rather than guessed at.\n");
 }
 
 static void print_join_row(const char *a, const char *b, const char *becomes,
@@ -1919,8 +2157,14 @@ static void emit_pairwise_table(void)
                            table_rate(adverb("chills", all_rows[i].r->chills)),
                            "");
             if (all_rows[j].r->shatters_to != 0) {
+                /* Index 1: sand_reactions.c's SECOND shatters_to
+                 * REACTION_DOC(), at step_one_cold_cell()'s SAND_SHOCK_HEAT
+                 * check - "if chilled while hot", the direction this row
+                 * itself is walking (A chills B). Index 0 belongs to
+                 * emit_shatter() instead; see that function's own comment. */
                 print_join_row(all_rows[i].name, all_rows[j].name,
-                               to_name(all_rows[j].r->shatters_to), CAUSE,
+                               to_name(all_rows[j].r->shatters_to),
+                               cause_at("shatters_to", 1),
                                "only if B is hot enough when A touches it");
             }
         }
@@ -2051,8 +2295,9 @@ static void emit_pairwise_table(void)
  * **bold** (every rate word scannable in one pass - which is exactly what
  * made the by-feel adverb tuning pass legible once it landed), and
  * MARK_CAUSE as ***bold italic*** (a clause rather than a single word, and
- * the rarest thing on this page - every instance today is the CAUSE
- * placeholder below). Glue stays plain and unmarked, same as always. This
+ * the rarest thing on this page - every instance today is a clause
+ * recovered from a REACTION_DOC() call in sand_reactions.c, via cause_at()
+ * above). Glue stays plain and unmarked, same as always. This
  * is not a return to the all-markdown attempt two paragraphs up, which
  * failed because it had to carry FIVE distinct slots (Subject, Object,
  * Verb, Rate, Cause) through three visual weights: with material identity
@@ -2329,11 +2574,11 @@ static void emit_anatomy(void)
            "scannable in one pass. A silent rate prints no word at all "
            "here, same as in the default section - see seg_rate_gap().\n");
     printf("- Cause (***bold italic***) - a trigger that lives at a read "
-           "site in sand_reactions.c, not in this table - rendered as the "
-           "literal `%s` placeholder rather than guessed at. Bold italic "
-           "marks it as a clause rather than a single word, which is also "
-           "the rarest thing on this page: every instance today is that "
-           "same placeholder.\n", CAUSE);
+           "site in sand_reactions.c, not in this table - recovered from "
+           "that file's own REACTION_DOC() annotation at the point that "
+           "decides it, rather than guessed at. Bold italic marks it as a "
+           "clause rather than a single word, which is also the rarest "
+           "thing on this page.\n");
     printf("- Glue (plain, unmarked) - prose typed by hand inside the "
            "`emit_*()` function itself: connective words, punctuation, "
            "the parts no field drives.\n");
@@ -2693,8 +2938,10 @@ static void emit_anatomy(void)
                        "(emit_regrow)", segs, n);
     }
 
-    /* GRP_SHATTER - emit_shatter(): shatters_to, and CAUSE - the one
-     * per-material clause that ever prints it. */
+    /* GRP_SHATTER - emit_shatter(): shatters_to, and MARK_CAUSE - one of
+     * two per-material clauses that ever print it (emit_spoils() is the
+     * other). Index 0, matching emit_shatter()'s own call - see that
+     * function's comment. */
     {
         const mrow_t *row = find_row("Glass");
         char subject[COLOR_LEN];
@@ -2714,7 +2961,7 @@ static void emit_anatomy(void)
         seg_glue(segs, &n, " into ");
         seg_material(segs, &n, shatters_color, shatters_name);
         seg_glue(segs, &n, " ");
-        seg_mark(segs, &n, MARK_CAUSE, CAUSE);
+        seg_mark(segs, &n, MARK_CAUSE, cause_at("shatters_to", 0));
         seg_glue(segs, &n, ".");
         print_example("Shatter - GRP_SHATTER: shatters_to (emit_shatter)",
                        segs, n);
@@ -2725,8 +2972,16 @@ static void emit_anatomy(void)
  * main
  *---------------------------------------------------------------------*/
 
-int main(void)
+int main(int argc, char **argv)
 {
+    if (argc != 2) {
+        fprintf(stderr, "usage: %s <path/to/sand_reactions.c>\n",
+                (argc > 0) ? argv[0] : "dump_reactions");
+        fprintf(stderr, "  sand_reactions.c is read as TEXT, never linked - "
+                "see reaction_doc.h and this file's own "
+                "parse_reaction_docs() for why.\n");
+        return 1;
+    }
 #ifdef _WIN32
     /* MinGW's CRT defaults stdout to text mode, which rewrites every '\n'
      * this file prints into "\r\n" - invisible on Windows, but it makes
@@ -2742,6 +2997,15 @@ int main(void)
     build_rows();
     adverb_exceptions_are_sound();
     legibility_overrides_are_sound();
+    /* sand_reactions.c's own REACTION_DOC() calls, read as text - must run
+     * before any emit_*() call below, since emit_shatter(), emit_spoils()
+     * and emit_pairwise_table() all pull their cause clauses out of this. */
+    {
+        char *sand_reactions_src = read_whole_file(argv[1]);
+        parse_reaction_docs(argv[1], sand_reactions_src);
+        free(sand_reactions_src);
+    }
+    causes_are_complete();
     /* Each of these four is only ever read in DEFAULT-section prose
      * (emit_wet(), emit_regrow(), emit_transform(), emit_ignite(),
      * emit_burn(), emit_grow()) - never a table cell or heading - so
@@ -2781,9 +3045,10 @@ int main(void)
            "this follows. Every rate/frequency word below is the ladder's "
            "computed bucket (see this file's own adverb_for()/"
            "chance_bucket_for()), with one checked, by-feel exception - see "
-           "ADVERB_EXCEPTIONS in the source. Every `" CAUSE "` marks a "
-           "trigger that lives at a read site in sand_reactions.c rather "
-           "than in the table itself, and is not guessed at.\n");
+           "ADVERB_EXCEPTIONS in the source. Every ***bold italic*** clause "
+           "marks a trigger that lives at a read site in sand_reactions.c "
+           "rather than in the table itself, recovered from that file's "
+           "own REACTION_DOC() annotations rather than guessed at.\n");
 
     emit_legend();
 
