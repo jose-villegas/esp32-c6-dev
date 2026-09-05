@@ -2015,6 +2015,98 @@ static bool impulse_index_still_tracked(const sand_t *s, int kept, int self_i,
     return false;
 }
 
+/* MEDIUM DRAG AND TRANSFER, CHARGED THE SAME WAY REGARDLESS OF WHICH OF
+ * step_impulses()'s TWO DISPLACING MOVES ACTUALLY MOVED THE MOVER THIS
+ * STEP - the push move at the bottom of that loop, or the "AIRBORNE SOLIDS
+ * FALL TOO" gravity-drift a few dozen lines above it, which is what keeps a
+ * KIND_STATIC entry falling once its own push has spent itself. Only the
+ * push move used to charge either. The drift's own swap ran for free: no
+ * drag to slow it, no transfer to show for it - which is exactly the
+ * asymmetry a slow-arriving chunk exploited. A chunk struck near the blast
+ * is still fast enough for its push-roll (rolled_move, that loop's own
+ * comment) to succeed most turns, so it mostly takes the push path and
+ * pays for what it hits; a chunk that has flown a long way arrives with
+ * `speed` mostly ramped away, its push-roll mostly failing, so nearly every
+ * displacement IT makes is the drift's own free swap - it tunnels through
+ * a bank in complete silence, burying itself no matter how the drag
+ * constants are tuned, and never throwing a single transfer entry however
+ * far it travelled to get there. A displacement is a displacement either
+ * way - the medium being displaced does not know or care which of the
+ * loop's two rules is what moved the mover into it, so neither should the
+ * bookkeeping.
+ *
+ * ONE BODY, NOT TWO CALL SITES ANSWERING "WHAT DOES DISPLACING A CELL
+ * COST" TWO DIFFERENT WAYS - this file already shipped one bug from
+ * exactly that shape once, for a different question ("is this entry still
+ * airborne" - see impulse_gravity_candidates()'s and
+ * can_impulse_enter_gravity_ward()'s own comments for that history); the
+ * lesson is the same one. A future retune of drag or the transfer floor
+ * changes this function once, not the drift site and the push site
+ * separately, free to drift apart again exactly as they already did.
+ *
+ * `impact_speed` is the speed `entry` ARRIVED at this displacement WITH,
+ * captured by the CALLER before this call charges drag - the "what it
+ * LOST, not what it has LEFT" rule the push site's own history already
+ * settled (momentum handed to the medium is what the mover lost, so
+ * deriving the transfer from what is left after paying drag gets the
+ * relationship backwards - measured, at powder's present cost, as a
+ * full-speed impactor keeping 5 of 253, which would starve the transfer to
+ * nothing were it read after this call instead of before).
+ *
+ * `dir_for_transfer` is the direction THIS displacement actually happened
+ * in - the push site's own `entry.dir` unchanged, or, at the drift site,
+ * whichever of the three gravity-ward candidates the fall actually took.
+ * NOT always entry.dir: a chunk moved by the drift can still be labelled
+ * with a `dir` it never displaced anything along this step, and the
+ * transfer's backward cone (dir_for_transfer + 3/4/5, below - see the
+ * ordinary TRANSFER history for why backward: pushing struck material
+ * further along the direction it was just hit from only ever shoves it
+ * deeper into whatever bank it is already part of) has to spray out of the
+ * surface the chunk actually broke through, not out of whatever heading it
+ * happens to still carry.
+ *
+ * Gated twice, same as the ordinary push-site transfer always was: the
+ * floor (SAND_IMPULSE_TRANSFER_MIN_SPEED) keeps a nearly-spent mover from
+ * queuing a transfer too faint to ever move, and the shared per-step cap
+ * (SAND_CASCADE_MAX_PER_STEP) is what actually protects impulse_buf from a
+ * long plow queuing one transfer per cell touched.
+ *
+ * Mutates `entry->speed` in place - the caller's own stack copy - so
+ * whatever runs next (the drift's own gravity-ward gate on its NEXT
+ * candidate, the settle/spent check, or the ordinary write-back at the end
+ * of this step) sees the post-drag figure, exactly as the push site's
+ * write-back already did before this existed. That is deliberate, not
+ * incidental: a KIND_STATIC chunk should come to rest within the first few
+ * layers of a packed bank whether it arrived falling or pushing, the same
+ * "close to the rim, not buried in it" shape the push site's own drag
+ * already produced - see SAND_IMPULSE_DRAG_POWDER_SHIFT's own comment in
+ * sand.h for the measured figure that shape rests on. */
+static void impulse_charge_displacement(sand_t *s, impulse_t *entry,
+                                        uint8_t mat_id, cell_t displaced,
+                                        uint8_t impact_speed, uint16_t at_index,
+                                        int dir_for_transfer,
+                                        impulse_t *deferred, int *deferred_count)
+{
+    if (CELL_IS_EMPTY(displaced) ||
+        (materials[mat_id].kind != KIND_STATIC &&
+         materials[mat_id].kind != KIND_POWDER)) {
+        return;
+    }
+
+    const uint8_t drag = impulse_drag_of(displaced);
+    entry->speed = (entry->speed > drag) ? (uint8_t)(entry->speed - drag) : 0;
+
+    if (impact_speed >= SAND_IMPULSE_TRANSFER_MIN_SPEED &&
+        *deferred_count < SAND_CASCADE_MAX_PER_STEP) {
+        impulse_t *t = &deferred[(*deferred_count)++];
+        t->index = at_index;
+        t->cell  = displaced;
+        t->dir   = (uint8_t)((dir_for_transfer + 3 +
+                             rng_below(&s->rng, 3)) & 7);
+        t->speed = (uint8_t)(impact_speed / SAND_IMPULSE_TRANSFER_DIVISOR);
+    }
+}
+
 /* The flight pass: every entry in s->impulse_buf either moves exactly one
  * cell along the direction it was queued with, waits another turn for its
  * way to clear, or is finally dropped. Called from sand_step(), immediately
@@ -2283,6 +2375,18 @@ static void step_impulses(sand_t *s, int dx, int dy)
             const int gy = (int)((unsigned)entry.index / (unsigned)w);
             int gcand[3][2];
             impulse_gravity_candidates(gx, gy, dx, dy, gcand);
+            /* The direction each of the three candidates ABOVE actually
+             * is - straight gravity-ward first, then the two diagonal
+             * slides either side of it, the same order
+             * impulse_gravity_candidates() itself builds them in (see that
+             * function's own body: cand[0] is (dx,dy)'s own ring
+             * direction, cand[1] and cand[2] are that direction +/- 1).
+             * Whichever candidate this loop below actually takes,
+             * gcand_dir[c] is the direction impulse_charge_displacement()'s
+             * own transfer cone needs - see that function's own comment on
+             * `dir_for_transfer` for why this cannot simply be entry.dir. */
+            const int i_dir = ring_of(dx, dy);
+            const int gcand_dir[3] = { i_dir, (i_dir + 7) & 7, (i_dir + 1) & 7 };
             for (int c = 0; c < 3; c++) {
                 const int cx = gcand[c][0];
                 const int cy = gcand[c][1];
@@ -2334,6 +2438,22 @@ static void step_impulses(sand_t *s, int dx, int dy)
                 const size_t gat  = entry.index;
                 const size_t gnat = (size_t)cy * (size_t)w + (size_t)cx;
                 const cell_t gdisplaced = s->cells[gnat];
+
+                /* A DISPLACEMENT IS A DISPLACEMENT - see
+                 * impulse_charge_displacement()'s own comment for the
+                 * silent tunnelling this closes: without this, a chunk
+                 * arriving slow (mostly falling by the time it gets here,
+                 * its own push-roll long since unlikely to fire) ploughed
+                 * through a bank paying nothing and throwing nothing,
+                 * however far it had already flown to get there. Arrival
+                 * speed captured BEFORE the charge, same rule the push
+                 * site below keeps. */
+                const uint8_t gimpact_speed = entry.speed;
+                impulse_charge_displacement(s, &entry, mat_id, gdisplaced,
+                                            gimpact_speed, (uint16_t)gat,
+                                            gcand_dir[c], deferred,
+                                            &deferred_count);
+
                 s->cells[gnat] = entry.cell;
                 s->cells[gat]  = gdisplaced;
                 latch_content_flags(s, entry.cell);
@@ -2610,6 +2730,88 @@ static void step_impulses(sand_t *s, int dx, int dy)
                         }
                     }
                 }
+            } else if (materials[mat_id].kind == KIND_POWDER &&
+                       entry.speed >= SAND_IMPULSE_BOUNCE_MIN_SPEED) {
+                /* A THROWN GRAIN GETS THE SAME "STILL AIRBORNE, DON'T
+                 * SETTLE" TREATMENT A THROWN CHUNK ALREADY GETS, ABOVE -
+                 * this branch used to not exist at all, which meant only a
+                 * KIND_STATIC entry survived a failed push-roll; every
+                 * other kind (KIND_POWDER very much included) fell straight
+                 * through to the plain `continue` below and was DROPPED,
+                 * regardless of whether it was still genuinely falling.
+                 * The roll's own chance IS entry.speed (this loop's own
+                 * comment above), and the ramp erodes it every step, so a
+                 * thrown grain's odds of still being tracked collapsed with
+                 * `speed` long before its actual energy did - measured (one
+                 * ramp, SAND_IMPULSE_SPEED_RAMP): ~62% still tracked at 10
+                 * steps, ~16% at 20, ~2% at 30, ~0.1% at 40, while `speed`
+                 * at step 30 is still 193 - nearly three times
+                 * SAND_IMPULSE_TRANSFER_MIN_SPEED. The grain kept flying
+                 * regardless (the ordinary sweep falls it every step
+                 * whether or not this loop still has it tracked - see the
+                 * "AIRBORNE SOLIDS FALL TOO" comment above for why that
+                 * fallback does NOT double as a reason to extend the drift
+                 * block itself to KIND_POWDER), but it arrived with no
+                 * impulse entry attached, so the TRANSFER block a few dozen
+                 * lines below never ran on impact and nothing was ever
+                 * ejected - harmless before TRANSFER existed, which is
+                 * exactly why only KIND_STATIC was ever checked here, and
+                 * not any more.
+                 *
+                 * SAME PREDICATE, impulse_gravity_candidates() PLUS
+                 * can_impulse_enter_gravity_ward() - NOT A SECOND,
+                 * HAND-ROLLED "IS IT STILL FALLING" TEST. This file already
+                 * shipped one bug from two call sites asking that exact
+                 * question two different ways (see
+                 * impulse_gravity_candidates()'s own comment for the
+                 * history); "has an opening" means the same thing here it
+                 * means for a KIND_STATIC chunk just above - gravity has
+                 * not yet found this grain anywhere new to go, so it has
+                 * not actually landed yet.
+                 *
+                 * NO "SUPPORT THAT IS ITSELF IN FLIGHT" WAIT, UNLIKE
+                 * KIND_STATIC just above - that extra check exists solely
+                 * because a thrown chunk's own gravity-drift IS the only
+                 * thing in this engine that ever falls it; settling it
+                 * early over a support that is about to move out from
+                 * under it would freeze it there forever. A powder grain
+                 * has no such dependency - the ordinary sweep falls it
+                 * every step regardless of this loop, so a false "settled"
+                 * here costs nothing but this one entry's own remaining
+                 * impulse; the grain itself keeps moving exactly as it
+                 * always would have.
+                 *
+                 * FLOORED AT SAND_IMPULSE_BOUNCE_MIN_SPEED (the `if`
+                 * guarding this whole branch, above) - below it a grain can
+                 * neither clear the TRANSFER floor
+                 * (SAND_IMPULSE_TRANSFER_MIN_SPEED, well above this one)
+                 * nor bounce off a wall, so tracking it any further is pure
+                 * bookkeeping cost for an entry that can no longer do
+                 * anything on impact. Dropping it here, rather than riding
+                 * the ramp all the way to zero the way this used to (never)
+                 * do, is what keeps this fix from growing impulse_buf's own
+                 * average occupancy much beyond what that speed floor
+                 * already bounds - see this file's own measurements for the
+                 * actual figures. */
+                const int rx = (int)((unsigned)entry.index % (unsigned)w);
+                const int ry = (int)((unsigned)entry.index / (unsigned)w);
+                int rcand[3][2];
+                impulse_gravity_candidates(rx, ry, dx, dy, rcand);
+
+                bool has_opening = false;
+                for (int c = 0; c < 3; c++) {
+                    if (can_impulse_enter_gravity_ward(
+                            sand_at(s, rcand[c][0], rcand[c][1]), entry.cell,
+                            entry.speed)) {
+                        has_opening = true;
+                        break;
+                    }
+                }
+                if (has_opening) {
+                    s->impulse_buf[kept++] = entry;
+                    continue;   /* still airborne - keep tracked; the
+                                 * ordinary sweep does the actual falling */
+                }
             }
             continue;   /* settled - out of flight for good */
         }
@@ -2719,36 +2921,44 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * grand total is untouched whichever of the two cases this was. */
         const cell_t displaced = s->cells[nat];
 
-        /* MEDIUM DRAG - EVERY MOVER BUT A LIQUID. Charged here, at the move
-         * site, rather than folded into the ramp above `rolled_move`'s own
-         * decay: open air (nothing displaced) must cost exactly nothing, so
-         * a flight through empty space stays byte-for-byte what it always
-         * was. See SAND_IMPULSE_DRAG_SHIFT's own comment in sand.h for what
-         * the number means, and for why powders were briefly left out and
-         * then let back in - a thrown grain is most of what a blast puts in
-         * the air, so a static-only rule was invisible on the device even
-         * though it worked exactly as designed. Liquids stay out: they
-         * carry their own geometric decay (SAND_SPLASH_SPEED_DECAY_SHIFT)
-         * and the splash/cascade feature is tuned around it. Saturating at
-         * 0, same idiom as the ramp two hundred lines up. */
-        /* THE SPEED IT ARRIVED WITH, captured before drag takes its cut -
-         * this is what the TRANSFER below is owed, and reading `entry.speed`
-         * there instead was a real bug rather than a detail. Momentum handed
-         * to the medium is what the mover LOST, so deriving the throw from
-         * what it has LEFT gets the relationship exactly backwards: the
-         * harder a medium resists, the less it would fling. Every round that
-         * strengthened drag was quietly strangling the ejecta, and at
-         * powder's present cost a full-speed impactor would keep 5 of 253 -
-         * under the transfer gate, so a bank would have thrown nothing at
-         * all, ever. */
+        /* MEDIUM DRAG AND TRANSFER - EVERY MOVER BUT A LIQUID, both now
+         * charged by impulse_charge_displacement() (this file, just above
+         * step_impulses()), the one place this loop's OTHER displacing move
+         * - the gravity-drift a few dozen lines up - charges the exact same
+         * two things for the exact same reason. See that function's own
+         * comment for the full history (why one shared body, not two sites
+         * quietly answering "what does displacing a cell cost" two
+         * different ways) and for SAND_IMPULSE_DRAG_SHIFT's own comment in
+         * sand.h for what the drag number itself means. Charged here, at
+         * the move site, rather than folded into the ramp above
+         * `rolled_move`'s own decay: open air (nothing displaced) must
+         * cost exactly nothing, so a flight through empty space stays
+         * byte-for-byte what it always was. Liquids pay no drag either
+         * way: they carry their own geometric decay
+         * (SAND_SPLASH_SPEED_DECAY_SHIFT) and the splash/cascade feature is
+         * tuned around it.
+         *
+         * THE SPEED IT ARRIVED WITH, captured before this call's own drag
+         * takes its cut - this is what the TRANSFER inside that call is
+         * owed, and reading `entry.speed` AFTER drag instead was a real bug
+         * rather than a detail. Momentum handed to the medium is what the
+         * mover LOST, so deriving the throw from what it has LEFT gets the
+         * relationship exactly backwards: the harder a medium resists, the
+         * less it would fling. Every round that strengthened drag was
+         * quietly strangling the ejecta, and at powder's present cost a
+         * full-speed impactor would keep 5 of 253 - under the transfer
+         * gate, so a bank would have thrown nothing at all, ever.
+         *
+         * `entry.dir` IS THE DIRECTION THIS DISPLACEMENT HAPPENED IN, at
+         * this site specifically - the push move only ever moves along the
+         * mover's own heading, unlike the drift's own swap, which is why
+         * the drift site has to work out its own `dir_for_transfer`
+         * instead of reusing `entry.dir` (see that function's own comment
+         * on the parameter). */
         const uint8_t impact_speed = entry.speed;
-
-        if (!CELL_IS_EMPTY(displaced) &&
-            (materials[mat_id].kind == KIND_STATIC ||
-             materials[mat_id].kind == KIND_POWDER)) {
-            const uint8_t drag = impulse_drag_of(displaced);
-            entry.speed = (entry.speed > drag) ? (uint8_t)(entry.speed - drag) : 0;
-        }
+        impulse_charge_displacement(s, &entry, mat_id, displaced,
+                                    impact_speed, (uint16_t)at, entry.dir,
+                                    deferred, &deferred_count);
 
         s->cells[nat] = entry.cell;
         s->cells[at]  = displaced;
@@ -2763,65 +2973,6 @@ static void step_impulses(sand_t *s, int dx, int dy)
             latch_content_flags(s, displaced);
         }
         mark_move(s, x, y, nx, ny);
-
-        /* TRANSFER - a struck cell picks up impulse of its own, rather than
-         * the volume it sat in silently closing behind the mover with
-         * nothing else in it ever learning it was hit. See SAND_IMPULSE_
-         * TRANSFER_DIVISOR's and SAND_IMPULSE_TRANSFER_MIN_SPEED's own
-         * comments in sand.h for the two numbers below; this is the site
-         * both belong to.
-         *
-         * SAME SCOPE AS DRAG, JUST ABOVE - KIND_STATIC or KIND_POWDER
-         * movers only, and `displaced` must be non-empty (nothing to
-         * transfer to otherwise). The DISPLACED cell's own kind is
-         * unrestricted beyond that: can_impulse_enter() already refuses a
-         * KIND_STATIC target before the swap above ever runs, so whatever
-         * is sitting in `displaced` here is never a wall - a struck powder
-         * or liquid alike is fair game, and flinging water out of a pool is
-         * exactly the wanted effect (sand_impulse() already handles a
-         * liquid source, same as the cascade relay below).
-         *
-         * INDEX IS `at`, THE MOVER'S OLD CELL - that is where `displaced`
-         * now physically sits, two lines up (`s->cells[at] = displaced`),
-         * so that is where the transferred entry has to start tracking
-         * from.
-         *
-         * DIRECTION IS A BACKWARD CONE - one of `dir+3`, `dir+4` (straight
-         * back) or `dir+5`, not the mover's own `dir` and not a reflection
-         * either. Queuing the struck cell along the mover's own heading was
-         * the first version of this, and it was wrong: on device it drove
-         * nothing visibly out of the surface at all, because pushing struck
-         * material further ALONG the direction it was just hit from only
-         * ever shoves it deeper into whatever bank or pool it was already
-         * part of - the opposite of the wanted crater. A real impact sprays
-         * material back OUT through the surface it came in by, roughly
-         * backward and outward, not onward. Straight back is also where the
-         * open room actually is: the mover just came through those exact
-         * cells, so the ejecta has somewhere to fly into instead of wedging
-         * against whatever is still ahead of the mover. rng_below(&s->rng,
-         * 3) picks which of the three, so a single struck cell does not
-         * always spray the same way.
-         *
-         * `entry.speed` HERE IS ALREADY POST-DRAG - the charge above already
-         * ran and mutated it in place, so both the floor check and the
-         * divisor below are already measuring what the mover has LEFT after
-         * paying for this same displacement, not its speed on entry to this
-         * step. Gated twice: the floor keeps a nearly-spent mover from
-         * queuing a transfer too faint to ever move, and the shared
-         * per-step cap (SAND_CASCADE_MAX_PER_STEP, this array's own top
-         * comment) is what actually protects impulse_buf from a long plow
-         * queuing one transfer per cell touched. */
-        if (!CELL_IS_EMPTY(displaced) &&
-            (materials[mat_id].kind == KIND_STATIC ||
-             materials[mat_id].kind == KIND_POWDER) &&
-            impact_speed >= SAND_IMPULSE_TRANSFER_MIN_SPEED &&
-            deferred_count < SAND_CASCADE_MAX_PER_STEP) {
-            impulse_t *t = &deferred[deferred_count++];
-            t->index = (uint16_t)at;
-            t->cell  = displaced;
-            t->dir   = (uint8_t)((entry.dir + 3 + rng_below(&s->rng, 3)) & 7);
-            t->speed = (uint8_t)(impact_speed / SAND_IMPULSE_TRANSFER_DIVISOR);
-        }
 
         /* CASCADE - see this array's own top comment for why this only
          * COLLECTS a candidate rather than queuing one directly. WATER
