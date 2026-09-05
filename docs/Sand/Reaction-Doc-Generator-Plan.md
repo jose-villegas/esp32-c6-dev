@@ -1,6 +1,11 @@
 # Plan: a generated description for every material
 
-**Status**: planned, not built. Written 2026-08-27.
+**Status**: written 2026-08-27. Phases 1 and 2 are built - the generator,
+the splice mechanism that lets hand-written mechanics coexist with it (see
+`report_reactions.sh`'s own top comment), cause clauses via `REACTION_DOC`,
+the silent-middle rate ladder, and contrast-safe colour throughout the
+default output. Phase 3 - the actual brush-facing blurb table this whole
+plan is for - has not started.
 
 The end goal is **a short description for each brush**, shown in the game.
 Getting there needs a prose record of what every material actually does —
@@ -323,9 +328,18 @@ all far easier to judge against a generated table than in the abstract, and
 the placeholders show exactly how many clauses phase 2 owes. Tune after
 seeing it, not before.
 
-**Phase 2** — `REACTION_DOC` registration in `sand_reactions.c`, cause
-clauses at every read site, the by-feel adverb pass, and the retirement of
-the EMBER chart from `Adding-a-Material.md`.
+**Phase 2 (done)** — `REACTION_DOC` registration in `sand_reactions.c`, cause
+clauses at every read site (`shatters_to`'s two thresholds, `spoils_to`,
+`hardens_to`'s still-attached exception), and the by-feel adverb pass (the
+3-bucket ladder with a silent middle and 0/255 as absolutes, plus one
+measured exception - sand's `heat_chance` computes fast and plays slow).
+
+The EMBER chart in `Adding-a-Material.md` was not retired as originally
+planned here. A separate line of work kept that hand-drawn diagram instead
+and updated it as the simulation grew (dirt, metal, and more since) - a
+live, actively-maintained chart, not the stale one this plan was written
+against. Only the "two independent axes" diagram's own stale ember mention,
+in a different section, still needed fixing, and has been.
 
 **Phase 3** — the blurb table, audit mode, and the sentence-per-material
 output the whole thing is for.
@@ -366,38 +380,33 @@ hour.
 
 ---
 
-## Deferred: the palette does not survive being used as text
+## Resolved: the palette did not survive being used as text
 
 Material names are coloured with the device's exact palette values. Measured
-against a 3:1 contrast floor on both GitHub themes, **14 of 18 fail
-somewhere**:
+against a 3:1 contrast floor on both GitHub themes, 14 of 18-plus materials
+failed somewhere - roughly half unreadable on a dark background, the rest on
+a light one.
 
-    unreadable on DARK    Oil #101008, Water, Wood, Lava, Acid, Dirt, Plant
-    unreadable on LIGHT   Leaf, Sand, Ice, Gas, Fire, Snow, Steam
-    fine on both          Glass, Stone, Smoke, Metal
+The cause was structural, not a bad palette: **it was designed to fill
+cells, not to draw glyphs.** Oil against black works as a solid region of
+pixels and vanishes as thin letterforms. Area and text are different
+legibility problems, and one set of values cannot serve both.
 
-The cause is structural, not a bad palette: **it was designed to fill cells,
-not to draw glyphs.** Oil against black works as a solid region of pixels and
-vanishes as thin letterforms. Area and text are different legibility
-problems, and one set of values cannot serve both.
+Fixed by lifting or darkening only the colours that actually fail, hue and
+saturation held, moved the least distance that clears 3:1 on both
+backgrounds - not the alternative of clamping every colour into one narrow
+band, which was considered and rejected: it would have collapsed several
+pale, hue-distinguished materials (snow, steam, ice, gas) into
+near-identical mid-tones. The adjusted values live in `LEGIBILITY_OVERRIDES`
+in `dump_reactions.c`, each carrying the raw value it was computed against;
+a startup check recomputes that raw value live and refuses to build if the
+device palette has since moved out from under it, so a stale override
+cannot ship silently.
 
-Two ways out, when this is picked up:
-
-- **Lift only the seven that fail on dark.** Keeps every pale colour
-  byte-exact, assumes a dark reader. Minimal fidelity loss, and it fixes the
-  case actually complained about (oil).
-- **Clamp everything into a both-themes band.** The contrast maths puts that
-  band at relative luminance 0.117-0.30, narrow enough that hue becomes the
-  only separator - and Snow, Steam, Ice and Gas are pale blue-whites
-  distinguished BY lightness today. They would collapse into near-identical
-  mid-blues. Probably worse than the problem it solves.
-
-Deliberately left for later (2026-08-27): the table is legible enough to tune
-prose against, which is what it is for at this stage.
-
-Measure rather than eyeball - the script that produced the table above lives
-in this session's scratchpad as `contrast.py` and takes the generated file as
-its argument.
+Measure rather than eyeball. The generator's own colour list follows this
+same WCAG relative-luminance formula, not plain HSL lightness - see
+`LEGIBILITY_OVERRIDES`'s own comment for the exact method if this ever needs
+recomputing.
 
 ---
 
