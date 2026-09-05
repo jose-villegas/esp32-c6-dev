@@ -20999,7 +20999,27 @@ static void test_a_blast_wakes_the_blocks_it_touches(void)
      * the block it lands in is never woken back up. */
     sand_explode(&s, 3, 6, 1);
 
-    for (int i = 0; i < 60; i++) {
+    /* PAST THE DETERMINISTIC FLIGHT-TIME BOUND, not a bare 60 any more - the
+     * same derivation test_the_sand_dune_scene_throws_grains_beyond_its_own_
+     * footprint (this file) already uses for a KIND_STATIC entry's own full
+     * decay to zero. A thrown KIND_POWDER grain can now stay TRACKED (kept,
+     * not merely still falling under the ordinary sweep) for as long as its
+     * speed is at or above SAND_IMPULSE_BOUNCE_MIN_SPEED - see step_impulses
+     * ()'s own "!rolled_move" KIND_POWDER branch, sand.c - so a fixed low
+     * step budget risks taking this test's snapshot while a grain is still
+     * legitimately being nudged by its own fading impulse (a real, bounded
+     * bounce near the top of the bed) rather than by anything sleeping got
+     * wrong. That is exactly what the old fixed 60 hit: measured directly,
+     * this scene's own s.impulse_count did not reach zero until step 111 of
+     * 200 sampled, so a snapshot at 60 could still show a grain hovering
+     * mid-bounce - which the fresh, impulse-free "awake" replay inside
+     * assert_nothing_left_to_do() (no impulses enabled on it at all) then
+     * naturally continues falling under plain gravity, misreading a real,
+     * still-in-flight grain as one sleeping had wrongly frozen. */
+    const int max_lifetime = (SAND_EXPLODE_INITIAL_SPEED +
+                              SAND_IMPULSE_SPEED_RAMP - 1) /
+                             SAND_IMPULSE_SPEED_RAMP;
+    for (int i = 0; i < max_lifetime + 20; i++) {
         sand_step(&s, 0, 1000, 0);
     }
 
@@ -21180,10 +21200,33 @@ static void test_a_flying_grain_keeps_its_outward_push_while_falling(void)
  * test below settles at row 5, not row SETTLE_TOP_ROW, purely from that
  * sideways escape route - whatever residue `cells` happened to still hold
  * from an earlier test decided which column it escaped into. Filling every
- * column removes both problems at once. */
+ * column removes both problems at once.
+ *
+ * "STILL SINKS ALL THE WAY THROUGH" IS NO LONGER THE CLAIM, as of a later
+ * rung (step_impulses(), sand.c: impulse_charge_displacement(), shared by
+ * this gravity-drift and the ordinary push move) - device evidence was a
+ * sand pyramid with a stone column beside it: a chunk thrown from CLOSE
+ * moved sand visibly, one thrown from FAR tunnelled straight through and
+ * ejected nothing, penetrating exactly as deep regardless of how far it
+ * had already flown. The cause was this test's own "energetic chunk sinks
+ * to the bottom" behaviour, taken to its logical extreme: the drift used
+ * to charge NO drag at all, so an energetic KIND_STATIC mover swapped
+ * through an entire packed bank for free, one row a step, with nothing to
+ * show for it on the way. Charging the same drag (and firing the same
+ * TRANSFER) at the drift site that the push site already charged is what
+ * fixes the device bug, and it means an energetic chunk over a packed
+ * powder bank now stops within the first few layers instead - see
+ * SAND_IMPULSE_DRAG_POWDER_SHIFT's own comment in sand.h for the measured
+ * push-site figure ("dirt stopping inside one cell is the point, not an
+ * overshoot") this now matches from the drift side too. The test below is
+ * renamed and its assertion rewritten to say so; the SPENT test right
+ * after it needed no change at all, since a spent (speed 0) entry never
+ * reaches this call in the first place - can_impulse_enter_gravity_ward()
+ * already refuses it a non-empty candidate before any drag would be
+ * charged. */
 enum { SETTLE_COL = 3, SETTLE_TOP_ROW = 0 };
 
-static void test_an_energetic_static_chunk_over_a_powder_bank_still_sinks_to_the_bottom(void)
+static void test_an_energetic_static_chunk_over_a_powder_bank_now_stops_within_the_first_few_layers(void)
 {
     fixture();
     sand_clear(&s);
@@ -21202,14 +21245,29 @@ static void test_an_energetic_static_chunk_over_a_powder_bank_still_sinks_to_the
         sand_step(&s, 0, 1000, 0);
     }
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(H - 1, first_row_holding(MAT_STONE),
-        "an ENERGETIC thrown KIND_STATIC chunk - well above SAND_IMPULSE_"
-        "SINK_MIN_SPEED for the whole fall, since the plain ramp only "
-        "costs it 2 speed a step - must still sink through an entire "
-        "packed powder bank to the bottom, one row per step, exactly as "
-        "before rung 4: settling after only one row is the original bug "
-        "this test guards against, and rung 4's new SPENT narrowing must "
-        "not have reopened it for anything that still has push left");
+    /* MEASURED: row 2 (of 8), deterministically, for this exact scene - two
+     * rows of fall before SAND's own drag (density 60, doubled twice by
+     * SAND_IMPULSE_DRAG_POWDER_SHIFT) saturates the chunk's speed to 0. Not
+     * pinned to that exact row here: what this test actually guards against
+     * is regressing toward either extreme this rung sits between - staying
+     * at the rim (drag charged so hard, or so early, that the chunk never
+     * moves at all) or sinking to the bottom again (drag silently not
+     * charged at the drift site, reopening the exact device bug this rung
+     * fixes) - so a range comfortably inside those two failure shapes is
+     * the more durable check. */
+    const int landed_row = first_row_holding(MAT_STONE);
+    TEST_ASSERT_GREATER_THAN_MESSAGE(SETTLE_TOP_ROW, landed_row,
+        "an ENERGETIC thrown KIND_STATIC chunk must still fall AT LEAST one "
+        "row into the bank - a chunk stuck exactly at the rim would mean "
+        "drag is now charged so eagerly the drift cannot move it at all, "
+        "which is not this rung's own fix either");
+    TEST_ASSERT_LESS_THAN_INT_MESSAGE(H / 2, landed_row,
+        "and it must stop well short of the bottom (measured row 2 of 8) - "
+        "reaching anywhere near H-1 again would mean the drift's own "
+        "displacement is silently paying no drag, exactly the device bug "
+        "(a far-thrown chunk tunnels through a sand pyramid and ejects "
+        "nothing, however deep, regardless of how far it travelled to get "
+        "there) impulse_charge_displacement() exists to close");
 }
 
 static void test_a_spent_static_chunk_rests_on_a_powder_bank_instead_of_sinking_forever(void)
@@ -21240,6 +21298,140 @@ static void test_a_spent_static_chunk_rests_on_a_powder_bank_instead_of_sinking_
         "swapping through the entire bank the way an unconditional "
         "gravity-drift once did (device feedback: a thrown chunk entering "
         "a powder bank did not stop)");
+}
+
+/* --- PENETRATION MUST STOP BEING DISTANCE-DEPENDENT ---------------------
+ *
+ * A SECOND, SEPARATE BUG from the ones above - device evidence was a sand
+ * pyramid with a stone column beside it: blasted so its chunks flew into
+ * the pyramid, a chunk thrown from CLOSE moved sand visibly, one thrown
+ * from FAR tunnelled straight through and ejected nothing, penetrating
+ * exactly as deep regardless of how far it had already flown.
+ *
+ * THE CAUSE: the gravity-drift move just above (the "AIRBORNE SOLIDS FALL
+ * TOO" block, step_impulses(), sand.c) performs a swap that DISPLACES a
+ * cell, and until impulse_charge_displacement() existed it charged no drag
+ * and fired no transfer - only the push move at the bottom of that same
+ * loop did either, and only when rolled_move (whose own chance IS
+ * entry.speed) succeeds. A chunk near a blast arrives fast, so its push
+ * rolls mostly succeed and it pays for what it hits; a chunk that has
+ * flown a long way arrives slow and mostly FALLING, so nearly every
+ * displacement it makes is the drift's own then-free swap - it tunnels in
+ * silently, no drag to stop it and no transfer to show for it, however far
+ * it had already travelled to get there.
+ *
+ * ISOLATED FROM THE PUSH SITE ON PURPOSE - `DIR_UP` queues the chunk's own
+ * push in a direction that can only ever nudge it into open air above
+ * where it started, so every displacement this scene measures is
+ * attributable to the gravity-drift's own swap and nothing else; a push
+ * direction that could ALSO usefully displace into the bed (down, or
+ * sideways through a full-width bed) let the push site's own,
+ * already-correct accounting quietly cover for a broken drift in an
+ * earlier draft of this exact scene, masking precisely the bug this test
+ * exists to catch.
+ *
+ * A FLOOR DIRECTLY UNDER THE BED, NOT SOME FIXED ROW FAR BELOW IT - a bed
+ * with open air beneath it is not a bed, it is a second falling body: an
+ * earlier draft rested the bed on a floor 175 rows below it and measured
+ * the bed free-falling in lockstep with the chunk chasing it, at the same
+ * one-row-a-step rate, never actually touched at all (a "penetration" of
+ * 200+ rows into air the bed had long since vacated - a scene bug, not a
+ * sand.c one).
+ *
+ * MEASURED, 40 seeds, FAR_SINK_DISTANCE (50 rows of open-air fall before
+ * the chunk ever reaches the bed): mean penetration 6.775 rows into a
+ * 20-row bed with the drift's own charge hard-mutated back out (the
+ * live-mutation check this file uses elsewhere), 0.000 with this rung's
+ * fix - the bed is FAR_SINK_BED_DEPTH deep specifically so a regression
+ * back to the old, unconditional drift has real room to bury the chunk in
+ * rather than hitting a floor that would mask it. */
+#define FAR_SINK_W 20
+#define FAR_SINK_BED_DEPTH 20
+#define FAR_SINK_DISTANCE 50
+#define FAR_SINK_H (FAR_SINK_DISTANCE + FAR_SINK_BED_DEPTH + 10)
+#define FAR_SINK_SEEDS 40
+static long far_sink_penetration_total(uint8_t *cells, impulse_t *buf)
+{
+    long total = 0;
+    for (uint32_t seed = 1; seed <= (uint32_t)FAR_SINK_SEEDS; seed++) {
+        const int bed_y0    = FAR_SINK_DISTANCE;
+        const int bed_y1    = bed_y0 + FAR_SINK_BED_DEPTH - 1;
+        const int floor_row = bed_y1 + 1;
+        sand_t g;
+        memset(cells, 0, (size_t)FAR_SINK_W * FAR_SINK_H);
+        sand_init(&g, cells, FAR_SINK_W, FAR_SINK_H, seed);
+        sand_enable_impulses(&g, buf, FAR_SINK_W * FAR_SINK_H);
+
+        for (int x = 0; x < FAR_SINK_W; x++) {
+            sand_set(&g, x, floor_row, STONE);
+        }
+        for (int y = bed_y0; y <= bed_y1; y++) {
+            for (int x = 0; x < FAR_SINK_W; x++) {
+                sand_set(&g, x, y, SAND);
+            }
+        }
+
+        const int mover_x = FAR_SINK_W / 2;
+        sand_set(&g, mover_x, 0, STONE);
+        enum { DIR_UP = 4 };
+        sand_impulse_dislodge(&g, mover_x, 0, DIR_UP, 255,
+                              SAND_IMPULSE_SPEED_RAMP);
+
+        /* PAST THE DETERMINISTIC FLIGHT-TIME BOUND - see this file's own
+         * max_lifetime derivation elsewhere for the same reasoning: a
+         * regression back to the unconditional drift can keep this entry
+         * tracked (and sinking) for up to a full ramp's worth of steps
+         * after it enters the bed, on top of the open-air fall it already
+         * took to get there. A shorter budget here (measured directly)
+         * still shows the chunk mid-sink in some seeds under the bug,
+         * understating exactly the depth this test exists to catch. */
+        for (int i = 0; i < FAR_SINK_DISTANCE + 150; i++) {
+            sand_step(&g, 0, 1000, 0);
+        }
+
+        int landed_row = -1;
+        for (int y = 0; y < floor_row && landed_row < 0; y++) {
+            for (int x = 0; x < FAR_SINK_W; x++) {
+                if (CELL_MATERIAL(sand_at(&g, x, y)) == MAT_STONE) {
+                    landed_row = y;
+                    break;
+                }
+            }
+        }
+        /* landed_row < bed_y0 means the chunk stopped short of the bed
+         * entirely (its own ramp exhausted before it ever arrived) - zero
+         * penetration, nothing to add, rather than a negative figure. */
+        if (landed_row >= bed_y0) {
+            total += (landed_row - bed_y0);
+        }
+    }
+    return total;
+}
+
+static void test_a_static_chunk_thrown_far_still_stops_shallow_in_the_bed_it_hits(void)
+{
+    uint8_t *cells = malloc((size_t)FAR_SINK_W * FAR_SINK_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
+        "far-sink grid must fit in what the framebuffer leaves");
+    impulse_t *buf = malloc((size_t)(FAR_SINK_W * FAR_SINK_H) * sizeof *buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(buf,
+        "far-sink impulse queue must fit in what the framebuffer leaves");
+
+    const long total = far_sink_penetration_total(cells, buf);
+
+    free(buf);
+    free(cells);
+
+    TEST_ASSERT_LESS_THAN_MESSAGE(FAR_SINK_SEEDS * 2, total,
+        "a KIND_STATIC chunk thrown 50 rows of open air before it ever "
+        "reaches a packed bed must still stop within a couple of rows of "
+        "the surface, same as one thrown from right beside it - measured "
+        "a mean of 6.775 rows deep (271 summed across 40 seeds) with the "
+        "gravity-drift's own drag/transfer charge hard-mutated out, "
+        "against 0 with this rung's fix: the whole point of "
+        "impulse_charge_displacement() is that a chunk cannot silently "
+        "bury itself just because it arrived slow and mostly falling "
+        "instead of fast and mostly pushing");
 }
 
 /* THE SAME SPLIT, OVER A LIQUID - and the user's own explicit call (see
@@ -23268,6 +23460,117 @@ static void test_a_thrown_powder_grain_flings_dirt_out_of_the_bank_it_hits(void)
         "dirt bank never spreads on its own (measured zero with transfer's "
         "own gate hard-mutated off), so any cell found outside it was "
         "flung there by the transfer this rung adds");
+}
+
+/* --- A THROWN GRAIN THAT HAS FLOWN A LONG WAY STILL EJECTS ON IMPACT ------
+ *
+ * THE BUG: step_impulses()'s `!rolled_move` branch (the push-roll failed
+ * this turn) only ever kept a KIND_STATIC entry tracked once it verified
+ * the entry was still genuinely airborne - every OTHER kind, KIND_POWDER
+ * included, fell straight through to the plain `continue` right after and
+ * was DROPPED, whether or not it had actually landed. The roll's own
+ * chance IS entry.speed (that loop's own comment), and the ramp erodes it
+ * every step, so a thrown powder grain's odds of still being tracked
+ * collapsed with `speed` long before its actual energy did: roughly 62% at
+ * 10 steps, 16% at 20, 2% at 30, 0.1% at 40 - while `speed` at step 30 is
+ * still 193, nearly three times SAND_IMPULSE_TRANSFER_MIN_SPEED. The grain
+ * kept flying regardless (the ordinary sweep falls a powder grain every
+ * step whether or not this loop still has it tracked), but it arrived with
+ * no impulse entry attached, so the TRANSFER block never ran on impact and
+ * nothing was ever ejected - harmless before TRANSFER existed, which is
+ * exactly why only KIND_STATIC was ever checked here, and not any more.
+ *
+ * A TALL WALL, NOT A BANK RESTING ON A SHARED FLOOR - the mover has to
+ * stay genuinely AIRBORNE for its whole flight, which a floor would end
+ * early: the instant a KIND_POWDER mover is actually supported,
+ * can_impulse_enter_gravity_ward() correctly finds no opening in any of
+ * its three gravity-ward candidates and it settles, exactly as it should
+ * (that is the intended floor, not a bug to route around). Resting the
+ * wall's own footprint on the SAME floor as the open lane made the mover
+ * land on that floor itself long before covering any real distance, which
+ * measured as "no ejecta at every distance" even for the FIXED code - a
+ * scene bug, not a sand.c one. A wall tall enough to span whatever row the
+ * mover has fallen to by the time it crosses the wall's own column (it
+ * falls under the ordinary sweep the whole flight, independent of this
+ * mechanism) keeps it genuinely airborne until the moment of impact,
+ * whatever that row turns out to be. */
+#define EJECTA_FAR_W 45
+#define EJECTA_FAR_H 70
+#define EJECTA_FAR_WALL_X 35
+#define EJECTA_FAR_WALL_W 6
+#define EJECTA_FAR_SEEDS 60
+#define EJECTA_FAR_DISTANCE 30
+static long ejecta_far_thrown_powder_total(uint8_t *cells, impulse_t *buf)
+{
+    long total = 0;
+    for (uint32_t seed = 1; seed <= (uint32_t)EJECTA_FAR_SEEDS; seed++) {
+        const int mover_x = EJECTA_FAR_WALL_X - EJECTA_FAR_DISTANCE;
+        sand_t g;
+        memset(cells, 0, (size_t)EJECTA_FAR_W * EJECTA_FAR_H);
+        sand_init(&g, cells, EJECTA_FAR_W, EJECTA_FAR_H, seed);
+        sand_enable_impulses(&g, buf, EJECTA_FAR_W * EJECTA_FAR_H);
+        for (int y = 0; y < EJECTA_FAR_H; y++) {
+            for (int x = EJECTA_FAR_WALL_X; x < EJECTA_FAR_WALL_X + EJECTA_FAR_WALL_W; x++) {
+                sand_set(&g, x, y, CELL_MAKE(MAT_DIRT, 0));
+            }
+        }
+        sand_set(&g, mover_x, 0, SAND_FIRST_SHADE);
+        enum { DIR_RIGHT = 2 };
+        sand_impulse(&g, mover_x, 0, DIR_RIGHT, 255);
+        for (int i = 0; i < 160; i++) {
+            sand_step(&g, 0, 1000, 0);
+        }
+        for (int y = 0; y < EJECTA_FAR_H; y++) {
+            for (int x = 0; x < EJECTA_FAR_W; x++) {
+                if (CELL_MATERIAL(sand_at(&g, x, y)) != MAT_DIRT) {
+                    continue;
+                }
+                if (x >= EJECTA_FAR_WALL_X &&
+                    x < EJECTA_FAR_WALL_X + EJECTA_FAR_WALL_W) {
+                    continue;   /* still inside the wall's own footprint */
+                }
+                total++;
+            }
+        }
+    }
+    return total;
+}
+
+/* MEASURED, 60 seeds, at EJECTA_FAR_DISTANCE (30 cells of open-air flight
+ * before impact - kept smaller than the full 50 cells the diagnosis itself
+ * used, so the wall this scene needs to stay tall enough for fits inside
+ * the host heap arena, DP_FREE_HEAP_BYTES, alongside this test's own grid):
+ * 60 dirt cells ejected (one per seed - a single struck cell's own
+ * TRANSFER, every time) with this rung's fix; 0 with the bug (KIND_POWDER
+ * hard-mutated back out of the `!rolled_move` branch, the live-mutation
+ * check this file uses elsewhere). Every distance in the diagnosis's own
+ * range measured for the maintainer's own record (not asserted
+ * individually here, to keep this one assertion cheap): 0.933/0.367/0.000/
+ * 0.000 mean ejecta per seed before the fix at 5/15/30/50 cells, 0.900/
+ * 1.000/1.000/1.000 after - 30 cells (this test's own distance) is already
+ * comfortably past where tracking used to collapse entirely. */
+static void test_a_powder_grain_thrown_far_still_ejects_from_the_bank_it_hits(void)
+{
+    uint8_t *cells = malloc((size_t)EJECTA_FAR_W * EJECTA_FAR_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
+        "far-throw ejecta grid must fit in what the framebuffer leaves");
+    impulse_t *buf = malloc((size_t)(EJECTA_FAR_W * EJECTA_FAR_H) * sizeof *buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(buf,
+        "far-throw ejecta impulse queue must fit in what the framebuffer "
+        "leaves");
+
+    const long total = ejecta_far_thrown_powder_total(cells, buf);
+
+    free(buf);
+    free(cells);
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(EJECTA_FAR_SEEDS / 2, total,
+        "a powder grain thrown 30 cells before it ever reaches a wall must "
+        "still eject material on impact in most seeds - measured 0 across "
+        "all 60 seeds with KIND_POWDER excluded from step_impulses()'s own "
+        "`!rolled_move` tracking branch (the bug this test guards against: "
+        "tracking died long before the grain's actual energy did), and 60 "
+        "of 60 with it included");
 }
 
 /* WATER, a single row deep, resting directly on the floor - see this
@@ -29102,8 +29405,9 @@ void run_sand_suite(void)
     RUN_TEST(test_two_overlapping_blasts_share_the_buffer_evenly);
     RUN_TEST(test_a_blast_wakes_the_blocks_it_touches);
     RUN_TEST(test_a_flying_grain_keeps_its_outward_push_while_falling);
-    RUN_TEST(test_an_energetic_static_chunk_over_a_powder_bank_still_sinks_to_the_bottom);
+    RUN_TEST(test_an_energetic_static_chunk_over_a_powder_bank_now_stops_within_the_first_few_layers);
     RUN_TEST(test_a_spent_static_chunk_rests_on_a_powder_bank_instead_of_sinking_forever);
+    RUN_TEST(test_a_static_chunk_thrown_far_still_stops_shallow_in_the_bed_it_hits);
     RUN_TEST(test_an_energetic_static_chunk_still_sinks_into_water_instead_of_resting_on_its_surface);
     RUN_TEST(test_a_spent_static_chunk_still_sinks_through_water_to_the_bottom);
     RUN_TEST(test_a_thrown_static_chunk_conserves_lava_mass_on_sink);
@@ -29130,6 +29434,7 @@ void run_sand_suite(void)
     RUN_TEST(test_without_a_buffer_explode_does_nothing);
     RUN_TEST(test_the_two_wall_explosion_scene_bounces_more_than_once_before_settling);
     RUN_TEST(test_a_thrown_powder_grain_flings_dirt_out_of_the_bank_it_hits);
+    RUN_TEST(test_a_powder_grain_thrown_far_still_ejects_from_the_bank_it_hits);
     RUN_TEST(test_a_thrown_powder_grain_flings_water_out_of_the_pool_it_hits);
     RUN_TEST(test_a_struck_water_cell_is_handed_impulse_in_a_backward_cone_from_the_mover);
     RUN_TEST(test_a_thrown_powder_grain_travels_less_far_through_dirt_than_through_air);
