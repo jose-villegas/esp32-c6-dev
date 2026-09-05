@@ -344,19 +344,28 @@ SHADES(lo,hi)"]
    itself a heat source, it conducts heat, it smokes, it does something
    other than vanish when quenched, or it flares a flame - it also needs
    a row in the *second* table, `reaction_t reactions[]` (same header,
-   same file). Three more fields joined this table for gunpowder, and
-   apply to any material with `explodes`/`soaks`-style behaviour of its
-   own: `explodes` (a blast radius - non-zero means ignition or a heat
-   hit detonates the cell via `sand_explode()` instead of placing fire,
-   falling back to plain fire when the impulse buffer is not live);
-   `soaked_to`/`soaked_chance` (what a *saturated* cell - moisture at
-   `moist_max` - has a chance/256 per step of becoming instead, checked
-   only once the cell is actually full so an inert material with
-   `soaked_to = 0` never rolls); and `tones`/`moist_max`, which are
-   encoding, not reaction behaviour - they size the dry-tone/moisture
-   split a `dries != 0` material's variant reads (dirt: 8 tones, moisture
-   1-7; gunpowder: 3 tones, moisture 1-5, because its variant is only 3
-   bits wide).
+   same file). Several more fields joined this table for gunpowder, and
+   apply to any material with similar behaviour of its own: `lit_from`
+   (for a `burn_decay != 0` material, the first variant code that counts
+   as "burning" - wood is 1, so its own unlit/lit split is variant 0 vs.
+   anything else, unchanged; a material whose burning state shares its
+   variant with something else, like gunpowder sharing 3 bits with a
+   dry-tone/moisture split, sets this higher so `cell_is_burning()` still
+   knows which codes mean lit); `explodes` (a blast radius - non-zero
+   means the cell can detonate via `sand_explode()`, checked once it
+   **burns out**, i.e. when its `burn_decay` countdown reaches
+   `lit_from`, and only if every one of its eight neighbours is also lit;
+   otherwise, or with no impulse buffer live, it becomes plain fire
+   instead - ignition and heat write the *lit* code, they never detonate
+   directly); `soaked_to`/`soaked_chance` (what a *saturated* cell -
+   moisture at `moist_max` - has a chance/256 per step of becoming
+   instead, checked only once the cell is actually full so an inert
+   material with `soaked_to = 0` never rolls); and `tones`/`moist_max`,
+   which are encoding, not reaction behaviour - they size the
+   dry-tone/moisture split a `dries != 0` material's variant reads (dirt:
+   8 tones, moisture 1-7; gunpowder: 3 tones, moisture 1-4, because its
+   variant is only 3 bits wide and the eighth code is spent on
+   `lit_from` instead).
 
    **An absent row is not neutral.** It is all-zero, and zero means
    something different for each field: never catches, never a heat

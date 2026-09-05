@@ -389,39 +389,65 @@ changes its *kind* (fuel igniting into a gas, a liquid boiling into one)
 has to latch that kind's `may_have_*` flag, and getting it wrong is
 invisible to almost every other test.
 
-**Gunpowder detonates instead of burning - `reaction_t.explodes`, a
-non-zero blast radius, is what tells `try_ignite_given()` and
-`try_heat_transform_given()` to call `sand_explode()` at that radius
-(6 cells) rather than place an ordinary `MAT_FIRE` cell.** Either trigger
-reaches it: a flame or hot lava touching dry powder ignites it in the
-usual way (`flammability` 200, so it catches almost every time it is
-rolled) and the ignition itself detonates; heat alone, with nothing
+**Gunpowder has a fuse, not a detonator - it catches and burns like wood,
+and it is the burning-out that can end in a blast.** A flame or hot lava
+touching dry powder ignites it in the usual way (`flammability` 200, so it
+catches almost every time it is rolled), and heat alone, with nothing
 burning yet - lava resting beside it, or heat conducted through stone or
-metal - reaches the same `explodes` check from the heat-transform path
-instead. Same fallback the confined-gas blast already relies on: with no
-impulse buffer live, `sand_explode()` is a documented no-op, so ignition
-simply falls through to plain fire - correct, since nothing else in the
-simulation throws grains without one either, and a host test with
-impulses off has to still see gunpowder catch fire like any other fuel.
+metal, once the wet stage below has steamed any moisture off - reaches the
+same trigger from the heat-transform path. Either one writes code 7, the
+cell's **lit** state, in place of the plain `MAT_FIRE` a less flammable
+fuel would get. A lit cell is a heat source in its own right, exactly like
+a burning log: it ignites neighbouring dry powder (so a trail burns along,
+cell by cell), it can boil adjacent water, and it counts down its own
+`burn_decay` (32, roughly eight steps of fuse) every step via the same
+`tick_decay_at()` wood already uses - generalised by `reaction_t.lit_from`,
+the first variant code a `burn_decay` material treats as "burning" (wood:
+1; gunpowder: 7, since gunpowder's other six codes are already spoken for
+by dry tone and moisture). It is not smothered by its own neighbours the
+way a buried wood fire would be - `explodes != 0` opts a material out of
+that check, because gunpowder carries its own oxidiser and a fuse buried
+in the middle of a pile has to keep burning regardless. Water quenches a
+lit cell to **soaked** (moisture pinned at `moist_max`), not to the unlit
+code, or it would simply relight from an adjacent lit neighbour on the
+very next step.
+
+Only when a lit cell **burns out** - its countdown reaching `lit_from` -
+does the blast radius (`reaction_t.explodes`, 6 cells) get read at all:
+if every one of its eight neighbours (cardinal and diagonal; the board
+edge counts as not-lit) is also lit gunpowder, and the impulse buffer is
+live, it detonates (`sand_explode()`); otherwise it simply becomes an
+ordinary `MAT_FIRE` cell, the same no-buffer fallback the confined-gas
+blast already relies on, so a host test with impulses off still sees
+gunpowder burn down to fire like any other fuel. In a lit pile only the
+first cell to burn out actually sees eight lit neighbours and blasts - by
+the time its neighbours reach their own burn-out they are fire or flying
+grains, so a thick pile's blasts land one at a time, spread across
+several frames by nothing more than each cell's own independent
+`burn_decay` roll, rather than one single blast on ignition. A thin trail
+or a lone lit cell never blasts at all - there just aren't eight lit
+neighbours to check. This replaced two earlier designs, both measured on
+the device and found no cheaper: an immediate per-cell blast on ignition,
+and later a boundary-only check: the fuse model above is what shipped.
 
 Moisture damps the ignition roll before it happens, generically, for any
 `dries != 0` material: `f >>= SAND_DAMP_IGNITION_SHIFT * moisture` (shift
-2), so gunpowder's 200-in-256 base chance runs 200 → 50 → 12 → 3 → 0 as
-its own moisture climbs from dry to saturated - a damp charge misfires
-more often than it should, and a fully wet one (moisture 4 and up) cannot
-ignite at all until something dries it out. Drying happens the same two
-ways wet earth already dries: heat driving a level off as steam (the
-existing wet-earth stage of `try_heat_transform_given()`, once it reads
-moisture through the generic `moisture_of()` helper rather than dirt's own
-macros), or simple time (`dries = 1`, half dirt's own rate of 2 - powder
-holds water longer than soil does). A saturated cell - moisture pinned at
-`moist_max` - additionally has a small chance per step
-(`soaked_to`/`soaked_chance`, 3 in 256) to give up being powder altogether
-and become a full `MAT_OIL` cell instead, the same "one grain plus its
-water becomes one liquid cell" shape other saturation reactions already
-use. Acid dissolves gunpowder at the same rate it dissolves sand
-(`dissolvable = 200`); nothing about being explosive changes how a cell
-disappears once acid is what is touching it.
+2), so gunpowder's 200-in-256 base chance runs 200 → 50 → 12 → 3 → inert
+at moisture 4 - a damp charge misfires more often than it should, and a
+fully wet one (moisture pinned at `moist_max`, 4) cannot ignite at all
+until something dries it out. Drying happens the same two ways wet earth
+already dries: heat driving a level off as steam (the existing wet-earth
+stage of `try_heat_transform_given()`, once it reads moisture through the
+generic `moisture_of()` helper rather than dirt's own macros), or simple
+time (`dries = 1`, half dirt's own rate of 2 - powder holds water longer
+than soil does). A saturated cell - moisture pinned at `moist_max` -
+additionally has a small chance per step (`soaked_to`/`soaked_chance`, 3
+in 256) to give up being powder altogether and become a full `MAT_OIL`
+cell instead, the same "one grain plus its water becomes one liquid cell"
+shape other saturation reactions already use. Acid dissolves gunpowder at
+the same rate it dissolves sand (`dissolvable = 200`); nothing about
+being explosive changes how a cell disappears once acid is what is
+touching it.
 
 Stone and glass bank heat in the low nibble their `KIND_STATIC` never
 otherwise needed (material.h's own comment on the low nibble's per-material
