@@ -45,8 +45,8 @@ typedef struct {
     UnityTestFunction fn;
 } oracle_scene_t;
 
-/* One row per SAND_HOST_PROBE wrapper in suite_sand.c - see probe_main.c's
- * own table for the same list; re-verify against that file whenever a scene
+/* One row per SAND_HOST_PROBE wrapper in the suite_sand_*.c files - see
+ * probe_main.c's own table for the same list; re-verify against that file whenever a scene
  * is added or renamed there, this one does not discover it. */
 static const oracle_scene_t SCENES[] = {
     {"full_step_control", sand_host_probe_run_full_step_control},

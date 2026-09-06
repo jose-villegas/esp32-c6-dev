@@ -1216,7 +1216,7 @@ static inline bool overlay_any_on(void) { return debug_overlay_on || leaf_overla
  * Exists for a device test that wants to know not just how long
  * gfx_present() took but WHY, against a real sand scene's dirty pattern
  * rather than the synthetic marks the rest of this file's tests use - see
- * suite_sand.c. Not reset by gfx_present() itself, so a caller can
+ * suite_sand_perf.c. Not reset by gfx_present() itself, so a caller can
  * accumulate across exactly the frames it is measuring by calling
  * gfx_reset_strip_send_counts() right before its own timed window. */
 static int dev_strips_sent_full;
@@ -1530,7 +1530,7 @@ static void gather_and_send(int x0, int y0, int x1, int y1, int row,
  * costs 3,405 us. Measured inside a real frame, where later bands' DMA
  * overlaps earlier bands' CPU-side setup here, seven bands come to
  * 18,147 us, not 7 x 3,405 = 23,835 - the price
- * run_present_against_scene() in suite_sand.c measures with its three
+ * run_present_against_scene() in suite_sand_perf.c measures with its three
  * present-cost tests. Both numbers are correct; they answer different
  * questions, and multiplying the isolated price by the band count does
  * not recover the pipelined one. */

@@ -204,7 +204,7 @@ swinging large amounts of mass back and forth every step or two - visible as
 water that looked settled flashing between shades and resettling. Fixed by
 taking the axis from the *nearest* (non-dithered) direction instead, the
 same fix friction's burial check already used for the identical reason. See
-`test_a_settled_pool_does_not_flicker` in `suite_sand.c`.
+`test_a_settled_pool_does_not_flicker` in `suite_sand_materials.c`.
 
 **That fix had a sequel, and it is worth knowing too.** Pinning cross-flow
 to the nearest of the eight gravity directions was the correct fix for the
@@ -532,8 +532,8 @@ merely banking one more level of heat, which stone and glass do on nearly
 every step they touch lava and which never costs anything) rolls the same
 chain. Getting this distinction right mattered enough to be its own guarded
 test (`test_a_lava_pool_in_a_dry_stone_bowl_does_not_freeze_itself`,
-`suite_sand.c`): gating on whether the heat-transform probe merely
-*returned true* rather than on whether `CELL_MATERIAL` actually changed
+`suite_sand_reaction_encoding.c`): gating on whether the heat-transform
+probe merely *returned true* rather than on whether `CELL_MATERIAL` actually changed
 would have made a lava pool sitting in an ordinary stone bowl slowly
 self-extinguish with no water and no fuel anywhere on the board - an
 always-on drain nobody asked for.
@@ -611,7 +611,8 @@ contiguity walk, no exception. The one shape it still fires on at a wall
 that the player might not expect is a two-cell-wide overhang, where the
 innermost cell does have a complete lid. See
 `test_lava_in_a_wall_notch_never_bursts` and
-`test_cover_primitive_matches_the_exhaustive_shape_table`, `suite_sand.c`.
+`test_cover_primitive_matches_the_exhaustive_shape_table`,
+`suite_sand_lava_burial.c`.
 
 **`sand_explode()` fills a core of radius `radius / SAND_EXPLODE_CORE_
 DIVISOR` with fire before it queues a single flight entry** (see
@@ -619,7 +620,8 @@ DIVISOR` with fire before it queues a single flight entry** (see
 RADIUS` (12) and divisor 5, that core radius is 2 - so the `MAT_STONE`
 this feature just wrote at the centre is immediately overwritten by fresh
 fire. That is pinned, expected behaviour (see
-`test_buried_lava_bursts_into_stone_and_fire`, `suite_sand.c`), not a bug.
+`test_buried_lava_bursts_into_stone_and_fire`,
+`suite_sand_lava_burial.c`), not a bug.
 `SAND_LAVA_BURST_RADIUS` started at `SAND_GAS_IGNITE_BLAST_RADIUS`'s own
 figure (8, the only other reaction-driven burst that existed at the
 time), was raised to 16 once a radius-8 burst read as a barely-visible
@@ -911,7 +913,7 @@ system instead of ever reaching the trunk above. This is not a bug in
 `find_water()`'s transparency (untouched by PART 2, and still correct);
 it is root and tree genuinely competing for the same scarce moisture,
 first roll wins. `test_a_buried_root_does_not_cut_off_the_water_below_it`
-(`suite_sand.c`) used to rest on a single row of water directly under the
+(`suite_sand_roots.c`) used to rest on a single row of water directly under the
 root, and PART 2 made that scene racy against this exact competition
 (measured: FAILED, deterministically, for this suite's fixed seed) - the
 fix was a deeper wet reserve below the root, not a change to the
@@ -952,7 +954,7 @@ of 3, a typical flick's kick was only 1-2 mass out of 15, barely visible.
 ## Performance discipline
 
 Every number below came from `esp_timer_get_time()` on real hardware, via
-the device-only tests in `suite_sand.c` (`#ifdef DEVICE_BUILD`), not
+the device-only tests in `suite_sand_perf.c` (`#ifdef DEVICE_BUILD`), not
 estimated:
 
 | Scenario | Cost | Budget |

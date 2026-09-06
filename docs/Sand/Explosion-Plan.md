@@ -210,7 +210,7 @@ empty space sat just outside the vessel it was supposed to be part of.
 No earlier round's radius ever reached a wall this way, so the gap was
 invisible until `DETONATE_RADIUS_PX` doubled (see that constant's own
 comment in app_sand.c) - at which point `test_the_vessel_scene_lets_
-nothing_reach_outside_it` (suite_sand.c) caught over a thousand sand
+nothing_reach_outside_it` (suite_sand_dune_blast.c) caught over a thousand sand
 cells outside a "sealed" vessel on the very first run. Fixed the same
 way the entering half already was: `sand_impulse()` now refuses to queue
 a `KIND_STATIC` source cell at all, in `sand.c`, right beside `can_impulse
@@ -498,7 +498,7 @@ igniting gas pockets is exactly a burst of near-simultaneous
 `sand_explode()` calls). Fixed by sizing `keep` against
 `s->impulse_max - s->impulse_count` - the buffer's REMAINING room -
 instead, proven by a host test
-(`test_two_overlapping_blasts_share_the_buffer_evenly`, suite_sand.c)
+(`test_two_overlapping_blasts_share_the_buffer_evenly`, suite_sand_impulse.c)
 that fires two explosions back to back with no `sand_step()` between
 them and checks the second one's exact queued indices by hand against
 the real remaining capacity; written against the bug first and confirmed
@@ -543,8 +543,9 @@ way when a blast is pointed directly at it with enough force - a small
 box with real empty margin outside its own walls (not just the grid
 edge, which would give a dislodged cell nowhere to fly), detonated
 close enough that every wall cell gets at least one roll. That specific
-scene, run against the real, shipped `sand_explode()` with suite_sand.c's
-own fixed seed (12345), was checked to dislodge exactly one wall cell -
+scene, run against the real, shipped `sand_explode()` with
+`suite_sand_impulse.c`'s own fixed seed (12345), was checked to dislodge
+exactly one wall cell -
 the observed outcome the test pins, the same way an RNG-driven result
 gets treated everywhere else in this file: measured by running the real
 code, not derived by hand from the generator's own algorithm. The real-

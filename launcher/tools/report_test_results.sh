@@ -112,7 +112,7 @@ echo "=== Capturing self-test output ==="
 # along: two consecutive captures were cut off mid-suite at exactly 1500s,
 # both landing in the sand suites with no SELFTEST_COMPLETE and - the part
 # that actually costs something - no `us per step` line from any
-# frame-budget test, since those run late. Every budget in suite_sand.c is
+# frame-budget test, since those run late. Every budget in suite_sand_perf.c is
 # pegged from a capture, so a window that never reaches them cannot peg or
 # re-peg anything. Overridable now rather than hard-coded, so a run that
 # only needs the early suites does not have to wait out the whole window.
