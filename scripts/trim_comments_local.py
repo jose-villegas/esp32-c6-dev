@@ -7,15 +7,26 @@ shape and dropped into its original span. Code cannot be damaged by a bad
 generation because code is never in the model's hands; the worst case is a bad
 sentence, which the report puts in front of a reviewer.
 
-A comment the model cannot get under the limit in `--retries` attempts keeps
+A comment the model cannot get under `--ceiling` in `--retries` attempts keeps
 its ORIGINAL text. Failing to shorten is a fine outcome; silently losing a
-constraint is not.
+constraint is not. One that lands between `--limit` and `--ceiling` is kept
+as an improvement even though it missed the aim - a comment that truly needs
+the room is allowed up to the ceiling, it just should not still be at its
+starting length.
+
+A comment that is pure change-history narration - what it used to do, when it
+was fixed, an earlier version's behaviour - with no constraint left that
+still applies is DELETED entirely rather than shortened: git log already owns
+that history, and every deletion is flagged in both reports for a human to
+confirm nothing load-bearing went with it.
 
 Usage:
   trim_comments_local.py [options] [<path>...]     (default: the sand app)
 
 Options:
-  --limit N       character ceiling (default 300)
+  --limit N       character aim, retried against (default 300)
+  --ceiling N     hard cap - a result over this is left unresolved, original
+                  text kept (default 500)
   --model NAME    ollama model (default qwen2.5-coder:32b-instruct-q4_K_M)
   --retries N     attempts per comment before giving up (default 3)
   --banners       also rewrite file/section header banners (off: their `====`
@@ -56,7 +67,12 @@ DEFAULT_REVIEW_MODEL = "mistral-nemo:latest"
 DEFAULT_PATHS = ["launcher/main/apps/sand"]
 
 PROMPT = """You shorten source-code comments. Rewrite the comment below so it \
-is at most {limit} characters, and reply with NOTHING but the rewritten prose.
+is at most {limit} characters, and reply with NOTHING but the rewritten \
+prose - OR, if the whole comment is only a change-history narration (what \
+it used to do, what it was changed to, when a bug was fixed) with no \
+constraint or reason that still applies to the code as it stands today, \
+reply with exactly the single word DELETE. git log already owns that \
+history; the comment does not need to repeat it.
 
 Rules:
 - Keep every concrete fact: numbers with units, measured percentages and frame
@@ -109,6 +125,25 @@ def clean(raw):
     return re.sub(r"\s+", " ", " ".join(lines)).strip()
 
 
+LEADING_DELETE = re.compile(r"^\s*DELETE\b", re.I)
+TRAILING_DELETE = re.compile(r"[:.\s]*\bDELETE\s*\.?\s*$", re.I)
+
+
+def split_delete(prose):
+    """A model asked to reply with prose OR the bare word DELETE sometimes
+    mixes the two, two different ways that need opposite handling:
+
+    - DELETE leading, with or without a reason after it ("DELETE: this is
+      just change history") - a real delete decision, reason discarded.
+    - DELETE trailing, tacked onto an otherwise complete rewrite - a leftover
+      artifact of the model trying to do both; the rewrite is the real
+      answer and the stray word must not end up written into a live comment.
+    """
+    if LEADING_DELETE.match(prose):
+        return True, ""
+    return False, TRAILING_DELETE.sub("", prose).strip() or prose
+
+
 def rewrap(comment, prose, width, source):
     """Put `prose` back into the shape the original comment had.
 
@@ -150,6 +185,23 @@ def wrap_width(source):
     return min(78, max(widths) if widths else 78)
 
 
+def current_head():
+    r = subprocess.run(["git", "rev-parse", "HEAD"],
+                        capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def whole_line_span(comment, source):
+    """The comment's own lines, leading indentation and trailing newline
+    included, so removing it leaves no blank line behind."""
+    start = comment.spans[0][0]
+    end = comment.spans[-1][1]
+    bol = source.rfind("\n", 0, start) + 1
+    eol = source.find("\n", end)
+    eol = len(source) if eol < 0 else eol + 1
+    return bol, eol
+
+
 def trim_file(path, opts, log, results):
     source = open(path, encoding="utf-8", errors="replace").read()
     width = wrap_width(source)
@@ -168,6 +220,17 @@ def trim_file(path, opts, log, results):
         prose = ask(opts["model"],
                     PROMPT.format(limit=opts["limit"], length=com.length,
                                   text=original), log)
+        wants_delete, prose = split_delete(prose)
+
+        if com.own_line and wants_delete:
+            row = {"path": path, "line": com.line, "before": com.length,
+                   "after": 0, "tries": 1, "kept": False, "deleted": True,
+                   "original": original, "new": ""}
+            results["trimmed"].append(row)
+            start, end = whole_line_span(com, source)
+            edits.append((start, end, ""))
+            continue
+
         tries = 1
         while prose and len(prose) > opts["limit"] and tries < opts["retries"]:
             prose = ask(opts["model"],
@@ -178,11 +241,12 @@ def trim_file(path, opts, log, results):
         row = {"path": path, "line": com.line, "before": com.length,
                "after": len(prose) if prose else 0, "tries": tries,
                "original": original, "new": prose}
-        if not prose or len(prose) > opts["limit"]:
+        if not prose or len(prose) > opts["ceiling"]:
             row["kept"] = True
             results["unresolved"].append(row)
             continue
         row["kept"] = False
+        row["over_aim"] = len(prose) > opts["limit"]
         results["trimmed"].append(row)
         start = com.spans[0][0]
         end = com.spans[-1][1]
@@ -198,7 +262,19 @@ def trim_file(path, opts, log, results):
     if code_only(source) != code_only(out):
         results["rejected"].append(path)
         return 0
+
     if not opts["dry_run"]:
+        # Something else checking out a different branch in this same
+        # worktree mid-run has actually happened here once - see esp32c6-90z.
+        # A run this long has to notice before it writes over whatever that
+        # left behind, not after.
+        now = current_head()
+        if opts["expected_head"] is not None and now != opts["expected_head"]:
+            print(f"\nABORTING: HEAD moved from {opts['expected_head']} to "
+                  f"{now} while this run was in progress - something else "
+                  f"checked out a different branch in this worktree. "
+                  f"Refusing to write {path}.", file=sys.stderr)
+            sys.exit(1)
         with open(path, "w", encoding="utf-8", newline="") as f:
             f.write(out)
     return len(edits)
@@ -264,14 +340,25 @@ def facts_lost(old, new):
 
 
 def review(rows, opts, log):
-    """Check each rewrite for dropped facts, then optionally ask a model."""
+    """Check each rewrite for dropped facts, then optionally ask a model.
+
+    A deletion is always flagged for a human look - facts_lost trivially
+    reports everything as lost against empty text, and a reviewer model has
+    nothing to compare a verdict against, so neither is worth spending on it.
+    """
     for i, r in enumerate(rows, 1):
-        r["lost"] = facts_lost(r["original"], r["new"])
-        r["verdict"] = ""
-        if opts["review_model"] != "none":
-            out = ask(opts["review_model"],
-                      VERDICT.format(old=r["original"], new=r["new"]), log)
-            r["verdict"] = "" if out.upper().startswith("OK") else out[:400]
+        if r.get("deleted"):
+            r["lost"] = ["entire comment removed - verify nothing here was "
+                         "load-bearing"]
+            r["verdict"] = ""
+        else:
+            r["lost"] = facts_lost(r["original"], r["new"])
+            r["verdict"] = ""
+            if opts["review_model"] != "none":
+                out = ask(opts["review_model"],
+                          VERDICT.format(old=r["original"], new=r["new"]),
+                          log)
+                r["verdict"] = "" if out.upper().startswith("OK") else out[:400]
         flagged = "!" if (r["lost"] or r["verdict"]) else "."
         print(flagged, end="" if i % 60 else f" {i}\n", flush=True)
     print(flush=True)
@@ -296,8 +383,9 @@ def write_packet(directory, rows, per_file=40):
                     "limitation turned into a benefit, or a claim the "
                     "original did not make. Do not flag mere brevity.\n\n")
             for n, r in enumerate(chunk, start + 1):
+                new = "(deleted entirely)" if r.get("deleted") else r["new"]
                 f.write(f"## {n}  {r['path']}:{r['line']}\n\n")
-                f.write(f"OLD: {r['original']}\n\nNEW: {r['new']}\n\n")
+                f.write(f"OLD: {r['original']}\n\nNEW: {new}\n\n")
         written.append(path)
     return written
 
@@ -319,7 +407,8 @@ def write_review_report(path, rows, opts):
                 f.write(f"- dropped: {', '.join(r['lost'])}\n")
             if r.get("verdict"):
                 f.write(f"- reviewer: {r['verdict']}\n")
-            f.write(f"\nOLD: {r['original']}\n\nNEW: {r['new']}\n\n")
+            new = "(deleted entirely)" if r.get("deleted") else r["new"]
+            f.write(f"\nOLD: {r['original']}\n\nNEW: {new}\n\n")
         f.write(f"## Passed\n\n{len(rows) - len(flagged)} rewrites raised "
                 f"nothing.\n")
 
@@ -327,24 +416,44 @@ def write_review_report(path, rows, opts):
 def write_report(path, results, opts, seconds):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     t, u = results["trimmed"], results["unresolved"]
+    deleted = [r for r in t if r.get("deleted")]
+    shortened = [r for r in t if not r.get("deleted")]
+    over_aim = [r for r in shortened if r.get("over_aim")]
     saved = sum(r["before"] - r["after"] for r in t)
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write("# Comment trim (local model)\n\n")
         f.write(f"- model: `{opts['model']}`\n")
-        f.write(f"- limit: {opts['limit']} characters\n")
+        f.write(f"- aim: {opts['limit']} characters,"
+                f" ceiling: {opts['ceiling']} characters\n")
         f.write(f"- ran: {time.strftime('%Y-%m-%d %H:%M')}"
                 f" ({seconds / 60:.1f} min)\n")
-        f.write(f"- shortened: **{len(t)}**, left alone: {len(u)}\n")
+        f.write(f"- shortened: **{len(shortened)}**"
+                f" ({len(shortened) - len(over_aim)} to the aim,"
+                f" {len(over_aim)} only within the ceiling),"
+                f" deleted entirely: **{len(deleted)}**"
+                f" (pure change history - git log owns it),"
+                f" left alone: {len(u)}\n")
         f.write(f"- prose removed: {saved:,} characters\n")
         if results["rejected"]:
             f.write(f"- **files discarded (code would have moved): "
                     f"{', '.join(results['rejected'])}**\n")
+        if deleted:
+            f.write("\n## Deleted entirely\n\nEach was judged to be pure "
+                    "change-history narration with no constraint that still "
+                    "applies. Verify none of these was actually load-bearing "
+                    "before trusting this list.\n\n")
+            for r in sorted(deleted, key=lambda r: -r["before"]):
+                f.write(f"### {r['path']}:{r['line']}  ({r['before']} chars"
+                        f" removed)\n\n")
+                f.write(f"**was:** {r['original']}\n\n")
         f.write("\n## Review these\n\nEvery rewrite, longest first. Read the "
                 "pair: the new line must not invert a limitation into a "
                 "benefit or move a reason onto a different cause.\n\n")
-        for r in sorted(t, key=lambda r: -r["before"]):
+        for r in sorted(shortened, key=lambda r: -r["before"]):
+            tag = "  *(over the aim, within ceiling)*" if r.get("over_aim") \
+                else ""
             f.write(f"### {r['path']}:{r['line']}"
-                    f"  ({r['before']} -> {r['after']})\n\n")
+                    f"  ({r['before']} -> {r['after']}){tag}\n\n")
             f.write(f"**was:** {r['original']}\n\n")
             f.write(f"**now:** {r['new']}\n\n")
         if u:
@@ -355,7 +464,7 @@ def write_report(path, results, opts, seconds):
 
 
 def main(argv):
-    opts = {"limit": 300, "model": DEFAULT_MODEL, "retries": 3,
+    opts = {"limit": 300, "ceiling": 500, "model": DEFAULT_MODEL, "retries": 3,
             "banners": False, "max": 0, "dry_run": False,
             "review_model": DEFAULT_REVIEW_MODEL}
     report = "scripts/results/comment-trim.md"
@@ -366,6 +475,8 @@ def main(argv):
     for arg in it:
         if arg == "--limit":
             opts["limit"] = int(next(it))
+        elif arg == "--ceiling":
+            opts["ceiling"] = int(next(it))
         elif arg == "--model":
             opts["model"] = next(it)
         elif arg == "--retries":
@@ -399,6 +510,8 @@ def main(argv):
     log = "scripts/results/comment-trim.server.log"
     os.makedirs(os.path.dirname(log), exist_ok=True)
     open(log, "w", encoding="utf-8").close()
+
+    opts["expected_head"] = current_head()
 
     results = {"trimmed": [], "unresolved": [], "rejected": [], "attempted": 0}
     started = time.time()
