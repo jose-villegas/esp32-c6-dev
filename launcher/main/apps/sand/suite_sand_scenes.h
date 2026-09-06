@@ -32,3 +32,15 @@ void build_wet_earth_scene(sand_t *s);
  * has, not a looser one a differently-sized test buffer would hide. */
 #define WATER_LAVA_IMPULSE_MAX 2048
 void build_water_over_lava_scene(sand_t *s);
+
+/* Same reasoning as WATER_LAVA_IMPULSE_MAX above and DUNE_IMPULSE_MAX
+ * (suite_sand_dune_blast.c) - the app's own fixed, device-heap-sized
+ * APP_IMPULSE_MAX, not a formula in this scene's own blast radius. */
+#define GUNPOWDER_BASIN_IMPULSE_MAX 2048
+
+/* The coverage test's own measured window, reused by the frame-budget
+ * test beside it - see either test's comment (suite_sand_scenes.c) for
+ * why 90 steps, no settling. */
+#define GUNPOWDER_BASIN_MEASURED_STEPS 90
+
+void build_gunpowder_basin_scene(sand_t *s);
