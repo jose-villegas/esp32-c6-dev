@@ -70,51 +70,52 @@ typedef uint8_t cell_t;
 
 #define MATERIAL_VARIANTS   16
 
-/* WHERE ROOM TEMPERATURE SITS on a heat-ramping material's 0-15 variant. Not
- * 0, and that is the whole point. With ambient at the bottom of the range
- * there is no such thing as colder than resting: a pane at 0 touched by snow
- * has nothing to lose, so it cannot change and cannot show that anything
- * happened. Snow beside glass looked identical to snow beside nothing, which
- * is exactly what it was. Ambient in the middle gives cold somewhere to go.
- * Below it a pane is FROSTED and visibly pale; above it, warming; far enough
- * above, glowing and about to break. Three levels of frost is not much
- * resolution, but it is the difference between a state you can see and one
- * you cannot, and the levels above ambient are the ones doing the interesting
- * work. SOIL reads its nibble by STATE rather than by a fixed field split:
- * which half of the value it is in says whether it holds a dry TONE or a wet
- * MOISTURE, rather than one bit always meaning tone and three always meaning
- * moisture regardless of which state the cell is actually in. 0 ..
- * SOIL_DRY_TONES - 1 DRY. The value IS the tone, 0 palest to SOIL_DRY_TONES -
- * 1 darkest-dry. SOIL_DRY_TONES .. WET. moisture = value -
- * (SOIL_DRY_TONES-1), SOIL_DRY_TONES - 1 1 up to SOIL_MOISTURE_MAX. +
- * SOIL_MOISTURE_MAX MATERIAL_VARIANTS - 1 UNUSED. A corrupt cell here reads
- * as moisture SOIL_MOISTURE_MAX in every accessor below AND in the palette
- * (see material.c), rather than as an unpredictable eighth colour - one more
- * value than the ranges above need, so it degrades instead of aliasing a real
- * one. This was a fixed split instead - one bit of carried tone, three of
+/* SOIL reads its nibble by STATE rather than by a fixed field split: which
+ * half of the value it is in says whether it holds a dry TONE or a wet
+ * MOISTURE, rather than one bit always meaning tone and three always
+ * meaning moisture regardless of which state the cell is actually in. */
+
+/* 0 .. SOIL_DRY_TONES - 1: DRY, and the value IS the tone (0 palest to
+ * SOIL_DRY_TONES - 1 darkest-dry). SOIL_DRY_TONES .. SOIL_DRY_TONES - 1 +
+ * SOIL_MOISTURE_MAX: WET, moisture = value - (SOIL_DRY_TONES - 1), 1 up to
+ * SOIL_MOISTURE_MAX. MATERIAL_VARIANTS - 1: UNUSED. */
+
+/* A corrupt cell here reads as moisture SOIL_MOISTURE_MAX in every
+ * accessor below AND in the palette (see material.c), rather than as an
+ * unpredictable eighth colour - one more value than the ranges above need,
+ * so it degrades instead of aliasing a real one. */
+
+/* This was a fixed split instead - one bit of carried tone, three of
  * moisture, so SOIL_TONES was 2 - and it undersold dry soil specifically. A
  * WATERED bank had a real gradient, because moisture is laid out by
  * percolation cell by cell; a DRY one had exactly two colours, because two
  * tones is all one bit can ever say, and that is most of what a pile looks
- * like once it stops being watered. Splitting by state instead of by bit
- * position gives the dry side of the nibble every value the wet side does not
- * need at that moment - eight tones instead of two - and costs the wet side
- * nothing it was using: a saturated bed's own variation was always going to
- * be the moisture gradient itself, not an independent tone, because that
- * gradient is what percolation already draws down a pile. The trade is real -
- * a UNIFORMLY wet bed has one flat colour where it used to have two - but a
- * uniformly wet bed is the one case moisture itself cannot shade regardless,
- * and it is the rarer of the two flat cases this fixes one of. Dry tone is
- * also no longer noise. It is picked at POUR time, banded the way sand's
- * shade is (see random_cell() in sand.c), and re-picked at the moment a cell
- * crosses back to dry, biased by how wet its surroundings still are right
- * then (see soil_dry_out() in sand_reactions.c) - so a pile that dried from
- * the top down keeps that as a visible imprint: pale where the front left
- * nothing behind, darker wherever it was still handing water off when it
- * happened. Tone and moisture together are one monotone luminance ramp across
- * variants 0 through SOIL_DRY_TONES - 1 + SOIL_MOISTURE_MAX (see material.c's
- * SOIL_SHADES) - bone-dry-palest at one end, saturated at the other, with
- * nothing in between reading as an unrelated colour. */
+ * like once it stops being watered. */
+
+/* Splitting by state instead of by bit position gives the dry side of the
+ * nibble every value the wet side does not need at that moment - eight
+ * tones instead of two - and costs the wet side nothing it was using: a
+ * saturated bed's own variation was always going to be the moisture
+ * gradient itself, not an independent tone, because that gradient is what
+ * percolation already draws down a pile. */
+
+/* The trade is real: a UNIFORMLY wet bed has one flat colour where it used
+ * to have two - but a uniformly wet bed is the one case moisture itself
+ * cannot shade regardless, and it is the rarer of the two flat cases this
+ * fixes one of. */
+
+/* Dry tone is also no longer noise: it is picked at POUR time, banded the
+ * way sand's shade is (see random_cell() in sand.c), and re-picked at the
+ * moment a cell crosses back to dry, biased by how wet its surroundings
+ * still are right then (see soil_dry_out() in sand_reactions.c) - so a pile
+ * that dried from the top down keeps that as a visible imprint: pale where
+ * the front left nothing behind, darker wherever it was still handing water
+ * off when it happened. */
+
+/* Tone and moisture together are one monotone luminance ramp across
+ * variants 0 through SOIL_DRY_TONES - 1 + SOIL_MOISTURE_MAX (see
+ * material.c's SOIL_SHADES) - bone-dry-palest at one end, saturated at the
+ * other, with nothing in between reading as an unrelated colour. */
 #define SOIL_DRY_TONES      8
 #define SOIL_MOISTURE_MAX   7
 
@@ -147,6 +148,18 @@ typedef uint8_t cell_t;
                                           ((m) & SOIL_MOISTURE_MAX)       \
                                     : ((tone) & (SOIL_DRY_TONES - 1u))))
 
+/* WHERE ROOM TEMPERATURE SITS on a heat-ramping material's 0-15 variant.
+ * Not 0, and that is the whole point: with ambient at the bottom of the
+ * range there is no such thing as colder than resting - a pane at 0 touched
+ * by snow has nothing to lose, so it cannot change and cannot show that
+ * anything happened. Snow beside glass looked identical to snow beside
+ * nothing, which is exactly what it was. */
+
+/* Ambient in the middle gives cold somewhere to go: below it a pane is
+ * FROSTED and visibly pale; above it, warming; far enough above, glowing
+ * and about to break. Three levels of frost is not much resolution, but it
+ * is the difference between a state you can see and one you cannot, and
+ * the levels above ambient are the ones doing the interesting work. */
 #define SAND_AMBIENT_HEAT 3
 
 /* The heat level at or above which a cell with `shatters_to` cracks rather
@@ -1424,68 +1437,81 @@ typedef enum {
 
 /* Fills in the colours this cell is painted with and says how to arrange
  * them: `out[0]` is the body, `out[1]` the diagonal lines, `out[2]` where
- * two lines cross. A flat or speckled material sets all three the same.
- *
- * `hash` is any stable per-cell number - a speckled material uses it to
+ * two lines cross. A flat or speckled material sets all three the same. */
+
+/* `hash` is any stable per-cell number - a speckled material uses it to
  * pick its shade, so the same cell keeps the same one frame to frame. */
+
 /* `mask` is which of this cell's eight neighbours are empty - see the
  * MATERIAL_EDGE_* bits above. Anything that only cares WHETHER this cell
  * is an edge at all, rather than which side, tests
  * `(mask & MATERIAL_EDGE_CARDINAL) != 0`: that is exactly what the old
  * bool `edge` meant, back when the mask held only the four cardinals, and
  * every existing reader (glass, stone) keeps exactly its old behaviour
- * under that test. Testing `mask != 0` instead would be wrong now that
- * diagonal bits exist - see MATERIAL_EDGE_CARDINAL's own comment.
- *
- * A material whose colour tracks a temperature moves much less on its
+ * under that test. */
+
+/* WARNING: testing `mask != 0` instead would be wrong now that diagonal
+ * bits exist - see MATERIAL_EDGE_CARDINAL's own comment. */
+
+/* A material whose colour tracks a temperature moves much less on its
  * outline than in its body, so a wall keeps its shape as it heats instead
  * of the silhouette itself changing colour. The heat is still perfectly
  * visible; it is just shown by the inside of the wall rather than by its
- * edge against the background.
- *
- * A LIQUID reads the mask more finely still - see material_colours()'s own
+ * edge against the background. */
+
+/* A LIQUID reads the mask more finely still - see material_colours()'s own
  * comment in material.c for why its interior ignores fill level entirely
  * and its rim both keeps the fill ramp and shades by which way the empty
  * side faces against gravity. WATER's rim reads the mask finer again, all
  * eight bits of it, to decide where FOAM gathers - see that same comment's
- * discussion of curvature.
- *
- * `depth` is this liquid cell's LOCAL DEPTH: 0 at this material's own
+ * discussion of curvature. */
+
+/* `depth` is this liquid cell's LOCAL DEPTH: 0 at this material's own
  * boundary - the neighbour one step toward the surface is a different
  * material, empty space, or solid, anything that is not the same body of
  * liquid - climbing by one for each further cell into the body, clamped at
- * 255. LOCAL, not a screen position: see paint_row_n() in app_sand.c, which
+ * 255. */
+
+/* LOCAL, not a screen position: see paint_row_n() in app_sand.c, which
  * walks it fresh from the live grid every row, for the full mechanism and
  * the two device reports ("the sensibility against gravity makes it behave
  * almost like platinum"; "maybe it's better if the depth just follows the
- * shape of the puddle") that replaced the old screen-position gradient with
- * this one. Only a liquid's INTERIOR reads it; everything else - the rim
+ * shape of the puddle") that replaced the old screen-position gradient
+ * with this one. */
+
+/* Only a liquid's INTERIOR reads `depth`; everything else - the rim
  * included - ignores the value entirely, so any depth may be passed where
- * it does not apply.
- *
- * `depth` no longer feeds anything but a plain shade-index shift, for every
- * liquid including water - see DEPTH_SATURATE_CELLS's own comment in
- * material.c for the scale that shift saturates against, and for why water
- * used to also read an animated wave-table index and a haze blend here and
- * no longer does (a genuine bug in the fog blend's own arithmetic, plus a
- * column-artifact risk from riding straight over local depth's own axis
- * seam - both still exist, untouched, on the water-wave-fog-depth-banked
- * branch for anyone who wants to revisit that approach).
- *
- * FOR A ROOT CELL, `depth` MEANS SOMETHING ELSE: how many of its eight
+ * it does not apply. */
+
+/* `depth` no longer feeds anything but a plain shade-index shift, for
+ * every liquid including water - see DEPTH_SATURATE_CELLS's own comment in
+ * material.c for the scale that shift saturates against. */
+
+/* Water used to also read an animated wave-table index and a haze blend
+ * here and no longer does: a genuine bug in the fog blend's own
+ * arithmetic, plus a column-artefact risk from riding straight over local
+ * depth's own axis seam - both still exist, untouched, on the
+ * water-wave-fog-depth-banked branch for anyone who wants to revisit that
+ * approach. */
+
+/* FOR A ROOT CELL, `depth` MEANS SOMETHING ELSE: how many of its eight
  * neighbours are also root - material_root_neighbours() below, which the
  * painter substitutes for the liquid walk's number on exactly that one
- * material. A root has no variant to carry an age in (its low nibble is
- * which extended material it is), and the ordinary table is full, so
- * "how old is this root" cannot be stored. It can be READ off the shape,
- * though: a fresh tip touches one other root, a cell that has put out
- * children touches two or three, the collar touches more. Shading by that
- * count is what the maintainer asked for - "as one root grows from
- * another, it darkens its parent" - with no state at all, and it heals in
- * the direction stored age never could: lose a child to rot or lava and
- * the parent lightens again. Reusing `depth` rather than adding a
- * parameter keeps the painter's call and this function's signature exactly
- * as measured. */
+ * material. */
+
+/* A root has no variant to carry an age in (its low nibble is which
+ * extended material it is), and the ordinary table is full, so "how old is
+ * this root" cannot be stored. It can be READ off the shape, though: a
+ * fresh tip touches one other root, a cell that has put out children
+ * touches two or three, the collar touches more. */
+
+/* Shading by that count is what the maintainer asked for - "as one root
+ * grows from another, it darkens its parent" - with no state at all, and
+ * it heals in the direction stored age never could: lose a child to rot or
+ * lava and the parent lightens again. */
+
+/* Reusing `depth` rather than adding a parameter keeps the painter's call
+ * and this function's signature exactly as measured. */
 material_pattern_t material_colours(cell_t c, unsigned hash, unsigned mask,
                                     unsigned depth, gfx_color_t out[3]);
 

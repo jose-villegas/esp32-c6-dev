@@ -157,52 +157,61 @@ static int cell, grid_w, grid_h, block_cols, block_rows;
 #define ERASE_EMITTER_RADIUS_PX  32
 
 /* Its own radius, not the eraser's borrowed one - a blast has to read as
- * bigger than a corrective tool, not the same size as one. 48 (three times
- * ERASE_RADIUS_PX) was an unmeasured starting point, picked only to look
- * obviously larger on screen than either existing brush. THE SHORT HISTORY,
- * because this number has moved several times and each move was a real,
- * device-confirmed lesson: WAS 48, DOUBLED TO 96 on a device request for "a
- * much bigger radius in general" - which broke the feature outright on real
- * hardware, twice, for two different reasons a device flash caught each time
- * (see SAND_IMPULSE_BUDGET_ BYTES's own comment for both). Neither failure
- * was fixed by touching this constant: the impulse buffer is a FIXED entry
- * count (APP_IMPULSE_ MAX, decoupled from this radius entirely) chosen from
- * the device's real heap budget, and sand_explode() itself (sand.c) THINS its
- * own seeding density automatically whenever a disc's true cell count would
- * exceed whatever buffer it was actually given - see queue_outward_
- * impulse()'s own comment in sand.c for how. That made 96 px allocate
- * successfully - a real device confirmed it detonating without a crash - but
- * thinned to only ~28% of its own 7,213-cell disc against the corrected
- * 2,048-entry budget, and the user's own reaction to that result on the
- * actual board was "it's tiny but maybe that's as far we can push it." IT
- * WASN'T. Handed the actual measured tradeoff - 96 px thinned scores 67.1
- * "grains outside the footprint" against build_sand_dune_scene(), while a
- * SMALLER radius that fits the same 2,048-entry budget at FULL density (no
+ * bigger than a corrective tool, not the same size as one. */
+
+/* THE SHORT HISTORY, because this number has moved several times and each
+ * move was a real, device-confirmed lesson: WAS 48 (three times
+ * ERASE_RADIUS_PX), an unmeasured starting point picked to look obviously
+ * larger than either existing brush. DOUBLED TO 96 on a device request for
+ * "a much bigger radius in general" - which broke the feature outright on
+ * real hardware, twice, for two different reasons a device flash caught
+ * each time (see SAND_IMPULSE_BUDGET_BYTES's own comment for both). */
+
+/* Neither failure was fixed by touching this constant: the impulse buffer
+ * is a FIXED entry count (APP_IMPULSE_MAX, decoupled from this radius
+ * entirely) chosen from the device's real heap budget, and sand_explode()
+ * itself (sand.c) THINS its own seeding density automatically whenever a
+ * disc's true cell count would exceed whatever buffer it was actually
+ * given - see queue_outward_impulse()'s own comment in sand.c for how. */
+
+/* That made 96 px allocate successfully - a real device confirmed it
+ * detonating without a crash - but thinned to only ~28% of its own
+ * 7,213-cell disc against the corrected 2,048-entry budget, and the user's
+ * own reaction to that result on the actual board was "it's tiny but maybe
+ * that's as far we can push it." IT WASN'T. */
+
+/* Handed the actual measured tradeoff - 96 px thinned scores 67.1 "grains
+ * outside the footprint" against build_sand_dune_scene(), while a SMALLER
+ * radius that fits the same 2,048-entry budget at FULL density (no
  * thinning at all) scores 106-107 on the same metric, at the cost of much
- * less reach (2.3 vs 11.6 average max-throw) and less destruction (48-79 vs
- * 235) - the user chose the smaller, fully-seeded blast: it reads as MORE
- * powerful despite being physically smaller, which is the whole reason
- * "grains outside the footprint" was adopted as this mechanic's own pass/fail
- * criterion in the first place (see that test's own comment in
- * suite_sand_dune_blast.c - "the user's own criterion"). 50 px (25 cells at
- * CELL_MIN) IS THE ANSWER TO A SPECIFIC QUESTION, not a round number: the
- * largest radius whose exact_disc_count() (sand.c) still fits inside
- * APP_IMPULSE_MAX with ZERO thinning. Checked directly rather than estimated
- * - exact_disc_count(25) is 1,961, comfortably under the 2,048-entry budget;
- * exact_disc_count(26) is 2,121, already over it. 25 cells is therefore the
- * largest radius this budget can still seed at full density, which is exactly
- * what "small and dense" means as a concrete number rather than a preference.
- * Re-measured at this exact radius and budget: 106.5 "grains outside the
+ * less reach (2.3 vs 11.6 average max-throw) and less destruction (48-79
+ * vs 235) - the user chose the smaller, fully-seeded blast: it reads as
+ * MORE powerful despite being physically smaller. */
+
+/* That is the whole reason "grains outside the footprint" was adopted as
+ * this mechanic's own pass/fail criterion in the first place - see that
+ * test's own comment in suite_sand_dune_blast.c ("the user's own
+ * criterion"). */
+
+/* 50 px (25 cells at CELL_MIN) IS THE ANSWER TO A SPECIFIC QUESTION, not a
+ * round number: the largest radius whose exact_disc_count() (sand.c) still
+ * fits inside APP_IMPULSE_MAX with ZERO thinning. Checked directly rather
+ * than estimated - exact_disc_count(25) is 1,961, comfortably under the
+ * 2,048-entry budget; exact_disc_count(26) is 2,121, already over it. */
+
+/* Re-measured at this exact radius and budget: 106.5 "grains outside the
  * footprint" against build_sand_dune_scene() (800-seed sweep, real
  * sand_explode()), landing right in the 106-107 range the estimate above
- * predicted - against 2.4 average max-throw and 78.7 average destroyed, both
- * well down from 96 px's 11.6 and 235.6, which is the reach and destruction
- * this choice deliberately gives up in exchange. DETONATE_RADIUS_PX is
- * otherwise a free gameplay dial, same as it always looked like one: raising
- * it past 50 px re-engages thinning (see the history above for what that
- * costs), never whether it allocates. Nothing below this line needs to move
- * when it changes - see APP_IMPULSE_MAX's own comment for why sizing is
- * deliberately independent of whatever this constant is set to. */
+ * predicted - against 2.4 average max-throw and 78.7 average destroyed,
+ * both well down from 96 px's 11.6 and 235.6, which is the reach and
+ * destruction this choice deliberately gives up in exchange. */
+
+/* DETONATE_RADIUS_PX is otherwise a free gameplay dial, same as it always
+ * looked like one: raising it past 50 px re-engages thinning (see the
+ * history above for what that costs), never whether it allocates. Nothing
+ * below this line needs to move when it changes - see APP_IMPULSE_MAX's
+ * own comment for why sizing is deliberately independent of whatever this
+ * constant is set to. */
 #define DETONATE_RADIUS_PX  50
 
 /* A FIXED ENTRY COUNT, not a formula in DETONATE_RADIUS_PX - the single most
@@ -225,68 +234,90 @@ static int cell, grid_w, grid_h, block_cols, block_rows;
  * hand-edited on its own. */
 #define APP_IMPULSE_MAX  2048
 
-/* THE BUDGET APP_IMPULSE_MAX MUST NOT EXCEED - a HARDWARE decision, made ONCE
- * here, deliberately independent of DETONATE_RADIUS_PX or anything else that
- * might change for gameplay reasons. That independence is the whole point:
- * DETONATE_RADIUS_PX doubling once already sailed straight past what the
- * device can actually spare, and nothing caught it until a device flash
- * reported detonate as a total no-op - not weaker, not shorter-ranged,
- * NOTHING, because sand_explode()'s first line is `if (s->impulse_buf ==
- * NULL) return;` and a failed malloc hits that silently, with only an
- * ESP_LOGE (see below, where impulse_buf is allocated) that nobody was
- * watching for. A radius-independent budget means that specific failure mode
- * cannot recur no matter how large a future radius request gets - see
- * DETONATE_RADIUS_PX's own comment for how sand_explode() now spends whatever
- * this budget affords instead of demanding more of it. THIS BUDGET WAS WRONG
- * ONCE ALREADY, AT 24,576 BYTES, AND A DEVICE FLASH IS WHAT CAUGHT IT - not
- * host arithmetic, which had already signed off on that number and was still
- * wrong. The mistake was sizing against a real boot log's TOTAL FREE HEAP
- * (76,068 bytes, everything this app's own fixed buffers -
+/* THE BUDGET APP_IMPULSE_MAX MUST NOT EXCEED - a HARDWARE decision, made
+ * ONCE here, deliberately independent of DETONATE_RADIUS_PX or anything
+ * else that might change for gameplay reasons. */
+
+/* That independence is the whole point: DETONATE_RADIUS_PX doubling once
+ * already sailed straight past what the device can actually spare, and
+ * nothing caught it until a device flash reported detonate as a total
+ * no-op - not weaker, not shorter-ranged, NOTHING, because
+ * sand_explode()'s first line is `if (s->impulse_buf == NULL) return;` and
+ * a failed malloc hits that silently, with only an ESP_LOGE (see below,
+ * where impulse_buf is allocated) that nobody was watching for. */
+
+/* A radius-independent budget means that specific failure mode cannot
+ * recur no matter how large a future radius request gets - see
+ * DETONATE_RADIUS_PX's own comment for how sand_explode() now spends
+ * whatever this budget affords instead of demanding more of it. */
+
+/* THIS BUDGET WAS WRONG ONCE ALREADY, AT 24,576 BYTES, AND A DEVICE FLASH
+ * IS WHAT CAUGHT IT - not host arithmetic, which had already signed off on
+ * that number and was still wrong. */
+
+/* The mistake was sizing against a real boot log's TOTAL FREE HEAP (76,068
+ * bytes, everything this app's own fixed buffers -
  * dirty_rows/sleep_blocks/grid/row_run_*, ~43,480 bytes together, none of
- * them scaling with the blast radius - subtracted from it). Total free heap
- * is the wrong number for a SINGLE malloc() call to be judged against: what a
- * single allocation actually needs is one contiguous run at least that large,
- * and a heap can have plenty of total free bytes while its largest unbroken
- * run is much smaller than their sum. That is exactly what a live serial
- * capture at 82851a9 found: `impulse_buf`'s malloc failing on THREE separate
- * detonate attempts, at THREE different quality settings (grid sizes 18,178 /
- * 10,304 / 4,514 bytes), with `heap_caps_get_largest_free_ block()` reporting
- * an IDENTICAL 14,592 bytes every single time - unmoved by a grid allocation
- * that itself varied by nearly 4x across those three runs. A number that does
- * not move with the one thing in this app that changes size is not describing
- * this app's own allocations at all; it is describing something upstream of
- * them (heap layout left behind by whatever ran before this app, most likely
- * - see start_sim()'s own comment on moving this allocation first, which was
- * the other half of this same fix) that 76,068 bytes of TOTAL free heap never
- * had any way to reveal. THE BUDGET IS NOW SET AGAINST THAT OBSERVED NUMBER,
- * NOT TOTAL FREE HEAP: 12 KB (12,288 bytes) against a measured 14,592-byte
- * largest block leaves 2,304 bytes (about 16%) of margin for allocator
- * overhead and whatever this specific board's fragmentation looks like on a
- * run that was not captured. That margin is deliberately real but not huge -
- * three identical captures in a row is a strong signal this number is a
- * structural property of this board's heap layout, not noise that might land
- * anywhere on the next boot, so a small margin is buying protection against
- * overhead and rounding, not against this number moving on its own. STILL NOT
- * A NUMBER THIS PROJECT HAS BISECTED TO ITS OWN FAILURE THRESHOLD - it is one
- * considered step below the one real data point available, and the honest
- * thing to say about it is exactly that: see docs/Sand/Explosion-Plan.md's
- * "Two failure modes to watch for by name" for both incidents this constant
- * has now been through and what each one got wrong. WHY A FIXED BYTE BUDGET
- * RATHER THAN A RADIUS CAP: a radius cap has to be re-derived by hand every
- * time either the radius or impulse_t's own size changes (see impulse_t's
- * comment in sand.h - it has already grown once, from 4 bytes to 6), and a
- * hand re-derivation is exactly the step that got skipped the one time this
- * mattered. A fixed byte budget needs re-deriving only when the HARDWARE
- * changes - a new board, more PSRAM, a leaner framebuffer, or (as just
- * happened) a better understanding of what this same board's heap was already
- * doing - and it never needs touching just because a gameplay radius moved.
- * See the _Static_assert immediately below for the guard this buys: it now
+ * them scaling with the blast radius - subtracted from it). */
+
+/* Total free heap is the wrong number for a SINGLE malloc() call to be
+ * judged against: what a single allocation actually needs is one
+ * contiguous run at least that large, and a heap can have plenty of total
+ * free bytes while its largest unbroken run is much smaller than their
+ * sum. */
+
+/* That is exactly what a live serial capture at 82851a9 found:
+ * `impulse_buf`'s malloc failing on THREE separate detonate attempts, at
+ * THREE different quality settings (grid sizes 18,178 / 10,304 / 4,514
+ * bytes), with `heap_caps_get_largest_free_block()` reporting an
+ * IDENTICAL 14,592 bytes every single time - unmoved by a grid allocation
+ * that itself varied by nearly 4x across those three runs. */
+
+/* A number that does not move with the one thing in this app that changes
+ * size is not describing this app's own allocations at all; it is
+ * describing something upstream of them (heap layout left behind by
+ * whatever ran before this app, most likely - see start_sim()'s own
+ * comment on moving this allocation first, which was the other half of
+ * this same fix) that 76,068 bytes of TOTAL free heap never had any way to
+ * reveal. */
+
+/* THE BUDGET IS NOW SET AGAINST THAT OBSERVED NUMBER, NOT TOTAL FREE HEAP:
+ * 12 KB (12,288 bytes) against a measured 14,592-byte largest block leaves
+ * 2,304 bytes (about 16%) of margin for allocator overhead and whatever
+ * this specific board's fragmentation looks like on a run that was not
+ * captured. */
+
+/* That margin is deliberately real but not huge - three identical captures
+ * in a row is a strong signal this number is a structural property of
+ * this board's heap layout, not noise that might land anywhere on the next
+ * boot, so a small margin is buying protection against overhead and
+ * rounding, not against this number moving on its own. */
+
+/* STILL NOT A NUMBER THIS PROJECT HAS BISECTED TO ITS OWN FAILURE
+ * THRESHOLD - it is one considered step below the one real data point
+ * available, and the honest thing to say about it is exactly that: see
+ * docs/Sand/Explosion-Plan.md's "Two failure modes to watch for by name"
+ * for both incidents this constant has now been through and what each one
+ * got wrong. */
+
+/* WHY A FIXED BYTE BUDGET RATHER THAN A RADIUS CAP: a radius cap has to be
+ * re-derived by hand every time either the radius or impulse_t's own size
+ * changes (see impulse_t's comment in sand.h - it has already grown once,
+ * from 4 bytes to 6), and a hand re-derivation is exactly the step that
+ * got skipped the one time this mattered. */
+
+/* A fixed byte budget needs re-deriving only when the HARDWARE changes - a
+ * new board, more PSRAM, a leaner framebuffer, or (as just happened) a
+ * better understanding of what this same board's heap was already doing -
+ * and it never needs touching just because a gameplay radius moved. */
+
+/* See the _Static_assert immediately below for the guard this buys: it now
  * confirms two independent, hand-chosen constants agree with each other,
- * rather than re-deriving one from a radius that might have drifted - and see
- * that assert's own message for what it CANNOT check, which is whether this
- * number is actually right on real hardware. Nothing at compile time can
- * check that; only a device flash can, which is exactly how the 24,576-byte
- * version of this constant was caught. */
+ * rather than re-deriving one from a radius that might have drifted - and
+ * see that assert's own message for what it CANNOT check, which is whether
+ * this number is actually right on real hardware. Nothing at compile time
+ * can check that; only a device flash can, which is exactly how the
+ * 24,576-byte version of this constant was caught. */
 #define SAND_IMPULSE_BUDGET_BYTES  12288
 
 /* CONFIRMS TWO HAND-CHOSEN CONSTANTS AGREE. DOES NOT VALIDATE
@@ -810,43 +841,59 @@ static void sand_exit(void)
  * needed - the background is simply the colour of an empty cell. Only rows
  * the simulation reported as changed are touched, and each one tells gfx
  * which band it landed in. A settled pile therefore costs almost nothing to
- * draw AND almost nothing to send, which is where the real saving is: a whole
- * frame is 9.6 ms of bus time and drawing is a fraction of that. A band of
- * light travelling across anything hatched. An early version of this aligned
- * the shine to the board's tilt by picking WHICH of two fixed diagonals it
- * travelled along. That was a nicer idea and it never became visible: the
- * direction was right, the repaint was right by the end, and three rounds of
- * looking at it on the device still could not see it. Two diagonals of single
- * pixels differing only in WHICH way they lean is simply not a difference the
- * eye picks up on a 184x224 grid, however correct the arithmetic underneath.
- * Movement is a difference the eye cannot miss, which is the whole reason the
- * band exists at all - it sweeps, so the glass is doing something, whatever
- * else changes about it. GRAVITY IS BACK, but as a continuous angle rather
- * than a choice of two. shine_ux_q8/shine_uy_q8 (below) are a Q8 unit vector
- * of the current gravity direction - see material_shine_direction() in
- * material.h - and paint_row_n() projects each pixel onto it instead of onto
- * the fixed (1, 1) diagonal the band used before. Tilting the board now
- * visibly ROTATES which way the band runs, not merely which of two ways it
- * leans, which is a different and considerably less subtle claim than the one
- * that failed to show up before - but it is still a claim about a 184x224
- * grid that has not yet been confirmed on the device, and the same "picked
- * the wrong difference to make visible" failure mode applies until it has.
- * SHINE_PERIOD is the distance between bands along that direction, and the
+ * draw AND almost nothing to send, which is where the real saving is: a
+ * whole frame is 9.6 ms of bus time and drawing is a fraction of that. */
+
+/* A band of light travels across anything hatched. An early version of
+ * this aligned the shine to the board's tilt by picking WHICH of two fixed
+ * diagonals it travelled along. That was a nicer idea and it never became
+ * visible: the direction was right, the repaint was right by the end, and
+ * three rounds of looking at it on the device still could not see it. */
+
+/* Two diagonals differing only in WHICH way they lean is not a difference
+ * the eye picks up on a 184x224 grid, however correct the arithmetic
+ * underneath. */
+
+/* Movement is a difference the eye cannot miss, which is the whole reason
+ * the band exists at all - it sweeps, so the glass is doing something,
+ * whatever else changes about it. */
+
+/* GRAVITY IS BACK, but as a continuous angle rather than a choice of two.
+ * shine_ux_q8/shine_uy_q8 (below) are a Q8 unit vector of the current
+ * gravity direction - see material_shine_direction() in material.h - and
+ * paint_row_n() projects each pixel onto it instead of onto the fixed
+ * (1, 1) diagonal the band used before. */
+
+/* Tilting the board now visibly ROTATES which way the band runs, not
+ * merely which of two ways it leans, which is a different and considerably
+ * less subtle claim than the one that failed to show up before - BUT IT IS
+ * STILL A CLAIM ABOUT A 184x224 GRID THAT HAS NOT YET BEEN CONFIRMED ON THE
+ * DEVICE, and the same "picked the wrong difference to make visible"
+ * failure mode applies until it has. */
+
+/* SHINE_PERIOD is the distance between bands along that direction, and the
  * band moves SHINE_STEP_PX every SHINE_STEP_MS - about 1.3 seconds for one
- * band to reach where the one before it started. ITS WIDTH IS ONE CELL, not a
- * number of pixels, which is why no constant for it appears here. Measured in
- * pixels it was two cells thick at the finest quality and two thirds of one
- * at the coarsest, so the same glass looked like a different material
- * depending on a setting that has nothing to do with it. paint_row_n()
- * already receives the cell size as `n`, and `n` is a compile-time constant
- * at each of its call sites, so scaling by it costs nothing at all. The
- * period stays in PIXELS on purpose: the screen is the same size at every
- * quality, so pixel spacing is what keeps the same number of bands across it.
- * 64 rather than a rounder number because it is a power of two, which turns
- * the per-pixel wrap into a mask. Speed comes from the step SIZE, not from
- * ticking more often, and the difference is not cosmetic: every tick repaints
- * all the rows holding glass, so halving SHINE_STEP_MS would double that cost
- * while doubling SHINE_STEP_PX is free. */
+ * band to reach where the one before it started. */
+
+/* ITS WIDTH IS ONE CELL, not a number of pixels, which is why no constant
+ * for it appears here. Measured in pixels it was two cells thick at the
+ * finest quality and two thirds of one at the coarsest, so the same glass
+ * looked like a different material depending on a setting that has nothing
+ * to do with it. paint_row_n() already receives the cell size as `n`, and
+ * `n` is a compile-time constant at each of its call sites, so scaling by
+ * it costs nothing at all. */
+
+/* The period stays in PIXELS on purpose: the screen is the same size at
+ * every quality, so pixel spacing is what keeps the same number of bands
+ * across it. */
+
+/* 64 rather than a rounder number because it is a power of two, which
+ * turns the per-pixel wrap into a mask. */
+
+/* Speed comes from the step SIZE, not from ticking more often, and the
+ * difference is not cosmetic: every tick repaints all the rows holding
+ * glass, so halving SHINE_STEP_MS would double that cost while doubling
+ * SHINE_STEP_PX is free. */
 #define SHINE_PERIOD   64      /* power of two - see the mask below */
 #define SHINE_STEP_MS  40
 #define SHINE_STEP_PX   2
@@ -1065,46 +1112,60 @@ static int glass_last_phase;
  * for why the DEBOUNCE KEY it stores means something different in each
  * regime - a genuine finding from writing this, not a stylistic choice. */
 
-/* THIS FRAME'S SCALE, in Q8 - how many eighths... no, straight Q8 units of
- * TRUE distance (along gravity) one raw STEP COUNT is worth, for whichever
- * regime is active this frame: `local_depth_scale_q8 = 256 * im_len(gx, gy) /
- * dominant_axis` (`dominant_axis` is `|gy|` when vertical-dominant, `|gx|`
- * when horizontal-dominant) - see update_local_depth_gravity() below for
- * where it is set, once a frame, and LOCAL DEPTH's own top comment for why a
- * single walk along the ray needs only ONE scale, not two weights blended or
- * maxed together. NOTE THE DIRECTION OF THIS RATIO IS THE OPPOSITE OF THE OLD
- * BLEND/MAX DESIGN'S OWN WEIGHT - worth stating plainly, because copying the
- * old formula's shape here silently, without re-deriving it, is exactly the
- * mistake this file's own host-side validation caught once already (see git
- * log for the commit this comment describes: a first draft reused the old
- * `component / len` ratio unchanged and read a fixed 10-cell planar depth as
- * 19 at 45 degrees). The OLD axis count walked a fixed SCREEN AXIS regardless
- * of gravity's own angle, so recovering true depth from it meant SHRINKING
- * the count by that axis's own share of gravity (`component / len`, always <=
- * 256, minimised at the 45-degree tie). THIS walk already follows the gravity
- * ray itself - each step of the count already covers `len / dominant_axis`
- * cells of TRUE distance, not one screen cell - so recovering true depth
- * means GROWING the count by that same ratio instead (`len / dominant_axis`,
- * always >= 256, exactly 256 only when gravity is perfectly axis-aligned and
- * the ray IS the screen axis). This is also WHY LOCAL_DEPTH_COUNT_CEILING
- * NEEDS NO RAISE THIS TIME - see that constant's own comment below. PROJECTED
- * AT COMBINE TIME, deliberately, not baked into the climb itself - see "THE
- * COUNT MUST STAY A RAW COUNT" in LOCAL DEPTH's own top comment for why: a
- * raw count is gravity-agnostic (means the same thing no matter when it was
- * accumulated), so scaling it fresh, from THIS frame's own gravity, at the
- * moment it is read, is always correct regardless of when the count was built
- * up - the property every earlier shape of this mechanism already proved is
- * load-bearing (git log, commit 3376c8e and earlier) and this rewrite does
- * not get to relitigate. ALSO SET HERE: `local_depth_vertical_dominant`
- * (which regime is active this frame, `|gy| >= |gx|`) and the two
- * scan-direction flags this file has always needed -
- * `local_depth_v_reverse`/`local_depth_h_reverse`, UNCHANGED in meaning from
- * every earlier shape of this mechanism (descend instead of ascend when that
- * axis's own gravity component is negative). Both flags now feed BOTH
- * regimes, not one each - see LOCAL DEPTH's own top comment, "THIS IS NOT
- * SHAPE (1) AGAIN", for why `local_depth_v_ reverse` alone is also the
- * correct row-processing order for the horizontal-dominant regime's own
- * cross-row reads, not merely the vertical one's. */
+/* THIS FRAME'S SCALE, in Q8 units of TRUE distance (along gravity) one raw
+ * STEP COUNT is worth, for whichever regime is active this frame:
+ * `local_depth_scale_q8 = 256 * im_len(gx, gy) / dominant_axis`
+ * (`dominant_axis` is `|gy|` when vertical-dominant, `|gx|` when
+ * horizontal-dominant) - see update_local_depth_gravity() below for where
+ * it is set, once a frame, and LOCAL DEPTH's own top comment for why a
+ * single walk along the ray needs only ONE scale, not two weights blended
+ * or maxed together. */
+
+/* WARNING: the direction of this ratio is the OPPOSITE of the old
+ * blend/max design's own weight - worth stating plainly, because copying
+ * the old formula's shape here silently, without re-deriving it, is
+ * exactly the mistake this file's own host-side validation caught once
+ * already (see git log for the commit this comment describes: a first
+ * draft reused the old `component / len` ratio unchanged and read a fixed
+ * 10-cell planar depth as 19 at 45 degrees). */
+
+/* The OLD axis count walked a fixed SCREEN AXIS regardless of gravity's
+ * own angle, so recovering true depth from it meant SHRINKING the count by
+ * that axis's own share of gravity (`component / len`, always <= 256,
+ * minimised at the 45-degree tie). */
+
+/* THIS walk already follows the gravity ray itself - each step of the
+ * count already covers `len / dominant_axis` cells of TRUE distance, not
+ * one screen cell - so recovering true depth means GROWING the count by
+ * that same ratio instead (`len / dominant_axis`, always >= 256, exactly
+ * 256 only when gravity is perfectly axis-aligned and the ray IS the
+ * screen axis). */
+
+/* This is also why LOCAL_DEPTH_COUNT_CEILING needs no raise this time -
+ * see that constant's own comment below. */
+
+/* PROJECTED AT COMBINE TIME, deliberately, not baked into the climb itself
+ * - see "THE COUNT MUST STAY A RAW COUNT" in LOCAL DEPTH's own top comment
+ * for why: a raw count is gravity-agnostic (means the same thing no matter
+ * when it was accumulated), so scaling it fresh, from THIS frame's own
+ * gravity, at the moment it is read, is always correct regardless of when
+ * the count was built up. */
+
+/* That property was already proved load-bearing by every earlier shape of
+ * this mechanism (git log, commit 3376c8e and earlier), and this rewrite
+ * does not get to relitigate it. */
+
+/* ALSO SET HERE: `local_depth_vertical_dominant` (which regime is active
+ * this frame, `|gy| >= |gx|`) and the two scan-direction flags this file
+ * has always needed - `local_depth_v_reverse`/`local_depth_h_reverse`,
+ * UNCHANGED in meaning from every earlier shape of this mechanism (descend
+ * instead of ascend when that axis's own gravity component is negative). */
+
+/* Both flags now feed BOTH regimes, not one each - see LOCAL DEPTH's own
+ * top comment, "THIS IS NOT SHAPE (1) AGAIN", for why `local_depth_v_
+ * reverse` alone is also the correct row-processing order for the
+ * horizontal-dominant regime's own cross-row reads, not merely the
+ * vertical one's. */
 static unsigned local_depth_scale_q8;
 static bool local_depth_vertical_dominant;
 static bool local_depth_v_reverse;
@@ -1126,161 +1187,196 @@ static bool local_depth_v_reverse_prev;
 static bool local_depth_h_reverse_prev;
 
 /* THE WALK'S OWN STORAGE - a plain double buffer, GRID_W_MAX entries each,
- * the same file-static persistence-across-calls pattern row_has_shine[] above
- * already uses for the same reason (sized for the finest quality tier; a
- * coarser one just uses less of it). Replaces BOTH col_stable_
- * depth[]/row_stable_depth[] together - one walk needs one chain, not two -
- * see LOCAL DEPTH's own top comment for why a SINGLE cx-indexed pair works
- * for EITHER regime, not only the vertical one.
- * `local_depth_cur_row`/`local_depth_prev_row` are pointers into these two
- * buffers, POINTER-SWAPPED at the end of every paint_row_n() call (see that
- * function's own tail) rather than copied - "the row painted before this one"
- * always means whichever buffer `local_depth_prev_row` names at the moment a
- * new row starts, and "this row's own emerging values" always means whichever
- * buffer `local_depth_cur_row` names, however many frames apart the two calls
+ * the same file-static persistence-across-calls pattern row_has_shine[]
+ * above already uses for the same reason (sized for the finest quality
+ * tier; a coarser one just uses less of it). Replaces BOTH
+ * col_stable_depth[]/row_stable_depth[] together - one walk needs one
+ * chain, not two - see LOCAL DEPTH's own top comment for why a SINGLE
+ * cx-indexed pair works for EITHER regime, not only the vertical one. */
+
+/* `local_depth_cur_row`/`local_depth_prev_row` are pointers into these two
+ * buffers, POINTER-SWAPPED at the end of every paint_row_n() call (see
+ * that function's own tail) rather than copied - "the row painted before
+ * this one" always means whichever buffer `local_depth_prev_row` names at
+ * the moment a new row starts, however many frames apart the two calls
  * that used them actually were under this file's own sparse-repaint
- * discipline (STALE READINGS ARE ACCEPTED here exactly as they always have
- * been for this mechanism - see LOCAL DEPTH's own top comment's forebears in
- * git log for the accepted trade-off this inherits unchanged).
- * VERTICAL-DOMINANT reads `local_depth_prev_row[cx + step]` - a genuinely
- * DIFFERENT row's data, always (the source cell is one whole row away along
- * the ray) - so the buffer this function is currently WRITING into
- * (`local_depth_cur_row`) is never also read from during the same call; there
- * is no read/write aliasing to worry about, and the CX scan order inside one
- * call does not matter to this regime's own correctness (see
- * `cx_first`/`cx_step` below for the reason those still exist anyway).
- * HORIZONTAL-DOMINANT reads either `local_depth_cur_row[cx - hdir]` (the
- * common case, `step == 0`: the source is the PREVIOUSLY-PROCESSED column of
- * THIS SAME row, already written earlier in this same call's own scan - this
- * is where the scan order set by `cx_first`/`cx_step` below actually matters)
- * or `local_depth_prev_row[cx - hdir]` (`step != 0`: the ray crossed a row
- * boundary at this column, so the source is the row processed immediately
- * before this one instead). Genuinely no aliasing either way: the `cur_row`
- * read only ever looks at an EARLIER cx in the SAME scan, never the slot
- * about to be written this same iteration, and the `prev_row` read is a
- * wholly separate buffer from whichever one is being written this call.
- * Verified in a host model before this was wired in here, per this rewrite's
- * own instructions - not assumed. */
+ * discipline. */
+
+/* STALE READINGS ARE ACCEPTED here exactly as they always have been for
+ * this mechanism - see LOCAL DEPTH's own top comment's forebears in git
+ * log for the accepted trade-off this inherits unchanged. */
+
+/* VERTICAL-DOMINANT reads `local_depth_prev_row[cx + step]` - a genuinely
+ * DIFFERENT row's data, always (the source cell is one whole row away
+ * along the ray) - so the buffer this function is currently WRITING into
+ * (`local_depth_cur_row`) is never also read from during the same call;
+ * there is no read/write aliasing to worry about, and the CX scan order
+ * inside one call does not matter to this regime's own correctness (see
+ * `cx_first`/`cx_step` below for the reason those still exist anyway). */
+
+/* HORIZONTAL-DOMINANT reads either `local_depth_cur_row[cx - hdir]` (the
+ * common case, `step == 0`: the source is the PREVIOUSLY-PROCESSED column
+ * of THIS SAME row, already written earlier in this same call's own scan -
+ * this is where the scan order set by `cx_first`/`cx_step` below actually
+ * matters) or `local_depth_prev_row[cx - hdir]` (`step != 0`: the ray
+ * crossed a row boundary at this column, so the source is the row
+ * processed immediately before this one instead). */
+
+/* Genuinely no aliasing either way: the `cur_row` read only ever looks at
+ * an EARLIER cx in the SAME scan, never the slot about to be written this
+ * same iteration, and the `prev_row` read is a wholly separate buffer from
+ * whichever one is being written this call. Verified in a host model
+ * before this was wired in here, per this rewrite's own instructions - not
+ * assumed. */
 static uint8_t local_depth_row_a[GRID_W_MAX];
 static uint8_t local_depth_row_b[GRID_W_MAX];
 static uint8_t *local_depth_cur_row = local_depth_row_a;
 static uint8_t *local_depth_prev_row = local_depth_row_b;
 
 /* WHICH ROW local_depth_prev_row[] ACTUALLY DESCRIBES - the one fact the
- * double buffer above never carried, and whose absence turned out to be the
- * whole of a reported device artifact: "a brief flip of colours" on a
+ * double buffer above never carried, and whose absence turned out to be
+ * the whole of a reported device artifact: "a brief flip of colours" on a
  * settled pool, and "a huge spike" flipping the board to a straight
- * orientation. LOCAL_DEPTH_NO_ROW means "nothing painted yet, or the chain
- * was deliberately broken" (chosen outside 0..GRID_H_MAX-1 so no real row
- * can ever collide with it, the same trick local_depth_top_row[]'s own 255
- * uses).
- *
- * THE DEFECT, exactly. Every cross-row read in paint_row_n() below treats
+ * orientation. */
+
+/* LOCAL_DEPTH_NO_ROW means "nothing painted yet, or the chain was
+ * deliberately broken" (chosen outside 0..GRID_H_MAX-1 so no real row can
+ * ever collide with it, the same trick local_depth_top_row[]'s own 255
+ * uses). */
+
+/* THE DEFECT, exactly. Every cross-row read in paint_row_n() below treats
  * local_depth_prev_row[qx] as "the count belonging to the cell one step
  * back along the ray, in row cy - vdir". That is only true when the row
- * painted immediately before this one WAS row cy - vdir. draw_dirty_rows()
- * sweeps surface-first precisely so that it usually is - but it only ever
- * paints DIRTY rows, and LOCAL_DEPTH_WAKE_MS's own tick marks only rows
- * that hold a LIQUID cell. So on a settled pool the sweep's FIRST row is
- * the surface row, the (empty) row above it is never painted, and
- * local_depth_prev_row[] still holds what the LAST row of the PREVIOUS
- * sweep left there - the DEEPEST row of the pool, saturated at
- * LOCAL_DEPTH_COUNT_CEILING.
- *
- * WHY THAT IS CATASTROPHIC RATHER THAN MERELY STALE. The surface row's
+ * painted immediately before this one WAS row cy - vdir. */
+
+/* draw_dirty_rows() sweeps surface-first precisely so that it usually is -
+ * but it only ever paints DIRTY rows, and LOCAL_DEPTH_WAKE_MS's own tick
+ * marks only rows that hold a LIQUID cell. So on a settled pool the
+ * sweep's FIRST row is the surface row, the (empty) row above it is never
+ * painted, and local_depth_prev_row[] still holds what the LAST row of the
+ * PREVIOUS sweep left there - the DEEPEST row of the pool, saturated at
+ * LOCAL_DEPTH_COUNT_CEILING. */
+
+/* WHY THAT IS CATASTROPHIC RATHER THAN MERELY STALE. The surface row's
  * source is air, so `same_material` is false and the walk drops into the
  * hold-then-commit debounce below. A COMMIT writes 0 and all is well. A
  * HOLD instead "keeps climbing as if nothing happened" - and climbing FROM
  * A SATURATED COUNT means the surface itself reads fully saturated, which
- * every row beneath it then inherits as a same-material climb. The entire
- * body renders at maximum depth in one frame: not a shade or two out, the
- * gradient inverted end to end. Measured, host-side, on the user's own
- * scenario (a pool filling 40% of a 92x112 grid, settled under portrait
- * gravity, the SIMULATION THEN FROZEN so that every displayed change is
- * spurious by construction, gravity swept 0 to 90 degrees at one degree per
- * frame): 841 interior cells - a quarter of the pool - crossed a full shade
- * step in a single frame, 23 of the 24-cell band, at the first wake tick
- * after the 45-degree regime flip. With this guard: 83, and none of them in
- * the body of the pool (see the residual note below).
- *
- * WHY THE GUARD IS ON THE HOLD PATH ONLY, and not on every cross-row read.
- * A same-material climb reading a stale count is DELIBERATE and load-
- * bearing: a row repainted in isolation deep inside a pool inherits a value
- * that is stale but SATURATED, which is exactly right there, and is the
- * property test_a_sparse_repaint_does_not_band_a_tall_liquid_column pins
- * (still 0 banded pairs). Distrusting the buffer on that path too was tried
- * in the same harness and is strictly worse: it makes an isolated deep row
- * re-climb from 1, which is the banding that test exists to forbid. At a
- * BOUNDARY the stale value is not approximately right - it belongs to a
- * different body entirely - so 0 is the only honest carry, and it is also
- * what a coherent sweep would have produced, since the non-liquid row the
- * chain should have started from writes 0 into every column.
- *
- * THE RESIDUAL 83 CELLS are a one-to-five-column strip against the left
- * wall, where the ray leaves the grid (`qx_ok` false) and the walk restarts
- * from 0 by construction; which rows that happens on shifts as the per-row
- * Bresenham drift changes with the tilt. That is the wall's own shadow
- * moving, not a chain break, and it is left alone.
- *
- * -2, NOT -1, and the difference is load-bearing rather than stylistic: the
- * value this is compared against is `cy - vdir`, which ranges over
+ * every row beneath it then inherits as a same-material climb. */
+
+/* The entire body renders at maximum depth in one frame: not a shade or
+ * two out, the gradient inverted end to end. */
+
+/* Measured, host-side, on the user's own scenario (a pool filling 40% of a
+ * 92x112 grid, settled under portrait gravity, the SIMULATION THEN FROZEN
+ * so that every displayed change is spurious by construction, gravity
+ * swept 0 to 90 degrees at one degree per frame): 841 interior cells - a
+ * quarter of the pool - crossed a full shade step in a single frame, 23 of
+ * the 24-cell band, at the first wake tick after the 45-degree regime
+ * flip. */
+
+/* With this guard: 83, and none of them in the body of the pool (see the
+ * residual note below). */
+
+/* WHY THE GUARD IS ON THE HOLD PATH ONLY, and not on every cross-row read.
+ * A same-material climb reading a stale count is DELIBERATE and
+ * load-bearing: a row repainted in isolation deep inside a pool inherits a
+ * value that is stale but SATURATED, which is exactly right there, and is
+ * the property test_a_sparse_repaint_does_not_band_a_tall_liquid_column
+ * pins (still 0 banded pairs). */
+
+/* Distrusting the buffer on that path too was tried in the same harness
+ * and is strictly worse: it makes an isolated deep row re-climb from 1,
+ * which is the banding that test exists to forbid. */
+
+/* At a BOUNDARY the stale value is not approximately right - it belongs to
+ * a different body entirely - so 0 is the only honest carry, and it is
+ * also what a coherent sweep would have produced, since the non-liquid row
+ * the chain should have started from writes 0 into every column. */
+
+/* THE RESIDUAL 83 CELLS are a one-to-five-column strip against the left
+ * wall, where the ray leaves the grid (`qx_ok` false) and the walk
+ * restarts from 0 by construction; which rows that happens on shifts as
+ * the per-row Bresenham drift changes with the tilt. That is the wall's
+ * own shadow moving, not a chain break, and it is left alone. */
+
+/* -2, NOT -1, and the difference is load-bearing rather than stylistic:
+ * the value this is compared against is `cy - vdir`, which ranges over
  * [-1, grid_h] as cy sweeps [0, grid_h) with vdir either sign. -1 is
  * therefore a REAL value that comparison can produce - the top row of the
- * grid with gravity pointing down - so a -1 sentinel would read as "the
- * chain is intact" for exactly the cells whose neighbour is off the top of
- * the screen, which is precisely the surface-flood case above. -2 is
- * outside that range at both ends. */
+ * grid with gravity pointing down. */
+
+/* So a -1 sentinel would read as "the chain is intact" for exactly the
+ * cells whose neighbour is off the top of the screen, which is precisely
+ * the surface-flood case above. -2 is outside that range at both ends. */
 #define LOCAL_DEPTH_NO_ROW (-2)
 static int local_depth_prev_cy = LOCAL_DEPTH_NO_ROW;
 
 /* THE DEBOUNCE KEY - one array now, not two, but NOT a plain merge of
  * col_top_row[]/row_top_col[]'s own two conventions: the two regimes need
  * DIFFERENT things stored here, and forcing one convention onto both was
- * tried, found broken, and is worth recording precisely rather than only the
- * working design that replaced it. VERTICAL-DOMINANT keeps the OLD convention
- * exactly: `local_depth_top_ row[cx]` holds the ROW INDEX of column cx's most
- * recent boundary request, and a reset only COMMITS once the SAME row asks
- * for it again on a later painted frame (255 = "nothing tracked yet", chosen
- * the same way the old arrays did - GRID_H_MAX is 224, comfortably under
- * 255). This still works for exactly the reason it always did:
+ * tried, found broken, and is worth recording precisely rather than only
+ * the working design that replaced it. */
+
+/* VERTICAL-DOMINANT keeps the OLD convention exactly: `local_depth_top_
+ * row[cx]` holds the ROW INDEX of column cx's most recent boundary
+ * request, and a reset only COMMITS once the SAME row asks for it again on
+ * a later painted frame (255 = "nothing tracked yet", chosen the same way
+ * the old arrays did - GRID_H_MAX is 224, comfortably under 255). */
+
+/* This still works for exactly the reason it always did:
  * `local_depth_cur_row[]` is column-indexed and a GIVEN column's own
  * row-sweep visits that column's slot roughly once per frame (once per row
  * painted, chained down the column across separate calls) - "the row"
  * genuinely identifies a stable physical location for that column across
- * frames. HORIZONTAL-DOMINANT CANNOT REUSE THAT KEY, and this was found by
+ * frames. */
+
+/* HORIZONTAL-DOMINANT CANNOT REUSE THAT KEY, and this was found by
  * testing, not reasoned out in advance: unlike the vertical case, EVERY
  * row-call writes EVERY column's slot in local_depth_cur_row[] (a row-call
- * always walks its own full width), so a row-indexed key compares against a
- * DIFFERENT row's own index on almost every successive write to the same slot
- * - a column sitting permanently beside a real wall would ask for a reset
+ * always walks its own full width), so a row-indexed key compares against
+ * a DIFFERENT row's own index on almost every successive write to the same
+ * slot. */
+
+/* A column sitting permanently beside a real wall would ask for a reset
  * from a different `cy` on every single dirty row that touches it, so
- * `top_row[cx] == cy` would almost never match twice, and the debounce would
- * HOLD FOREVER instead of ever committing to a genuine, permanent boundary.
- * Measured directly, reproducing exactly this geometry (a settled pool
+ * `top_row[cx] == cy` would almost never match twice, and the debounce
+ * would HOLD FOREVER instead of ever committing to a genuine, permanent
+ * boundary. */
+
+/* Measured directly, reproducing exactly this geometry (a settled pool
  * against a real side wall, gravity mostly horizontal): a row-indexed key
  * left the wall-adjacent column's own reported depth stuck climbing
  * indefinitely rather than reading near 0, the column beside a REAL,
  * PERMANENT wall - the single most common case this debounce has to get
- * right, not an edge case. THE FIX FOR THIS REGIME: `local_depth_top_row[cx]`
- * instead stores a PLAIN PENDING FLAG - any value other than 255 means "the
- * immediately preceding write to this slot was ALSO a boundary request, not
- * yet confirmed a second time"; 255 means "the preceding write was a genuine
- * same-material climb, or nothing has been written yet." A reset commits once
- * this flag is already pending, and STAYS pending (re-armed) on every
- * subsequent boundary request too - so a permanent wall commits to 0 on every
- * row that touches it after the first, while a single stray blink (one row's
- * own grain-settling noise misreading a boundary that is not really there)
- * still gets held rather than trusted immediately, and the flag is explicitly
- * cleared back to 255 on the very next confirmed same-material climb so a
- * long-past, unrelated blink cannot pre-arm a later, different blink into an
- * instant false commit. This is a genuine REINTERPRETATION of what the stored
- * byte means, not a coincidental reuse - see paint_row_n()'s own "THE WALK
- * ITSELF" comment for the exact comparison each regime makes against this
- * same array. BOTH REGIMES SHARE THE ARRAY, NOT JUST THE TYPE, because a
- * REGIME FLIP (see update_local_depth_gravity() below) always resets it
- * wholesale alongside local_depth_row_a[]/local_depth_row_b[] - the two
- * regimes never read a value the OTHER one wrote, by construction, so there
- * is no cross-regime confusion for either convention to guard against. */
+ * right, not an edge case. */
+
+/* THE FIX FOR THIS REGIME: `local_depth_top_row[cx]` instead stores a
+ * PLAIN PENDING FLAG - any value other than 255 means "the immediately
+ * preceding write to this slot was ALSO a boundary request, not yet
+ * confirmed a second time"; 255 means "the preceding write was a genuine
+ * same-material climb, or nothing has been written yet." */
+
+/* A reset commits once this flag is already pending, and STAYS pending
+ * (re-armed) on every subsequent boundary request too - so a permanent
+ * wall commits to 0 on every row that touches it after the first, while a
+ * single stray blink (one row's own grain-settling noise misreading a
+ * boundary that is not really there) still gets held rather than trusted
+ * immediately. */
+
+/* The flag is explicitly cleared back to 255 on the very next confirmed
+ * same-material climb so a long-past, unrelated blink cannot pre-arm a
+ * later, different blink into an instant false commit. */
+
+/* This is a genuine REINTERPRETATION of what the stored byte means, not a
+ * coincidental reuse - see paint_row_n()'s own "THE WALK ITSELF" comment
+ * for the exact comparison each regime makes against this same array. */
+
+/* BOTH REGIMES SHARE THE ARRAY, NOT JUST THE TYPE, because a REGIME FLIP
+ * (see update_local_depth_gravity() below) always resets it wholesale
+ * alongside local_depth_row_a[]/local_depth_row_b[] - the two regimes
+ * never read a value the OTHER one wrote, by construction, so there is no
+ * cross-regime confusion for either convention to guard against. */
 static uint8_t local_depth_top_row[GRID_W_MAX];
 
 /* local_depth_cur_row[]/local_depth_prev_row[] hold a plain CELL COUNT - see
@@ -1336,89 +1432,115 @@ static void update_local_depth_gravity(int gx, int gy)
     const bool new_h_reverse = (gx < 0);
 
     /* A CHANGE IN ANY OF THE THREE - which regime is dominant, or either
-     * scan's own direction - invalidates the walk's shared state as ONE unit,
-     * not three separately guarded pieces. Argued through, regime by regime,
-     * for why each one earns a reset on its own (not merely copied from the
-     * two-walk design's own two resets): A REVERSAL OF EITHER SCAN DIRECTION
-     * is the same failure the two-walk design's own v_reverse/h_reverse flips
-     * already fixed, unchanged in kind: "the neighbour toward the surface"
-     * relocates (above/below swap, or the within-row scan direction swaps),
-     * so a row or column index this array's debounce was tracking under the
-     * OLD direction describes a boundary relationship the NEW direction does
-     * not have. Reproducing the ORIGINAL device report this fixed (landscape
-     * lock, gy small and tremor-noisy against a tall water column) against
-     * THIS mechanism shows the identical shape of corruption without the
-     * reset: a raw count compounding unboundedly across repeated direction
-     * flips instead of resetting where it should. A REGIME FLIP
-     * (vertical-dominant <-> horizontal-dominant) is new to THIS shape -
-     * shapes (2) and (3) never had it, because both regimes ran every frame
-     * unconditionally there. Here, the SAME array slot (indexed by cx)
-     * carries a different RECURRENCE depending on which regime is active - a
-     * vertical-dominant count chains down rows at a fixed column; a
-     * horizontal-dominant count chains across columns within a row, only
-     * occasionally borrowing a value from the row above or below. A value
-     * left behind by one regime is not simply "the same count under different
-     * bookkeeping" to the other regime's own read pattern - it is a value
-     * about a physically different neighbour relationship. Reset here for the
-     * same reason the two scan-direction flips already are: a brief, bounded
-     * bookkeeping correction rather than trusting a stale interpretation
-     * across the switch. MEASURED, host-side, a single sharp jostle across
-     * the 45-degree line in the middle of an otherwise steady near-horizontal
-     * hold (the regime-flip analogue of the landscape-lock model already used
-     * to measure the two scan-direction resets): the reset itself produces a
-     * small, SELF-HEALING blip immediately after the jostle ends and gravity
-     * returns to near-horizontal - 12 banded pairs the very next measured
-     * frame, falling to 6 one frame later, 0 the frame after that
-     * (LOCAL_DEPTH_WAKE_MS's own periodic wake finishes the job) - not the
-     * "visually a no-op" result the scan-direction resets measured, but
-     * bounded, transient, and gone within two frames at 30fps (well under
-     * 100ms), against an artificially instantaneous gravity step no real
-     * hand-tremor input produces (the tilt filter's own smoothing means a
-     * real crossing ramps through several frames, not one). Worth
-     * re-measuring on the device if a "brief pop near 45 degrees" report ever
-     * comes back in about this mechanism specifically. A SCAN-DIRECTION FLIP
-     * ONLY EARNS THE RESET IF THE ACTIVE REGIME CAN SEE IT, and that turned
-     * out to matter at exactly the orientations a hand actually holds this
-     * board at. AT AXIS LOCK ONE COMPONENT SITS ON ZERO: the device's own
-     * capture sidecars from the report this block was re-examined for read
+     * scan's own direction - invalidates the walk's shared state as ONE
+     * unit, not three separately guarded pieces. */
+
+    /* A REVERSAL OF EITHER SCAN DIRECTION is the same failure the two-walk
+     * design's own v_reverse/h_reverse flips already fixed, unchanged in
+     * kind: "the neighbour toward the surface" relocates (above/below
+     * swap, or the within-row scan direction swaps), so a row or column
+     * index this array's debounce was tracking under the OLD direction
+     * describes a boundary relationship the NEW direction does not have. */
+
+    /* Reproducing the ORIGINAL device report this fixed (landscape lock,
+     * gy small and tremor-noisy against a tall water column) against THIS
+     * mechanism shows the identical shape of corruption without the reset:
+     * a raw count compounding unboundedly across repeated direction flips
+     * instead of resetting where it should. */
+
+    /* A REGIME FLIP (vertical-dominant <-> horizontal-dominant) is new to
+     * THIS shape - shapes (2) and (3) never had it, because both regimes
+     * ran every frame unconditionally there. Here, the SAME array slot
+     * (indexed by cx) carries a different RECURRENCE depending on which
+     * regime is active - a vertical-dominant count chains down rows at a
+     * fixed column; a horizontal-dominant count chains across columns
+     * within a row, only occasionally borrowing a value from the row
+     * above or below. */
+
+    /* A value left behind by one regime is not simply "the same count
+     * under different bookkeeping" to the other regime's own read pattern
+     * - it is a value about a physically different neighbour relationship.
+     * Reset here for the same reason the two scan-direction flips already
+     * are: a brief, bounded bookkeeping correction rather than trusting a
+     * stale interpretation across the switch. */
+
+    /* MEASURED, host-side, a single sharp jostle across the 45-degree line
+     * in the middle of an otherwise steady near-horizontal hold (the
+     * regime-flip analogue of the landscape-lock model already used to
+     * measure the two scan-direction resets): the reset itself produces a
+     * small, SELF-HEALING blip immediately after the jostle ends and
+     * gravity returns to near-horizontal. */
+
+    /* 12 banded pairs the very next measured frame, falling to 6 one frame
+     * later, 0 the frame after that (LOCAL_DEPTH_WAKE_MS's own periodic
+     * wake finishes the job). */
+
+    /* Not the "visually a no-op" result the scan-direction resets
+     * measured, but bounded, transient, and gone within two frames at
+     * 30fps (well under 100ms), against an artificially instantaneous
+     * gravity step no real hand-tremor input produces (the tilt filter's
+     * own smoothing means a real crossing ramps through several frames,
+     * not one). Worth re-measuring on the device if a "brief pop near 45
+     * degrees" report ever comes back about this mechanism specifically. */
+
+    /* A SCAN-DIRECTION FLIP ONLY EARNS THE RESET IF THE ACTIVE REGIME CAN
+     * SEE IT, and that turned out to matter at exactly the orientations a
+     * hand actually holds this board at. */
+
+    /* AT AXIS LOCK ONE COMPONENT SITS ON ZERO: the device's own capture
+     * sidecars from the report this block was re-examined for read
      * tilt_x -12 and -195 against tilt_y 3342 and 4190 - portrait, with gx
      * hovering either side of zero. `new_h_reverse` is just `gx < 0`, so
      * ordinary hand tremor flips it many times a second, and EVERY ONE of
-     * those flips wiped the whole walk state. Measured, host-side, over 40
-     * frames of that exact tremor against a settled 40% pool: 40 resets in 40
-     * frames. Landscape is the mirror image with `new_v_reverse` as the noisy
-     * flag: 39 in 40. WHAT THOSE RESETS COST, measured rather than assumed -
-     * they are NOT the "flip of colours" this file's own local_depth_prev_cy
-     * comment tracks down (with the tremor running and nothing else changing,
-     * the displayed depth moved by at most 1 of 24 and no cell crossed a
-     * shade step). What they do is DISABLE THE DEBOUNCE OUTRIGHT:
-     * local_depth_top_ row[] is wiped to "untracked" before every single
-     * frame's paint, so a boundary can never be asked for a second time and
-     * can never COMMIT. The surface of a settled pool holds at 1 instead of
-     * committing to 0 forever, and every row beneath inherits it - mean
-     * displayed depth over the pool's 3956 interior cells measured 18.12 with
-     * the resets against 17.58 without, permanently, plus a three-array wipe
-     * every frame for a flag change nothing can observe. THE GATE IS EXACT
-     * ARITHMETIC, NOT A DEADBAND - deliberately, because this mechanism
-     * already removed one tuned dead zone and should not quietly grow
-     * another. Each condition below is a statement about whether the flipped
-     * flag can change a number THIS grid's walk actually computes, derived
-     * from the Bresenham arithmetic itself: VERTICAL-DOMINANT:
-     * `new_h_reverse` only supplies `xsign`, the SIGN of the per-row drift.
-     * That drift's running total across the whole grid is floor(grid_h * ax /
-     * ay) (see paint_row_n()'s "THE ROW OFFSET, WITHOUT AN ACCUMULATOR"), so
-     * when `grid_h * ax < ay` every row's step is 0, and the sign of nothing
-     * is still nothing. HORIZONTAL-DOMINANT: `new_v_reverse` only picks the
-     * cross-row source (`toward_surface`, dereferenced only when `step != 0`)
-     * and the sweep order that gives `local_depth_prev_row[]` its meaning.
-     * The within-row accumulator adds ay per cell from 0 and fires at ax, so
-     * when `grid_w * ay < ax` no cell in any row ever reads across a row at
-     * all, and neither of those two can be observed. A REGIME FLIP is never
-     * gated - it always changes what the array slot means, whatever the
-     * magnitudes are. Measured with the gate in place, same harness: portrait
-     * tremor 0 resets in 40 frames and the mean back to 17.58; landscape
-     * tremor 0 in 40; the genuine 45-degree crossing still resets, 2 flips in
-     * the 12-frame portrait-to-landscape ramp, unchanged. */
+     * those flips wiped the whole walk state. */
+
+    /* Measured, host-side, over 40 frames of that exact tremor against a
+     * settled 40% pool: 40 resets in 40 frames. Landscape is the mirror
+     * image with `new_v_reverse` as the noisy flag: 39 in 40. */
+
+    /* WHAT THOSE RESETS COST, measured rather than assumed - they are NOT
+     * the "flip of colours" this file's own local_depth_prev_cy comment
+     * tracks down (with the tremor running and nothing else changing, the
+     * displayed depth moved by at most 1 of 24 and no cell crossed a shade
+     * step). */
+
+    /* What they do is DISABLE THE DEBOUNCE OUTRIGHT: local_depth_top_row[]
+     * is wiped to "untracked" before every single frame's paint, so a
+     * boundary can never be asked for a second time and can never COMMIT.
+     * The surface of a settled pool holds at 1 instead of committing to 0
+     * forever, and every row beneath inherits it. */
+
+    /* Mean displayed depth over the pool's 3956 interior cells measured
+     * 18.12 with the resets against 17.58 without, permanently, plus a
+     * three-array wipe every frame for a flag change nothing can
+     * observe. */
+
+    /* THE GATE IS EXACT ARITHMETIC, NOT A DEADBAND - deliberately, because
+     * this mechanism already removed one tuned dead zone and should not
+     * quietly grow another. Each condition below is a statement about
+     * whether the flipped flag can change a number THIS grid's walk
+     * actually computes, derived from the Bresenham arithmetic itself. */
+
+    /* VERTICAL-DOMINANT: `new_h_reverse` only supplies `xsign`, the SIGN
+     * of the per-row drift. That drift's running total across the whole
+     * grid is floor(grid_h * ax / ay) (see paint_row_n()'s "THE ROW
+     * OFFSET, WITHOUT AN ACCUMULATOR"), so when `grid_h * ax < ay` every
+     * row's step is 0, and the sign of nothing is still nothing. */
+
+    /* HORIZONTAL-DOMINANT: `new_v_reverse` only picks the cross-row source
+     * (`toward_surface`, dereferenced only when `step != 0`) and the sweep
+     * order that gives `local_depth_prev_row[]` its meaning. The
+     * within-row accumulator adds ay per cell from 0 and fires at ax, so
+     * when `grid_w * ay < ax` no cell in any row ever reads across a row
+     * at all, and neither of those two can be observed. */
+
+    /* A REGIME FLIP is never gated - it always changes what the array
+     * slot means, whatever the magnitudes are. */
+
+    /* Measured with the gate in place, same harness: portrait tremor 0
+     * resets in 40 frames and the mean back to 17.58; landscape tremor 0
+     * in 40; the genuine 45-degree crossing still resets, 2 flips in the
+     * 12-frame portrait-to-landscape ramp, unchanged. */
     const bool drift_observable = ((long)grid_h * (long)ax >= (long)ay);
     const bool cross_row_observable = ((long)grid_w * (long)ay >= (long)ax);
     const bool v_reverse_matters = (new_v_reverse != local_depth_v_reverse_prev) &&
@@ -1448,74 +1570,99 @@ static void update_local_depth_gravity(int gx, int gy)
     local_depth_h_reverse = new_h_reverse;
 }
 
-/* LOCAL DEPTH'S OWN PERIODIC WAKE - closes the same gap SHINE_STEP_MS already
- * closes for the travelling shine (see that constant's own comment above, and
- * advance_shine() below, for the pattern this mirrors almost exactly). THE
- * BUG: the walk above is recomputed from THIS FRAME's gravity, every frame
- * paint_row_n() runs for a row - but a settled, sleeping block does not run
- * it again once nothing is moving, because nothing calls paint_row_n() for a
- * row draw_dirty_rows() never marks dirty. sand_enable_sleeping()'s own
- * comment (sand.h) - "everything wakes when the gravity direction changes...
- * since either can free a grain" - is a promise about the SIMULATION's
- * sleeping blocks (BLOCK_ACTIVE, whether PHYSICS gets re-examined), not about
- * this file's dirty_rows[] (whether PIXELS get repainted). A block can wake
- * for physics, find nothing actually needs to move, and go back to sleep
- * without ever touching dirty_rows[]. Ordinary hand wobble drifts gravity
- * continuously - smoothed by the tilt filter but never perfectly still - so
- * local_depth_scale_q8 above keeps changing, frame after frame, with no cell
- * in a settled pool ever moving to earn that pool's rows a repaint. The
- * result: a sleeping block's displayed depth is stuck at whatever it was the
- * last time something nearby genuinely disturbed it, while a neighbouring
- * block still being redrawn for an unrelated reason repaints with the CURRENT
- * walk output - a hard, rectangular seam between "stale" and "fresh" exactly
- * where one block's sleep boundary meets another's, in place of the smooth
- * gradient a puddle's own surface should read as. THE FIX is the same shape
- * as the shine's: an unconditional periodic tick that marks every row known
- * to hold a liquid cell dirty, regardless of what the simulation did that
- * frame - see row_has_liquid[] just below, advance_local_depth_wake() beside
- * advance_shine() further down, and draw_dirty_rows()'s own shine_moved block
- * for the precedent this repeats in the same shape. row_has_liquid[] GATES ON
- * ANY LIQUID CELL, RIM INCLUDED - not only an interior one, despite this
- * array existing purely to feed the blend that only an interior cell ever
- * reads. An earlier version gated on interior cells alone, which reproduced
- * this exact staleness bug one level down: ordinary grain-level settling
- * noise flips a cell between rim (`mask != 0`) and interior (`mask == 0`)
- * classification constantly at any real liquid surface, so a wide, shallow
- * pool's edge rows can read as all-rim for many consecutive ticks - the wake
- * skips them entirely for as long as that holds, which is unbounded - and
- * when a cell in one of those rows THEN flips back to interior, the very next
- * wake tick repaints it from CURRENT gravity/weight over a value that may be
- * frozen from an arbitrarily distant past. Gating on any liquid cell keeps
- * every liquid-bearing row on the same bounded refresh cadence regardless of
- * how its edges flicker between rim and interior, so by the time a cell IS
- * classified interior its row was already fresh as of the last wake tick -
- * see test_a_settled_edge_does_not_flicker_stale_to_fresh in
+/* LOCAL DEPTH'S OWN PERIODIC WAKE - closes the same gap SHINE_STEP_MS
+ * already closes for the travelling shine (see that constant's own comment
+ * above, and advance_shine() below, for the pattern this mirrors almost
+ * exactly). */
+
+/* THE BUG: the walk above is recomputed from THIS FRAME's gravity, every
+ * frame paint_row_n() runs for a row - but a settled, sleeping block does
+ * not run it again once nothing is moving, because nothing calls
+ * paint_row_n() for a row draw_dirty_rows() never marks dirty. */
+
+/* sand_enable_sleeping()'s own comment (sand.h) - "everything wakes when
+ * the gravity direction changes... since either can free a grain" - is a
+ * promise about the SIMULATION's sleeping blocks (BLOCK_ACTIVE, whether
+ * PHYSICS gets re-examined), not about this file's dirty_rows[] (whether
+ * PIXELS get repainted). A block can wake for physics, find nothing
+ * actually needs to move, and go back to sleep without ever touching
+ * dirty_rows[]. */
+
+/* Ordinary hand wobble drifts gravity continuously - smoothed by the tilt
+ * filter but never perfectly still - so local_depth_scale_q8 above keeps
+ * changing, frame after frame, with no cell in a settled pool ever moving
+ * to earn that pool's rows a repaint. */
+
+/* The result: a sleeping block's displayed depth is stuck at whatever it
+ * was the last time something nearby genuinely disturbed it, while a
+ * neighbouring block still being redrawn for an unrelated reason repaints
+ * with the CURRENT walk output - a hard, rectangular seam between "stale"
+ * and "fresh" exactly where one block's sleep boundary meets another's, in
+ * place of the smooth gradient a puddle's own surface should read as. */
+
+/* THE FIX is the same shape as the shine's: an unconditional periodic tick
+ * that marks every row known to hold a liquid cell dirty, regardless of
+ * what the simulation did that frame - see row_has_liquid[] just below,
+ * advance_local_depth_wake() beside advance_shine() further down, and
+ * draw_dirty_rows()'s own shine_moved block for the precedent this repeats
+ * in the same shape. */
+
+/* row_has_liquid[] GATES ON ANY LIQUID CELL, RIM INCLUDED - not only an
+ * interior one, despite this array existing purely to feed the blend that
+ * only an interior cell ever reads. An earlier version gated on interior
+ * cells alone, which reproduced this exact staleness bug one level down:
+ * ordinary grain-level settling noise flips a cell between rim (`mask !=
+ * 0`) and interior (`mask == 0`) classification constantly at any real
+ * liquid surface. */
+
+/* So a wide, shallow pool's edge rows can read as all-rim for many
+ * consecutive ticks - the wake skips them entirely for as long as that
+ * holds, which is unbounded - and when a cell in one of those rows THEN
+ * flips back to interior, the very next wake tick repaints it from
+ * CURRENT gravity/weight over a value that may be frozen from an
+ * arbitrarily distant past. */
+
+/* Gating on any liquid cell keeps every liquid-bearing row on the same
+ * bounded refresh cadence regardless of how its edges flicker between rim
+ * and interior, so by the time a cell IS classified interior its row was
+ * already fresh as of the last wake tick - see
+ * test_a_settled_edge_does_not_flicker_stale_to_fresh in
  * suite_sand_liquid_depth.c for the reproduction and the measured collapse
- * this closes. A SEPARATE clock from the shine's own, on purpose - not folded
- * into one shared tick for two features. Different feature, different rate,
- * independently tunable - the same reasoning that keeps FOAM_PHASE_MS's own
- * clock apart from the shine's rather than reusing it. 120 IS A STARTING
- * POINT, a look/cost trade-off tuned by eye and by device measurement, not a
- * physical constant - exactly the same status SHINE_STEP_MS's own comment
- * gives that constant: speed comes from the STEP SIZE, not from ticking more
- * often, so a SHORTER value here tracks gravity's drift more closely at a
+ * this closes. */
+
+/* A SEPARATE clock from the shine's own, on purpose - not folded into one
+ * shared tick for two features. Different feature, different rate,
+ * independently tunable - the same reasoning that keeps FOAM_PHASE_MS's
+ * own clock apart from the shine's rather than reusing it. */
+
+/* 120 IS A STARTING POINT, a look/cost trade-off tuned by eye and by
+ * device measurement, not a physical constant - exactly the same status
+ * SHINE_STEP_MS's own comment gives that constant: speed comes from the
+ * STEP SIZE, not from ticking more often. */
+
+/* A SHORTER value here tracks gravity's drift more closely at a
  * proportionally HIGHER redraw cost (every row holding any liquid cell
- * repainted in full, every tick), while a longer value is cheaper and drifts
- * more visibly out of date before the next wake catches it up. Unlike glass,
- * a large body of water, oil, lava or acid can cover far more of the screen
- * than a typical hatched scene ever does, so this cost is worth watching
- * closely on the device before trusting 120 as final - it has not been
- * measured there yet. WIDENING row_has_liquid[] TO RIM CELLS TOO does not
- * change this estimate in any way that matters: a row with liquid but no
- * interior cell at all is a thin strip sitting right at a pool's edge - one
- * or two rows at the very top, bottom, or side of a settled body, where the
- * liquid is shallow enough that every cell in the row happens to have an
- * empty cardinal neighbour at that instant. A pool's INTERIOR - the bulk of
- * its rows, the part this array already marked before the widening - is
- * unaffected: a row with any interior cell was already gated in, rim or not.
- * The widening can only ADD the handful of edge-only rows the old condition
- * used to skip; it cannot double the marked-row count the way gating on "any
- * liquid" from scratch would if the array previously gated on nothing at all. */
+ * repainted in full, every tick), while a longer value is cheaper and
+ * drifts more visibly out of date before the next wake catches it up. */
+
+/* WARNING: unlike glass, a large body of water, oil, lava or acid can
+ * cover far more of the screen than a typical hatched scene ever does, so
+ * this cost is worth watching closely on the device before trusting 120
+ * as final - IT HAS NOT BEEN MEASURED THERE YET. */
+
+/* WIDENING row_has_liquid[] TO RIM CELLS TOO does not change this
+ * estimate in any way that matters: a row with liquid but no interior cell
+ * at all is a thin strip sitting right at a pool's edge - one or two rows
+ * at the very top, bottom, or side of a settled body, where the liquid is
+ * shallow enough that every cell in the row happens to have an empty
+ * cardinal neighbour at that instant. */
+
+/* A pool's INTERIOR - the bulk of its rows, the part this array already
+ * marked before the widening - is unaffected: a row with any interior
+ * cell was already gated in, rim or not. The widening can only ADD the
+ * handful of edge-only rows the old condition used to skip; it cannot
+ * double the marked-row count the way gating on "any liquid" from scratch
+ * would if the array previously gated on nothing at all. */
 #define LOCAL_DEPTH_WAKE_MS 120
 
 /* Real time accumulated toward the next local-depth wake tick - carried
@@ -2412,38 +2559,51 @@ static mu_Color mu_color_hex(uint32_t rgb)
  * other UI in the shell (see ui_launcher.c), rebuilt every frame while
  * SAND_UI_PALETTE is the active screen rather than drawn on open, on
  * selection and on a quarter-turn change. ui_end() only repaints when the
- * command list actually changed, so a held-steady panel still costs nothing -
- * see ui.h's own top comment on that skip. sand_frame()'s SAND_UI_PALETTE
- * handling calls this unconditionally now; there is no more stored "last
- * drawn at this turn" to compare against. EACH TILE IS A REAL mu_button() NOW
- * Used to be a manually bezelled rect, hit-tested separately by palette_hit()
- * on raw screen coordinates - see sand_ui.h's own "WHO HIT-TESTS AND WHO
- * DECIDES" comment for why that split existed and why it does not any more.
- * microui now lays each tile out AND hit-tests it, through the very same
+ * command list actually changed, so a held-steady panel still costs
+ * nothing - see ui.h's own top comment on that skip. */
+
+/* sand_frame()'s SAND_UI_PALETTE handling calls this unconditionally now;
+ * there is no more stored "last drawn at this turn" to compare against. */
+
+/* EACH TILE IS A REAL mu_button() NOW. Used to be a manually bezelled
+ * rect, hit-tested separately by palette_hit() on raw screen coordinates -
+ * see sand_ui.h's own "WHO HIT-TESTS AND WHO DECIDES" comment for why that
+ * split existed and why it does not any more. */
+
+/* microui now lays each tile out AND hit-tests it, through the very same
  * mu_button() every other button in this shell already uses; a click just
- * tells this loop which tile index to hand to sand_ui_tile_clicked(), which
- * is where "what a click on this tile means" still lives, unchanged, and
- * still host-tested - see suite_sand_ui.c. THE WHOLE PANEL TURNS WITH THE
- * BOARD - BUT NOT BY DECIDING SO ITSELF This function used to compute its own
- * quarter turn from gravity (gravity_quarter_turn()) and push it with
- * ui_set_transform() before ui_begin(), which is what made every tile drawn
- * below - and hit-tested, through the same transform - turn with the board.
- * That decision now belongs to the shell (see display.h and main.c's display
- * sampling): by the time this function runs, main.c has already called
- * ui_set_transform() for whatever quarter is current, so the panel simply
- * inherits it. No `turn` parameter, no ui_set_transform() call here any more
- * - there would be nothing for this function to base one on that
+ * tells this loop which tile index to hand to sand_ui_tile_clicked(),
+ * which is where "what a click on this tile means" still lives, unchanged,
+ * and still host-tested - see suite_sand_ui.c. */
+
+/* THE WHOLE PANEL TURNS WITH THE BOARD - BUT NOT BY DECIDING SO ITSELF.
+ * This function used to compute its own quarter turn from gravity
+ * (gravity_quarter_turn()) and push it with ui_set_transform() before
+ * ui_begin(), which is what made every tile drawn below - and hit-tested,
+ * through the same transform - turn with the board. */
+
+/* That decision now belongs to the shell (see display.h and main.c's
+ * display sampling): by the time this function runs, main.c has already
+ * called ui_set_transform() for whatever quarter is current, so the panel
+ * simply inherits it. */
+
+/* No `turn` parameter, no ui_set_transform() call here any more - there
+ * would be nothing for this function to base one on that
  * display_shell_quarter() does not already know, and a second opinion here
- * could only disagree with the shell's. Every tile still hit-tests through
- * microui the same feed_input()-through-the-inverse-transform path every
- * other described UI in this shell takes (see ui.c's "Touch to mouse"
- * comment), so turning the shell's transform turns this panel's hit-testing
- * right along with its drawing - nothing here hard-codes physical screen
- * coordinates the way palette_hit() used to. Nothing in this loop branches on
- * the turn by hand, either: draw_command() in ui.c derives the quarter turn
- * from whatever transform is in force and picks gfx_text_font()'s turned
- * glyph path accordingly, so mu_button()'s own centred label - and every rect
- * this loop draws - comes out turned for free. */
+ * could only disagree with the shell's. */
+
+/* Every tile still hit-tests through microui the same
+ * feed_input()-through-the-inverse-transform path every other described UI
+ * in this shell takes (see ui.c's "Touch to mouse" comment), so turning
+ * the shell's transform turns this panel's hit-testing right along with
+ * its drawing - nothing here hard-codes physical screen coordinates the
+ * way palette_hit() used to. */
+
+/* Nothing in this loop branches on the turn by hand, either: draw_command()
+ * in ui.c derives the quarter turn from whatever transform is in force and
+ * picks gfx_text_font()'s turned glyph path accordingly, so mu_button()'s
+ * own centred label - and every rect this loop draws - comes out turned
+ * for free. */
 static void draw_palette(const input_t *input)
 {
     mu_Context *ctx = ui_context();
