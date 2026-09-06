@@ -492,6 +492,15 @@ static void test_turning_a_settled_pool_to_landscape_fits_in_the_frame_budget(vo
         "THIS BUDGET IS UNPEGGED: see the comment above it");
 }
 
+#ifdef SAND_HOST_PROBE
+/* Host-only timing probe (see the full-step control's own wrapper for the
+ * pattern). */
+void sand_host_probe_run_settled_pool_to_landscape(void)
+{
+    test_turning_a_settled_pool_to_landscape_fits_in_the_frame_budget();
+}
+#endif
+
 static void test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget(void)
 {
     /* A harder worst case than the single-material flip above: three
