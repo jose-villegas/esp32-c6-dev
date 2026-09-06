@@ -44,6 +44,29 @@
 
 static const char *TAG = "shell";
 
+#if CONFIG_LAUNCHER_DEVELOPMENT
+#include "esp_heap_caps.h"
+
+/* BOOT HEAP TRACE (bd esp32c6-8h2). Free heap has never predicted whether
+ * the next big allocation fits: the framebuffer (322 KiB) and the sand
+ * grid (41 KiB) each need ONE CONTIGUOUS block, and about 20 KiB of the
+ * free heap has been sitting outside the largest one with nothing saying
+ * where it went. Printing both numbers at each boot phase says which phase
+ * loses it, which is the question two on-device OOM incidents both had to
+ * answer by guesswork.
+ *
+ * Development builds only, and only at boot - a handful of log lines
+ * before the frame loop exists, not something any hot path pays for. */
+static void heap_mark(const char *where)
+{
+    ESP_LOGI(TAG, "HEAPMARK %-18s free %6u largest %6u", where,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
+}
+#else
+#define heap_mark(where) ((void)0)
+#endif
+
 /* Leaving an app is a swipe up from the bottom edge, the same gesture the
  * board's stock firmware used. It replaced a small back button, which was fine
  * to aim at with a mouse and miserable with a fingertip. The recognition
@@ -364,9 +387,12 @@ static void report_fps(int64_t now_us, int64_t *window_start, uint32_t *frames)
 
 void app_main(void)
 {
+    heap_mark("boot");
+
     /* Before the display: the SD card shares SPI2 with the panel, so this is
      * the one moment it can be tested without tearing anything down. */
     post_run_before_display();
+    heap_mark("after sd probe");
 
     if (!gfx_init()) {
         ESP_LOGE(TAG, "Graphics failed to start; nothing more to do");
@@ -374,6 +400,16 @@ void app_main(void)
          * idle and unflashable. */
         while (1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
     }
+
+    heap_mark("after gfx_init");
+#if CONFIG_LAUNCHER_DEVELOPMENT
+    /* The one full block map of the boot, taken at the moment that matters:
+     * the framebuffer is placed, every driver that runs before it has had
+     * its say, and nothing since has moved. Reading it beside the marks
+     * above is what turns "20 KiB is missing" into "20 KiB is sitting at
+     * this address, below the framebuffer, left by this phase". */
+    heap_caps_dump(MALLOC_CAP_DMA);
+#endif
 
     /* The rest of the health check, now that the display is up and can be
      * reported on. Ships in every build, release included: "is this board
@@ -387,6 +423,7 @@ void app_main(void)
     if (!post_run_after_display()) {
         show_post_failures();
     }
+    heap_mark("after post");
 
 #if CONFIG_LAUNCHER_SELFTEST && CONFIG_LAUNCHER_SELFTEST_AUTORUN
     /* Diagnostics build only - a default build compiles none of this. The
@@ -415,6 +452,7 @@ void app_main(void)
      * says so before it does anything decorative, and before touch starts,
      * because there is nothing yet for a tap to reach. */
     boot_anim_run();
+    heap_mark("after boot anim");
 
     touch_start();
     buttons_start();
@@ -446,6 +484,7 @@ void app_main(void)
     shell_display.quarter = DISPLAY_DEFAULT_QUARTER;
 
     ui_launcher_init();
+    heap_mark("shell ready");
 
     /* ui_init() (inside ui_launcher_init() above) resets the transform to
      * identity - it has to, so a stale transform from a previous run of a

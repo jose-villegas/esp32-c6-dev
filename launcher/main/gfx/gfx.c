@@ -233,6 +233,17 @@ bool gfx_init(void)
         return false;
     }
 
+#if CONFIG_LAUNCHER_DEVELOPMENT
+    /* The state the framebuffer is about to be placed into: everything the
+     * SD probe and the panel bring-up left behind, before the one
+     * allocation that has to be contiguous takes its share. Paired with
+     * main.c's own HEAPMARK lines either side of gfx_init() - see
+     * heap_mark()'s comment there, and bd esp32c6-8h2. */
+    ESP_LOGI(TAG, "HEAPMARK %-18s free %6u largest %6u", "before framebuffer",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
+#endif
+
     const size_t bytes = (size_t)GFX_WIDTH * GFX_HEIGHT * sizeof(gfx_color_t);
     fb = heap_caps_malloc(bytes, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
     if (fb == NULL) {
@@ -254,9 +265,17 @@ bool gfx_init(void)
     gfx_clear_clip();
     gfx_mark_all_dirty();
 
-    ESP_LOGI(TAG, "%dx%d framebuffer, %u bytes, %u bytes of heap still free",
-             GFX_WIDTH, GFX_HEIGHT, (unsigned)bytes,
-             (unsigned)esp_get_free_heap_size());
+    /* Both numbers, not just free heap: what decides whether the sand app's
+     * grid can still be allocated after this is the LARGEST CONTIGUOUS
+     * block, and the two have differed by about 20 KiB with nothing in the
+     * log saying so (bd esp32c6-8h2). The framebuffer's own address comes
+     * along because a block map is unreadable without knowing which block
+     * is this one. */
+    ESP_LOGI(TAG, "%dx%d framebuffer at %p, %u bytes; heap free %u, "
+                  "largest DMA block %u",
+             GFX_WIDTH, GFX_HEIGHT, (void *)fb, (unsigned)bytes,
+             (unsigned)esp_get_free_heap_size(),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
     return true;
 #else
     /* No panel, no DMA, no heap capabilities to ask for - a host renderer
