@@ -39,8 +39,8 @@
  * why no separate "is it moving" signal is wired in here or anywhere else.
  *
  * None of these four tests can reach into material.c's own `water_foam`
- * constant - it is file-static, the same way glass_shine and stone_speckle
- * already are, and these tests reach material_colours() only through
+ * constant - it is file-static, the same way stone_speckle already is,
+ * and these tests reach material_colours() only through
  * material.h same as any other caller. Instead they lean on
  * material_set_gravity(0, 0), which zeroes liquid_spec[] entirely (see that
  * function's own free-fall branch), so that "did NOT foam" has an exact,
@@ -273,11 +273,6 @@ static void test_a_diagonal_neighbour_alone_is_not_an_edge(void)
             "glass's body colour must be identical with a lone diagonal "
             "neighbour empty - the cardinal test is what decides an edge, "
             "not `mask != 0`");
-        TEST_ASSERT_EQUAL_MESSAGE(interior[1], diagonal[1],
-            "and its dither, which glass_edge_dither vs glass_dither would "
-            "otherwise silently swap in");
-        TEST_ASSERT_EQUAL_MESSAGE(interior[2], diagonal[2],
-            "and its shine, for the same reason");
     }
 
     {

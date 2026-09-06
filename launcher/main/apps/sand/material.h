@@ -1979,3 +1979,12 @@ void material_set_foam_phase(unsigned phase);
  * SAND_CULLET_BASE for why the shade no longer names one fixed colour by
  * itself. */
 void material_set_cullet_phase(unsigned phase);
+
+/* Called once per frame, before painting - not really a clock at all,
+ * unlike the three above: app_sand.c hands this a plain SNAPSHOT of
+ * gravity's current bearing (gravity_bearing_q16() there, shifted down
+ * by GLASS_PHASE_SHIFT), not a value accumulated over time. */
+
+/* Signed, unlike foam's and cullet's phase - this one names a direction,
+ * not a rate, and holding any tilt steady leaves it exactly where it is. */
+void material_set_glass_phase(int phase);
