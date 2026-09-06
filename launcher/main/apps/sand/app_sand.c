@@ -1031,6 +1031,12 @@ static uint8_t row_has_shine[GRID_H_MAX];
  * paint_row_n() right beside row_has_shine[cy]'s own population point. */
 static uint8_t row_has_cullet[GRID_H_MAX];
 
+/* Which rows painted a GLASS cell last time - the same mechanism again,
+ * for glass_phase's own gravity drift: a settled pane has nothing in the
+ * cell byte to mark its row dirty, so without this it freezes at
+ * whatever shade it last painted and never answers a tilt again. */
+static uint8_t row_has_glass[GRID_H_MAX];
+
 /* How much a WATER cell's grain hash is coarsened before it reaches
  * material_colours() - see the comment inside paint_row_n() where that
  * coarsening actually happens for the full account of why. 3 means an 8x8
@@ -1809,6 +1815,7 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
     row_has_shine[cy] = 0;
     row_has_liquid[cy] = 0;
     row_has_cullet[cy] = 0;
+    row_has_glass[cy] = 0;
 
     /* grid_w, not a parameter: it does not need to be a compile-time
      * constant the way n does - only the innermost dy/dx loops below are hot
@@ -2163,6 +2170,12 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
             row_has_cullet[cy] = 1;
         }
 
+        /* row_has_glass[]'s own population point, same shape as cullet's
+         * just above - see that array's comment for the mechanism. */
+        if (CELL_MATERIAL(row[cx]) == MAT_GLASS) {
+            row_has_glass[cy] = 1;
+        }
+
         gfx_color_t col[3];
         const material_pattern_t pat =
             material_colours(row[cx], hash, mask, depth, col);
@@ -2435,7 +2448,21 @@ static bool advance_local_depth_wake(uint32_t dt_ms)
     return true;
 }
 
-static void draw_dirty_rows(bool shine_moved, bool local_depth_woke, bool cullet_moved)
+/* Advances glass's phase, and says whether the DISCRETE band changed -
+ * not merely whether the accumulator moved, which is true almost every
+ * frame gravity is nonzero. Same affordability reasoning advance_shine()
+ * and advance_cullet() already rely on. */
+static bool advance_glass_phase(uint32_t dt_ms, int gy)
+{
+    const int before = (int)(glass_phase_accum / GLASS_PHASE_SCALE);
+    glass_phase_accum += (int64_t)gy * (int64_t)dt_ms;
+    const int after = (int)(glass_phase_accum / GLASS_PHASE_SCALE);
+    material_set_glass_phase(after);
+    return after != before;
+}
+
+static void draw_dirty_rows(bool shine_moved, bool local_depth_woke,
+                             bool cullet_moved, bool glass_moved)
 {
     gfx_color_t *fb = gfx_framebuffer();
 
@@ -2493,6 +2520,16 @@ static void draw_dirty_rows(bool shine_moved, bool local_depth_woke, bool cullet
     if (cullet_moved) {
         for (int cy = 0; cy < grid_h; cy++) {
             if (row_has_cullet[cy]) {
+                dirty_rows[cy] = 1;
+            }
+        }
+    }
+
+    /* THE SAME MECHANISM ONCE MORE, for glass's phase - see row_has_glass[]'s
+     * own comment above for why a settled pane needs this at all. */
+    if (glass_moved) {
+        for (int cy = 0; cy < grid_h; cy++) {
+            if (row_has_glass[cy]) {
                 dirty_rows[cy] = 1;
             }
         }
@@ -3702,14 +3739,15 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
              * draw_dirty_rows(): the markers are drawn straight over the
              * grid's own pixels, not stored in it, so a full repaint of the
              * grid alone would erase them without this. Nothing here calls
-             * advance_shine(), advance_local_depth_wake() or advance_cullet(),
-             * or passes any of their results along - the simulation is
-             * paused while the panel is open, so this repaint happens only
-             * on an actual orientation change, never once per frame; ticking
-             * any of the three clocks on a static canvas would be paying an
-             * animation cost for a picture that already looks right. */
+             * advance_shine(), advance_local_depth_wake(), advance_cullet()
+             * or advance_glass_phase(), or passes any of their results along
+             * - the simulation is paused while the panel is open, so this
+             * repaint happens only on an actual orientation change, never
+             * once per frame; ticking any of the four wakes on a static
+             * canvas would be paying an animation cost for a picture that
+             * already looks right. */
             mark_sand_fully_dirty();
-            draw_dirty_rows(false, false, false);
+            draw_dirty_rows(false, false, false, false);
             draw_emitter_markers();
             palette_drawn_quarter = quarter;
         }
@@ -3810,13 +3848,6 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
     foam_elapsed_ms += dt_ms;
     material_set_foam_phase(foam_elapsed_ms / FOAM_PHASE_MS);
 
-    /* Glass's own phase, driven by GRAVITY not a clock - see
-     * GLASS_PHASE_SCALE above. gy already carries both magnitude and
-     * sign, so a harder tilt runs this faster and the opposite tilt runs
-     * it backwards for free. */
-    glass_phase_accum += (int64_t)gy * (int64_t)dt_ms;
-    material_set_glass_phase((int)(glass_phase_accum / GLASS_PHASE_SCALE));
-
 #if CONFIG_LAUNCHER_DEVELOPMENT
     const int64_t t1 = esp_timer_get_time();
     int awake_blocks, awake_cells;
@@ -3831,9 +3862,11 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
      * All three are driven by this same dt_ms because all three need real
      * elapsed time, not a frame count, but they are three independent
      * ticks at three independently tuned rates, not one clock wearing three
-     * hats. */
+     * hats. Glass's own wake rides alongside them here, driven by gy
+     * rather than a fourth clock - see advance_glass_phase()'s own
+     * comment for why it ticks by gravity instead. */
     draw_dirty_rows(advance_shine(dt_ms), advance_local_depth_wake(dt_ms),
-                     advance_cullet(dt_ms));
+                     advance_cullet(dt_ms), advance_glass_phase(dt_ms, gy));
 
     /* After the rows, every frame - see draw_emitter_markers()'s own
      * comment for why once would not be enough. */
