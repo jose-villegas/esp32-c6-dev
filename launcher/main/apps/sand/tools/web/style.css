@@ -67,23 +67,6 @@ html, body {
 }
 #loading[hidden] { display: none; }
 
-#fullscreen-btn {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  border-radius: 6px;
-  background: rgba(17, 20, 31, .75);
-  border: 1px solid var(--border);
-  color: var(--text);
-  font-size: 16px;
-  line-height: 1;
-  cursor: pointer;
-}
-#fullscreen-btn[hidden] { display: none; }
-
 /* :fullscreen only applies to the element actually passed to
  * requestFullscreen() (#app, in app.js) - the browser handles centering the
  * fullscreened element on the screen itself, this just needs to fill it

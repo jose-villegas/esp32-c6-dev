@@ -242,8 +242,7 @@ if (requestFs) {
   ["fullscreenchange", "webkitfullscreenchange"].forEach((ev) =>
     document.addEventListener(ev, () => {
       const active = !!(document.fullscreenElement || document.webkitFullscreenElement);
-      fsBtn.textContent = active ? "✕" : "⛶";
-      fsBtn.setAttribute("aria-label", active ? "Exit fullscreen" : "Fullscreen");
+      fsBtn.textContent = active ? "Exit fullscreen" : "Fullscreen";
     }));
 }
 
