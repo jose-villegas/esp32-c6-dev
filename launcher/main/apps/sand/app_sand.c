@@ -1088,11 +1088,11 @@ static uint32_t foam_elapsed_ms;
  * see advance_cullet() for why this one needs the sibling shape instead). */
 static uint32_t cullet_elapsed_ms;
 
-/* How much accumulated gravity*time slides glass's phase by one band step -
- * tuned by eye against a resting tilt_y around 3300-4200 (suite_sand_
- * liquid_depth.c's own sidecars): about a step a second there, a slow
- * shimmer, not a flicker. First to move if it reads too fast or slow. */
-#define GLASS_PHASE_SCALE 2000000
+/* How much accumulated bearing*time (see gravity_bearing_q16() below)
+ * slides glass's phase by one band step - a first guess, scaled up from
+ * an earlier gy-only version by roughly the ratio between a Q16 quarter-
+ * turn and a resting tilt_y. First to move if it reads too fast or slow. */
+#define GLASS_PHASE_SCALE 20000000
 
 /* Gravity accumulated toward the next glass phase step, carried across
  * frames the same way cullet_elapsed_ms is - except signed and never
@@ -2448,14 +2448,39 @@ static bool advance_local_depth_wake(uint32_t dt_ms)
     return true;
 }
 
+/* A trig-free BEARING for (gx, gy): a signed value in Q16 units of a
+ * quarter-turn (a full rotation spans 4.0, i.e. -131072..131072),
+ * increasing monotonically all the way around the circle. Not a true
+ * angle - the step size varies within a quadrant - but continuous. */
+
+/* glass_phase used to read gy alone, which is blind to any tilt in the
+ * gx direction: rotating within a quadrant where gy barely changes moved
+ * nothing, and only the tilts that swung gy hard did anything - reading
+ * as a few "cardinal" positions rather than a smooth sweep. */
+
+/* Standard L1 pseudoangle trick: dx / (|dx| + |dy|) sweeps -1..1 across
+ * one quadrant; folding by dy's sign and that ratio's own sign turns the
+ * four separate ramps into one monotonic sweep over the full turn. */
+static int gravity_bearing_q16(int gx, int gy)
+{
+    const int64_t ax = gx < 0 ? -(int64_t)gx : (int64_t)gx;
+    const int64_t ay = gy < 0 ? -(int64_t)gy : (int64_t)gy;
+    const int64_t denom = ax + ay;
+    if (denom == 0) {
+        return 0;   /* flat or free fall: no bearing to report */
+    }
+    const int64_t p_q16 = ((int64_t)gx << 16) / denom;   /* -65536..65536 */
+    return (int)(gy < 0 ? (p_q16 - 65536) : (65536 - p_q16));
+}
+
 /* Advances glass's phase, and says whether the DISCRETE band changed -
  * not merely whether the accumulator moved, which is true almost every
  * frame gravity is nonzero. Same affordability reasoning advance_shine()
  * and advance_cullet() already rely on. */
-static bool advance_glass_phase(uint32_t dt_ms, int gy)
+static bool advance_glass_phase(uint32_t dt_ms, int gx, int gy)
 {
     const int before = (int)(glass_phase_accum / GLASS_PHASE_SCALE);
-    glass_phase_accum += (int64_t)gy * (int64_t)dt_ms;
+    glass_phase_accum += (int64_t)gravity_bearing_q16(gx, gy) * (int64_t)dt_ms;
     const int after = (int)(glass_phase_accum / GLASS_PHASE_SCALE);
     material_set_glass_phase(after);
     return after != before;
@@ -3862,11 +3887,11 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
      * All three are driven by this same dt_ms because all three need real
      * elapsed time, not a frame count, but they are three independent
      * ticks at three independently tuned rates, not one clock wearing three
-     * hats. Glass's own wake rides alongside them here, driven by gy
-     * rather than a fourth clock - see advance_glass_phase()'s own
-     * comment for why it ticks by gravity instead. */
+     * hats. Glass's own wake rides alongside them here, driven by
+     * gravity's own bearing rather than a fourth clock - see
+     * gravity_bearing_q16()'s own comment for why. */
     draw_dirty_rows(advance_shine(dt_ms), advance_local_depth_wake(dt_ms),
-                     advance_cullet(dt_ms), advance_glass_phase(dt_ms, gy));
+                     advance_cullet(dt_ms), advance_glass_phase(dt_ms, gx, gy));
 
     /* After the rows, every frame - see draw_emitter_markers()'s own
      * comment for why once would not be enough. */
