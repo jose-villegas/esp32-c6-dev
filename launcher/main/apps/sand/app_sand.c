@@ -1031,6 +1031,12 @@ static uint8_t row_has_shine[GRID_H_MAX];
  * paint_row_n() right beside row_has_shine[cy]'s own population point. */
 static uint8_t row_has_cullet[GRID_H_MAX];
 
+/* Which rows painted a GLASS cell last time - the same mechanism again,
+ * for glass_phase's own gravity drift: a settled pane has nothing in the
+ * cell byte to mark its row dirty, so without this it freezes at
+ * whatever shade it last painted and never answers a tilt again. */
+static uint8_t row_has_glass[GRID_H_MAX];
+
 /* How much a WATER cell's grain hash is coarsened before it reaches
  * material_colours() - see the comment inside paint_row_n() where that
  * coarsening actually happens for the full account of why. 3 means an 8x8
@@ -1081,6 +1087,17 @@ static uint32_t foam_elapsed_ms;
  * pattern this follows (unlike foam_elapsed_ms, which is never decremented -
  * see advance_cullet() for why this one needs the sibling shape instead). */
 static uint32_t cullet_elapsed_ms;
+
+/* Bits of gravity_bearing_q16()'s range glass_phase drops - not a rate,
+ * see advance_glass_phase(). Keeps an earlier, coarser version's pacing
+ * (one sweep per sixteenth-turn) but resolves it into 256 shades instead
+ * of jumping between 8, so a small tilt moves the shade a small amount. */
+#define GLASS_PHASE_SHIFT 7
+
+/* The last phase glass_phase actually painted at, so advance_glass_phase()
+ * can tell whether this frame's snapshot differs enough to be worth
+ * repainting - see that function's own comment. */
+static int glass_last_phase;
 
 /*=============================================================================
  * A LIQUID INTERIOR'S LOCAL DEPTH - replaces a screen-position gradient with
@@ -1797,6 +1814,7 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
     row_has_shine[cy] = 0;
     row_has_liquid[cy] = 0;
     row_has_cullet[cy] = 0;
+    row_has_glass[cy] = 0;
 
     /* grid_w, not a parameter: it does not need to be a compile-time
      * constant the way n does - only the innermost dy/dx loops below are hot
@@ -1963,11 +1981,11 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
          * consumer of its hash: material_colours()'s foam dither (see that
          * function's own comment on its water branch, in material.c). Every
          * other material still gets material_grain_hash(cx, cy) - the FINE,
-         * per-cell hash - completely unchanged: stone's and wood's speckle
-         * and glass's hatch all depend on adjacent cells disagreeing, and
-         * coarsening their hash the way water's is coarsened here would
-         * flatten them into the same striping bug material_grain_hash()'s
-         * own comment already tells the story of. */
+         * per-cell hash - completely unchanged: stone's, wood's and glass's
+         * grain all depend on adjacent cells disagreeing, and coarsening
+         * their hash the way water's is coarsened here would flatten them
+         * into the same striping bug material_grain_hash()'s own comment
+         * already tells the story of. */
         const bool cell_is_water = CELL_MATERIAL(row[cx]) == MAT_WATER;
         const unsigned hash = cell_is_water
             ? material_grain_hash(cx >> FOAM_BLOB_SHIFT, cy >> FOAM_BLOB_SHIFT)
@@ -2151,6 +2169,12 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
             row_has_cullet[cy] = 1;
         }
 
+        /* row_has_glass[]'s own population point, same shape as cullet's
+         * just above - see that array's comment for the mechanism. */
+        if (CELL_MATERIAL(row[cx]) == MAT_GLASS) {
+            row_has_glass[cy] = 1;
+        }
+
         gfx_color_t col[3];
         const material_pattern_t pat =
             material_colours(row[cx], hash, mask, depth, col);
@@ -2178,93 +2202,40 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
             continue;
         }
 
-        /* Diagonals BOTH ways, and brightest where two cross - which is
-         * what makes it read as light caught on a pane rather than as a
-         * pattern printed on one. A single family of lines was almost
-         * invisible; the crossings are what the eye picks up.
-         *
-         * Both diagonals are drawn identically today - no gravity
-         * asymmetry between them, and none wanted: this is the surface's
-         * fixed woven texture, not the light landing on it. An earlier
-         * version favoured whichever one aligned with the board's tilt;
-         * see SHINE_PERIOD's own comment above for why a gravity-aligned
-         * difference like that turned out to be imperceptible on this
-         * grid and was dropped - the shine below is where gravity is
-         * expressed now, as a continuously rotating angle rather than a
-         * choice between these two.
-         *
-         * Measured in SCREEN pixels rather than within the block, so the
-         * lines run unbroken from one cell into the next instead of
-         * restarting at every boundary. That is the whole reason this
-         * cannot be constant-folded the way the flat loop above is: the
-         * phase depends on where the cell is.
-         *
-         * Still inside the block as far as the dirty-run tracking is
-         * concerned - that works on grid CELLS (row_runs_find below), and
-         * every cell is painted whatever its neighbours are, so no run is
-         * broken by any of this. */
-        const int base = (cx + cy) * n;
-        const int diff = (cx - cy) * n;
-
         /* The shine's own axis, in Q8 screen-pixel units: this cell's
-         * origin projected onto the current gravity direction (shine_ux_q8/
-         * shine_uy_q8, updated once a frame - see material_shine_direction()
-         * in material.h). Computed once per cell, same as base/diff above,
-         * so the per-pixel loop below only ever adds dx/dy's own share of
-         * the projection. */
+         * origin projected onto current gravity (shine_ux_q8/shine_uy_q8,
+         * updated once a frame - material_shine_direction(), material.h).
+         * Computed once per cell; the loop below adds dx/dy's own share. */
         const int shine_base_q8 = (cx * n) * shine_ux_q8 + (cy * n) * shine_uy_q8;
 
         for (int dy = 0; dy < n; dy++) {
             for (int dx = 0; dx < n; dx++) {
-                /* One pixel every eight, both ways. Wide bands were the
-                 * first try and buried the pane - half the pixels were
-                 * line and a quarter were shine, so the glass itself
-                 * barely showed. Thin and sparse reads as light caught on
-                 * a surface; thick reads as a pattern printed on one.
-                 *
-                 * `& 7` rather than a modulo because the period is a power
-                 * of two, and it is fine on the negative values `w` takes
-                 * left of the diagonal: two's complement just shifts the
-                 * phase, which nothing here can tell apart from any other
-                 * phase.
-                 *
-                 * Fixed to the (1, 1)/(1, -1) diagonals regardless of
-                 * gravity - this is the WOVEN TEXTURE of the surface, not
-                 * the light landing on it, and a texture that rotated with
-                 * every tilt would look like the material itself was
-                 * turning rather than like a fixed pane being lit from a
-                 * new angle. Only the shine below follows gravity. */
-                const bool grain = (((base + dx + dy) & 7) == 0) ||
-                                   (((diff + dx - dy) & 7) == 0);
-
                 /* SHINE: a band travelling against the CURRENT GRAVITY
                  * DIRECTION, leaned 45 degrees (material_shine_direction()
-                 * owns that turn), advanced on a clock - see this function's
-                 * own top comment for why both halves of that matter. Projecting
-                 * (dx, dy) onto shine_ux_q8/shine_uy_q8 is a plain 2D dot
-                 * product in Q8 fixed point; the `>> 8` back down to pixel
-                 * units is an arithmetic right shift, sign-extending on this
-                 * toolchain, so it is fine on the negative projections a
-                 * pixel above or left of a cell's origin produces - the same
-                 * trust the mask below places in two's complement.
-                 *
-                 * A mask rather than a modulo because SHINE_PERIOD is a
-                 * power of two, and it is fine on the values left of the
-                 * origin - two's complement shifts the phase, which nothing
-                 * here can tell from any other phase.
-                 *
-                 * `< n` is the width: one CELL, so the band looks the same
-                 * at every quality setting. n is a compile-time constant
-                 * here, so this is a comparison against a literal. */
+                 * owns that turn), advanced on a clock. Projecting (dx, dy)
+                 * onto shine_ux_q8/shine_uy_q8 is a plain 2D dot product in
+                 * Q8 fixed point. */
+
+                /* `>> 8` back to pixel units is an arithmetic right shift,
+                 * sign-extending on this toolchain, so it is fine on the
+                 * negative projections a pixel above or left of a cell's
+                 * origin produces. */
+
+                /* A mask, not a modulo, because SHINE_PERIOD is a power of
+                 * two and it is fine on values left of the origin - two's
+                 * complement shifts the phase, which nothing here can tell
+                 * from any other phase. `< n` is the width: one CELL, so
+                 * the band looks the same at every quality setting. */
                 const int shine_q8 = shine_base_q8 + dx * shine_ux_q8 + dy * shine_uy_q8;
                 const int along = ((shine_q8 >> 8) + shine_offset)
                                   & (SHINE_PERIOD - 1);
 
-                /* The band wins wherever it falls, including over the
-                 * grain - it is the bright thing, and letting the grain
-                 * override it would put dark notches through a highlight. */
-                p[dy * GFX_WIDTH + dx] =
-                    (along < n) ? col[2] : (grain ? col[1] : col[0]);
+                /* The band wins wherever it falls - the bright thing
+                 * catching the light - and the surface is a plain fill
+                 * everywhere else. A second, woven diagonal texture used
+                 * to sit under it (col[1]); dropped for reading as a
+                 * printed grid rather than a surface - see git log. */
+                p[dy * GFX_WIDTH + dx] = (along < n) ? col[2] : col[0];
             }
         }
     }
@@ -2423,7 +2394,52 @@ static bool advance_local_depth_wake(uint32_t dt_ms)
     return true;
 }
 
-static void draw_dirty_rows(bool shine_moved, bool local_depth_woke, bool cullet_moved)
+/* A trig-free BEARING for (gx, gy): a signed value in Q16 units of a
+ * quarter-turn (a full rotation spans 4.0, i.e. -131072..131072),
+ * increasing monotonically all the way around the circle. Not a true
+ * angle - the step size varies within a quadrant - but continuous. */
+
+/* glass_phase used to read gy alone, which is blind to any tilt in the
+ * gx direction: rotating within a quadrant where gy barely changes moved
+ * nothing, and only the tilts that swung gy hard did anything - reading
+ * as a few "cardinal" positions rather than a smooth sweep. */
+
+/* Standard L1 pseudoangle trick: dx / (|dx| + |dy|) sweeps -1..1 across
+ * one quadrant; folding by dy's sign and that ratio's own sign turns the
+ * four separate ramps into one monotonic sweep over the full turn. */
+static int gravity_bearing_q16(int gx, int gy)
+{
+    const int64_t ax = gx < 0 ? -(int64_t)gx : (int64_t)gx;
+    const int64_t ay = gy < 0 ? -(int64_t)gy : (int64_t)gy;
+    const int64_t denom = ax + ay;
+    if (denom == 0) {
+        return 0;   /* flat or free fall: no bearing to report */
+    }
+    const int64_t p_q16 = ((int64_t)gx << 16) / denom;   /* -65536..65536 */
+    return (int)(gy < 0 ? (p_q16 - 65536) : (65536 - p_q16));
+}
+
+/* A SNAPSHOT of gravity's bearing, not a rate accumulated over time - an
+ * earlier version accumulated bearing*dt_ms the way shine_offset does. */
+
+/* That was the bug: bearing is essentially never zero (the board reads
+ * SOME direction even sitting dead level), so accumulating it slid the
+ * phase forever with nothing to show which part was an actual tilt. */
+
+/* Reading it directly ties the phase to WHERE the board currently points,
+ * not how long it has pointed there - hold a tilt and the phase holds
+ * with it; change the tilt and the phase follows by exactly as much. */
+static bool advance_glass_phase(int gx, int gy)
+{
+    const int phase = gravity_bearing_q16(gx, gy) >> GLASS_PHASE_SHIFT;
+    const bool changed = phase != glass_last_phase;
+    glass_last_phase = phase;
+    material_set_glass_phase(phase);
+    return changed;
+}
+
+static void draw_dirty_rows(bool shine_moved, bool local_depth_woke,
+                             bool cullet_moved, bool glass_moved)
 {
     gfx_color_t *fb = gfx_framebuffer();
 
@@ -2481,6 +2497,16 @@ static void draw_dirty_rows(bool shine_moved, bool local_depth_woke, bool cullet
     if (cullet_moved) {
         for (int cy = 0; cy < grid_h; cy++) {
             if (row_has_cullet[cy]) {
+                dirty_rows[cy] = 1;
+            }
+        }
+    }
+
+    /* THE SAME MECHANISM ONCE MORE, for glass's phase - see row_has_glass[]'s
+     * own comment above for why a settled pane needs this at all. */
+    if (glass_moved) {
+        for (int cy = 0; cy < grid_h; cy++) {
+            if (row_has_glass[cy]) {
                 dirty_rows[cy] = 1;
             }
         }
@@ -3690,14 +3716,15 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
              * draw_dirty_rows(): the markers are drawn straight over the
              * grid's own pixels, not stored in it, so a full repaint of the
              * grid alone would erase them without this. Nothing here calls
-             * advance_shine(), advance_local_depth_wake() or advance_cullet(),
-             * or passes any of their results along - the simulation is
-             * paused while the panel is open, so this repaint happens only
-             * on an actual orientation change, never once per frame; ticking
-             * any of the three clocks on a static canvas would be paying an
-             * animation cost for a picture that already looks right. */
+             * advance_shine(), advance_local_depth_wake(), advance_cullet()
+             * or advance_glass_phase(), or passes any of their results along
+             * - the simulation is paused while the panel is open, so this
+             * repaint happens only on an actual orientation change, never
+             * once per frame; ticking any of the four wakes on a static
+             * canvas would be paying an animation cost for a picture that
+             * already looks right. */
             mark_sand_fully_dirty();
-            draw_dirty_rows(false, false, false);
+            draw_dirty_rows(false, false, false, false);
             draw_emitter_markers();
             palette_drawn_quarter = quarter;
         }
@@ -3812,9 +3839,11 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
      * All three are driven by this same dt_ms because all three need real
      * elapsed time, not a frame count, but they are three independent
      * ticks at three independently tuned rates, not one clock wearing three
-     * hats. */
+     * hats. Glass's own wake rides alongside them here, driven by
+     * gravity's own bearing rather than a fourth clock - see
+     * gravity_bearing_q16()'s own comment for why. */
     draw_dirty_rows(advance_shine(dt_ms), advance_local_depth_wake(dt_ms),
-                     advance_cullet(dt_ms));
+                     advance_cullet(dt_ms), advance_glass_phase(gx, gy));
 
     /* After the rows, every frame - see draw_emitter_markers()'s own
      * comment for why once would not be enough. */

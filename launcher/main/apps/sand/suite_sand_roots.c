@@ -1465,12 +1465,14 @@ static void test_a_continuously_watered_root_system_still_saturates(void)
 
 /* Plant, leaf, ice, root and metal all take their texture from the
  * position hash, and everything else extended does not. Metal alone is
- * HATCHED rather than SPECKLED - it is the only one of the five with a
- * travelling shine on top of its grain (see metal_dither/metal_shine's own
- * comment in material.c) - so it gets its own pattern check instead of
- * sharing the other four's.
- *
- * An extended material's variant IS which one it is, so neither can carry
+ * HATCHED rather than SPECKLED, for its travelling shine - so it gets
+ * its own pattern check instead of sharing the other four's. */
+
+/* The woven diagonal line that used to sit under that shine read as a
+ * printed grid rather than metal, and was dropped; the shine itself
+ * stayed. */
+
+/* An extended material's variant IS which one it is, so neither can carry
  * a shade and the position hash is the only variation available - the same
  * tool stone and wood use, and right here for the same reason it was wrong
  * for dirt: neither a wall of ice, a grown tree, nor a smelted metal bar
@@ -1615,40 +1617,25 @@ static void test_the_right_extended_materials_are_grained(void)
     }
 }
 
-/* Metal's body, its lines and their crossings must all differ - the same
- * requirement glass's own painted-the-way-it-should-be check makes, just
- * asserted here instead since metal is extended rather than a top-level
- * MAT_* the other test's loop reaches (see MAT_COUNT <= MAT_EXTENDED in
- * material.h). Equal ones would paint a flat block and the shine would
- * never be seen. */
-static void test_metal_hatched_body_lines_and_shine_differ(void)
-{
-    gfx_color_t col[3] = { 0, 0, 0 };
-    material_colours(MATX(MATX_METAL), 0u, 0u, 255u, col);
+/* Metal's shine does NOT vary from cell to cell: light landing on the
+ * surface, not the surface itself, and a highlight that wobbled per cell
+ * would look chewed rather than reflective. */
 
-    TEST_ASSERT_TRUE_MESSAGE(col[0] != col[1] && col[1] != col[2],
-        "metal is hatched, so its body, its lines and their crossings "
-        "must all differ - equal ones paint a flat block and the shine "
-        "vanishes");
-}
-
-/* Metal's lines and shine do NOT vary from cell to cell, same reasoning as
- * test_the_shine_does_not_vary_between_cells for glass: they are light
- * landing on the surface, not the surface itself, and a highlight that
- * wobbled per cell would look chewed rather than reflective. Unlike
- * glass's version this has no variant loop to run - metal has none. */
+/* Its line no longer exists as a separate colour - out[1] just mirrors
+ * out[0] now that the woven diagonal is gone - so that half of the old
+ * check is replaced with confirming the mirror instead. */
 static void test_metal_shine_does_not_vary_between_cells(void)
 {
     gfx_color_t a[3], b[3];
     material_colours(MATX(MATX_METAL), 0u, 0u, 255u, a);
     material_colours(MATX(MATX_METAL), 5u, 0u, 255u, b);
 
-    TEST_ASSERT_EQUAL_MESSAGE(a[1], b[1],
-        "metal's line colour must be identical in every cell");
+    TEST_ASSERT_EQUAL_MESSAGE(a[1], a[0],
+        "metal's line colour must mirror its body - there is no separate "
+        "line any more");
     TEST_ASSERT_EQUAL_MESSAGE(a[2], b[2],
         "metal's shine colour must be identical in every cell");
 }
-
 
 /* The three airborne materials agree with themselves about weight, speed
  * and lifetime.
@@ -2384,7 +2371,6 @@ void run_sand_roots_suite(void)
     RUN_TEST(test_a_root_darkens_as_more_root_grows_around_it);
     RUN_TEST(test_root_neighbours_are_counted_across_three_rows);
     RUN_TEST(test_the_right_extended_materials_are_grained);
-    RUN_TEST(test_metal_hatched_body_lines_and_shine_differ);
     RUN_TEST(test_metal_shine_does_not_vary_between_cells);
     RUN_TEST(test_the_air_agrees_about_weight_speed_and_lifetime);
     RUN_TEST(test_steam_melts_ice_and_plain_gas_does_not);

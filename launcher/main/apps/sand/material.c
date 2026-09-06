@@ -1334,6 +1334,15 @@ const reaction_t reactions[MATERIAL_MAX] = {
 
 #define LERP(lo, hi, sh)  ((LERP_CH(lo, hi, 16, sh) << 16) | (LERP_CH(lo, hi, 8, sh) << 8) | LERP_CH(lo, hi, 0, sh))
 
+/* The same blend, out of 255 rather than 15 - glass's live gravity
+ * gradient (MAT_GLASS case below) needs a small tilt to move the shade a
+ * small amount, finer than the sixteen steps the rest of the palette is
+ * built from once, at compile time, and never touches again. */
+#define LERP8_CH(lo, hi, shift, fr)                                                                                    \
+    ((((((lo) >> (shift)) & 0xFF) * (255 - (fr)) + (((hi) >> (shift)) & 0xFF) * (fr)) / 255) & 0xFF)
+
+#define LERP8(lo, hi, fr) ((LERP8_CH(lo, hi, 16, fr) << 16) | (LERP8_CH(lo, hi, 8, fr) << 8) | LERP8_CH(lo, hi, 0, fr))
+
 /* A ramp for `n` steps between two colours, for a material that needs its
  * sixteen entries built in more than one piece. */
 #define SEG(lo, hi, i, n) GFX_RGB(LERP(lo, hi, ((i) * 15) / ((n) - 1)))
@@ -1467,9 +1476,18 @@ const reaction_t reactions[MATERIAL_MAX] = {
 
 #define GLASS_FROST   0xD6EEF8
 #define GLASS_AMBIENT 0x2E6B85
-#define GLASS_NEUTRAL 0x7E8E86
+#define GLASS_NEUTRAL 0x8C7E70
 #define GLASS_GLOW    0xC8701E
 #define GLASS_MOLTEN  0xFFD873
+
+/* Was 0x7E8E86 - G the highest channel, a sage green between AMBIENT's
+ * blue and GLOW's orange. STONE_NEUTRAL crosses that gap R-dominant
+ * instead (see MAT_GLASS's own reaction row above - "differ in ONE
+ * thing" - for why the two heat ramps were meant to track each other). */
+
+/* Reported as glass turning green under heat once the live gravity blend
+ * made this endpoint far more visible than the old per-cell wobble ever
+ * did. R-dominant now, the same shape stone's own transition uses. */
 
 /* The three segments, each mapped onto 0..15 for LERP. Every branch has to
  * compute without dividing by zero even where it is not selected, hence the
@@ -1848,103 +1866,40 @@ static const gfx_color_t palette[256] = {
                               * REVISION 2 spent this code on the lit state */
 };
 
-/* Glass's SECOND colour: the same temperature, mixed halfway to the
- * background.
- *
- * Painted on alternate pixels inside each cell's block it reads as a woven
- * or frosted pane rather than a solid slab - which is most of what tells
- * glass apart from stone at a glance, since the two are identical in the
- * density ladder and behave identically to everything except acid.
- *
- * Mixed toward the BACKGROUND specifically, not simply darkened, because
- * what glass wants to look like is see-through. Half strength is the whole
- * effect: at cell size 2 a block is four pixels, so a checker is two of
- * each and any subtler mix would round away.
- *
- * Only glass has one. Everything else dithers against itself, which is the
- * same as not dithering - see material_dither() and paint_row_n(). */
-#define GLASS_DIM(v)      GFX_RGB(GLASS_LINE(GLASS_RGB(v)))
-
 /* The same ramps pulled two thirds of the way back to their own ambient
  * colour, used wherever a cell touches empty space. Ten of fifteen, so an
  * outline still shifts with heat - just a third as far as the body does. */
 #define GLASS_RGB(v)      ((v) <= SAND_AMBIENT_HEAT ? GLASS_COOL(v) : (v) < SAND_SHOCK_HEAT ? GLASS_WARM(v) : GLASS_HOT(v))
 
-#define GLASS_EDGE_RGB(v) LERP(GLASS_RGB(v), GLASS_RGB(SAND_AMBIENT_HEAT), 10)
+/* Blends v ITSELF toward ambient before choosing a colour, not the two
+ * ENDPOINT colours after the fact the way STONE_EDGE_RGB still does. */
+
+/* Averaging a HOT cell's saturated orange with ambient's saturated blue
+ * in raw RGB space lands on green - a hue with nothing to do with
+ * either heat or ambient. */
+
+/* Blending the TEMPERATURE first keeps every edge colour a real point
+ * on glass's own COOL/WARM/HOT ramp instead. Stone's own endpoints stay
+ * close enough in hue that mixing its raw colours never hits this. */
+#define GLASS_EDGE_V_RAW(v) ((v) + (((int)(SAND_AMBIENT_HEAT) - (int)(v)) * 10) / 15)
+
+/* Still crosses ONE boundary on its own: a cell only just past
+ * SAND_SHOCK_HEAT dampens down to 4, back into WARM's own blue-grey -
+ * read as the pane cooling off rather than merely dimming its glow. */
+
+/* Clamped to SAND_SHOCK_HEAT whenever the real v is already HOT, so a
+ * cell that has genuinely started glowing never shows a cooler band's
+ * colour at all. */
+#define GLASS_EDGE_V(v)                                                                                               \
+    (((v) >= SAND_SHOCK_HEAT && GLASS_EDGE_V_RAW(v) < SAND_SHOCK_HEAT) ? SAND_SHOCK_HEAT : GLASS_EDGE_V_RAW(v))
+#define GLASS_EDGE_RGB(v) GLASS_RGB(GLASS_EDGE_V(v))
 #define STONE_EDGE_RGB(v) LERP(STONE_RGB(v), STONE_RGB(SAND_AMBIENT_HEAT), 10)
 
-/* The lines and their crossings are LIGHTER than the pane, not darker.
- * They were a mix toward the background, which is what you would do for
- * something see-through and which came out as very nearly no pattern at
- * all - a dark line on a dark pane is invisible. What glass actually shows
- * is light caught on it, so the lines lift toward white and the crossings
- * go most of the way there. That is the shine. */
-#define GLASS_LINE(rgb)   LERP((rgb), 0xFFFFFF, 4)
-#define GLASS_SHINE(rgb)  LERP((rgb), 0xFFFFFF, 11)
-
-#define GLASS_EDGE_DIM(v) GFX_RGB(GLASS_LINE(GLASS_EDGE_RGB(v)))
-
-static const gfx_color_t glass_edge_dither[MATERIAL_VARIANTS] = {
-    GLASS_EDGE_DIM(0),  GLASS_EDGE_DIM(1),  GLASS_EDGE_DIM(2),  GLASS_EDGE_DIM(3),
-    GLASS_EDGE_DIM(4),  GLASS_EDGE_DIM(5),  GLASS_EDGE_DIM(6),  GLASS_EDGE_DIM(7),
-    GLASS_EDGE_DIM(8),  GLASS_EDGE_DIM(9),  GLASS_EDGE_DIM(10), GLASS_EDGE_DIM(11),
-    GLASS_EDGE_DIM(12), GLASS_EDGE_DIM(13), GLASS_EDGE_DIM(14), GLASS_EDGE_DIM(15),
-};
-
-#define GLASS_EDGE_SHINE(v) GFX_RGB(GLASS_SHINE(GLASS_EDGE_RGB(v)))
-#define GLASS_AT_SHINE(v)   GFX_RGB(GLASS_SHINE(GLASS_RGB(v)))
-
-static const gfx_color_t glass_edge_shine[MATERIAL_VARIANTS] = {
-    GLASS_EDGE_SHINE(0),  GLASS_EDGE_SHINE(1),  GLASS_EDGE_SHINE(2),  GLASS_EDGE_SHINE(3),
-    GLASS_EDGE_SHINE(4),  GLASS_EDGE_SHINE(5),  GLASS_EDGE_SHINE(6),  GLASS_EDGE_SHINE(7),
-    GLASS_EDGE_SHINE(8),  GLASS_EDGE_SHINE(9),  GLASS_EDGE_SHINE(10), GLASS_EDGE_SHINE(11),
-    GLASS_EDGE_SHINE(12), GLASS_EDGE_SHINE(13), GLASS_EDGE_SHINE(14), GLASS_EDGE_SHINE(15),
-};
-
-static const gfx_color_t glass_shine[MATERIAL_VARIANTS] = {
-    GLASS_AT_SHINE(0),  GLASS_AT_SHINE(1),  GLASS_AT_SHINE(2),  GLASS_AT_SHINE(3),
-    GLASS_AT_SHINE(4),  GLASS_AT_SHINE(5),  GLASS_AT_SHINE(6),  GLASS_AT_SHINE(7),
-    GLASS_AT_SHINE(8),  GLASS_AT_SHINE(9),  GLASS_AT_SHINE(10), GLASS_AT_SHINE(11),
-    GLASS_AT_SHINE(12), GLASS_AT_SHINE(13), GLASS_AT_SHINE(14), GLASS_AT_SHINE(15),
-};
-
-/* A per-cell wobble in the PANE, the same trick stone's speckle uses and
- * deliberately much quieter: a twentieth either way against stone's fifth.
- * Stone is rock and wants visible grain; glass is smooth and wants only
- * enough variation that a wall of it stops looking like one flat fill.
- *
- * The lines and the shine are left uniform. They are light landing on the
- * surface rather than the surface itself, and letting them wobble per cell
- * makes a highlight look chewed rather than reflective. */
-#define GLASS_GRAIN(rgb, k) GFX_RGB(LERP(LERP((rgb), 0x000000, 1), LERP((rgb), 0xFFFFFF, 1), (k) * 5))
-
-#define GLASS_BODY_ROW(v)                                                                                              \
-    {GLASS_GRAIN(GLASS_RGB(v), 0), GLASS_GRAIN(GLASS_RGB(v), 1), GLASS_GRAIN(GLASS_RGB(v), 2),                         \
-     GLASS_GRAIN(GLASS_RGB(v), 3)}
-
-#define GLASS_EDGE_BODY_ROW(v)                                                                                         \
-    {GLASS_GRAIN(GLASS_EDGE_RGB(v), 0), GLASS_GRAIN(GLASS_EDGE_RGB(v), 1), GLASS_GRAIN(GLASS_EDGE_RGB(v), 2),          \
-     GLASS_GRAIN(GLASS_EDGE_RGB(v), 3)}
-
-static const gfx_color_t glass_body[MATERIAL_VARIANTS][4] = {
-    GLASS_BODY_ROW(0),  GLASS_BODY_ROW(1),  GLASS_BODY_ROW(2),  GLASS_BODY_ROW(3),
-    GLASS_BODY_ROW(4),  GLASS_BODY_ROW(5),  GLASS_BODY_ROW(6),  GLASS_BODY_ROW(7),
-    GLASS_BODY_ROW(8),  GLASS_BODY_ROW(9),  GLASS_BODY_ROW(10), GLASS_BODY_ROW(11),
-    GLASS_BODY_ROW(12), GLASS_BODY_ROW(13), GLASS_BODY_ROW(14), GLASS_BODY_ROW(15),
-};
-
-static const gfx_color_t glass_edge_body[MATERIAL_VARIANTS][4] = {
-    GLASS_EDGE_BODY_ROW(0),  GLASS_EDGE_BODY_ROW(1),  GLASS_EDGE_BODY_ROW(2),  GLASS_EDGE_BODY_ROW(3),
-    GLASS_EDGE_BODY_ROW(4),  GLASS_EDGE_BODY_ROW(5),  GLASS_EDGE_BODY_ROW(6),  GLASS_EDGE_BODY_ROW(7),
-    GLASS_EDGE_BODY_ROW(8),  GLASS_EDGE_BODY_ROW(9),  GLASS_EDGE_BODY_ROW(10), GLASS_EDGE_BODY_ROW(11),
-    GLASS_EDGE_BODY_ROW(12), GLASS_EDGE_BODY_ROW(13), GLASS_EDGE_BODY_ROW(14), GLASS_EDGE_BODY_ROW(15),
-};
-
-static const gfx_color_t glass_dither[MATERIAL_VARIANTS] = {
-    GLASS_DIM(0),  GLASS_DIM(1),  GLASS_DIM(2),  GLASS_DIM(3),  GLASS_DIM(4),  GLASS_DIM(5),
-    GLASS_DIM(6),  GLASS_DIM(7),  GLASS_DIM(8),  GLASS_DIM(9),  GLASS_DIM(10), GLASS_DIM(11),
-    GLASS_DIM(12), GLASS_DIM(13), GLASS_DIM(14), GLASS_DIM(15),
-};
+/* The far end of the live gravity gradient - GLASS_FROST only through
+ * COOL. Blending a WARM or HOT orange all the way to that icy blue passed
+ * through a muddy yellow-green, reading as the glass turning green rather
+ * than heat catching the light; white keeps the hue and adds brightness. */
+#define GLASS_GRADIENT_HI(v) ((v) <= SAND_AMBIENT_HEAT ? GLASS_FROST : 0xFFFFFF)
 
 /* Stone's SPECKLE: eight shades of each temperature, picked per cell from
  * the cell's own position rather than from its variant.
@@ -2135,6 +2090,12 @@ static const gfx_color_t plant_grain[8] = GRAIN8_ROW(PLANT_DARK, PLANT_LIGHT);
 static const gfx_color_t ice_grain[8] = GRAIN8_ROW(ICE_DARK, ICE_LIGHT);
 static const gfx_color_t leaf_grain[8] = GRAIN8_ROW(LEAF_DARK, LEAF_LIGHT);
 static const gfx_color_t metal_grain[8] = GRAIN8_ROW(METAL_DARK, METAL_LIGHT);
+
+/* Metal's own travelling shine, HATCHED's one surviving effect now that
+ * the woven diagonal line under it is gone (app_sand.c's paint_row_n()) -
+ * lifted off METAL_LIGHT rather than metal_grain's per-cell wobble, so
+ * the highlight reads as one reflective surface, not chewed. */
+static const gfx_color_t metal_shine = GFX_RGB(LERP(METAL_LIGHT, 0xFFFFFF, 11));
 /* One grain row per shade step, fresh first - see ROOT_OLD above. */
 static const gfx_color_t root_grain[ROOT_SHADES][8] = {
     GRAIN8_ROW(ROOT_STEP(0), ROOT_STEP_LIGHT(0)),
@@ -2143,23 +2104,6 @@ static const gfx_color_t root_grain[ROOT_SHADES][8] = {
     GRAIN8_ROW(ROOT_STEP(3), ROOT_STEP_LIGHT(3)),
 };
 _Static_assert(ROOT_SHADES == 4, "root_grain[] above spells out one row per shade - add a row here too");
-
-/* Metal's woven line and travelling shine - the same HATCHED mechanism
- * glass uses in paint_row_n(), which is generic to anything hatched and
- * not glass-specific (the diagonal grain, the crossings, the travelling
- * band all key off the pattern, never the material). What glass gets that
- * metal cannot is a per-variant ramp to shade these by: an extended
- * material's low nibble is spent naming WHICH one it is rather than
- * holding a variant (see the MAT_EXTENDED case below), so there is one
- * dither tone and one shine tone here, not sixteen.
- *
- * Lifted off METAL_LIGHT rather than off metal_grain's own per-cell
- * wobble, same reasoning as GLASS_LINE/GLASS_SHINE above: a highlight
- * that wobbled per cell would look chewed rather than reflective. Same
- * two weights as glass's, 4 and 11 of 15 - metal is meant to look
- * brushed and catching light exactly the way a pane does, just opaque. */
-static const gfx_color_t metal_dither = GFX_RGB(LERP(METAL_LIGHT, 0xFFFFFF, 4));
-static const gfx_color_t metal_shine = GFX_RGB(LERP(METAL_LIGHT, 0xFFFFFF, 11));
 
 static const gfx_color_t stone_edge_speckle[MATERIAL_VARIANTS][8] = {
     STONE_EDGE_ROW(0),  STONE_EDGE_ROW(1),  STONE_EDGE_ROW(2),  STONE_EDGE_ROW(3),
@@ -2434,9 +2378,9 @@ material_shine_direction(int gx, int gy, int *ux_q8, int *uy_q8) {
  * needs it. */
 
 /* FOAM's own colour - a side table, not a palette[] row, the same pattern
- * glass_shine and stone_speckle already use above: there is no spare slot
- * in palette[] for it, and a dither over an existing rim colour does not
- * need an indexed row of its own the way a fill level does.
+ * stone_speckle already uses above: there is no spare slot in palette[]
+ * for it, and a dither over an existing rim colour does not need an
+ * indexed row of its own the way a fill level does.
  *
  * Brighter and whiter than water's own palest ramp entry (0x77C4E8, the
  * shallow end of the SHADES() run in palette[] above) - foam has to read
@@ -2507,6 +2451,17 @@ static unsigned cullet_phase;
 void
 material_set_cullet_phase(unsigned phase) {
     cullet_phase = phase;
+}
+
+/* THIS FRAME'S GLASS PHASE - see material_set_glass_phase()'s own comment
+ * in material.h for what drives it (a live gravity snapshot, not a
+ * clock). Zero until the first frame sets it - a reasonable default for
+ * anything reading material_colours() before a frame ever runs. */
+static int glass_phase;
+
+void
+material_set_glass_phase(int phase) {
+    glass_phase = phase;
 }
 
 /* How many of `mask`'s bits are set - the same manual bit-count
@@ -2836,26 +2791,28 @@ material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_col
         case MAT_EXTENDED:
             /* Switched on the low nibble, which for these is their identity
          * rather than a variant - see MATX(). Anything without a grain of
-         * its own falls through to the flat palette entry below.
-         *
-         * Metal gets its own leading equality check, ahead of the guard
-         * below, because it returns a different PATTERN (HATCHED) rather
-         * than just a different colour - it cannot live inside the
-         * ternary, which only ever chooses a colour for one shared
-         * MATERIAL_SPECKLED return. That guard-plus-ternary shape below is
-         * otherwise untouched and back to the three materials it was
-         * measured at: a respelling of it into a switch cost 14% through
-         * the inlining cliff, and a single unhinted branch cost 26% of a
-         * benchmark, simulation byte-identical either way - see
-         * docs/Sand/Tuning-At-a-Glance.md. Adding metal's check ahead of it
-         * is one more cheap equality test per extended cell, not a
-         * restructure of the measured shape. */
+         * its own falls through to the flat palette entry below. */
+
+            /* Metal gets its own leading check, ahead of the guard below,
+         * because it still returns a different PATTERN (HATCHED) for its
+         * travelling shine - it cannot live inside the ternary, which
+         * only ever picks a colour for one shared MATERIAL_SPECKLED
+         * return. */
+
+            /* The woven diagonal line HATCHED used to draw alongside that
+         * shine is gone (paint_row_n(), app_sand.c) - read as a printed
+         * grid rather than metal - but the shine stays, so metal still
+         * needs the pattern, just not the line colour. */
             if (v == MATX_METAL) {
                 out[0] = metal_grain[hash & 7u];
-                out[1] = metal_dither;
+                out[1] = out[0];
                 out[2] = metal_shine;
                 return MATERIAL_HATCHED;
             }
+
+            /* Guard-plus-ternary, measured at plant/leaf/ice/root: a
+         * switch cost 14% through the inlining cliff, an unhinted branch
+         * cost 26% of a benchmark - see docs/Sand/Tuning-At-a-Glance.md. */
             if (v == MATX_PLANT || v == MATX_LEAF || v == MATX_ICE || v == MATX_ROOT) {
                 out[0] = (v == MATX_PLANT)  ? plant_grain[hash & 7u]
                          : (v == MATX_LEAF) ? leaf_grain[hash & 7u]
@@ -2873,10 +2830,28 @@ material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_col
          * cardinal neighbour occupied but one diagonal empty must stay
          * interior, not spring an edge. */
             const bool edge = (mask & MATERIAL_EDGE_CARDINAL) != 0;
-            out[0] = edge ? glass_edge_body[v][hash & 3u] : glass_body[v][hash & 3u];
-            out[1] = edge ? glass_edge_dither[v] : glass_dither[v];
-            out[2] = edge ? glass_edge_shine[v] : glass_shine[v];
-            return MATERIAL_HATCHED;
+
+            /* The hash picks each cell's own random starting point, stable
+             * forever since glass never moves; glass_phase then slides
+             * every cell's point by the same amount, so the whole pane
+             * drifts together while staying individually scattered. */
+
+            /* A live LERP8, not a lookup into a precomputed ramp - fine
+             * enough to move by a small angle would need hundreds of
+             * entries per temperature. Runs once per PAINTED cell, not
+             * per pixel, so the blend costs nothing a table would save. */
+            const unsigned frac = (unsigned)(((int)(hash & 0xFFu) + glass_phase) & 0xFF);
+
+            /* uint32_t, NOT gfx_color_t - `base` is a raw 0xRRGGBB value,
+             * not yet packed by GFX_RGB() below. gfx_color_t is uint16_t,
+             * the PANEL format, and storing 24 bits into 16 silently drops
+             * red's own byte before LERP8 ever runs - this was the actual
+             * "glass reads green under heat": red truncated clean away. */
+            const uint32_t base = edge ? GLASS_EDGE_RGB(v) : GLASS_RGB(v);
+            out[0] = GFX_RGB(LERP8(base, GLASS_GRADIENT_HI(v), frac));
+            out[1] = out[0];
+            out[2] = out[0];
+            return MATERIAL_SPECKLED;
         }
         case MAT_STONE:
             /* Same CARDINAL-only test as glass above, and for the same reason -
