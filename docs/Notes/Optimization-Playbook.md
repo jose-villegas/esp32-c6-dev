@@ -202,6 +202,13 @@ now caught mechanically: `launcher/tools/check_static_ram.py` predicts the
 largest contiguous block from every build's map file and fails `idf.py
 build` if the framebuffer or a real-size grid would no longer fit.
 
+When checking memory live rather than at link time, compare
+`heap_caps_get_largest_free_block(MALLOC_CAP_DMA)` only against
+`heap_caps_get_free_size(MALLOC_CAP_DMA)`, never against
+`esp_get_free_heap_size()` — that sums a second, physically separate DMA
+region no large allocation can ever use, manufacturing a "fragmentation"
+gap that was actually 12 bytes (beads esp32c6-8h2).
+
 ---
 
 ## A host-validated win is a hypothesis until the target measures it

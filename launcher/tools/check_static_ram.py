@@ -25,9 +25,11 @@ failures. This script moves that failure to link time, on a laptop, naming
 the largest offenders.
 
 This is a PREDICTION, not a reproduction. It has no visibility into runtime
-fragmentation from allocation order, so it is deliberately conservative
-(see FRAGMENTATION_BYTES below) and the messages say "predicted" - expect
-about +-1 KiB of slop from the two calibrated constants.
+allocation order, so both calibrated constants below are pegged to the
+worst point actually measured on a real board, not to true fragmentation
+(which, measured directly from a heap block map, is 12 bytes - see
+BOOT_ALLOCATIONS_AND_SEPARATE_REGION_BYTES below). Expect about +-1 KiB of
+slop from the two calibrated constants, and the messages say "predicted".
 
 THE ARITHMETIC
 
@@ -36,8 +38,8 @@ THE ARITHMETIC
   SOC_ROM_STACK_SIZE (0x2000). The main heap region runs from the linker
   symbol _heap_start up to this address, in one contiguous piece. (An
   additional ~11 KiB above it is added to the heap later at startup as a
-  SEPARATE region and never helps a single large allocation - ignored
-  here.)
+  SEPARATE region and never helps a single large allocation - it is folded
+  into BOOT_ALLOCATIONS_AND_SEPARATE_REGION_BYTES below, not ignored.)
 
     usable_heap = APP_USABLE_DRAM_END - _heap_start
 
@@ -48,28 +50,45 @@ THE ARITHMETIC
   FRAMEBUFFER_BYTES = 368 * 448 * 2 = 329,728 (launcher/main/gfx/gfx.c,
   gfx_init()).
 
-  BOOT_OVERHEAD_BYTES = 12,548. Calibrated 2026-09-05 from a
-  development-image boot log: heap_init reported the region "At 40817390
-  len 00065280" (usable = 414,336) and gfx logged "329728 bytes, 72060
-  bytes of heap still free" immediately after allocating the framebuffer:
-  414,336 - 329,728 - 72,060 = 12,548 bytes taken before/around the
-  framebuffer by task stacks, drivers, the SD probe and gfx's own gather
-  buffer. Re-peg from those two log lines whenever boot allocations
-  change.
+  PRE_FRAMEBUFFER_OVERHEAD_BYTES = 10,760. Measured 2026-09-06 on a
+  development image via a boot heap trace (heap_caps_get_free_size(
+  MALLOC_CAP_DMA) at each phase): usable heap 414,096, "before framebuffer"
+  free 403,336 -> 414,096 - 403,336 = 10,760 bytes taken by task stacks,
+  drivers and the SD probe before gfx_init() runs. This covers gate 1 only
+  (see below) - it is measured at the one point in boot where the
+  framebuffer does not exist yet, so it cannot also describe what happens
+  afterward. Re-peg by flashing a dev image and reading the "HEAPMARK
+  before framebuffer" line against the usable heap.
 
-  FRAGMENTATION_BYTES = 20,480. Same boot: POST reported "memory 70 KiB
-  free, DMA block 50 KiB"; the diagnostics image on 2026-09-02 reported
-  "59 KiB free, DMA block 38 KiB". About 20 KiB of the post-framebuffer
-  free heap is never in the largest contiguous block. Empirical; re-peg
-  from POST's memory line.
+  BOOT_ALLOCATIONS_AND_SEPARATE_REGION_BYTES = 40,336. Same 2026-09-06
+  capture, but at "shell ready" - after touch_start(), buttons_start(),
+  screenshot_start(), imu_init(), display_init() and ui_launcher_init()
+  have all run, which is the actual moment the sand app's later grid
+  allocation has to compete with, not gfx_init time: measured shell-ready
+  largest contiguous block was 44,032, so 414,096 - 329,728 (framebuffer) -
+  44,032 = 40,336 bytes accounts for everything else - every allocation
+  from boot through a fully-up shell, AND the ~11 KiB separate region
+  above APP_USABLE_DRAM_END that heap_init hands back but that can never
+  serve a large allocation (see APP_USABLE_DRAM_END above). Real
+  fragmentation inside the main heap region, measured directly from a heap
+  block map at the framebuffer moment, was 12 bytes - not the ~20 KiB this
+  constant used to be called "fragmentation" for (beads esp32c6-8h2,
+  closed as disproved). Re-peg by flashing a dev image and reading the
+  "HEAPMARK shell ready" line's largest-block figure against the usable
+  heap and FRAMEBUFFER_BYTES.
 
   GRID_BYTES = 41,216 = 184 * 224: the sand app's grid at the real screen
   size (main/apps/sand/app_sand.c) and the STRESS_W*STRESS_H fixture of
   the real-size tests in main/apps/sand/suite_sand.c.
 
-    predicted_largest_before_fb = usable_heap - BOOT_OVERHEAD_BYTES
-    predicted_largest_after_fb  = predicted_largest_before_fb
-                                   - FRAMEBUFFER_BYTES - FRAGMENTATION_BYTES
+    predicted_largest_before_fb = usable_heap - PRE_FRAMEBUFFER_OVERHEAD_BYTES
+    predicted_largest_after_fb  = usable_heap - FRAMEBUFFER_BYTES
+                                   - BOOT_ALLOCATIONS_AND_SEPARATE_REGION_BYTES
+
+  (predicted_largest_after_fb is NOT predicted_largest_before_fb minus the
+  framebuffer - it is pegged independently, straight off the shell-ready
+  measurement, because the overhead that matters for each gate is measured
+  at a different moment in boot.)
 
 TWO GATES, applied to every variant (the numbers differ only in how much
 headroom is left):
@@ -77,15 +96,16 @@ headroom is left):
   1. predicted_largest_before_fb >= FRAMEBUFFER_BYTES + FRAMEBUFFER_-
      SLACK_BYTES  -  the framebuffer itself must fit, with a little slack.
   2. predicted_largest_after_fb  >= GRID_BYTES  -  one real-size grid must
-     still fit afterwards. Zero margin here on purpose: this is exactly
-     the number that failed on-device twice.
+     still fit once the shell is up. Zero margin here on purpose: this is
+     exactly the number that failed on-device twice.
 
 If a build fails here: shrink or malloc-on-use the largest offenders
 printed below (see docs/Notes/Optimization-Playbook.md, "Test and debug
 code shares your production memory budget"), or, if boot allocations
-genuinely changed on purpose, re-peg BOOT_OVERHEAD_BYTES /
-FRAGMENTATION_BYTES from a fresh boot log as described above and update
-this header comment's provenance alongside the constant.
+genuinely changed on purpose, re-peg PRE_FRAMEBUFFER_OVERHEAD_BYTES /
+BOOT_ALLOCATIONS_AND_SEPARATE_REGION_BYTES from a fresh boot log as
+described above and update this header comment's provenance alongside the
+constant.
 """
 
 import argparse
@@ -97,8 +117,24 @@ from pathlib import Path
 
 APP_USABLE_DRAM_END = 0x4087C610
 FRAMEBUFFER_BYTES = 368 * 448 * 2
-BOOT_OVERHEAD_BYTES = 12548
-FRAGMENTATION_BYTES = 20480
+PRE_FRAMEBUFFER_OVERHEAD_BYTES = 10760
+BOOT_ALLOCATIONS_AND_SEPARATE_REGION_BYTES = 40336
+
+# The same accounting one boot phase earlier, for a SELFTEST image. Its
+# grids are allocated by the suites, which run in selftest_run() straight
+# after POST - before the boot animation, and before touch, buttons,
+# screenshot, the IMU, the display and the launcher's UI have taken their
+# share. Measured in the same 2026-09-06 capture, at "HEAPMARK after post":
+# largest 50,176, so 414,096 - 329,728 - 50,176 = 34,192.
+#
+# Gating a selftest image at the shell-ready figure instead would ask it a
+# question its own tests never face, and would fail the one build the
+# device test workflow depends on. The trade is deliberate and has a
+# backstop: a selftest image is also a development image, so a person CAN
+# open the sand app on it interactively, and that allocation happens at
+# shell ready with about 6 KiB less room than this gate guarantees. POST's
+# own memory check on the device is what catches that case.
+SELFTEST_BOOT_ALLOCATIONS_BYTES = 34192
 GRID_BYTES = 184 * 224
 FRAMEBUFFER_SLACK_BYTES = 4096
 
@@ -108,13 +144,19 @@ TOP_OBJECTS_SHOWN = 8
 
 # --- pure arithmetic (no file I/O - this is what --self-test exercises) ---
 
-def compute_gates(heap_start, dram_data_size, dram_bss_size):
+def compute_gates(heap_start, dram_data_size, dram_bss_size, selftest=False):
     """Everything the gate decides, as a function of three numbers off the
     map file. Kept separate from parsing so --self-test can hit the math
-    directly without a synthetic map for every boundary case."""
+    directly without a synthetic map for every boundary case.
+
+    `selftest` moves gate 2 to the boot phase where THAT image allocates
+    its grids - see SELFTEST_BOOT_ALLOCATIONS_BYTES for which phase and
+    why it is a different one."""
     usable_heap = APP_USABLE_DRAM_END - heap_start
-    predicted_before = usable_heap - BOOT_OVERHEAD_BYTES
-    predicted_after = predicted_before - FRAMEBUFFER_BYTES - FRAGMENTATION_BYTES
+    overhead = (SELFTEST_BOOT_ALLOCATIONS_BYTES if selftest
+                else BOOT_ALLOCATIONS_AND_SEPARATE_REGION_BYTES)
+    predicted_before = usable_heap - PRE_FRAMEBUFFER_OVERHEAD_BYTES
+    predicted_after = usable_heap - FRAMEBUFFER_BYTES - overhead
     gate1_threshold = FRAMEBUFFER_BYTES + FRAMEBUFFER_SLACK_BYTES
     gate2_threshold = GRID_BYTES
     return {
@@ -122,6 +164,8 @@ def compute_gates(heap_start, dram_data_size, dram_bss_size):
         "dram_bss_size": dram_bss_size,
         "heap_start": heap_start,
         "usable_heap": usable_heap,
+        "selftest": selftest,
+        "overhead": overhead,
         "predicted_before": predicted_before,
         "predicted_after": predicted_after,
         "gate1_pass": predicted_before >= gate1_threshold,
@@ -129,6 +173,23 @@ def compute_gates(heap_start, dram_data_size, dram_bss_size):
         "gate2_pass": predicted_after >= gate2_threshold,
         "gate2_threshold": gate2_threshold,
     }
+
+
+# Which image this is, read off the map itself rather than passed in from
+# CMake, so running this by hand on any map file gives the verdict the build
+# got. The test is whether a SUITE actually contributed static data: the
+# mere presence of libunity.a proves nothing, because unity is listed
+# unconditionally in REQUIRES (see launcher/main/CMakeLists.txt's own
+# comment on why) and so appears in the link of every variant - with
+# nothing referencing it, --gc-sections drops it and it owns no .data or
+# .bss. A suite_*.c.obj with bytes to its name only exists when the suites
+# were compiled in.
+_SELFTEST_OBJECT_RE = re.compile(r"suite_[A-Za-z0-9_]*\.c\.obj|libunity\.a\(")
+
+
+def parsed_is_selftest(parsed):
+    return any(_SELFTEST_OBJECT_RE.search(raw_object)
+               for _section, _name, _size, raw_object in parsed.entries)
 
 
 # --- map-file parsing -------------------------------------------------------
@@ -266,16 +327,18 @@ def print_summary(gates):
     print("  _heap_start              0x%08x" % gates["heap_start"])
     print("  usable heap              %10s bytes  (APP_USABLE_DRAM_END 0x%08x - _heap_start)"
           % (_fmt(gates["usable_heap"]), APP_USABLE_DRAM_END))
-    print("  predicted largest before framebuffer: %10s bytes  (usable heap - boot overhead %s)"
-          % (_fmt(gates["predicted_before"]), _fmt(BOOT_OVERHEAD_BYTES)))
-    print("  predicted largest after  framebuffer: %10s bytes  (- framebuffer %s - fragmentation slop %s)"
-          % (_fmt(gates["predicted_after"]), _fmt(FRAMEBUFFER_BYTES), _fmt(FRAGMENTATION_BYTES)))
+    print("  predicted largest before framebuffer: %10s bytes  (usable heap - pre-fb overhead %s)"
+          % (_fmt(gates["predicted_before"]), _fmt(PRE_FRAMEBUFFER_OVERHEAD_BYTES)))
+    moment = "after POST (selftest)" if gates["selftest"] else "at shell ready"
+    print("  predicted largest %-21s %10s bytes  (usable heap - framebuffer %s - boot/separate-region %s)"
+          % (moment + ":", _fmt(gates["predicted_after"]),
+             _fmt(FRAMEBUFFER_BYTES), _fmt(gates["overhead"])))
     print("  gate 1 (framebuffer fits):    %-4s  %s >= %s (framebuffer %s + slack %s)"
           % ("PASS" if gates["gate1_pass"] else "FAIL",
              _fmt(gates["predicted_before"]), _fmt(gates["gate1_threshold"]),
              _fmt(FRAMEBUFFER_BYTES), _fmt(FRAMEBUFFER_SLACK_BYTES)))
-    print("  gate 2 (one grid fits after): %-4s  %s %s %s (grid 184x224)"
-          % ("PASS" if gates["gate2_pass"] else "FAIL",
+    print("  gate 2 (one grid fits %-21s %-4s  %s %s %s (grid 184x224)"
+          % (moment + "):", "PASS" if gates["gate2_pass"] else "FAIL",
              _fmt(gates["predicted_after"]),
              ">=" if gates["gate2_pass"] else "< ",
              _fmt(gates["gate2_threshold"])))
@@ -305,9 +368,10 @@ def print_offenders(parsed):
     print("  what to do: shrink or malloc-on-use the offenders above (see")
     print("  docs/Notes/Optimization-Playbook.md, \"Test and debug code")
     print("  shares your production memory budget\"). If boot allocations")
-    print("  genuinely changed on purpose, re-peg BOOT_OVERHEAD_BYTES /")
-    print("  FRAGMENTATION_BYTES from a fresh boot log - see this script's")
-    print("  header comment for how the current values were calibrated.")
+    print("  genuinely changed on purpose, re-peg PRE_FRAMEBUFFER_OVERHEAD_")
+    print("  BYTES / BOOT_ALLOCATIONS_AND_SEPARATE_REGION_BYTES from a fresh")
+    print("  boot log - see this script's header comment for how the")
+    print("  current values were calibrated.")
 
 
 def run(map_path):
@@ -322,7 +386,8 @@ def run(map_path):
               file=sys.stderr)
         return 1
 
-    gates = compute_gates(parsed.heap_start, parsed.dram_data_size, parsed.dram_bss_size)
+    gates = compute_gates(parsed.heap_start, parsed.dram_data_size,
+                          parsed.dram_bss_size, parsed_is_selftest(parsed))
     print_summary(gates)
 
     if gates["gate1_pass"] and gates["gate2_pass"]:
@@ -403,13 +468,56 @@ def self_test():
     # A build where the framebuffer fits but the grid, allocated right
     # after it, does not - this is the shape both real-world incidents took.
     grid_only_fail_heap_start = (
-        APP_USABLE_DRAM_END - BOOT_OVERHEAD_BYTES - FRAMEBUFFER_BYTES
-        - FRAGMENTATION_BYTES - (GRID_BYTES - 1)
+        APP_USABLE_DRAM_END - FRAMEBUFFER_BYTES
+        - BOOT_ALLOCATIONS_AND_SEPARATE_REGION_BYTES - (GRID_BYTES - 1)
     )
     grid_only_fail = compute_gates(
         heap_start=grid_only_fail_heap_start, dram_data_size=0, dram_bss_size=0)
     assert grid_only_fail["gate1_pass"], "grid-only case should still pass gate 1"
     assert not grid_only_fail["gate2_pass"], "grid-only case should fail gate 2"
+
+    # Pin the real 2026-09-06 measurement itself: this exact heap_start
+    # (0x40817480 in that boot's map) must reproduce the measured
+    # shell-ready largest block, 44,032 bytes, and pass gate 2 - this is
+    # the fixed point every re-peg of BOOT_ALLOCATIONS_AND_SEPARATE_REGION_
+    # BYTES has to keep reproducing. Raising heap_start by 4 KiB (as if
+    # .data/.bss grew by that much) eats straight into the same margin and
+    # must fail it, since that margin is exactly what the two on-device
+    # incidents ran out of.
+    measured = compute_gates(heap_start=0x40817480, dram_data_size=0, dram_bss_size=0)
+    _assert_eq(measured["predicted_after"], 44032, "measured shell-ready largest block")
+    assert measured["gate2_pass"], "measured 2026-09-06 boot should pass gate 2"
+
+    grown = compute_gates(heap_start=0x40817480 + 4096, dram_data_size=0, dram_bss_size=0)
+    assert not grown["gate2_pass"], "4 KiB more static RAM should fail gate 2"
+
+    # A SELFTEST image is judged one boot phase earlier, where its own
+    # suites allocate - see SELFTEST_BOOT_ALLOCATIONS_BYTES. Same heap
+    # start, so the only difference is which moment gate 2 asks about, and
+    # the selftest moment must be the roomier of the two.
+    as_selftest = compute_gates(heap_start=0x40817480, dram_data_size=0,
+                                dram_bss_size=0, selftest=True)
+    _assert_eq(as_selftest["predicted_after"], 50176,
+               "measured after-POST largest block, the selftest moment")
+    assert as_selftest["predicted_after"] > measured["predicted_after"], \
+        "the selftest moment has to be roomier than shell ready, or it " \
+        "would not be worth distinguishing"
+
+    # And the map itself is what decides which of the two applies, on
+    # whether a suite contributed static data - not on the mere presence of
+    # libunity.a, which every variant links (see parsed_is_selftest).
+    class _Fake(object):
+        def __init__(self, entries):
+            self.entries = entries
+
+    assert parsed_is_selftest(_Fake([
+        ("bss", ".bss.s", 232, "esp-idf/main/libmain.a(suite_sand.c.obj)")])), \
+        "a suite object owning .bss means the suites were compiled in"
+    assert parsed_is_selftest(_Fake([
+        ("bss", ".bss.Unity", 344, "esp-idf/unity/libunity.a(unity.c.obj)")])), \
+        "unity owning .bss means the same"
+    assert not parsed_is_selftest(parsed), \
+        "the synthetic map above carries no suite data and must read as ordinary"
 
     print("self-test OK")
     return 0

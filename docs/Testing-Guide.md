@@ -111,12 +111,17 @@ left. `launcher/tools/check_static_ram.py` predicts — arithmetic on the map
 file, not a reproduction — whether both still fit, and runs as a
 `POST_BUILD` step on every `idf.py build` (release, dev, diag alike), so a
 build that would not have booted fails on a laptop instead. Two of its
-constants are calibrated from real boot logs rather than derived: boot
-overhead (12,548 bytes taken by task stacks/drivers/gfx's own buffers
-before the framebuffer lands) and heap fragmentation (about 20 KiB of the
-post-framebuffer free heap that is never in the largest contiguous block)
-— see the script's header comment for the exact log lines each was pegged
-to, and re-peg them from a fresh boot if boot-time allocations change.
+constants are calibrated from a real boot capture rather than derived: the
+overhead before the framebuffer lands (task stacks, drivers, the SD probe),
+and everything else — every allocation from boot through a fully-up shell,
+plus a ~11 KiB region that heap_init hands back separately and can never
+serve a large allocation. Neither of these is "fragmentation" — a device
+heap block map measured that directly, at 12 bytes — they are simply
+pegged at the moment the sand grid's allocation actually has to compete,
+shell-ready, because that is when the app opens it, not at `gfx_init()`
+time. See the script's header comment for the exact log lines each
+constant was pegged to, and re-peg them from a fresh boot if boot-time
+allocations change.
 Nothing hardcodes a chip's constants, so a second board is a new profile
 rather than an edit everywhere; a profile field that has never been
 measured is the literal `unmeasured`, and both loaders refuse to hand one
