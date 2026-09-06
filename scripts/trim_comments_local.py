@@ -213,6 +213,22 @@ def split_delete(prose):
     return False, TRAILING_DELETE.sub("", prose).strip() or prose
 
 
+META_REPLY = re.compile(
+    r"\byour (?:next )?repl(?:y|ies)\b|\byou should (?:reply|respond)\b|"
+    r"^(?:i will|i'll|i am going to|let me) (?:now )?(?:reply|rewrite|"
+    r"provide|shorten)\b|\bas an ai\b", re.I)
+
+
+def looks_like_meta_reply(prose):
+    """Catches a model talking ABOUT the task instead of doing it - observed
+    directly from an OmniRoute-routed model ("Your next reply should provide
+    the shortened comment or the word DELETE.") that was short enough to pass
+    every other check and would have been written into a live comment as-is.
+    Not exhaustive, just the shape actually seen; treated the same as an
+    empty reply - forces a retry rather than being accepted."""
+    return bool(META_REPLY.search(prose))
+
+
 def rewrap(comment, prose, width, source):
     """Put `prose` back into the shape the original comment had.
 
@@ -311,11 +327,18 @@ def trim_file(path, opts, log, results):
             continue
 
         tries = 1
-        while prose and len(prose) > opts["limit"] and tries < opts["retries"]:
+        while prose and tries < opts["retries"] and \
+                (len(prose) > opts["limit"] or looks_like_meta_reply(prose)):
             prose = ask(opts["model"],
                         RETRY.format(got=len(prose), limit=opts["limit"],
                                      text=prose), log, via=opts["via"])
             tries += 1
+
+        if prose and looks_like_meta_reply(prose):
+            # Retries exhausted and it's STILL talking about the task instead
+            # of doing it - discard rather than risk writing this into a
+            # live comment (observed once, via OmniRoute's free routing).
+            prose = ""
 
         row = {"path": path, "line": com.line, "before": com.length,
                "after": len(prose) if prose else 0, "tries": tries,
