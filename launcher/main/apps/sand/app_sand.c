@@ -1960,11 +1960,11 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
          * consumer of its hash: material_colours()'s foam dither (see that
          * function's own comment on its water branch, in material.c). Every
          * other material still gets material_grain_hash(cx, cy) - the FINE,
-         * per-cell hash - completely unchanged: stone's and wood's speckle
-         * and glass's hatch all depend on adjacent cells disagreeing, and
-         * coarsening their hash the way water's is coarsened here would
-         * flatten them into the same striping bug material_grain_hash()'s
-         * own comment already tells the story of. */
+         * per-cell hash - completely unchanged: stone's, wood's and glass's
+         * grain all depend on adjacent cells disagreeing, and coarsening
+         * their hash the way water's is coarsened here would flatten them
+         * into the same striping bug material_grain_hash()'s own comment
+         * already tells the story of. */
         const bool cell_is_water = CELL_MATERIAL(row[cx]) == MAT_WATER;
         const unsigned hash = cell_is_water
             ? material_grain_hash(cx >> FOAM_BLOB_SHIFT, cy >> FOAM_BLOB_SHIFT)

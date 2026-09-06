@@ -1908,32 +1908,36 @@ static const gfx_color_t glass_shine[MATERIAL_VARIANTS] = {
     GLASS_AT_SHINE(12), GLASS_AT_SHINE(13), GLASS_AT_SHINE(14), GLASS_AT_SHINE(15),
 };
 
-/* A per-cell wobble in the PANE, the same trick stone's speckle uses and
- * deliberately much quieter: a twentieth either way against stone's fifth.
- * Stone is rock and wants visible grain; glass is smooth and wants only
- * enough variation that a wall of it stops looking like one flat fill.
- *
- * The lines and the shine are left uniform. They are light landing on the
- * surface rather than the surface itself, and letting them wobble per cell
- * makes a highlight look chewed rather than reflective. */
-#define GLASS_GRAIN(rgb, k) GFX_RGB(LERP(LERP((rgb), 0x000000, 1), LERP((rgb), 0xFFFFFF, 1), (k) * 5))
+/* A per-cell speckle in the PANE, material_grain_hash()'s own scatter, not
+ * the ring modulo tried first - that tiled visibly and read as a printed
+ * grid, not a crystal. */
+
+/* Each step runs from the pane's own colour (k=0) toward GLASS_FROST, the
+ * same near-white a cold pane already reaches at the bottom of its heat
+ * ramp - glassier than stone's plain black/white wobble. */
+
+/* Lines and shine stay uniform: light landing on the surface, not the
+ * surface itself, wobbling per cell reads as chewed, not reflective. */
+#define GLASS_GRAIN(rgb, k) GFX_RGB(LERP((rgb), GLASS_FROST, (k) * 15 / 7))
 
 #define GLASS_BODY_ROW(v)                                                                                              \
     {GLASS_GRAIN(GLASS_RGB(v), 0), GLASS_GRAIN(GLASS_RGB(v), 1), GLASS_GRAIN(GLASS_RGB(v), 2),                         \
-     GLASS_GRAIN(GLASS_RGB(v), 3)}
+     GLASS_GRAIN(GLASS_RGB(v), 3), GLASS_GRAIN(GLASS_RGB(v), 4), GLASS_GRAIN(GLASS_RGB(v), 5),                         \
+     GLASS_GRAIN(GLASS_RGB(v), 6), GLASS_GRAIN(GLASS_RGB(v), 7)}
 
 #define GLASS_EDGE_BODY_ROW(v)                                                                                         \
     {GLASS_GRAIN(GLASS_EDGE_RGB(v), 0), GLASS_GRAIN(GLASS_EDGE_RGB(v), 1), GLASS_GRAIN(GLASS_EDGE_RGB(v), 2),          \
-     GLASS_GRAIN(GLASS_EDGE_RGB(v), 3)}
+     GLASS_GRAIN(GLASS_EDGE_RGB(v), 3), GLASS_GRAIN(GLASS_EDGE_RGB(v), 4), GLASS_GRAIN(GLASS_EDGE_RGB(v), 5),          \
+     GLASS_GRAIN(GLASS_EDGE_RGB(v), 6), GLASS_GRAIN(GLASS_EDGE_RGB(v), 7)}
 
-static const gfx_color_t glass_body[MATERIAL_VARIANTS][4] = {
+static const gfx_color_t glass_body[MATERIAL_VARIANTS][8] = {
     GLASS_BODY_ROW(0),  GLASS_BODY_ROW(1),  GLASS_BODY_ROW(2),  GLASS_BODY_ROW(3),
     GLASS_BODY_ROW(4),  GLASS_BODY_ROW(5),  GLASS_BODY_ROW(6),  GLASS_BODY_ROW(7),
     GLASS_BODY_ROW(8),  GLASS_BODY_ROW(9),  GLASS_BODY_ROW(10), GLASS_BODY_ROW(11),
     GLASS_BODY_ROW(12), GLASS_BODY_ROW(13), GLASS_BODY_ROW(14), GLASS_BODY_ROW(15),
 };
 
-static const gfx_color_t glass_edge_body[MATERIAL_VARIANTS][4] = {
+static const gfx_color_t glass_edge_body[MATERIAL_VARIANTS][8] = {
     GLASS_EDGE_BODY_ROW(0),  GLASS_EDGE_BODY_ROW(1),  GLASS_EDGE_BODY_ROW(2),  GLASS_EDGE_BODY_ROW(3),
     GLASS_EDGE_BODY_ROW(4),  GLASS_EDGE_BODY_ROW(5),  GLASS_EDGE_BODY_ROW(6),  GLASS_EDGE_BODY_ROW(7),
     GLASS_EDGE_BODY_ROW(8),  GLASS_EDGE_BODY_ROW(9),  GLASS_EDGE_BODY_ROW(10), GLASS_EDGE_BODY_ROW(11),
@@ -2872,7 +2876,7 @@ material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_col
          * cardinal neighbour occupied but one diagonal empty must stay
          * interior, not spring an edge. */
             const bool edge = (mask & MATERIAL_EDGE_CARDINAL) != 0;
-            out[0] = edge ? glass_edge_body[v][hash & 3u] : glass_body[v][hash & 3u];
+            out[0] = edge ? glass_edge_body[v][hash & 7u] : glass_body[v][hash & 7u];
             out[1] = edge ? glass_edge_dither[v] : glass_dither[v];
             out[2] = edge ? glass_edge_shine[v] : glass_shine[v];
             return MATERIAL_HATCHED;
