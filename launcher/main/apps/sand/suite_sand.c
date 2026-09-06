@@ -17086,29 +17086,42 @@ static void test_gunpowder_without_impulses_burns_to_fire(void)
     sand_set(&s, 4, H - 2, GUNPOWDER_LIT_CELL);
     /* No sand_enable_impulses() - s->impulse_buf stays NULL, the default. */
 
+    /* WHAT EACH CORNER BECOMES AT THE MOMENT IT BURNS OUT, not what sits
+     * there once all four have. The four burn-outs are four independent
+     * geometric waits (reaction_t.burn_decay), so they are spread over
+     * many steps, and the fire the first one leaves is itself a transient
+     * that decays - at a long enough fuse it is gone before the last
+     * corner resolves, which read as "the corner left nothing" and made
+     * this test fail on a pure tuning change. Sampling each cell the step
+     * it stops being gunpowder pins the claim the fallback actually makes
+     * and is indifferent to how long the fuse burns. */
+    uint8_t became[4] = {0xFFu, 0xFFu, 0xFFu, 0xFFu};
+    const int cx[4] = {3, 4, 3, 4};
+    const int cy[4] = {H - 3, H - 3, H - 2, H - 2};
     bool all_resolved = false;
-    for (int i = 0; i < 200 && !all_resolved; i++) {
+    for (int i = 0; i < 400 && !all_resolved; i++) {
         sand_step(&s, 0, 1000, 0);
-        all_resolved = !cell_is_gunpowder(sand_at(&s, 3, H - 3)) &&
-                       !cell_is_gunpowder(sand_at(&s, 4, H - 3)) &&
-                       !cell_is_gunpowder(sand_at(&s, 3, H - 2)) &&
-                       !cell_is_gunpowder(sand_at(&s, 4, H - 2));
+        all_resolved = true;
+        for (int k = 0; k < 4; k++) {
+            const cell_t c = sand_at(&s, cx[k], cy[k]);
+            if (cell_is_gunpowder(c)) {
+                all_resolved = false;
+            } else if (became[k] == 0xFFu) {
+                became[k] = CELL_MATERIAL(c);
+            }
+        }
     }
 
     TEST_ASSERT_TRUE_MESSAGE(all_resolved,
         "setup: every corner of the 2x2 must burn out within the budget");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_FIRE,
-        CELL_MATERIAL(sand_at(&s, 3, H - 3)),
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_FIRE, became[0],
         "without an impulse buffer, a corner that would otherwise "
         "detonate must fall through to plain fire instead");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_FIRE,
-        CELL_MATERIAL(sand_at(&s, 4, H - 3)),
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_FIRE, became[1],
         "same corner rule for the second cell of the 2x2");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_FIRE,
-        CELL_MATERIAL(sand_at(&s, 3, H - 2)),
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_FIRE, became[2],
         "same corner rule for the third cell of the 2x2");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_FIRE,
-        CELL_MATERIAL(sand_at(&s, 4, H - 2)),
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_FIRE, became[3],
         "same corner rule for the fourth cell of the 2x2");
     TEST_ASSERT_EQUAL_INT_MESSAGE(0, s.impulse_count,
         "s->impulse_count must stay zero - there is no buffer for "

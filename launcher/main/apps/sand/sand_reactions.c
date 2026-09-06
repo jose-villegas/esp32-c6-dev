@@ -4307,7 +4307,7 @@ spend_lit_two_by_two(sand_t* s, int x, int y, int w, int dx, int dy) {
  * one (reaction_t.burn_decay). Board-wide rather than per pile because
  * "per pile" would need a region walk, and one blast a frame is already
  * more than the eye separates. */
-#define SAND_GUNPOWDER_BLAST_COOLDOWN 3
+#define SAND_GUNPOWDER_BLAST_COOLDOWN 8
 
 /* One burning cell's turn, in priority order: burn down first (a cell
  * that vanishes this step gets no turn to react further - it cannot
