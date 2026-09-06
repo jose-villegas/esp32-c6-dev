@@ -2202,93 +2202,40 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
             continue;
         }
 
-        /* Diagonals BOTH ways, and brightest where two cross - which is
-         * what makes it read as light caught on a pane rather than as a
-         * pattern printed on one. A single family of lines was almost
-         * invisible; the crossings are what the eye picks up.
-         *
-         * Both diagonals are drawn identically today - no gravity
-         * asymmetry between them, and none wanted: this is the surface's
-         * fixed woven texture, not the light landing on it. An earlier
-         * version favoured whichever one aligned with the board's tilt;
-         * see SHINE_PERIOD's own comment above for why a gravity-aligned
-         * difference like that turned out to be imperceptible on this
-         * grid and was dropped - the shine below is where gravity is
-         * expressed now, as a continuously rotating angle rather than a
-         * choice between these two.
-         *
-         * Measured in SCREEN pixels rather than within the block, so the
-         * lines run unbroken from one cell into the next instead of
-         * restarting at every boundary. That is the whole reason this
-         * cannot be constant-folded the way the flat loop above is: the
-         * phase depends on where the cell is.
-         *
-         * Still inside the block as far as the dirty-run tracking is
-         * concerned - that works on grid CELLS (row_runs_find below), and
-         * every cell is painted whatever its neighbours are, so no run is
-         * broken by any of this. */
-        const int base = (cx + cy) * n;
-        const int diff = (cx - cy) * n;
-
         /* The shine's own axis, in Q8 screen-pixel units: this cell's
-         * origin projected onto the current gravity direction (shine_ux_q8/
-         * shine_uy_q8, updated once a frame - see material_shine_direction()
-         * in material.h). Computed once per cell, same as base/diff above,
-         * so the per-pixel loop below only ever adds dx/dy's own share of
-         * the projection. */
+         * origin projected onto current gravity (shine_ux_q8/shine_uy_q8,
+         * updated once a frame - material_shine_direction(), material.h).
+         * Computed once per cell; the loop below adds dx/dy's own share. */
         const int shine_base_q8 = (cx * n) * shine_ux_q8 + (cy * n) * shine_uy_q8;
 
         for (int dy = 0; dy < n; dy++) {
             for (int dx = 0; dx < n; dx++) {
-                /* One pixel every eight, both ways. Wide bands were the
-                 * first try and buried the pane - half the pixels were
-                 * line and a quarter were shine, so the glass itself
-                 * barely showed. Thin and sparse reads as light caught on
-                 * a surface; thick reads as a pattern printed on one.
-                 *
-                 * `& 7` rather than a modulo because the period is a power
-                 * of two, and it is fine on the negative values `w` takes
-                 * left of the diagonal: two's complement just shifts the
-                 * phase, which nothing here can tell apart from any other
-                 * phase.
-                 *
-                 * Fixed to the (1, 1)/(1, -1) diagonals regardless of
-                 * gravity - this is the WOVEN TEXTURE of the surface, not
-                 * the light landing on it, and a texture that rotated with
-                 * every tilt would look like the material itself was
-                 * turning rather than like a fixed pane being lit from a
-                 * new angle. Only the shine below follows gravity. */
-                const bool grain = (((base + dx + dy) & 7) == 0) ||
-                                   (((diff + dx - dy) & 7) == 0);
-
                 /* SHINE: a band travelling against the CURRENT GRAVITY
                  * DIRECTION, leaned 45 degrees (material_shine_direction()
-                 * owns that turn), advanced on a clock - see this function's
-                 * own top comment for why both halves of that matter. Projecting
-                 * (dx, dy) onto shine_ux_q8/shine_uy_q8 is a plain 2D dot
-                 * product in Q8 fixed point; the `>> 8` back down to pixel
-                 * units is an arithmetic right shift, sign-extending on this
-                 * toolchain, so it is fine on the negative projections a
-                 * pixel above or left of a cell's origin produces - the same
-                 * trust the mask below places in two's complement.
-                 *
-                 * A mask rather than a modulo because SHINE_PERIOD is a
-                 * power of two, and it is fine on the values left of the
-                 * origin - two's complement shifts the phase, which nothing
-                 * here can tell from any other phase.
-                 *
-                 * `< n` is the width: one CELL, so the band looks the same
-                 * at every quality setting. n is a compile-time constant
-                 * here, so this is a comparison against a literal. */
+                 * owns that turn), advanced on a clock. Projecting (dx, dy)
+                 * onto shine_ux_q8/shine_uy_q8 is a plain 2D dot product in
+                 * Q8 fixed point. */
+
+                /* `>> 8` back to pixel units is an arithmetic right shift,
+                 * sign-extending on this toolchain, so it is fine on the
+                 * negative projections a pixel above or left of a cell's
+                 * origin produces. */
+
+                /* A mask, not a modulo, because SHINE_PERIOD is a power of
+                 * two and it is fine on values left of the origin - two's
+                 * complement shifts the phase, which nothing here can tell
+                 * from any other phase. `< n` is the width: one CELL, so
+                 * the band looks the same at every quality setting. */
                 const int shine_q8 = shine_base_q8 + dx * shine_ux_q8 + dy * shine_uy_q8;
                 const int along = ((shine_q8 >> 8) + shine_offset)
                                   & (SHINE_PERIOD - 1);
 
-                /* The band wins wherever it falls, including over the
-                 * grain - it is the bright thing, and letting the grain
-                 * override it would put dark notches through a highlight. */
-                p[dy * GFX_WIDTH + dx] =
-                    (along < n) ? col[2] : (grain ? col[1] : col[0]);
+                /* The band wins wherever it falls - the bright thing
+                 * catching the light - and the surface is a plain fill
+                 * everywhere else. A second, woven diagonal texture used
+                 * to sit under it (col[1]); dropped for reading as a
+                 * printed grid rather than a surface - see git log. */
+                p[dy * GFX_WIDTH + dx] = (along < n) ? col[2] : col[0];
             }
         }
     }
