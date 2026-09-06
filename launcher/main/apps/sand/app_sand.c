@@ -2184,9 +2184,17 @@ static void draw_dirty_rows(bool shine_moved, bool local_depth_woke,
  * palette-external colour is used. */
 #define EMITTER_MARKER_COLOR 0xFF3EC8
 
-/* Marker fixed on-screen size in pixels, not cells. Cell size varies (2 px at
- * ULTRA, 8 px at VERY LOW), affecting marker visibility. Tuned by eye; spans
- * about four HIGH cells (3 px each). Trade-off for visibility. */
+/* The marker's fixed on-screen size, in pixels rather than cells - the same
+ * reasoning POUR_RADIUS_PX's comment above gives for the pour/erase brushes:
+ * a cell is not a physical size, it is 2 px at ULTRA and 8 px at VERY LOW for
+ * the same object, so a marker drawn "one cell wide" would be a different
+ * physical mark at every quality setting, and it would shrink to nearly
+ * nothing at ULTRA specifically - the opposite of what a marker that has to
+ * be findable by a finger needs. Findability is a property of the finger, not
+ * of the grid, so the marker gets a size the grid has no say over. Tuned by
+ * eye. At HIGH's 3 px cells this spans about four cells across, so it does
+ * sit over a little of what the source underneath is actually producing - an
+ * accepted trade for being visible at all, not an oversight. */
 #define EMITTER_MARKER_PX  12
 
 /* Marks every placed emitter with a small square of fixed physical size - see
