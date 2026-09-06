@@ -6045,13 +6045,7 @@ static void test_each_material_is_painted_the_way_it_should_be(void)
             char why[128];
             snprintf(why, sizeof why, "%s variant %d", material_by_id((material_id_t)m)->name, v);
 
-            if (m == MAT_GLASS) {
-                TEST_ASSERT_EQUAL_MESSAGE(MATERIAL_HATCHED, pat, why);
-                TEST_ASSERT_TRUE_MESSAGE(col[0] != col[1] && col[1] != col[2],
-                    "glass is hatched, so its body, its lines and their "
-                    "crossings must all differ - equal ones paint a flat "
-                    "pane and the shine vanishes");
-            } else if (m == MAT_STONE) {
+            if (m == MAT_STONE || m == MAT_GLASS) {
                 TEST_ASSERT_EQUAL_MESSAGE(MATERIAL_SPECKLED, pat, why);
             } else if (m == MAT_WOOD) {
                 /* Speckled only while UNLIT. A burning log is a glow, and
@@ -6112,27 +6106,6 @@ static void test_glass_grain_is_quieter_than_stone(void)
     TEST_ASSERT_TRUE_MESSAGE(glass_spread < stone_spread,
         "but it must vary LESS than stone does - glass is smooth and rock "
         "is not, and a pane speckled as hard as a wall reads as gravel");
-}
-
-/* The lines and the shine do NOT vary from cell to cell.
- *
- * They are light landing on the surface, not the surface itself. Letting
- * them wobble per cell makes a highlight look chewed instead of
- * reflective, so only the pane underneath carries the grain. */
-static void test_the_shine_does_not_vary_between_cells(void)
-{
-    for (int v = 0; v < MATERIAL_VARIANTS; v++) {
-        gfx_color_t a[3], b[3];
-        material_colours(CELL_MAKE(MAT_GLASS, v), 0u, 0u, 255u, a);
-        material_colours(CELL_MAKE(MAT_GLASS, v), 2u, 0u, 255u, b);
-
-        char why[128];
-        snprintf(why, sizeof why,
-                 "glass at temperature %d: the %%s must be identical in "
-                 "every cell", v);
-        TEST_ASSERT_EQUAL_MESSAGE(a[1], b[1], why);
-        TEST_ASSERT_EQUAL_MESSAGE(a[2], b[2], why);
-    }
 }
 
 /* Stone's speckle comes from the cell's POSITION, not from its variant.
@@ -10347,7 +10320,7 @@ static void test_a_saturated_liquid_body_reads_the_same_shade_at_every_tilt_angl
  * why no separate "is it moving" signal is wired in here or anywhere else.
  *
  * None of these four tests can reach into material.c's own `water_foam`
- * constant - it is file-static, the same way glass_shine and stone_speckle
+ * constant - it is file-static, the same way metal_shine and stone_speckle
  * already are, and these tests reach material_colours() only through
  * material.h same as any other caller. Instead they lean on
  * material_set_gravity(0, 0), which zeroes liquid_spec[] entirely (see that
@@ -10581,11 +10554,6 @@ static void test_a_diagonal_neighbour_alone_is_not_an_edge(void)
             "glass's body colour must be identical with a lone diagonal "
             "neighbour empty - the cardinal test is what decides an edge, "
             "not `mask != 0`");
-        TEST_ASSERT_EQUAL_MESSAGE(interior[1], diagonal[1],
-            "and its dither, which glass_edge_dither vs glass_dither would "
-            "otherwise silently swap in");
-        TEST_ASSERT_EQUAL_MESSAGE(interior[2], diagonal[2],
-            "and its shine, for the same reason");
     }
 
     {
@@ -15765,11 +15733,10 @@ static void test_metal_hatched_body_lines_and_shine_differ(void)
         "vanishes");
 }
 
-/* Metal's lines and shine do NOT vary from cell to cell, same reasoning as
- * test_the_shine_does_not_vary_between_cells for glass: they are light
+/* Metal's lines and shine do NOT vary from cell to cell: they are light
  * landing on the surface, not the surface itself, and a highlight that
- * wobbled per cell would look chewed rather than reflective. Unlike
- * glass's version this has no variant loop to run - metal has none. */
+ * wobbled per cell would look chewed rather than reflective. No variant
+ * loop to run here - metal has none. */
 static void test_metal_shine_does_not_vary_between_cells(void)
 {
     gfx_color_t a[3], b[3];
@@ -32164,7 +32131,6 @@ void run_sand_suite(void)
     RUN_TEST(test_an_edge_shows_less_temperature_than_the_body);
     RUN_TEST(test_each_material_is_painted_the_way_it_should_be);
     RUN_TEST(test_glass_grain_is_quieter_than_stone);
-    RUN_TEST(test_the_shine_does_not_vary_between_cells);
     RUN_TEST(test_stone_speckles_by_position_at_every_temperature);
     RUN_TEST(test_cullet_shades_are_four_distinct_tints);
     RUN_TEST(test_cullet_changes_colour_as_the_phase_advances);

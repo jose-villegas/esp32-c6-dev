@@ -1848,23 +1848,6 @@ static const gfx_color_t palette[256] = {
                               * REVISION 2 spent this code on the lit state */
 };
 
-/* Glass's SECOND colour: the same temperature, mixed halfway to the
- * background.
- *
- * Painted on alternate pixels inside each cell's block it reads as a woven
- * or frosted pane rather than a solid slab - which is most of what tells
- * glass apart from stone at a glance, since the two are identical in the
- * density ladder and behave identically to everything except acid.
- *
- * Mixed toward the BACKGROUND specifically, not simply darkened, because
- * what glass wants to look like is see-through. Half strength is the whole
- * effect: at cell size 2 a block is four pixels, so a checker is two of
- * each and any subtler mix would round away.
- *
- * Only glass has one. Everything else dithers against itself, which is the
- * same as not dithering - see material_dither() and paint_row_n(). */
-#define GLASS_DIM(v)      GFX_RGB(GLASS_LINE(GLASS_RGB(v)))
-
 /* The same ramps pulled two thirds of the way back to their own ambient
  * colour, used wherever a cell touches empty space. Ten of fifteen, so an
  * outline still shifts with heat - just a third as far as the body does. */
@@ -1873,81 +1856,40 @@ static const gfx_color_t palette[256] = {
 #define GLASS_EDGE_RGB(v) LERP(GLASS_RGB(v), GLASS_RGB(SAND_AMBIENT_HEAT), 10)
 #define STONE_EDGE_RGB(v) LERP(STONE_RGB(v), STONE_RGB(SAND_AMBIENT_HEAT), 10)
 
-/* The lines and their crossings are LIGHTER than the pane, not darker.
- * They were a mix toward the background, which is what you would do for
- * something see-through and which came out as very nearly no pattern at
- * all - a dark line on a dark pane is invisible. What glass actually shows
- * is light caught on it, so the lines lift toward white and the crossings
- * go most of the way there. That is the shine. */
-#define GLASS_LINE(rgb)   LERP((rgb), 0xFFFFFF, 4)
-#define GLASS_SHINE(rgb)  LERP((rgb), 0xFFFFFF, 11)
-
-#define GLASS_EDGE_DIM(v) GFX_RGB(GLASS_LINE(GLASS_EDGE_RGB(v)))
-
-static const gfx_color_t glass_edge_dither[MATERIAL_VARIANTS] = {
-    GLASS_EDGE_DIM(0),  GLASS_EDGE_DIM(1),  GLASS_EDGE_DIM(2),  GLASS_EDGE_DIM(3),
-    GLASS_EDGE_DIM(4),  GLASS_EDGE_DIM(5),  GLASS_EDGE_DIM(6),  GLASS_EDGE_DIM(7),
-    GLASS_EDGE_DIM(8),  GLASS_EDGE_DIM(9),  GLASS_EDGE_DIM(10), GLASS_EDGE_DIM(11),
-    GLASS_EDGE_DIM(12), GLASS_EDGE_DIM(13), GLASS_EDGE_DIM(14), GLASS_EDGE_DIM(15),
-};
-
-#define GLASS_EDGE_SHINE(v) GFX_RGB(GLASS_SHINE(GLASS_EDGE_RGB(v)))
-#define GLASS_AT_SHINE(v)   GFX_RGB(GLASS_SHINE(GLASS_RGB(v)))
-
-static const gfx_color_t glass_edge_shine[MATERIAL_VARIANTS] = {
-    GLASS_EDGE_SHINE(0),  GLASS_EDGE_SHINE(1),  GLASS_EDGE_SHINE(2),  GLASS_EDGE_SHINE(3),
-    GLASS_EDGE_SHINE(4),  GLASS_EDGE_SHINE(5),  GLASS_EDGE_SHINE(6),  GLASS_EDGE_SHINE(7),
-    GLASS_EDGE_SHINE(8),  GLASS_EDGE_SHINE(9),  GLASS_EDGE_SHINE(10), GLASS_EDGE_SHINE(11),
-    GLASS_EDGE_SHINE(12), GLASS_EDGE_SHINE(13), GLASS_EDGE_SHINE(14), GLASS_EDGE_SHINE(15),
-};
-
-static const gfx_color_t glass_shine[MATERIAL_VARIANTS] = {
-    GLASS_AT_SHINE(0),  GLASS_AT_SHINE(1),  GLASS_AT_SHINE(2),  GLASS_AT_SHINE(3),
-    GLASS_AT_SHINE(4),  GLASS_AT_SHINE(5),  GLASS_AT_SHINE(6),  GLASS_AT_SHINE(7),
-    GLASS_AT_SHINE(8),  GLASS_AT_SHINE(9),  GLASS_AT_SHINE(10), GLASS_AT_SHINE(11),
-    GLASS_AT_SHINE(12), GLASS_AT_SHINE(13), GLASS_AT_SHINE(14), GLASS_AT_SHINE(15),
-};
-
-/* A per-cell speckle in the PANE, material_grain_hash()'s own scatter, not
- * the ring modulo tried first - that tiled visibly and read as a printed
- * grid, not a crystal. */
+/* The PANE's own gradient - indexed by material_gravity_band() (material.h),
+ * position along current gravity, not a hash. Two tried first read wrong:
+ * a per-cell hash speckles like stone, and a plain position modulo tiles
+ * into a visible printed grid - neither reads as a pane's own laminae. */
 
 /* Each step runs from the pane's own colour (k=0) toward GLASS_FROST, the
- * same near-white a cold pane already reaches at the bottom of its heat
- * ramp - glassier than stone's plain black/white wobble. */
+ * near-white a cold pane already reaches at its heat ramp's own bottom. */
 
-/* Lines and shine stay uniform: light landing on the surface, not the
- * surface itself, wobbling per cell reads as chewed, not reflective. */
-#define GLASS_GRAIN(rgb, k) GFX_RGB(LERP((rgb), GLASS_FROST, (k) * 15 / 7))
+/* Four steps, not eight: a wider band per step is what reads as glass,
+ * once the diagonal weave and its travelling shine - both now dropped for
+ * looking too much like brushed metal's own machined lines - stopped
+ * being there to carry the finer texture instead. */
+#define GLASS_GRAIN(rgb, k) GFX_RGB(LERP((rgb), GLASS_FROST, (k) * 5))
 
 #define GLASS_BODY_ROW(v)                                                                                              \
     {GLASS_GRAIN(GLASS_RGB(v), 0), GLASS_GRAIN(GLASS_RGB(v), 1), GLASS_GRAIN(GLASS_RGB(v), 2),                         \
-     GLASS_GRAIN(GLASS_RGB(v), 3), GLASS_GRAIN(GLASS_RGB(v), 4), GLASS_GRAIN(GLASS_RGB(v), 5),                         \
-     GLASS_GRAIN(GLASS_RGB(v), 6), GLASS_GRAIN(GLASS_RGB(v), 7)}
+     GLASS_GRAIN(GLASS_RGB(v), 3)}
 
 #define GLASS_EDGE_BODY_ROW(v)                                                                                         \
     {GLASS_GRAIN(GLASS_EDGE_RGB(v), 0), GLASS_GRAIN(GLASS_EDGE_RGB(v), 1), GLASS_GRAIN(GLASS_EDGE_RGB(v), 2),          \
-     GLASS_GRAIN(GLASS_EDGE_RGB(v), 3), GLASS_GRAIN(GLASS_EDGE_RGB(v), 4), GLASS_GRAIN(GLASS_EDGE_RGB(v), 5),          \
-     GLASS_GRAIN(GLASS_EDGE_RGB(v), 6), GLASS_GRAIN(GLASS_EDGE_RGB(v), 7)}
+     GLASS_GRAIN(GLASS_EDGE_RGB(v), 3)}
 
-static const gfx_color_t glass_body[MATERIAL_VARIANTS][8] = {
+static const gfx_color_t glass_body[MATERIAL_VARIANTS][4] = {
     GLASS_BODY_ROW(0),  GLASS_BODY_ROW(1),  GLASS_BODY_ROW(2),  GLASS_BODY_ROW(3),
     GLASS_BODY_ROW(4),  GLASS_BODY_ROW(5),  GLASS_BODY_ROW(6),  GLASS_BODY_ROW(7),
     GLASS_BODY_ROW(8),  GLASS_BODY_ROW(9),  GLASS_BODY_ROW(10), GLASS_BODY_ROW(11),
     GLASS_BODY_ROW(12), GLASS_BODY_ROW(13), GLASS_BODY_ROW(14), GLASS_BODY_ROW(15),
 };
 
-static const gfx_color_t glass_edge_body[MATERIAL_VARIANTS][8] = {
+static const gfx_color_t glass_edge_body[MATERIAL_VARIANTS][4] = {
     GLASS_EDGE_BODY_ROW(0),  GLASS_EDGE_BODY_ROW(1),  GLASS_EDGE_BODY_ROW(2),  GLASS_EDGE_BODY_ROW(3),
     GLASS_EDGE_BODY_ROW(4),  GLASS_EDGE_BODY_ROW(5),  GLASS_EDGE_BODY_ROW(6),  GLASS_EDGE_BODY_ROW(7),
     GLASS_EDGE_BODY_ROW(8),  GLASS_EDGE_BODY_ROW(9),  GLASS_EDGE_BODY_ROW(10), GLASS_EDGE_BODY_ROW(11),
     GLASS_EDGE_BODY_ROW(12), GLASS_EDGE_BODY_ROW(13), GLASS_EDGE_BODY_ROW(14), GLASS_EDGE_BODY_ROW(15),
-};
-
-static const gfx_color_t glass_dither[MATERIAL_VARIANTS] = {
-    GLASS_DIM(0),  GLASS_DIM(1),  GLASS_DIM(2),  GLASS_DIM(3),  GLASS_DIM(4),  GLASS_DIM(5),
-    GLASS_DIM(6),  GLASS_DIM(7),  GLASS_DIM(8),  GLASS_DIM(9),  GLASS_DIM(10), GLASS_DIM(11),
-    GLASS_DIM(12), GLASS_DIM(13), GLASS_DIM(14), GLASS_DIM(15),
 };
 
 /* Stone's SPECKLE: eight shades of each temperature, picked per cell from
@@ -2158,10 +2100,8 @@ _Static_assert(ROOT_SHADES == 4, "root_grain[] above spells out one row per shad
  * dither tone and one shine tone here, not sixteen.
  *
  * Lifted off METAL_LIGHT rather than off metal_grain's own per-cell
- * wobble, same reasoning as GLASS_LINE/GLASS_SHINE above: a highlight
- * that wobbled per cell would look chewed rather than reflective. Same
- * two weights as glass's, 4 and 11 of 15 - metal is meant to look
- * brushed and catching light exactly the way a pane does, just opaque. */
+ * wobble: a highlight that wobbled per cell would look chewed rather
+ * than reflective, not brushed. */
 static const gfx_color_t metal_dither = GFX_RGB(LERP(METAL_LIGHT, 0xFFFFFF, 4));
 static const gfx_color_t metal_shine = GFX_RGB(LERP(METAL_LIGHT, 0xFFFFFF, 11));
 
@@ -2437,7 +2377,7 @@ material_shine_direction(int gx, int gy, int *ux_q8, int *uy_q8) {
  * needs it. */
 
 /* FOAM's own colour - a side table, not a palette[] row, the same pattern
- * glass_shine and stone_speckle already use above: there is no spare slot
+ * metal_shine and stone_speckle already use above: there is no spare slot
  * in palette[] for it, and a dither over an existing rim colour does not
  * need an indexed row of its own the way a fill level does.
  *
@@ -2876,10 +2816,10 @@ material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_col
          * cardinal neighbour occupied but one diagonal empty must stay
          * interior, not spring an edge. */
             const bool edge = (mask & MATERIAL_EDGE_CARDINAL) != 0;
-            out[0] = edge ? glass_edge_body[v][hash & 7u] : glass_body[v][hash & 7u];
-            out[1] = edge ? glass_edge_dither[v] : glass_dither[v];
-            out[2] = edge ? glass_edge_shine[v] : glass_shine[v];
-            return MATERIAL_HATCHED;
+            out[0] = edge ? glass_edge_body[v][hash & 3u] : glass_body[v][hash & 3u];
+            out[1] = out[0];
+            out[2] = out[0];
+            return MATERIAL_SPECKLED;
         }
         case MAT_STONE:
             /* Same CARDINAL-only test as glass above, and for the same reason -

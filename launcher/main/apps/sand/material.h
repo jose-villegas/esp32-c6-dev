@@ -1730,6 +1730,26 @@ static inline unsigned material_grain_hash(int cx, int cy)
     return h;
 }
 
+/* A body index shared by GLASS and METAL - position projected onto
+ * CURRENT GRAVITY (ux_q8/uy_q8, material_shine_direction()'s own Q8 unit
+ * vector), not a hash. Steps read as laminae perpendicular to "down",
+ * turning with a tilt instead of sitting fixed to the screen. */
+
+/* `jitter` is the one thing the two callers disagree on: metal passes 0
+ * and keeps a razor edge between steps, which reads as brushed; glass
+ * passes a per-cell hash there instead, since that same sharp edge read
+ * as machined metal, not a hand-blown pane. */
+static inline unsigned material_gravity_band(int cx, int cy, int ux_q8,
+                                             int uy_q8, int period, int jitter)
+{
+    /* >> 8 undoes the Q8 scale, so `step` climbs by about one per cell
+     * moved along the gravity axis; the double modulo wraps the jittered
+     * sum into range from either side, since a dot product can go
+     * negative. */
+    const long step = (((long)cx * ux_q8 + (long)cy * uy_q8) >> 8) + jitter;
+    return (unsigned)(((step % period) + period) % period);
+}
+
 /* Every possible cell byte, mapped straight to a panel-ready pixel.
  *
  * 256 entries of two bytes: 512 bytes, in flash, costing no RAM. Drawing a
