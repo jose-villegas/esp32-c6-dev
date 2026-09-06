@@ -75,6 +75,9 @@ static const cell_t brushes[] = {
     CELL_MAKE(MAT_ACID, 0),  CELL_MAKE(MAT_GLASS, 0),
     CELL_MAKE(MAT_SNOW, 0),  CELL_MAKE(MAT_DIRT, 0),
     MATX(MATX_ICE),          MATX(MATX_PLANT),
+    GUNPOWDER_CELL(0), /* dry, tone 0 - same as app_sand.c's own brushes[];
+                         * see web_brush_swatch() for why the swatch itself
+                         * paints a different code. */
 };
 #define BRUSH_COUNT ((int)(sizeof(brushes) / sizeof(brushes[0])))
 
@@ -251,16 +254,22 @@ void web_set_brush(int index)
     }
 }
 
-/* One representative RGB888 colour for brush `index`'s material, for the
- * HTML palette's own swatch buttons - the real palette, not a hand-copied
- * hex list that could drift from it. 0xRRGGBB packed into the low 24 bits. */
+/* One representative RGB888 colour for brush `index`, for the HTML
+ * palette's own swatch buttons. Exact port of app_sand.c's brush_color() -
+ * see that function's own comment for why shade 13 (not variant 0), an
+ * extended static as itself, and gunpowder's GUNPOWDER_CELL(2) substitute. */
 EMSCRIPTEN_KEEPALIVE
 uint32_t web_brush_swatch(int index)
 {
     if (index < 0 || index >= BRUSH_COUNT) {
         return 0;
     }
-    return gfx_color_rgb888(material_palette()[brushes[index]]);
+    const cell_t c = brushes[index];
+    if (cell_is_gunpowder(c)) {
+        return gfx_color_rgb888(material_palette()[GUNPOWDER_CELL(2)]);
+    }
+    return gfx_color_rgb888(material_palette()[
+        cell_is_extended(c) ? c : CELL_MAKE(CELL_MATERIAL(c), 13)]);
 }
 
 /*---------------------------------------------------------------------------

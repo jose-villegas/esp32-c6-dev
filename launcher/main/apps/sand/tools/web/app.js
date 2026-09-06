@@ -10,7 +10,7 @@ const MODE_PAINT = 0, MODE_ERASE = 1, MODE_DETONATE = 2;
 
 const BRUSH_NAMES = [
   "Sand", "Water", "Stone", "Gas", "Fire", "Wood", "Oil", "Lava",
-  "Acid", "Glass", "Snow", "Dirt", "Ice", "Plant",
+  "Acid", "Glass", "Snow", "Dirt", "Ice", "Plant", "Gunpowder",
 ];
 
 const canvas = document.getElementById("canvas");
