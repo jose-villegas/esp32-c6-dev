@@ -1334,6 +1334,15 @@ const reaction_t reactions[MATERIAL_MAX] = {
 
 #define LERP(lo, hi, sh)  ((LERP_CH(lo, hi, 16, sh) << 16) | (LERP_CH(lo, hi, 8, sh) << 8) | LERP_CH(lo, hi, 0, sh))
 
+/* The same blend, out of 255 rather than 15 - glass's live gravity
+ * gradient (MAT_GLASS case below) needs a small tilt to move the shade a
+ * small amount, finer than the sixteen steps the rest of the palette is
+ * built from once, at compile time, and never touches again. */
+#define LERP8_CH(lo, hi, shift, fr)                                                                                    \
+    ((((((lo) >> (shift)) & 0xFF) * (255 - (fr)) + (((hi) >> (shift)) & 0xFF) * (fr)) / 255) & 0xFF)
+
+#define LERP8(lo, hi, fr) ((LERP8_CH(lo, hi, 16, fr) << 16) | (LERP8_CH(lo, hi, 8, fr) << 8) | LERP8_CH(lo, hi, 0, fr))
+
 /* A ramp for `n` steps between two colours, for a material that needs its
  * sixteen entries built in more than one piece. */
 #define SEG(lo, hi, i, n) GFX_RGB(LERP(lo, hi, ((i) * 15) / ((n) - 1)))
@@ -1855,42 +1864,6 @@ static const gfx_color_t palette[256] = {
 
 #define GLASS_EDGE_RGB(v) LERP(GLASS_RGB(v), GLASS_RGB(SAND_AMBIENT_HEAT), 10)
 #define STONE_EDGE_RGB(v) LERP(STONE_RGB(v), STONE_RGB(SAND_AMBIENT_HEAT), 10)
-
-/* The PANE's own gradient - a per-cell hash picks each cell's OWN resting
- * point (the MAT_GLASS case below mixes in glass_phase, gravity's own
- * live drift, on top of it). A position-only modulo tiled into a visible
- * printed grid when tried first; a hash speckles like stone instead. */
-
-/* Each step runs from the pane's own colour (k=0) toward GLASS_FROST, the
- * near-white a cold pane already reaches at its heat ramp's own bottom. */
-
-/* Four steps, not eight: a wider band per step is what reads as glass,
- * once the diagonal weave and its travelling shine - both now dropped for
- * looking too much like brushed metal's own machined lines - stopped
- * being there to carry the finer texture instead. */
-#define GLASS_GRAIN(rgb, k) GFX_RGB(LERP((rgb), GLASS_FROST, (k) * 5))
-
-#define GLASS_BODY_ROW(v)                                                                                              \
-    {GLASS_GRAIN(GLASS_RGB(v), 0), GLASS_GRAIN(GLASS_RGB(v), 1), GLASS_GRAIN(GLASS_RGB(v), 2),                         \
-     GLASS_GRAIN(GLASS_RGB(v), 3)}
-
-#define GLASS_EDGE_BODY_ROW(v)                                                                                         \
-    {GLASS_GRAIN(GLASS_EDGE_RGB(v), 0), GLASS_GRAIN(GLASS_EDGE_RGB(v), 1), GLASS_GRAIN(GLASS_EDGE_RGB(v), 2),          \
-     GLASS_GRAIN(GLASS_EDGE_RGB(v), 3)}
-
-static const gfx_color_t glass_body[MATERIAL_VARIANTS][4] = {
-    GLASS_BODY_ROW(0),  GLASS_BODY_ROW(1),  GLASS_BODY_ROW(2),  GLASS_BODY_ROW(3),
-    GLASS_BODY_ROW(4),  GLASS_BODY_ROW(5),  GLASS_BODY_ROW(6),  GLASS_BODY_ROW(7),
-    GLASS_BODY_ROW(8),  GLASS_BODY_ROW(9),  GLASS_BODY_ROW(10), GLASS_BODY_ROW(11),
-    GLASS_BODY_ROW(12), GLASS_BODY_ROW(13), GLASS_BODY_ROW(14), GLASS_BODY_ROW(15),
-};
-
-static const gfx_color_t glass_edge_body[MATERIAL_VARIANTS][4] = {
-    GLASS_EDGE_BODY_ROW(0),  GLASS_EDGE_BODY_ROW(1),  GLASS_EDGE_BODY_ROW(2),  GLASS_EDGE_BODY_ROW(3),
-    GLASS_EDGE_BODY_ROW(4),  GLASS_EDGE_BODY_ROW(5),  GLASS_EDGE_BODY_ROW(6),  GLASS_EDGE_BODY_ROW(7),
-    GLASS_EDGE_BODY_ROW(8),  GLASS_EDGE_BODY_ROW(9),  GLASS_EDGE_BODY_ROW(10), GLASS_EDGE_BODY_ROW(11),
-    GLASS_EDGE_BODY_ROW(12), GLASS_EDGE_BODY_ROW(13), GLASS_EDGE_BODY_ROW(14), GLASS_EDGE_BODY_ROW(15),
-};
 
 /* Stone's SPECKLE: eight shades of each temperature, picked per cell from
  * the cell's own position rather than from its variant.
@@ -2833,9 +2806,14 @@ material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_col
              * forever since glass never moves; glass_phase then slides
              * every cell's point by the same amount, so the whole pane
              * drifts together while staying individually scattered. */
-            const int shifted = (int)(hash & 3u) + glass_phase;
-            const unsigned band = (unsigned)(((shifted % 4) + 4) % 4);
-            out[0] = edge ? glass_edge_body[v][band] : glass_body[v][band];
+
+            /* A live LERP8, not a lookup into a precomputed ramp - fine
+             * enough to move by a small angle would need hundreds of
+             * entries per temperature. Runs once per PAINTED cell, not
+             * per pixel, so the blend costs nothing a table would save. */
+            const unsigned frac = (unsigned)(((int)(hash & 0xFFu) + glass_phase) & 0xFF);
+            const gfx_color_t base = edge ? GLASS_EDGE_RGB(v) : GLASS_RGB(v);
+            out[0] = GFX_RGB(LERP8(base, GLASS_FROST, frac));
             out[1] = out[0];
             out[2] = out[0];
             return MATERIAL_SPECKLED;
