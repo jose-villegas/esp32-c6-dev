@@ -5,6 +5,7 @@
 // comment for exactly what stayed behind on the device.
 
 const COUNTS_PER_G = 4096; // must match web_sand.c's WEB_COUNTS_PER_G
+const CANVAS_BASE_MAX_PX = 640; // 1x display width cap; must match style.css's own
 
 const MODE_PAINT = 0, MODE_ERASE = 1, MODE_DETONATE = 2;
 
@@ -265,6 +266,12 @@ function reinitSim() {
   canvas.width = screenW;
   canvas.height = screenH;
   canvas.style.aspectRatio = `${screenW} / ${screenH}`;
+  // The whole point of render size: a bigger canvas should be bigger ON
+  // THE PAGE, not just higher-resolution inside the same on-screen box -
+  // so the display width scales with it too, still capped to the viewport
+  // (max-height:80vh in style.css catches the portrait/tall-scale case
+  // this width cap alone would not).
+  canvas.style.width = `min(92vw, ${CANVAS_BASE_MAX_PX * Number(renderScaleSelect.value)}px)`;
   brush = 0;
   web_set_brush(0);
   [...paletteEl.children].forEach((c, ci) => c.classList.toggle("selected", ci === 0));

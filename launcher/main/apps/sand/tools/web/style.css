@@ -39,13 +39,14 @@ html, body {
 
 #canvas {
   display: block;
+  /* Both overridden inline by reinitSim() (app.js) on every quality/
+   * render-size/orientation change - width grows with the render-size
+   * multiplier there, so a bigger canvas is actually bigger on the page,
+   * not just higher-resolution inside the same box. These are only the
+   * pre-JS/fallback values. */
   width: min(92vw, 640px);
   height: auto;
   max-height: 80vh;
-  /* Default (landscape); app.js sets this inline on every orientation
-   * change to the raster's own current width/height, so the box always
-   * matches whatever web_screen_w()/web_screen_h() actually returned - see
-   * applyOrientation() there. */
   aspect-ratio: 448 / 368;
   background: var(--bg);
   border: 1px solid var(--border);
