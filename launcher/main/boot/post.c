@@ -20,9 +20,23 @@
 
 static const char *TAG = "post";
 
-/* Below this the framebuffer allocation and everything after it start failing
- * in confusing ways, so it is worth catching here where the message is clear. */
-#define MIN_FREE_HEAP (40 * 1024)
+/* Below this the board is genuinely starved and later contiguous
+ * allocations start failing in confusing ways, so it is worth catching
+ * here where the message is clear. Checked against
+ * heap_caps_get_largest_free_block(MALLOC_CAP_DMA), not total free heap -
+ * see check_memory() and beads esp32c6-8h2.
+ *
+ * DELIBERATELY WELL BELOW what the sand app's 41,216-byte grid needs, and
+ * this is not the check that guards it. POST runs early, before the boot
+ * animation and the shell's own tasks, so at this moment a healthy image
+ * still has around 50 KiB contiguous (measured 2026-09-06: dev 50,176,
+ * diagnostics predicted ~42,576). Pegging this at grid size would leave a
+ * diagnostics image a kilobyte or so from reporting a fault while being
+ * perfectly well - a false alarm at boot on a healthy board, which is
+ * worse than useless. Whether the grid still fits is answered at build
+ * time by tools/check_static_ram.py and at open time by the sand app's
+ * own allocation failure, both of which can say so precisely. */
+#define MIN_LARGEST_DMA_BLOCK (32 * 1024)
 
 #define EXPECTED_FLASH_BYTES (16 * 1024 * 1024)
 
@@ -177,13 +191,23 @@ static void check_flash(void)
 
 static void check_memory(void)
 {
-    const size_t free_heap = esp_get_free_heap_size();
+    /* free and largest must come from the SAME pool or their difference is
+     * meaningless: esp_get_free_heap_size() sums a second, physically
+     * separate ~11 KiB DMA region (the ROM-stack area) that is never
+     * contiguous with the main heap, so comparing it against heap_caps_
+     * get_largest_free_block()'s single-region answer invents a
+     * "fragmentation" gap that was never real. Both sides here are
+     * MALLOC_CAP_DMA. See beads esp32c6-8h2. */
+    const size_t free_dma = heap_caps_get_free_size(MALLOC_CAP_DMA);
     const size_t largest_dma = heap_caps_get_largest_free_block(MALLOC_CAP_DMA);
 
     char detail[96];
     snprintf(detail, sizeof(detail), "%u KiB free, DMA block %u KiB",
-             (unsigned)(free_heap / 1024), (unsigned)(largest_dma / 1024));
-    report("memory", free_heap > MIN_FREE_HEAP, POST_REQUIRED, detail);
+             (unsigned)(free_dma / 1024), (unsigned)(largest_dma / 1024));
+    /* Gated on the largest block, not total free: "can this board still
+     * allocate the things it needs" (the sand grid wants one contiguous
+     * 41,216-byte block) is a contiguity question, not a total-bytes one. */
+    report("memory", largest_dma > MIN_LARGEST_DMA_BLOCK, POST_REQUIRED, detail);
 
     /* This board has no PSRAM. Finding some would mean we are running on
      * different hardware than the code assumes, which is worth knowing. */
