@@ -3167,8 +3167,8 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_CODES] = {
      *                        same fuse with no flame required
      *   heat_chance = 24     wood's own smoulder figure: conducted heat is
      *                        a slower fuse than a direct flame
-     *   burn_decay = 16      the fuse's own burn rate - ~16 steps of lit
-     *                        life per cell on average (256/16), long
+     *   burn_decay = 8       the fuse's own burn rate - ~32 steps of lit
+     *                        life per cell on average (256/8), long
      *                        enough that a trail visibly travels rather
      *                        than flashing over, and the one knob for how
      *                        long a lit cell waits before it can go off
@@ -3215,7 +3215,7 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_CODES] = {
         .ignites_to = GUNPOWDER_LIT_CELL,                                                                              \
         .heats_to = GUNPOWDER_LIT_CELL,                                                                                \
         .heat_chance = 24,                                                                                             \
-        .burn_decay = 16,                                                                                              \
+        .burn_decay = 8,                                                                                               \
         .lit_from = GUNPOWDER_LIT,                                                                                     \
         .explodes = SAND_GUNPOWDER_BLAST_RADIUS,                                                                       \
         .needs_air = 0,                                                                                                \

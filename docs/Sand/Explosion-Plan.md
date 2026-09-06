@@ -627,7 +627,7 @@ one more code out of the three bits this paragraph already asked for, not
 a fourth bit. Ignition and the qualifying heat hit write that lit code
 instead of blasting; a lit cell is a heat source like a burning log
 (ignites neighbours, so a trail burns along; counts down its own
-`burn_decay`, 16); only at burn-out does `reaction_t.explodes` (radius 16)
+`burn_decay`, 8); only at burn-out does `reaction_t.explodes` (radius 16)
 get read, and only if the cell is one corner of a 2x2 that is all lit
 gunpowder and impulses are enabled - otherwise the cell becomes plain
 fire (a whole lit 3x3 was tried first and proved too rare to see). A pile still
