@@ -1412,3 +1412,92 @@ static inline bool driven_by_gravity(int mx, int my, int gx, int gy,
      * a ratio so this stays in integers. */
     return (int64_t)descent * 10 > (int64_t)lateral * repose;
 }
+
+/* Moved here from sand_reactions.c - a host test needs to call this
+ * directly, pinning it against the per-cell dispatch it feeds
+ * (step_one_reacting_row(), sand_reactions.c) so the two cannot
+ * silently drift apart. */
+/* Value 0 is load-bearing - material_first_stage[]/extended_first_stage[]
+ * (sand_reactions.c) are zero-initialised .bss, so an unwritten slot
+ * lands here. See step_one_reacting_row()'s stage_burn_any: label for
+ * why it has to be this one and not one of the other two burn stages. */
+enum {
+    RSTAGE_BURN_ANY,
+    RSTAGE_BURN_ALWAYS,
+    RSTAGE_BURN_CHECK,
+    RSTAGE_DISSOLVE,
+    RSTAGE_ACID_RAIN,
+    RSTAGE_CONDENSE,
+    RSTAGE_HEAT_RAMP,
+    RSTAGE_CHILL,
+    RSTAGE_WARM,
+    RSTAGE_SOAK_DRY,
+    RSTAGE_FALL,
+    RSTAGE_WITHER,
+    RSTAGE_DRINK,
+    RSTAGE_ROOT,
+    RSTAGE_GROW,
+    RSTAGE_SPROUT,
+    RSTAGE_BUD,
+    RSTAGE_END,
+    RSTAGE_COUNT
+};
+
+/* The first stage a row could ever take, in the walk's own fixed order -
+ * from the row's fields alone, nothing per-cell. `is_acid_rain_material`
+ * gates the one stage keyed by material identity, not a reaction_t field
+ * (MAT_GAS/MAT_STEAM): true only for those two rows, never for an
+ * extended one. */
+static inline uint8_t
+reaction_first_stage(const reaction_t *r, bool is_acid_rain_material)
+{
+    if (r->burns != 0) {
+        return RSTAGE_BURN_ALWAYS;
+    }
+    if (r->burn_decay != 0) {
+        return RSTAGE_BURN_CHECK;
+    }
+    if (r->dissolves != 0) {
+        return RSTAGE_DISSOLVE;
+    }
+    if (is_acid_rain_material) {
+        return RSTAGE_ACID_RAIN;
+    }
+    if (r->condenses != 0) {
+        return RSTAGE_CONDENSE;
+    }
+    if (r->heat_ramp != 0) {
+        return RSTAGE_HEAT_RAMP;
+    }
+    if (r->chills != 0) {
+        return RSTAGE_CHILL;
+    }
+    if (r->warms != 0) {
+        return RSTAGE_WARM;
+    }
+    if (r->soaks != 0 || r->dries != 0) {
+        return RSTAGE_SOAK_DRY;
+    }
+    if (r->falls != 0) {
+        return RSTAGE_FALL;
+    }
+    if (r->withers != 0) {
+        return RSTAGE_WITHER;
+    }
+    if (r->drinks != 0) {
+        return RSTAGE_DRINK;
+    }
+    if (r->roots != 0) {
+        return RSTAGE_ROOT;
+    }
+    if (r->grows != 0) {
+        return RSTAGE_GROW;
+    }
+    if (r->sprouts != 0) {
+        return RSTAGE_SPROUT;
+    }
+    if (r->buds != 0) {
+        return RSTAGE_BUD;
+    }
+    return RSTAGE_END;
+}
