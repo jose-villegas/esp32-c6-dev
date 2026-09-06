@@ -5,7 +5,7 @@
  * The centred partial last row is the fiddly part and the main reason this
  * module is host-tested at all - get it wrong and the bottom few materials
  * are unhittable or answer to the wrong index. These tests lean on that case
- * specifically, at BRUSH_COUNT's real value (14) and at a couple of others,
+ * specifically, at BRUSH_COUNT's real value (15) and at a couple of others,
  * rather than trusting the arithmetic by eye.
  *
  * Columns are no longer a fixed constant: palette_cols(screen_w) derives them
@@ -75,12 +75,38 @@ static void test_palette_cols_clamps_to_the_max(void)
         "an absurd width must not return an absurd column count");
 }
 
-/* --- palette_tile_rect / palette_hit agreement, count = 14 (the real brush
- * count: 3 full rows of 4, then a centred row of 2) ---------------------- */
+/* --- palette_tile_rect / palette_hit agreement, count = 14 (one plausible
+ * brush count: 3 full rows of 4, then a centred row of 2 - no longer
+ * BRUSH_COUNT's own value, see the count = 15 case just below, but kept as
+ * its own case since the sweep tests further down already cover every
+ * count 1-16 generically and this one still pins the specific 2-wide
+ * partial row by name) ---------------------------------------------------- */
 
 static void test_centre_of_every_tile_hits_its_own_index(void)
 {
     const int count = 14;
+    const int cols = palette_cols(PALETTE_SCREEN_W);
+    for (int i = 0; i < count; i++) {
+        int x, y, w, h;
+        palette_tile_rect(i, count, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H,
+                          &x, &y, &w, &h);
+
+        const int cx = x + w / 2;
+        const int cy = y + h / 2;
+
+        TEST_ASSERT_EQUAL_INT_MESSAGE(i,
+            palette_hit(cx, cy, count, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H),
+            "the centre of a tile's own rect must hit that tile's index");
+    }
+}
+
+/* count = 15, BRUSH_COUNT's REAL value now that gunpowder's brush pushed
+ * the panel one tile past the count = 14 case above (app_sand.c's own
+ * brushes[] array) - 3 full rows of 4, then a centred row of 3, a
+ * differently-shaped partial row than 14's own 2-wide one. */
+static void test_centre_of_every_tile_hits_its_own_index_at_brush_count(void)
+{
+    const int count = 15;
     const int cols = palette_cols(PALETTE_SCREEN_W);
     for (int i = 0; i < count; i++) {
         int x, y, w, h;
@@ -487,6 +513,7 @@ void run_palette_suite(void)
     RUN_TEST(test_palette_cols_clamps_to_at_least_one);
     RUN_TEST(test_palette_cols_clamps_to_the_max);
     RUN_TEST(test_centre_of_every_tile_hits_its_own_index);
+    RUN_TEST(test_centre_of_every_tile_hits_its_own_index_at_brush_count);
     RUN_TEST(test_hit_round_trips_against_tile_rect_for_every_tile);
     RUN_TEST(test_hit_round_trips_against_tile_rect_for_every_tile_turned);
     RUN_TEST(test_empty_region_beside_centred_partial_row_misses);
