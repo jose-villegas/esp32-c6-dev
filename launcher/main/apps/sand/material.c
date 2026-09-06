@@ -1865,6 +1865,12 @@ static const gfx_color_t palette[256] = {
 #define GLASS_EDGE_RGB(v) LERP(GLASS_RGB(v), GLASS_RGB(SAND_AMBIENT_HEAT), 10)
 #define STONE_EDGE_RGB(v) LERP(STONE_RGB(v), STONE_RGB(SAND_AMBIENT_HEAT), 10)
 
+/* The far end of the live gravity gradient - GLASS_FROST only through
+ * COOL. Blending a WARM or HOT orange all the way to that icy blue passed
+ * through a muddy yellow-green, reading as the glass turning green rather
+ * than heat catching the light; white keeps the hue and adds brightness. */
+#define GLASS_GRADIENT_HI(v) ((v) <= SAND_AMBIENT_HEAT ? GLASS_FROST : 0xFFFFFF)
+
 /* Stone's SPECKLE: eight shades of each temperature, picked per cell from
  * the cell's own position rather than from its variant.
  *
@@ -2813,7 +2819,7 @@ material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_col
              * per pixel, so the blend costs nothing a table would save. */
             const unsigned frac = (unsigned)(((int)(hash & 0xFFu) + glass_phase) & 0xFF);
             const gfx_color_t base = edge ? GLASS_EDGE_RGB(v) : GLASS_RGB(v);
-            out[0] = GFX_RGB(LERP8(base, GLASS_FROST, frac));
+            out[0] = GFX_RGB(LERP8(base, GLASS_GRADIENT_HI(v), frac));
             out[1] = out[0];
             out[2] = out[0];
             return MATERIAL_SPECKLED;
