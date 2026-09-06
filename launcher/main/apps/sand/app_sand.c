@@ -1088,17 +1088,16 @@ static uint32_t foam_elapsed_ms;
  * see advance_cullet() for why this one needs the sibling shape instead). */
 static uint32_t cullet_elapsed_ms;
 
-/* How much accumulated bearing*time (see gravity_bearing_q16() below)
- * slides glass's phase by one band step - a first guess, scaled up from
- * an earlier gy-only version by roughly the ratio between a Q16 quarter-
- * turn and a resting tilt_y. First to move if it reads too fast or slow. */
-#define GLASS_PHASE_SCALE 20000000
+/* One glass phase step per this much of gravity_bearing_q16()'s range -
+ * not a rate to accumulate, see advance_glass_phase() for why. 32768 is
+ * a sixteenth-turn, so a full rotation crosses eight steps: a guess,
+ * first to move if it reads too fast or slow. */
+#define GLASS_PHASE_SCALE 32768
 
-/* Gravity accumulated toward the next glass phase step, carried across
- * frames the same way cullet_elapsed_ms is - except signed and never
- * reset to a remainder, since the phase itself has to be able to run
- * backwards when gravity flips sign, not just restart a forward count. */
-static int64_t glass_phase_accum;
+/* The last phase glass_phase actually painted at, so advance_glass_phase()
+ * can tell whether this frame's snapshot differs enough to be worth
+ * repainting - see that function's own comment. */
+static int glass_last_phase;
 
 /*=============================================================================
  * A LIQUID INTERIOR'S LOCAL DEPTH - replaces a screen-position gradient with
@@ -2473,17 +2472,23 @@ static int gravity_bearing_q16(int gx, int gy)
     return (int)(gy < 0 ? (p_q16 - 65536) : (65536 - p_q16));
 }
 
-/* Advances glass's phase, and says whether the DISCRETE band changed -
- * not merely whether the accumulator moved, which is true almost every
- * frame gravity is nonzero. Same affordability reasoning advance_shine()
- * and advance_cullet() already rely on. */
-static bool advance_glass_phase(uint32_t dt_ms, int gx, int gy)
+/* A SNAPSHOT of gravity's bearing, not a rate accumulated over time - an
+ * earlier version accumulated bearing*dt_ms the way shine_offset does. */
+
+/* That was the bug: bearing is essentially never zero (the board reads
+ * SOME direction even sitting dead level), so accumulating it slid the
+ * phase forever with nothing to show which part was an actual tilt. */
+
+/* Reading it directly ties the phase to WHERE the board currently points,
+ * not how long it has pointed there - hold a tilt and the phase holds
+ * with it; change the tilt and the phase follows by exactly as much. */
+static bool advance_glass_phase(int gx, int gy)
 {
-    const int before = (int)(glass_phase_accum / GLASS_PHASE_SCALE);
-    glass_phase_accum += (int64_t)gravity_bearing_q16(gx, gy) * (int64_t)dt_ms;
-    const int after = (int)(glass_phase_accum / GLASS_PHASE_SCALE);
-    material_set_glass_phase(after);
-    return after != before;
+    const int phase = gravity_bearing_q16(gx, gy) / GLASS_PHASE_SCALE;
+    const bool changed = phase != glass_last_phase;
+    glass_last_phase = phase;
+    material_set_glass_phase(phase);
+    return changed;
 }
 
 static void draw_dirty_rows(bool shine_moved, bool local_depth_woke,
@@ -3891,7 +3896,7 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
      * gravity's own bearing rather than a fourth clock - see
      * gravity_bearing_q16()'s own comment for why. */
     draw_dirty_rows(advance_shine(dt_ms), advance_local_depth_wake(dt_ms),
-                     advance_cullet(dt_ms), advance_glass_phase(dt_ms, gx, gy));
+                     advance_cullet(dt_ms), advance_glass_phase(gx, gy));
 
     /* After the rows, every frame - see draw_emitter_markers()'s own
      * comment for why once would not be enough. */
