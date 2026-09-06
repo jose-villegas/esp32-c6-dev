@@ -946,53 +946,28 @@ const reaction_t reactions[MATERIAL_MAX] = {
  * sixteen entries built in more than one piece. */
 #define SEG(lo, hi, i, n) GFX_RGB(LERP(lo, hi, ((i) * 15) / ((n) - 1)))
 
-/* Glass, whose variant is a TEMPERATURE rather than a shade, so this is a
- * temperature scale - with room temperature in the MIDDLE of it and two
- * different things happening on either side. Below SAND_AMBIENT_HEAT a pane
- * has been chilled and is FROSTED: pale, near white, the way cold glass
- * actually goes. Those levels exist so that "snow is making this colder" is
- * something the player can see. With ambient at the bottom of the range there
- * was nothing below it, so chilling a resting pane changed no number and
- * therefore no colour. At SAND_SHOCK_HEAT the ramp BREAKS into a glow and
- * climbs to lava's own brightest, which is what a pane at 15 is about to
- * become. The break is the largest colour step in the ramp on purpose: at
- * that level the material stops merely cooling when something cold touches it
- * and starts shattering instead, and two panes that behave completely
- * differently must not look nearly identical. COMPUTED from the two constants
- * rather than written out by hand. The hand-written version needed a
- * _Static_assert to catch the ramp and the rule drifting apart, which worked
- * but made the threshold expensive to TUNE - every trial move meant
- * re-cutting sixteen entries by hand. It is a number that wants trying at
- * several values against a real board, so the palette follows it instead of
- * guarding it. Wood, whose variant is HOW MUCH IS LEFT TO BURN rather than a
- * shade. Zero is unlit timber and is the only value a drawn or unburnt log
- * ever has; one to fifteen is a log on fire, counting down. So this is not a
- * ramp at all - it is one colour followed by a ramp, and the jump between
- * them is the point: a log is either alight or it is not, and that should not
- * be a judgement call. The burn ramp is ember's own, kept exactly: dying char
- * through glowing orange, deliberately redder and darker than fire's
- * yellow-white so a smouldering log reads differently from the flame licking
- * off it. Wood loses its grain to this, the same trade stone made for
- * temperature, and gets it back the same way - see material_colours(), which
- * speckles unlit wood from the cell's position. Dirt's colour across the
- * WHOLE nibble - one monotone luminance ramp, bone-dry-palest at variant 0
- * through saturated-darkest at variant SOIL_DRY_TONES - 1 + SOIL_MOISTURE_MAX
- * (14). Wet soil really is darker than dry, so the direction is not a choice
- * - and it means a watered patch shows as a dark stain rather than as a
- * number only the plants can see. ONE ramp over the whole range, where this
- * used to be TWO - a tone's worth of dry/wet pair, repeated at each of soil's
- * (then) two tones, each pair independently shifted off the same
- * DIRT_DRY/DIRT_WET ends (SOIL_TONE_LO/HI, since removed). That shape is what
- * a carried tone needs when it has to coexist with an independent moisture
- * level on every cell, and it came with a real limit: wet soil has to stay
- * darker than dry soil whichever tone was involved, which capped how far the
- * two tones could be pushed apart - 7 points of luminance, "all the headroom
- * there is" (and tested as test_the_two_soil_tones_are_different_colours).
- * Reading the nibble by STATE instead (material.h's own comment) removes the
- * limit outright: dry and wet no longer share the same sixteen slots, so
- * there is nothing left for a tone to clear against a moisture level -
- * variant 0 only has to be paler than variant 1, not paler than every wet
- * variant at every other tone too. */
+/* Dirt's colour spans the WHOLE nibble as one monotone luminance ramp,
+ * bone-dry-palest at variant 0 through saturated-darkest at variant
+ * SOIL_DRY_TONES - 1 + SOIL_MOISTURE_MAX (14). Wet soil really is darker
+ * than dry, so the direction is not a choice - and it means a watered patch
+ * shows as a dark stain rather than as a number only the plants can see. */
+
+/* ONE ramp over the whole range, where this used to be TWO: a tone's worth
+ * of dry/wet pair, repeated at each of soil's (then) two tones, each pair
+ * independently shifted off the same DIRT_DRY/DIRT_WET ends
+ * (SOIL_TONE_LO/HI, since removed). That shape is what a carried tone needs
+ * when it has to coexist with an independent moisture level on every
+ * cell. */
+
+/* That old shape came with a real limit: wet soil has to stay darker than
+ * dry soil whichever tone was involved, which capped how far the two tones
+ * could be pushed apart - 7 points of luminance, "all the headroom there
+ * is" (tested as test_the_two_soil_tones_are_different_colours). */
+
+/* Reading the nibble by STATE instead (material.h's own comment) removes
+ * the limit outright: dry and wet no longer share the same sixteen slots,
+ * so variant 0 only has to be paler than variant 1, not paler than every
+ * wet variant at every other tone too. */
 #define DIRT_DRY 0x9A7B52
 #define DIRT_WET 0x3A2A18
 
@@ -1010,6 +985,20 @@ const reaction_t reactions[MATERIAL_MAX] = {
         GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 15)), /* variant 14: saturated */                                            \
         GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 15))  /* variant 15: unused - same as 14 */
 
+/* Wood's variant is HOW MUCH IS LEFT TO BURN rather than a shade. Zero is
+ * unlit timber and is the only value a drawn or unburnt log ever has; one
+ * to fifteen is a log on fire, counting down. So this is not a ramp at all
+ * - it is one colour followed by a ramp, and the jump between them is the
+ * point: a log is either alight or it is not, and that should not be a
+ * judgement call. */
+
+/* The burn ramp is ember's own, kept exactly: dying char through glowing
+ * orange, deliberately redder and darker than fire's yellow-white so a
+ * smouldering log reads differently from the flame licking off it. */
+
+/* Wood loses its grain to this, the same trade stone made for temperature,
+ * and gets it back the same way - see material_colours(), which speckles
+ * unlit wood from the cell's position. */
 #define WOOD_UNLIT   0x5A3D24
 #define WOOD_CHAR    0x2A0A00
 #define WOOD_GLOW    0xFF7A28
@@ -1048,6 +1037,29 @@ const reaction_t reactions[MATERIAL_MAX] = {
     STONE_AT(0), STONE_AT(1), STONE_AT(2), STONE_AT(3), STONE_AT(4), STONE_AT(5), STONE_AT(6), STONE_AT(7),            \
         STONE_AT(8), STONE_AT(9), STONE_AT(10), STONE_AT(11), STONE_AT(12), STONE_AT(13), STONE_AT(14), STONE_AT(15)
 
+/* Glass's variant is a TEMPERATURE rather than a shade, so this is a
+ * temperature scale, with room temperature in the MIDDLE of it: below
+ * SAND_AMBIENT_HEAT a pane has been chilled and is FROSTED (pale, near
+ * white, the way cold glass actually goes); at SAND_SHOCK_HEAT the ramp
+ * BREAKS into a glow and climbs to lava's own brightest, which is what a
+ * pane at 15 is about to become. */
+
+/* The frosted band exists so that "snow is making this colder" is
+ * something the player can see - with ambient at the bottom of the range
+ * there was nothing below it, so chilling a resting pane changed no number
+ * and therefore no colour. */
+
+/* The shock break is the largest colour step in the ramp on purpose: at
+ * that level the material stops merely cooling when something cold touches
+ * it and starts shattering instead, and two panes that behave completely
+ * differently must not look nearly identical. */
+
+/* The ramp is COMPUTED from the two constants rather than written out by
+ * hand. The hand-written version needed a _Static_assert to catch the ramp
+ * and the rule drifting apart, which worked but made the threshold
+ * expensive to TUNE - every trial move meant re-cutting sixteen entries by
+ * hand. It is a number that wants trying at several values against a real
+ * board, so the palette follows it instead of guarding it. */
 #define GLASS_FROST   0xD6EEF8
 #define GLASS_AMBIENT 0x2E6B85
 #define GLASS_NEUTRAL 0x8C7E70
@@ -1990,172 +2002,140 @@ material_popcount8(unsigned mask) {
 
 /* HOW MANY CELLS OF LOCAL DEPTH IT TAKES A LIQUID INTERIOR TO REACH FULL
  * DARKENING - the material's own body colour, with none of DEPTH_RANGE's
- * lightening left - clamped there for anything deeper, rather than needing to
- * approach local depth's own 255 clamp the way this divide used to. WATER
- * USED TO GET SOMETHING DIFFERENT HERE: an animated sum-of-sines wave table
- * riding on top of this same local depth, and a haze BLEND toward a pale fog
- * colour in place of the plain shade-index shift every other liquid used.
- * Both are gone. The fog blend's own arithmetic (`depth_q`, dividing by 255)
- * was tuned for the OLD screen-position depth, which legitimately spanned the
- * full 0-255 range across the whole grid - local depth resets to 0 at every
- * puddle's own surface and rarely exceeds a few dozen cells for any real pool
- * in this app, so the fog blend sat pinned near its palest end for
- * essentially every visible pool, and water read as a flat pale wash instead
- * of depth-through-water: a genuine bug, not a taste call. The wave bands had
- * their own, separate problem: local depth commits to a single dominant axis
- * (see LOCAL DEPTH below) with a hard, unsmoothed switch between vertical and
- * horizontal, and the bands rode straight over that seam with no blending
- * between an axis-aligned reading and a diagonal one, reading as rigid
- * columns (or rows) of matching colour rather than an organic gradient. Both
- * mechanisms still exist, untouched, on the water-wave-fog-depth-banked
- * branch, for anyone who wants to revisit that approach or reuse a piece of
- * it - the wave-table technique, the fog-blend arithmetic - for a different
- * effect later. Water's interior now uses EXACTLY the mechanism oil, lava and
- * acid always did: a plain shade-index shift into the material's own ramp,
- * darker with depth, fed by local depth alone. The SAME `/255` divide that
- * produced water's fog bug also fed this plain shift for every liquid, just
- * less visibly - a shade-index nudge saturating late is a smaller, less
- * noticeable effect than an entire colour failing to darken - which is why
- * this constant fixes the scale for all four liquids at once, not water
- * alone. 24 was modelled against water's own ramp: it gives idx 11 (lum 85,
- * lightened) at the very surface, exactly as DEPTH_RANGE's own comment above
- * describes, and reaches idx 15 (lum 54, the full body colour) once local
- * depth hits this constant - comfortably inside the range any real pool in
- * this app actually reaches, rather than needing depth in the hundreds the
- * way the old /255 divide did. SHARED with sand_liquid.c as
- * MATERIAL_LIQUID_DEPTH_BAND (material.h) - that is the same 24, not a
- * coincidence: sand_liquid.c uses it to bound how far a newly-claimed surface
- * cell can possibly move any cell's rendered depth, and that has to be
- * exactly this constant, or the two will silently drift apart the day only
- * one of them gets retuned. */
+ * lightening left - clamped there for anything deeper, rather than needing
+ * to approach local depth's own 255 clamp the way this divide used to. */
+
+/* Water used to get something different here: an animated sum-of-sines
+ * wave table riding on this same local depth, and a haze blend toward a
+ * pale fog colour, instead of the plain shade-index shift every other
+ * liquid used. Both are gone. */
+
+/* The fog blend's own arithmetic (`depth_q`, dividing by 255) was tuned for
+ * the OLD screen-position depth, which legitimately spanned the full
+ * 0-255 range - local depth resets to 0 at every puddle's own surface and
+ * rarely exceeds a few dozen cells for any real pool here, so the fog
+ * blend sat pinned near its palest end and water read as a flat pale wash
+ * instead of depth-through-water: a genuine bug, not a taste call. */
+
+/* The wave bands had their own, separate problem: local depth commits to a
+ * single dominant axis (see LOCAL DEPTH below) with a hard, unsmoothed
+ * switch between vertical and horizontal, and the bands rode straight over
+ * that seam with no blending between an axis-aligned reading and a
+ * diagonal one, reading as rigid columns (or rows) rather than an organic
+ * gradient. */
+
+/* Both mechanisms still exist, untouched, on the water-wave-fog-depth-
+ * banked branch, for anyone who wants to revisit that approach or reuse a
+ * piece of it - the wave-table technique, the fog-blend arithmetic - for a
+ * different effect later. */
+
+/* Water's interior now uses EXACTLY the mechanism oil, lava and acid
+ * always did: a plain shade-index shift into the ramp, darker with depth,
+ * fed by local depth alone. The SAME `/255` divide that produced water's
+ * fog bug also fed this plain shift for every liquid, just less visibly -
+ * a shade-index nudge saturating late is smaller and less noticeable than
+ * an entire colour failing to darken - which is why this constant fixes
+ * the scale for all four liquids at once, not water alone. */
+
+/* 24 was modelled against water's own ramp: it gives idx 11 (lum 85,
+ * lightened) at the very surface, exactly as DEPTH_RANGE's own comment
+ * above describes, and reaches idx 15 (lum 54, the full body colour) once
+ * local depth hits this constant - comfortably inside the range any real
+ * pool in this app actually reaches, rather than needing depth in the
+ * hundreds the way the old /255 divide did. */
+
+/* SHARED with sand_liquid.c as MATERIAL_LIQUID_DEPTH_BAND (material.h) -
+ * that is the same 24, not a coincidence: sand_liquid.c uses it to bound
+ * how far a newly-claimed surface cell can possibly move any cell's
+ * rendered depth, and that has to be exactly this constant, or the two
+ * will silently drift apart the day only one of them gets retuned. */
 #define DEPTH_SATURATE_CELLS MATERIAL_LIQUID_DEPTH_BAND
 
 material_pattern_t
 material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_color_t out[3]) {
     const uint8_t v = CELL_VARIANT(c);
 
-    /* A LIQUID paints one of two ways depending on whether this cell is a
-     * rim, and the split is not a cheat - it is what the variant actually
-     * MEANS. A liquid cell is only ever partially filled at a surface or in
-     * transit: mid-body, every cell wants to be full, and the only reason one
-     * dips below MASS_MAX is the levelling rule redistributing mass one step
-     * at a time (see material.h's own top comment on why the fill level
-     * exists at all). That is a transient of the SOLVER, not a claim that
-     * there is less water there - so painting an interior cell at anything
-     * but the full body colour shows the player an artefact of how the
-     * simulation works rather than anything true about the pool. It is also
-     * what fixes the comb. build_xflow()'s two-ray dither (sand.c) settles
-     * neighbouring interior columns to different fills while a pool is moving
-     * under tilt, one cell full and the next at mid-ramp, over and over -
-     * measured two steps into a strong tilt as alternating fills a whole 81
-     * luminance apart, which reads on the panel as hard lines through the
-     * water. The dither cannot be turned off; it is what keeps a settled
-     * pool's surface reading the same slope at every angle rather than one
-     * fixed shape (see build_xflow()'s own comment for what THAT bug looked
-     * like). But the comb only ever shows up mid-body, so an interior cell
-     * that always paints full water makes it invisible without touching the
-     * simulation or the palette at all. BUT A FLAT INTERIOR READS AS FLAT,
-     * which is exactly what was reported once the comb stopped showing: a
-     * settled pool has NO fill variation to shade with at all - measured 0 of
+    /* A LIQUID's interior always paints the full body colour, regardless of
+     * this cell's own fill level: the fill level is a transient of the
+     * SOLVER, not a claim that there is less liquid there (see material.h's
+     * own top comment on why fill exists at all) - so painting anything
+     * else would show the player an artefact of the simulation, not the
+     * pool. */
+
+    /* Painting the interior uniformly also fixes a comb: build_xflow()'s
+     * two-ray dither (sand.c) settles neighbouring interior columns to
+     * different fills under tilt, measured two steps in as fills 81
+     * luminance apart - hard lines through the water. The dither cannot be
+     * turned off (see build_xflow()'s own comment for what it fixes); a
+     * flat interior colour hides the comb without touching the
+     * simulation. */
+
+    /* BUT A FLAT INTERIOR READS AS FLAT: once the comb stopped showing, a
+     * settled pool had no fill variation left to shade with - measured 0 of
      * 747 interior cells anything but full at 40 degrees settled, 0 of 720
-     * settled flat, and only 5% even 3 steps into a tilt - so undoing the
-     * flat interior was never on the table; painting the FILL differently is
-     * painting almost nothing differently. `depth` is a new cue rather than a
-     * rescue of the old one: light attenuates with depth, so a deeper cell
-     * reads darker and a shallower one reads lighter, shifting the index
-     * toward the BRIGHT end of the ramp (see DEPTH_RANGE below) by up to
-     * DEPTH_RANGE steps as the cell gets shallower, from the body colour at
-     * the very deepest point. THIS USED TO ALSO CARRY WAVE BANDS AND, FOR
-     * WATER SPECIFICALLY, A HAZE BLEND in place of the plain shift below -
-     * both removed. See DEPTH_SATURATE_CELLS's own comment just above this
-     * function for why: the fog blend's range mismatch was a genuine bug
-     * (pinned near-pale for any depth a real pool here reaches), and the wave
-     * bands rode straight over local depth's own axis seam with no blending
-     * between an axis-aligned reading and a diagonal one, reading as rigid
-     * columns rather than an organic gradient. Water's interior now runs the
-     * exact same shift every other liquid always has - no more "water is
-     * special" fork in this branch. LOCAL DEPTH, NOT SCREEN POSITION. `depth`
-     * is 0 at this material's own boundary - the neighbour one step toward
-     * the surface is not the same material, whether that is a different
-     * liquid, empty space, or solid - and climbs by one for each further cell
-     * into the body, clamped at 255. That is a genuine per-puddle
-     * measurement, walked fresh from the live grid by app_sand.c's
-     * paint_row_n() (see LOCAL DEPTH's own long comment there for the full
-     * mechanism), not a screen-position gradient the way an earlier version
-     * of this cue was: that version was reported from the device as reading
-     * "almost like platinum" - a gradient swept across the WHOLE SCREEN,
-     * blind to where the water actually was, reads as a metallic sheen rather
-     * than depth through a medium - and as wanting to "just follow the shape
-     * of the puddle" instead, which this now does: an obstacle breaking a
-     * pool's surface shows up as a dip back to a small depth right where it
-     * interrupts the water, rather than a band painted straight through it.
-     * THIS USED TO also accept the same single-dominant-axis approximation
-     * build_xflow() (sand.c) takes for the simulation's own movement - `|gy|
-     * >= |gx|` picking a straight vertical or horizontal "toward the surface"
-     * rather than bracketing a genuinely diagonal gravity properly. That
-     * discrete switch went through two more shapes after this comment was
-     * last true here - a blend of two axis-aligned walks, then a
-     * projection-then-max combiner over the same two walks, both replaced in
-     * turn by a single walk that steps ALONG the gravity ray itself, by
-     * Bresenham (see LOCAL DEPTH's own top comment in app_sand.c for why: an
-     * axis-aligned walk, however its two readings get combined, can only ever
-     * cast an axis-aligned obstacle shadow, never one that follows the actual
-     * tilt). This function still has no idea any of that history happened,
-     * which is the point: `depth` arrives as one already-computed number,
-     * exactly as ignorant of where it came from as it was of the single-axis
-     * switch before any of it. The other accepted trade-off is staleness
-     * under the dirty-row optimisation - only rows something else marked
-     * dirty ever get repainted, so a column's stored depth for a row that has
-     * not repainted in a while can lag the puddle's current shape - see
-     * local_depth_row_a[]/local_depth_row_b[]'s own comment in app_sand.c for
-     * why that costs nothing extra to accept and matches the precedent
-     * already established for foam's own drift. INTERIOR ONLY, DELIBERATELY
-     * NOT THE RIM. A rim cell already carries two terms - its own fill level,
-     * and liquid_spec[]'s specular shift - and both already use most of the
-     * ramp's range between them; a third term stacked on top would spend most
-     * of its own range clamped against whichever end the other two had
-     * already reached, buying little for the cost of a less legible rim. The
-     * interior had nothing until now, so it is the only place adding a term
-     * is clearly a gain rather than a diminishing one. The RIM is the
-     * opposite case: it is the one place a liquid's fill level is actually
-     * true, and it is what lets the pale film at a shallow edge, lava's
-     * bright skim, oil's murky olive and acid's vivid lime survive on screen
-     * at all - flattening those the way an earlier attempt at this fix did
-     * destroyed the very thing this pass exists to keep. A rim cell keeps
-     * exactly the fill-indexed lookup every other material already gets,
-     * shifted by liquid_spec[] indexed by the CARDINAL bits alone - see that
-     * table's own comment above for what the shift means and
-     * material_set_gravity() for where it comes from, and
-     * MATERIAL_EDGE_CARDINAL's own comment in material.h for why the index
-     * has to be masked down rather than used raw now that `mask` carries
-     * diagonal bits too. WATER'S rim then gets one thing no other liquid
-     * does: foam, gated purely by curvature - see this file's own comment on
-     * that above. Oil, lava and acid fall through this same block unchanged;
-     * only the id check below diverts water into the foam path. `hash` ITSELF
-     * ARRIVES ALREADY COARSENED FOR WATER. paint_row_n() in app_sand.c hands
-     * this function material_grain_hash(cx, cy) for every material except
-     * water, and material_grain_hash(cx >> FOAM_BLOB_SHIFT, cy >>
-     * FOAM_BLOB_SHIFT) for water - an 8x8 block of cells sharing one value
-     * instead of each rolling its own - so foam clusters in blobs rather than
-     * speckling one cell at a time. This function does not know that, and
-     * does not need to: it just uses whatever `hash` it was handed, the same
-     * as it always has. That is safe ONLY because foam is the SOLE consumer
-     * of water's hash. Water is KIND_LIQUID and returns from this function
-     * below, so it never reaches the `switch (CELL_MATERIAL(c))` further down
-     * that reads `hash` for glass, stone, wood and the extended materials'
-     * grain - the coarsening never touches any of them. If water is ever
-     * given a speckle of its own - the way stone and wood have one - it will
-     * want the FINE per-cell hash like everything else, and the day that
-     * happens this coarsening has to move from "every water cell,
-     * unconditionally" to "only where foam actually reads it", or the new
-     * speckle will silently stripe in 8x8 blocks with no test anywhere
-     * catching why. Nothing enforces that today - it is a fact about the rest
-     * of this file, not a type - which is exactly why it is written down here
-     * rather than left to be rediscovered. */
+     * settled flat, only 5% even 3 steps into a tilt. Undoing the flat
+     * interior was never on the table; `depth` is a new cue, not a rescue
+     * of the old one. */
+
+    /* `depth` shifts the index toward the BRIGHT end of the ramp (see
+     * DEPTH_RANGE below) by up to DEPTH_RANGE steps as the cell gets
+     * shallower, from the body colour at the deepest point. Water's
+     * interior now runs the exact same shift every other liquid always
+     * has - no more "water is special" fork in this branch. */
+
+    /* This used to also carry wave bands and, for water specifically, a
+     * haze blend in place of the plain shift above - both removed. See
+     * DEPTH_SATURATE_CELLS's own comment above for why: the fog blend's
+     * range mismatch was a genuine bug, and the wave bands rode straight
+     * over local depth's own axis seam, reading as rigid columns rather
+     * than an organic gradient. */
+
+    /* LOCAL DEPTH, NOT SCREEN POSITION. `depth` is 0 at this material's own
+     * boundary - the neighbour one step toward the surface is not the same
+     * material, whether that is a different liquid, empty space, or solid -
+     * and climbs by one for each further cell into the body, clamped at
+     * 255. A genuine per-puddle measurement, walked fresh from the live
+     * grid by app_sand.c's paint_row_n() (see LOCAL DEPTH's own long
+     * comment there for the full mechanism). */
+
+    /* Not a screen-position gradient the way an earlier version of this
+     * cue was: that version was reported from the device as reading
+     * "almost like platinum" - a gradient swept across the whole screen,
+     * blind to where the water actually was - and as wanting to "just
+     * follow the shape of the puddle" instead, which this now does: an
+     * obstacle breaking a pool's surface shows up as a dip back to a small
+     * depth right where it interrupts the water, rather than a band
+     * painted straight through it. */
+
+    /* This also used to accept the same single-dominant-axis approximation
+     * build_xflow() (sand.c) takes for the simulation's own movement, later
+     * replaced by a walk that steps ALONG the gravity ray itself, by
+     * Bresenham - see LOCAL DEPTH's own top comment in app_sand.c for why:
+     * an axis-aligned walk can only ever cast an axis-aligned obstacle
+     * shadow, never one that follows the actual tilt. This function has no
+     * idea any of that history happened: `depth` arrives as one
+     * already-computed number either way. */
+
+    /* The other accepted trade-off is staleness under the dirty-row
+     * optimisation: only rows something else marked dirty ever get
+     * repainted, so a column's stored depth for a row that has not
+     * repainted in a while can lag the puddle's current shape - see
+     * local_depth_row_a[]/local_depth_row_b[]'s own comment in app_sand.c;
+     * this matches the precedent already established for foam's own
+     * drift. */
+
     if (material_of(c)->kind == KIND_LIQUID) {
         const uint8_t id = CELL_MATERIAL(c);
         const unsigned cardinal = mask & MATERIAL_EDGE_CARDINAL;
 
+        /* INTERIOR ONLY, DELIBERATELY NOT THE RIM. A rim cell already
+         * carries two terms - its own fill level, and liquid_spec[]'s
+         * specular shift - and both already use most of the ramp's range
+         * between them; a third term stacked on top would spend most of
+         * its own range clamped against whichever end the other two had
+         * already reached, buying little for the cost of a less legible
+         * rim. The interior had nothing until now, so it is the only place
+         * adding a term is clearly a gain rather than a diminishing one. */
         if (cardinal == 0) {
             /* SAME SHIFT FOR EVERY LIQUID, WATER INCLUDED. `depth` clamped to
              * DEPTH_SATURATE_CELLS to prevent unsigned wrap-around when depth
@@ -2171,16 +2151,58 @@ material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_col
             idx = idx < 0 ? 0 : (idx > MASS_MAX ? MASS_MAX : idx);
             out[0] = palette[CELL_MAKE(id, (uint8_t)idx)];
         } else {
+            /* The RIM is the opposite case: it is the one place a liquid's
+             * fill level is actually true, and it is what lets the pale
+             * film at a shallow edge, lava's bright skim, oil's murky olive
+             * and acid's vivid lime survive on screen at all - flattening
+             * those the way an earlier attempt at this fix did destroyed
+             * the very thing this pass exists to keep. */
+
+            /* A rim cell keeps exactly the fill-indexed lookup every other
+             * material already gets, shifted by liquid_spec[] indexed by
+             * the CARDINAL bits alone - see that table's own comment above
+             * for what the shift means and material_set_gravity() for
+             * where it comes from, and MATERIAL_EDGE_CARDINAL's own comment
+             * in material.h for why the index has to be masked down rather
+             * than used raw now that `mask` carries diagonal bits too. */
             int idx = (int)v + liquid_spec[cardinal];
             idx = idx < 0 ? 0 : (idx > MASS_MAX ? MASS_MAX : idx);
             out[0] = palette[CELL_MAKE(id, (uint8_t)idx)];
 
             if (id == MAT_WATER) {
+                /* WATER's rim then gets one thing no other liquid does:
+                 * foam, gated purely by curvature - see this file's own
+                 * comment on that above. Oil, lava and acid fall through
+                 * this same block unchanged; only this id check diverts
+                 * water into the foam path. */
                 const unsigned empty_count = material_popcount8(mask);
                 unsigned curvature = (empty_count > 3) ? (empty_count - 3) : (3 - empty_count);
                 if (curvature > WATER_FOAM_CURVATURE_MAX) {
                     curvature = WATER_FOAM_CURVATURE_MAX;
                 }
+
+                /* `hash` itself arrives already coarsened for water:
+                 * paint_row_n() in app_sand.c hands this function
+                 * material_grain_hash(cx, cy) for every material except
+                 * water, and material_grain_hash(cx >> FOAM_BLOB_SHIFT, cy
+                 * >> FOAM_BLOB_SHIFT) for water - an 8x8 block of cells
+                 * sharing one value instead of each rolling its own - so
+                 * foam clusters in blobs rather than speckling one cell at
+                 * a time. */
+
+                /* WARNING: this is safe ONLY because foam is the SOLE
+                 * consumer of water's hash. Water is KIND_LIQUID and
+                 * returns from this function below, so it never reaches
+                 * the `switch (CELL_MATERIAL(c))` further down that reads
+                 * `hash` for glass, stone, wood and the extended materials'
+                 * grain - the coarsening never touches any of them. */
+
+                /* If water is ever given a speckle of its own, it will
+                 * want the FINE per-cell hash like everything else, and
+                 * this coarsening must move from "every water cell,
+                 * unconditionally" to "only where foam actually reads it",
+                 * or the new speckle will silently stripe in 8x8 blocks
+                 * with no test anywhere catching why. */
 
                 /* ADD, not `^` - XOR fails as water_foam_threshold's windows
                  * are power-of-two aligned, causing roughly half of phase
@@ -2583,46 +2605,75 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_CODES] = {
         },
 
 /* GUNPOWDER'S REACTION ROW, shared by all eight low-nibble codes 0xF8-0xFF
- * (see GUNPOWDER_BASE, material.h) the same way an ordinary material's row is
- * shared by its TWIN_ROW pair above - one row, eight designators, so
- * reaction_of() keeps its single-branch decode. The chemistry, field by field
- * - the trigger sites themselves (try_ignite_given(),
+ * (see GUNPOWDER_BASE, material.h) the same way an ordinary material's row
+ * is shared by its TWIN_ROW pair above - one row, eight designators, so
+ * reaction_of() keeps its single-branch decode. */
+
+/* The chemistry itself - the trigger sites (try_ignite_given(),
  * try_heat_transform_given(), the wet-earth branch of the heat path,
- * step_one_soaking_cell(), step_one_burning_cell()) live in sand_reactions.c,
- * not here; this row only says what the numbers are and why: flammability =
- * 200 catches almost the instant a flame touches it - the one trait a powder
- * keg has to have ignites_to = GUNPOWDER_LIT_CELL a burning STATE like
- * wood's, not an ordinary flame - lights the fuse rather than placing
- * MAT_FIRE heats_to = GUNPOWDER_LIT_CELL heat alone - lava beside it, heat
+ * step_one_soaking_cell(), step_one_burning_cell()) - lives in
+ * sand_reactions.c, not here; this row only says what the numbers are and
+ * why, field by field: */
+
+/* flammability = 200: catches almost the instant a flame touches it - the
+ * one trait a powder keg has to have. */
+
+/* ignites_to = GUNPOWDER_LIT_CELL: a burning STATE like wood's, not an
+ * ordinary flame - lights the fuse rather than placing MAT_FIRE. */
+
+/* heats_to = GUNPOWDER_LIT_CELL: heat alone - lava beside it, heat
  * conducted through stone or metal - lights the same fuse with no flame
- * required heat_chance = 24 wood's own smoulder figure: conducted heat is a
- * slower fuse than a direct flame burn_decay = 16 the fuse's own burn rate -
- * ~16 steps of lit life per cell on average (256/16), long enough that a
- * trail visibly travels rather than flashing over, and the one knob for how
- * long a lit cell waits before it can go off lit_from = 7 GUNPOWDER_LIT - the
- * one code that means "on fire" (material.h); codes below it are dry tones
- * and moisture, never mistaken for embers explodes =
- * SAND_GUNPOWDER_BLAST_RADIUS read ONLY at burn-out now
- * (step_one_burning_cell()): a lit cell that is one corner of a still-lit 2x2
- * detonates instead of quietly going out - see that macro's own comment
- * (material.h) for the radius and REVISION 2's note on why ignition itself no
- * longer reads this field needs_air = 0 catches through its own volume, not
- * just an exposed face - a buried charge is still one dissolvable = 200 same
- * rate as sand and dirt (see dirt's own row) - acid does not spare a powder
- * charge soaks = 60 water wets it - moisture climbs, water is consumed -
- * dirt's own rate soaks_to = 0 stays gunpowder while it wets, only wetter,
- * same as dirt tones = 3 three dry tones - all the low bits gunpowder can
- * spare of nibble 15 (GUNPOWDER_BASE) moist_max = 4 four moisture levels in
- * what is left once the three tones AND the lit code are spent - one fewer
- * than section 2's five, the code that moisture level used to occupy is
- * GUNPOWDER_LIT now dries = 1 far under dirt's 2 - a powder keg holds water a
- * long time once soaked soaked_to = MAT_OIL saturated gunpowder eventually
- * turns to oil rather than staying wet and inert forever soaked_chance = 8
- * uncommon, rolled only once already fully soaked - it lingers wet a good
- * while first residue = 0 burning out never reaches the ordinary
- * smoke-residue roll (step_one_burning_cell() returns from the `explodes !=
- * 0` branch first) - left at 0, spelled out, so that stays true even if the
- * burn-out order ever changes */
+ * required. */
+
+/* heat_chance = 24: wood's own smoulder figure - conducted heat is a
+ * slower fuse than a direct flame. */
+
+/* burn_decay = 16: the fuse's own burn rate - ~16 steps of lit life per
+ * cell on average (256/16), long enough that a trail visibly travels
+ * rather than flashing over. */
+
+/* lit_from = GUNPOWDER_LIT (7): the one code that means "on fire" -
+ * codes below it are dry tones and moisture, never mistaken for embers. */
+
+/* explodes = SAND_GUNPOWDER_BLAST_RADIUS: read ONLY at burn-out now
+ * (step_one_burning_cell()) - a lit cell that is one corner of a still-lit
+ * 2x2 detonates instead of quietly going out - see that macro's own
+ * comment (material.h) for the radius and REVISION 2's note on why
+ * ignition itself no longer reads this field. */
+
+/* needs_air = 0: catches through its own volume, not just an exposed face
+ * - a buried charge is still one. */
+
+/* dissolvable = 200: same rate as sand and dirt (see dirt's own row) -
+ * acid does not spare a powder charge. */
+
+/* soaks = 60: water wets it - moisture climbs, water is consumed - dirt's
+ * own rate. */
+
+/* soaks_to = 0: stays gunpowder while it wets, only wetter, same as
+ * dirt. */
+
+/* tones = GUNPOWDER_TONES (3): three dry tones - all the low bits
+ * gunpowder can spare of nibble 15 (GUNPOWDER_BASE). */
+
+/* moist_max = GUNPOWDER_MOIST_MAX (4): four moisture levels in what is
+ * left once the three tones AND the lit code are spent - one fewer than
+ * section 2's five; the code that moisture level used to occupy is
+ * GUNPOWDER_LIT now. */
+
+/* dries = 1: far under dirt's 2 - a powder keg holds water a long time
+ * once soaked. */
+
+/* soaked_to = MAT_OIL: saturated gunpowder eventually turns to oil rather
+ * than staying wet and inert forever. */
+
+/* soaked_chance = 8: uncommon, rolled only once already fully soaked - it
+ * lingers wet a good while first. */
+
+/* residue = 0: burning out never reaches the ordinary smoke-residue roll
+ * (step_one_burning_cell() returns from the `explodes != 0` branch first)
+ * - left at 0, spelled out, so that stays true even if the burn-out order
+ * ever changes. */
 #define GUNPOWDER_REACTION                                                                                             \
     {                                                                                                                  \
         .flammability = 200,                                                                                           \
