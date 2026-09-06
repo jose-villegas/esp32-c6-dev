@@ -1856,10 +1856,10 @@ static const gfx_color_t palette[256] = {
 #define GLASS_EDGE_RGB(v) LERP(GLASS_RGB(v), GLASS_RGB(SAND_AMBIENT_HEAT), 10)
 #define STONE_EDGE_RGB(v) LERP(STONE_RGB(v), STONE_RGB(SAND_AMBIENT_HEAT), 10)
 
-/* The PANE's own gradient - indexed by material_gravity_band() (material.h),
- * position along current gravity, not a hash. Two tried first read wrong:
- * a per-cell hash speckles like stone, and a plain position modulo tiles
- * into a visible printed grid - neither reads as a pane's own laminae. */
+/* The PANE's own gradient - a per-cell hash picks each cell's OWN resting
+ * point (the MAT_GLASS case below mixes in glass_phase, gravity's own
+ * live drift, on top of it). A position-only modulo tiled into a visible
+ * printed grid when tried first; a hash speckles like stone instead. */
 
 /* Each step runs from the pane's own colour (k=0) toward GLASS_FROST, the
  * near-white a cold pane already reaches at its heat ramp's own bottom. */
@@ -2453,6 +2453,17 @@ material_set_cullet_phase(unsigned phase) {
     cullet_phase = phase;
 }
 
+/* THIS FRAME'S GLASS PHASE - see material_set_glass_phase() and its own
+ * comment in material.h for what drives it (gravity, not a clock) and why
+ * that makes it signed. Zero until the first frame sets it, which is
+ * exactly a level board's own reading - no drift yet to have accumulated. */
+static int glass_phase;
+
+void
+material_set_glass_phase(int phase) {
+    glass_phase = phase;
+}
+
 /* How many of `mask`'s bits are set - the same manual bit-count
  * suite_icons.c's popcount16() uses, kept here rather than shared because
  * the two operate on different widths for different reasons and a shared
@@ -2817,7 +2828,14 @@ material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_col
          * cardinal neighbour occupied but one diagonal empty must stay
          * interior, not spring an edge. */
             const bool edge = (mask & MATERIAL_EDGE_CARDINAL) != 0;
-            out[0] = edge ? glass_edge_body[v][hash & 3u] : glass_body[v][hash & 3u];
+
+            /* The hash picks each cell's own random starting point, stable
+             * forever since glass never moves; glass_phase then slides
+             * every cell's point by the same amount, so the whole pane
+             * drifts together while staying individually scattered. */
+            const int shifted = (int)(hash & 3u) + glass_phase;
+            const unsigned band = (unsigned)(((shifted % 4) + 4) % 4);
+            out[0] = edge ? glass_edge_body[v][band] : glass_body[v][band];
             out[1] = out[0];
             out[2] = out[0];
             return MATERIAL_SPECKLED;
