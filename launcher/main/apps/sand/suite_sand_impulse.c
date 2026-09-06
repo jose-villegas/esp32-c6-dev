@@ -1815,10 +1815,20 @@ static void test_a_thrown_liquid_grain_pays_no_drag_displacing_water(void)
      * at full speed covers more than one, and the decay is charged for each
      * the same way the ramp is for everything else. Derived from the
      * constants rather than restated, so retuning how far a step reaches
-     * cannot quietly turn this pin into a different claim. */
-    const int liquid_cells = 1 + (int)255 / SAND_IMPULSE_CELLS_PER_STEP_DIVISOR;
+     * cannot quietly turn this pin into a different claim.
+     *
+     * THE FIRST CELL IS CHARGED BEFORE push_count IS COMPUTED, so the
+     * budget comes from the speed left AFTER it, not from 255 - mirrored
+     * here in the same order step_impulses() runs it. Deriving the count
+     * from the raw 255 instead happened to agree while the decay was
+     * gentle enough that both readings landed on 3 cells, and stopped
+     * agreeing the moment SAND_SPLASH_SPEED_DECAY_SHIFT was retuned - the
+     * exact silent drift the paragraph above meant to rule out. */
     unsigned expect_speed = 255u;
-    for (int c = 0; c < liquid_cells; c++) {
+    expect_speed -= expect_speed >> SAND_SPLASH_SPEED_DECAY_SHIFT;
+    const int extra_cells =
+        (int)expect_speed / SAND_IMPULSE_CELLS_PER_STEP_DIVISOR;
+    for (int c = 0; c < extra_cells; c++) {
         expect_speed -= expect_speed >> SAND_SPLASH_SPEED_DECAY_SHIFT;
     }
     TEST_ASSERT_EQUAL_INT_MESSAGE(

@@ -1137,7 +1137,8 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
 #define SAND_SPLASH_CHANCE_FLOOR       24
 #define SAND_SPLASH_CHANCE_STEP        140
 
-/* How fast a WATER or ACID impulse's own `speed` decays per step, in the
+/* How fast a WATER or ACID impulse's own `speed` decays per CELL OF
+ * TRAVEL - impulse_decay()'s own `cells` argument, not once a step - in the
  * flight pass (step_impulses(), sand.c) - a right-shift, not the linear
  * SAND_IMPULSE_SPEED_RAMP subtraction every other material still uses.
  * ADDED 2026-08-31, same session as RADIUS_WATER's own doubling: reported
@@ -1159,20 +1160,21 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * extensively swept tuning (see SAND_IMPULSE_SPEED_RAMP's and
  * SAND_EXPLODE_CORE_DIVISOR's comments for that history).
  *
- * A STARTING POINT, NOT YET MEASURED - 1 (halving) was picked as the
- * gentlest shift that still qualifies as "much stronger" against the old
- * ~128-step linear tail, specifically to leave the cascade some room:
- * step_impulses()'s own comment on this decay explains the interaction -
- * a faster base decay means fewer relayed hops clear the cascade's
- * SAND_CASCADE_MIN_SPEED * SAND_CASCADE_SPEED_DIVISOR gate before dying,
- * on top of the cascade's own halving. A shift of 2 or higher would die
- * out even faster but was not tried first, on the reasoning that starving
- * the cascade entirely in the same round that is meant to make the splash
- * hit harder would make it hard to tell which change caused what on
- * device. Raise this if 1 still does not read as fast enough once tested;
- * lower SAND_CASCADE_MIN_SPEED instead if the cascade reads as cut too
- * short by this. */
-#define SAND_SPLASH_SPEED_DECAY_SHIFT  3
+ * BIGGER SHIFT MEANS SLOWER DECAY, NOT FASTER - impulse_decay() computes
+ * `speed -= speed >> SHIFT`, so 1 leaves 1/2 per cell, 2 leaves 3/4, 3
+ * leaves 7/8. The paragraph that used to stand here read the operation as
+ * a plain `speed >>= SHIFT` and had the direction backwards throughout;
+ * the 3 it shipped was the SLOWEST of the three it discussed, which is
+ * how droplets ended up arcing far higher off a rim than "dies out fast"
+ * ever intended.
+ *
+ * 2 (x3/4 per cell of travel) halves the range: from 255 a droplet drops
+ * under SAND_IMPULSE_BOUNCE_MIN_SPEED in ~7 cells rather than ~16. The
+ * cascade is not the constraint the old text feared - its gate is
+ * SAND_CASCADE_MIN_SPEED * SAND_CASCADE_SPEED_DIVISOR, which is 2, still
+ * cleared for ~17 cells at this rate. Lower to 1 for a shorter hop
+ * still; raise only with a reason, and expect height back. */
+#define SAND_SPLASH_SPEED_DECAY_SHIFT  2
 
 /* CASCADE - a WATER or ACID impulse that successfully moves relays its
  * push into whatever of the SAME material sits one step BEHIND where it
@@ -1310,9 +1312,16 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * read back over screenshot.sh's device-state JSON: the roll rate matched
  * CHANCE=20 to within rounding and every fired roll reached impulse_buf, so
  * the mechanism itself was never broken - it was only ever running at the
- * values this same comment already knew were too subtle to see. */
+ * values this same comment already knew were too subtle to see.
+ *
+ * SPEED TRIMMED 220 -> 180 (2026-09-06): reported that bubbles arc too high
+ * off an acid rim. Range is logarithmic in this number - at the decay in
+ * force it buys about two cells - so it is the fine adjustment here, and
+ * SAND_SPLASH_SPEED_DECAY_SHIFT (dropped 3 -> 2 in the same change, and
+ * shared with water) is the coarse one. Trim CHANCE instead to thin the
+ * fountain out; it governs how MANY bubbles, never how high. */
 #define SAND_ACID_BUBBLE_CHANCE 40
-#define SAND_ACID_BUBBLE_SPEED  220
+#define SAND_ACID_BUBBLE_SPEED  180
 
 /* DILUTION - water touching acid rolls a chance to decide who wins,
  * reusing the same trigger acid's ordinary eating already has: the
