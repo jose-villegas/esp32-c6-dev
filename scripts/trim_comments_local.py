@@ -14,17 +14,26 @@ as an improvement even though it missed the aim - a comment that truly needs
 the room is allowed up to the ceiling, it just should not still be at its
 starting length.
 
-A comment that is pure change-history narration - what it used to do, when it
-was fixed, an earlier version's behaviour - with no constraint left that
-still applies is DELETED entirely rather than shortened: git log already owns
-that history, and every deletion is flagged in both reports for a human to
-confirm nothing load-bearing went with it.
+The standard is WHY-only, not "shorter but keep everything": cut anything
+the code already says, all change history (git log owns that), and idiom
+re-explanation repeated across constants - keep only a still-true constraint,
+a still-rejected alternative, or a short cross-reference. Most comments end
+up far under `--limit`, or DELETED entirely - that is the normal, correct
+outcome, not a shortfall. Every deletion is flagged in both reports for a
+human to confirm nothing load-bearing went with it. (This standard replaced
+an earlier "compress into ~300-500 chars while keeping every fact" one after
+review found the old approach bloating files with dated tuning journeys and,
+once, an outright fabricated number - see the "Hard rules" in PROMPT below
+for the fabrication guard this earned.)
 
 A comment over `--skip-over` is left untouched rather than attempted at all -
-wave 1 found that everything past ~2500 chars bundles several topics no
-single rewrite can hold, and every one of those needed reverting and manual
-splitting anyway. Skipping them outright saves the retries that would only
-be thrown away, and the report lists them so they're not silently forgotten.
+a single automated rewrite of something this large tends to miss whichever
+one sentence in it is still load-bearing, however careful the prompt. These
+need a human (or an agent working under direct human review) reading the
+whole thing and applying the same WHY-only standard by hand, one paragraph
+at a time - not a different automated pass, just a slower, closer one.
+Skipping them outright here saves the retries that would only be thrown
+away, and the report lists them so they're not silently forgotten.
 
 Usage:
   trim_comments_local.py [options] [<path>...]     (default: the sand app)
@@ -89,25 +98,42 @@ DEFAULT_REVIEW_MODEL = "mistral-nemo:latest"
 DEFAULT_COMBO = "docs-update-free"
 DEFAULT_PATHS = ["launcher/main/apps/sand"]
 
-PROMPT = """You shorten source-code comments. Rewrite the comment below so it \
-is at most {limit} characters, and reply with NOTHING but the rewritten \
-prose - OR, if the whole comment is only a change-history narration (what \
-it used to do, what it was changed to, when a bug was fixed) with no \
-constraint or reason that still applies to the code as it stands today, \
-reply with exactly the single word DELETE. git log already owns that \
-history; the comment does not need to repeat it.
+PROMPT = """You cut source-code comments down to only what the code doesn't \
+already say. Most comments should end up much shorter than {limit} \
+characters, or deleted outright - that is the normal, correct result, not a \
+shortfall. Reply with NOTHING but the cut prose, OR, if nothing in the \
+comment survives the rules below, reply with exactly the single word \
+DELETE.
 
-Rules:
-- Keep every concrete fact: numbers with units, measured percentages and frame
-  rates, hardware constraints, named functions and files, and any alternative
-  that was tried and rejected together with the reason it was rejected.
-- Do not re-attribute a reason. If the text says X is done because of A, your
-  version must not say it is done because of B.
-- If the text describes a LIMITATION or a problem, your version must still read
-  as a limitation, not as a benefit.
-- Cut: narration of how the code got here over time (first attempt, second
-  attempt, this version), restatements of what the code obviously does, and
-  repeated phrasing.
+Cut, always:
+- Anything restating WHAT the code obviously does - trust well-named
+  identifiers and the code itself.
+- Change history: dates, old values, "raised/lowered/changed from X to Y",
+  a bug's own incident report, an investigation that confirmed something was
+  never broken. git log owns all of this. Keep only a WHY that is true of
+  the CODE AS IT STANDS TODAY, never a WHY for why an OLD value was chosen.
+- Re-explanation of an idiom already established elsewhere in this file
+  (e.g. what a chance-in-256 roll is) - say it once, not on every constant.
+- Arithmetic or measurement whose only role was explaining why an OLD value
+  failed, once that value is no longer in the code.
+
+Keep, only if still true and not obvious from the code:
+- A real constraint or invariant - especially "do NOT do X here, because Y"
+  warnings that would let a bug come back if ignored.
+- A rejected alternative that is STILL rejected for a reason that STILL
+  holds (not a tuning journey - just the current shape and why).
+- A short cross-reference to where fuller logic or history lives (a
+  function name, a doc path) - do not restate what's at the destination.
+
+Hard rules, regardless of length:
+- Never invent, compute, or round a number, name, or fact that is not
+  already stated (or spelled out in words, e.g. "five thousand") in the
+  original text below. If you are not sure a number belongs, leave it out
+  entirely rather than guess - an omitted number is safe, a wrong one is not.
+- Do not re-attribute a reason: if the text says X is done because of A,
+  your version must not say it is done because of B.
+- If the text describes a LIMITATION or a problem, your version must still
+  read as a limitation, not as a benefit.
 - British spelling as in the original (colour, behaviour). Plain prose, no
   bullet lists, no headings, no markdown, no code fences, no preamble.
 

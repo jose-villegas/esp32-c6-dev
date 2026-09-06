@@ -62,15 +62,24 @@ scripts/check-format.sh <file.c> [<file.h> ...]         # format in place
 scripts/check-format.sh --check <file.c> [<file.h> ...]  # verify only
 ```
 
-**300 characters is the aim for a comment; 500 is the hard ceiling**, for one
-that truly needs the room — say so by actually using the length, not by
-sitting at 320 out of habit. A run of consecutive own-line `//` lines, or of
-consecutive own-line `/* */` blocks with no code between them, counts as one
-comment; length is the prose, markers and `*` gutters stripped, so
-re-wrapping never changes the score and chopping one explanation into several
-adjacent blocks doesn't dodge it either. File and section header banners
-(`/*====`) are exempt — asked to fit, a model deletes the rule rather than the
-prose. The rule is aimed at comments beside code.
+**Comment the WHY, not the WHAT — and only when the code doesn't already say
+it.** Clean, well-named code mostly speaks for itself; a comment exists for
+context, a decision, or a non-obvious constraint, not to restate what the
+next line does. Keep comments accurate — an outdated one is worse than none,
+so update it in the same edit that changes the code it describes. Length
+follows from this, not the other way around: **300 characters is the aim,
+500 the hard ceiling** for a comment that still needs the room after cutting
+everything the code already says and everything that's really change history
+(git log owns that — dates, old values, "raised from X to Y", a bug's own
+incident report all belong there, not in the source). A short remainder, or
+none at all, is the normal, correct outcome for most fields and functions —
+not a sign the cut fell short. A run of consecutive own-line `//` lines, or
+of consecutive own-line `/* */` blocks with no code between them, counts as
+one comment for scoring; length is the prose, markers and `*` gutters
+stripped, so re-wrapping never changes the score and chopping one
+explanation into several adjacent blocks doesn't dodge it either. File and
+section header banners (`/*====`) are exempt — asked to fit, a model deletes
+the rule rather than the prose. The rule is aimed at comments beside code.
 
 ```sh
 scripts/check-comment-length.sh                 # whole repo, 20 worst listed

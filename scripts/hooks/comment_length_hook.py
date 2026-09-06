@@ -73,10 +73,13 @@ def main():
     print("", file=sys.stderr)
     print(f"Rewrite them. {TARGET} characters is the aim; up to {LIMIT} is "
           "fine for a comment that truly needs the room, but this is past "
-          "even that. Keep the WHY - a real constraint, a device "
-          "measurement, a rejected alternative and the reason. Cut change "
-          "history (git log owns that) and anything restating WHAT the code "
-          "does.", file=sys.stderr)
+          "even that. Keep only a WHY the code doesn't already say - a real "
+          "constraint, a device measurement, a rejected alternative still "
+          "rejected for a reason that still holds. Cut change history (git "
+          "log owns dates and old values), anything restating WHAT the code "
+          "does, and re-explaining an idiom already established elsewhere. "
+          "Deleting the comment entirely is a normal outcome, not a "
+          "shortfall.", file=sys.stderr)
     return 2
 
 
