@@ -46,52 +46,10 @@
                              * rather than re-deriving the weight from
                              * |gx|+|gy| the way the old blend did */
 
-/* Big enough for every case here, small enough to write out by hand. */
-#define W 8
-#define H 8
-
-static sand_t   s;
-static uint8_t  cells[W * H];
-/* DIRAM on-device is one pool for .data/.bss AND the heap, so every static
- * byte here is a byte the heap never gets - sand_t is 232 B, and three of
- * this file's tests need one contiguous 41,216 B (184x224, real screen
- * size) grid the diagnostics image can't spare from a ~37-38 KiB largest
- * free DMA block (bd esp32c6-e82). Safe to union: only one fixture is ever
- * live at a time, each test's fixture() helper re-inits it with sand_init()
- * before use, and no function mixes two members below or one of these with
- * s/big/pool/pour/wide.
- *
- * Rule for new tests: use exactly ONE member of fx. A fixture that must
- * stay alive alongside another needs its own static. s/big/pool/pour/wide
- * stay separate because they're each referenced by many tests, thousands
- * of times combined - never idle the way these are. */
-static union {
-    sand_t loc, splash_sim, crater_sim, cascade_test_sim, stir_sim,
-           liq_cascade_sim, quench_sim, obst_pool, blend_pool,
-           debounce_test, hdebounce_test, depth_test, shallow_pool,
-           wake_test_grid, band_test_grid, flash_test_grid, shadow_test_grid,
-           fizz_sim, dilute_sim, separated_dilute_sim, oil_dilute_sim,
-           dilute_pour_sim, bubble_sim, sleepy_bubble_sim;
-} fx;
-
-static void fixture(void)
-{
-    sand_init(&s, cells, W, H, 12345u);
-}
-
-/* Load a picture of a grid. Rows are given top to bottom, so the text reads
- * the way the screen looks. */
-static void load(const char *rows[], int count)
-{
-    sand_clear(&s);
-    for (int y = 0; y < count; y++) {
-        for (int x = 0; rows[y][x] != '\0'; x++) {
-            if (rows[y][x] == 'o') {
-                sand_set(&s, x, y, SAND_FIRST_SHADE);
-            }
-        }
-    }
-}
+/* s/cells/fx/W/H/fixture()/load() and the rest of the split's shared
+ * fixtures and assertion helpers now live in suite_sand_common.{c,h} -
+ * see that header for why. */
+#include "suite_sand_common.h"
 
 static void assert_looks_like(const char *rows[], int count, const char *why)
 {
@@ -367,16 +325,10 @@ static void test_a_grain_in_a_pit_stays_put(void)
 
 /* Everything here guards the same property: a row reported CLEAN must be
  * genuinely unchanged. Getting that wrong does not crash - it leaves stale
- * pixels on the panel, which is a maddening bug to chase from a photograph. */
-
-static uint8_t dirty[H];
-
-static void dirty_fixture(void)
-{
-    fixture();
-    sand_track_dirty_rows(&s, dirty);
-    memset(dirty, 0, sizeof(dirty));
-}
+ * pixels on the panel, which is a maddening bug to chase from a photograph.
+ *
+ * dirty[] and dirty_fixture() live in suite_sand_common.{c,h} - reused far
+ * past this section, by tests throughout the split. */
 
 static void test_a_settled_grid_reports_nothing_dirty(void)
 {
@@ -760,41 +712,9 @@ static void test_a_steep_tilt_does_pour_the_bed(void)
  * nothing at all happens. If sleeping froze something, the second pass frees
  * it and the grids differ. */
 
-#define BLOCK_COLS ((W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
-#define BLOCK_ROWS ((H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
-static uint8_t sleep_blocks[BLOCK_COLS * BLOCK_ROWS];
-
-static void settle_with_sleeping(const char *rows[], int count, int steps,
-                                 int gx, int gy)
-{
-    fixture();
-    sand_enable_sleeping(&s, sleep_blocks);
-    load(rows, count);
-
-    for (int i = 0; i < steps; i++) {
-        sand_step(&s, gx, gy, 0);
-    }
-}
-
-static void assert_nothing_left_to_do(int gx, int gy)
-{
-    uint8_t settled[W * H];
-    memcpy(settled, cells, sizeof(settled));
-
-    /* Same grid, same rules, but every row examined every step. */
-    sand_t awake;
-    sand_init(&awake, cells, W, H, 999u);
-    memcpy(cells, settled, sizeof(settled));
-
-    for (int i = 0; i < 60; i++) {
-        sand_step(&awake, gx, gy, 0);
-    }
-
-    TEST_ASSERT_EQUAL_MEMORY_MESSAGE(settled, cells, sizeof(settled),
-        "a fully awake simulation found something to move that the sleeping "
-        "one had left alone - which means sleeping froze sand that should "
-        "still have been falling");
-}
+/* BLOCK_COLS/BLOCK_ROWS/sleep_blocks/settle_with_sleeping()/
+ * assert_nothing_left_to_do() live in suite_sand_common.{c,h} - reused far
+ * past this section. */
 
 static void test_sleeping_leaves_nothing_able_to_move(void)
 {
@@ -1651,61 +1571,10 @@ static void test_a_lagging_grain_is_not_left_asleep(void)
 
 /* Everything above this point is about sand. These are about the fact that a
  * cell is now a material, and that materials behave differently from each
- * other - which is the whole basis of the sandbox. */
-
-#define WATER CELL_MAKE(MAT_WATER, 8)
-/* Room temperature, not a shade: stone's variant is a TEMPERATURE
- * now, the same as glass's, so the 8 this used to carry placed every
- * floor and wall in the suite well above the shock threshold - hot
- * enough that a flake of snow landing on it turned it into sand. */
-#define STONE CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT)
-#define SAND  CELL_MAKE(MAT_SAND,  8)
-#define GAS   CELL_MAKE(MAT_GAS,   8)
-#define FIRE  CELL_MAKE(MAT_FIRE,  8)
-/* UNLIT. Wood's variant is how much of it is left to burn, so the 8 this
- * used to carry now places a log that is already alight - which flares
- * fire, and turned a grain-conservation test into a count that grew.
- * Third macro in this file to be caught by a material spending its
- * variant on something: see GLASS and STONE above. */
-#define WOOD  CELL_MAKE(MAT_WOOD,  0)
-#define STEAM CELL_MAKE(MAT_STEAM, 8)
-#define SMOKE CELL_MAKE(MAT_SMOKE, 8)
-/* A LIT log. Wood's variant is how much of it is left to burn, so this is
- * what ember used to be - see reaction_t.burn_decay. */
-#define EMBER CELL_MAKE(MAT_WOOD, MATERIAL_VARIANTS - 1)
-
-/* Total AMOUNT of a material, not the number of cells holding it.
+ * other - which is the whole basis of the sandbox.
  *
- * For a liquid these are different questions, and only this one has a
- * conserved answer: two half-full cells can merge into one full cell without
- * a drop being lost. Counting cells and calling it conservation would report
- * a leak every time water settled. */
-static long mass_of(const sand_t *g, int w, int h, material_id_t m)
-{
-    long total = 0;
-    for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-            const cell_t c = sand_at(g, x, y);
-            if (!CELL_IS_EMPTY(c) && CELL_MATERIAL(c) == m) {
-                total += CELL_VARIANT(c);
-            }
-        }
-    }
-    return total;
-}
-
-static int count_of(material_id_t m)
-{
-    int n = 0;
-    for (int y = 0; y < H; y++) {
-        for (int x = 0; x < W; x++) {
-            if (CELL_MATERIAL(sand_at(&s, x, y)) == m) {
-                n++;
-            }
-        }
-    }
-    return n;
-}
+ * WATER/STONE/SAND/GAS/FIRE/WOOD/STEAM/SMOKE/EMBER and mass_of()/count_of()
+ * live in suite_sand_common.{c,h} - reused throughout the split. */
 
 static void test_a_cell_carries_both_material_and_variant(void)
 {
@@ -2151,50 +2020,21 @@ static void test_a_tipped_basin_keeps_its_sand(void)
 }
 
 /* Wide enough that a puddle has somewhere to go. On a grid the pour can fill,
- * water and sand both end up "full" and the comparison measures nothing. */
-#define WIDE_W 32
-#define WIDE_H 20
+ * water and sand both end up "full" and the comparison measures nothing.
+ *
+ * WIDE_W/WIDE_H/wide_cells/wide (this file's second shared fixture, after
+ * s/fixture() itself, reused from here through the boiler/conduction/
+ * metal-rod tests much further down) and OIL/LAVA/GLASS/SNOW live in
+ * suite_sand_common.{c,h}. */
 
 /* A deliberately over-long grid for test_conduction_stops_at_the_reach_cap
  * alone - see that test for why it cannot share `wide`.
  * CONDUCT_REACH_TEST mirrors sand_reactions.c's own CONDUCT_REACH,
  * which is private to that file; if the two ever drift apart the
  * test stops proving anything, so keep them together. */
-/* Half-full, matching WATER/STONE/GAS/... below rather than MASS_MAX -
- * a liquid's variant is a FILL LEVEL, so a grid laid out with these does
- * NOT fill its container, and a test that assumes a sealed box is brim
- * full because every cell in it was set will be wrong about where the
- * surface is. */
-#define OIL   CELL_MAKE(MAT_OIL,  8)
-#define LAVA  CELL_MAKE(MAT_LAVA, 8)
-/* Room temperature, not a shade. Glass is the one material whose variant
- * is a TEMPERATURE (material.h's top comment), so the 8 this used to carry
- * silently placed every pane in these tests at half melt - and, worse,
- * placed it hot enough that a stray flake of snow would shatter it.
- *
- * SAND_AMBIENT_HEAT rather than 0, because 0 is no longer "at rest": it is
- * the bottom of the frost range, so a pane placed there would start out
- * looking chilled and spend the first steps of every test warming up. */
-#define GLASS CELL_MAKE(MAT_GLASS, SAND_AMBIENT_HEAT)
-#define SNOW  CELL_MAKE(MAT_SNOW,  8)
-
 #define CONDUCT_REACH_TEST 32
 #define CAP_W (CONDUCT_REACH_TEST + 16)
 #define CAP_H 8
-/* HEAP, not static file scope - `wide` is this file's second shared
- * fixture (after `s`/fixture() itself), reused by every test below wide
- * enough to need more than the 8x8 default, from the water-levelling
- * tests just below through the boiler/conduction/metal-rod tests much
- * further down. A pointer, not an array: each TOP-LEVEL test that
- * touches it - directly, or through a helper like build_boiler_room() /
- * poured_height() / steps_to_boil_through() that reads and writes this
- * same global rather than taking a parameter - mallocs its own
- * WIDE_W * WIDE_H bytes and frees them once it is done, the same
- * technique as every other fixture in this file; see drop_impulse_buf's
- * own comment above for why this file's static test fixtures cannot
- * share the framebuffer's memory budget. */
-static uint8_t *wide_cells;
-static sand_t  wide;
 
 /* How tall a heap the same pour leaves, in cells above the floor. */
 static int poured_height(material_id_t m)
@@ -3347,17 +3187,10 @@ static void test_gas_decaying_away_marks_its_row_dirty(void)
  * strictly necessary, let both the fire and gas cells each hop one cell
  * sideways into the slack before reactions ever ran). The caller passes
  * the exact span it is about to fill (x0..x1 inclusive) - no slack, no
- * spare cells, by construction. */
-static void fire_room(int x0, int x1)
-{
-    fixture();
-    for (int x = 0; x < W; x++) {
-        sand_set(&s, x, 2, STONE);
-        sand_set(&s, x, 4, STONE);
-    }
-    sand_set(&s, x0 - 1, 3, STONE);
-    sand_set(&s, x1 + 1, 3, STONE);
-}
+ * spare cells, by construction.
+ *
+ * fire_room() now lives in suite_sand_common.{c,h} - reused past this
+ * section too. */
 
 static void test_fire_ignites_an_adjacent_flammable_neighbour(void)
 {
@@ -4306,58 +4139,10 @@ static void test_steam_and_smoke_are_told_apart_by_brightness(void)
 
 /* --- bubbles: gas rising through standing liquid ---------------------- */
 
-/* A sealed column of full-mass water in columns 2..5, rows 2..6, with a
- * stone floor and stone walls, so the water can neither drain nor spread
- * and a gas cell placed inside it has nowhere to go except up THROUGH the
- * water. Without that seal a gas cell just slips out sideways and the
- * test proves nothing about bubbling. */
-static void water_column(void)
-{
-    fixture();
-    sand_set_decay(&s, 0);   /* immortal: these tests measure movement,
-                              * and a decaying cell that vanished
-                              * mid-rise would read as "never escaped" */
-    for (int y = 1; y <= 7; y++) {
-        sand_set(&s, 1, y, STONE);
-        sand_set(&s, 6, y, STONE);
-    }
-    for (int x = 1; x <= 6; x++) {
-        sand_set(&s, x, 7, STONE);
-    }
-    for (int y = 2; y <= 6; y++) {
-        for (int x = 2; x <= 5; x++) {
-            sand_set(&s, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
-        }
-    }
-}
-
-static int first_row_holding(uint8_t id)
-{
-    for (int y = 0; y < H; y++) {
-        for (int x = 0; x < W; x++) {
-            if (CELL_MATERIAL(sand_at(&s, x, y)) == id) {
-                return y;
-            }
-        }
-    }
-    return -1;
-}
-
-static long mass_held_by(uint8_t id)
-{
-    long m = 0;
-    for (int y = 0; y < H; y++) {
-        for (int x = 0; x < W; x++) {
-            const cell_t c = sand_at(&s, x, y);
-            if (!CELL_IS_EMPTY(c) && CELL_MATERIAL(c) == id) {
-                m += CELL_VARIANT(c);
-            }
-        }
-    }
-    return m;
-}
-
-/* The behaviour try_bubble() exists for, and the one this simulation could
+/* water_column()/first_row_holding()/mass_held_by() live in
+ * suite_sand_common.{c,h} - reused far past this section.
+ *
+ * The behaviour try_bubble() exists for, and the one this simulation could
  * not do at all before it.
  *
  * can_enter() only lets a DENSER mover displace a lighter target, and a
@@ -4520,52 +4305,8 @@ static void test_water_still_puts_fire_out(void)
  * that got skipped. */
 /* --- acid ---------------------------------------------------------------- */
 
-/* Cells, not mass: a powder's variant is a shade, so summing it would be
- * meaningless for sand. */
-static int count_cells_of(uint8_t id)
-{
-    int n = 0;
-    for (int y = 0; y < H; y++) {
-        for (int x = 0; x < W; x++) {
-            if (CELL_MATERIAL(sand_at(&s, x, y)) == id) {
-                n++;
-            }
-        }
-    }
-    return n;
-}
-
-/* A sealed GLASS tank with `sand_rows` of sand in the bottom and
- * `acid_rows` of acid above it. Returns the acid mass placed.
- *
- * Glass, not stone. Stone used to be immune to acid and was therefore the
- * only thing acid could be kept in; it dissolves like everything else now
- * and glass is the sole exception. These fixtures were stone until that
- * changed, and both tests below started failing the moment it did - which
- * is the feature working, not a break. */
-static long acid_tank(int sand_rows, int acid_rows)
-{
-    fixture();
-    sand_set_mobility(&s, SAND_MOBILITY_PER_MATERIAL);
-    for (int x = 1; x < W - 1; x++) {
-        sand_set(&s, x, H - 1, GLASS);
-    }
-    for (int y = 1; y < H; y++) {
-        sand_set(&s, 1, y, GLASS);
-        sand_set(&s, W - 2, y, GLASS);
-    }
-    for (int y = H - 1 - sand_rows; y < H - 1; y++) {
-        for (int x = 2; x < W - 2; x++) {
-            sand_set(&s, x, y, CELL_MAKE(MAT_SAND, 8));
-        }
-    }
-    for (int y = 1; y <= acid_rows; y++) {
-        for (int x = 2; x < W - 2; x++) {
-            sand_set(&s, x, y, CELL_MAKE(MAT_ACID, MASS_MAX));
-        }
-    }
-    return mass_held_by(MAT_ACID);
-}
+/* count_cells_of()/acid_tank() live in suite_sand_common.{c,h} - reused far
+ * past this section too. */
 
 static void test_acid_dissolves_sand(void)
 {
@@ -5726,22 +5467,8 @@ static void test_snow_keeps_on_dry_ground(void)
         "heat, and a floor is neither");
 }
 
-/* Total mass of one liquid on the board - fill levels, not cell count.
- * A liquid that spreads occupies more cells holding less each, so cells
- * are the wrong unit for asking whether any of it was destroyed. */
-static int liquid_mass_of(uint8_t id)
-{
-    int m = 0;
-    for (int y = 0; y < H; y++) {
-        for (int x = 0; x < W; x++) {
-            const cell_t c = sand_at(&s, x, y);
-            if (CELL_MATERIAL(c) == id) {
-                m += CELL_VARIANT(c);
-            }
-        }
-    }
-    return m;
-}
+/* liquid_mass_of() lives in suite_sand_common.{c,h} - reused far past this
+ * section. */
 
 /* Stone carries a temperature, the same as glass. */
 static void test_stone_heats_up_next_to_lava(void)
@@ -6188,12 +5915,9 @@ static void test_stone_speckles_by_position_at_every_temperature(void)
 }
 
 
-/* panel_luminance() is defined further down this file, beside the soil-tone
- * test it was written for. The rim/gravity test below needs the same
- * helper rather than a second hand-rolled one, hence the forward
- * declaration - it would be a stranger thing to duplicate luminance math
- * than to declare a static function ahead of its definition. */
-static int panel_luminance(gfx_color_t c);
+/* panel_luminance() now lives in suite_sand_common.{c,h} - both this file's
+ * cullet/tone tests and the soil-tone test it was originally written for
+ * need the same unpacking math. */
 
 /*=============================================================================
  * CULLET'S COLOUR CYCLE - each of the four reserved shades (SAND_CULLET_BASE
@@ -12107,22 +11831,6 @@ static void test_a_watered_bank_does_not_dry_back_to_one_flat_tone(void)
      * imprint and every cell dries through the unbiased path onto tone 0,
      * which is one distinct tone holding all eighty. */
     TEST_ASSERT_TRUE_MESSAGE(distinct >= 3 && commonest * 2 < total, why);
-}
-
-/* Rec.601 luminance of a panel colour, 0-255.
- *
- * The palette stores GFX_RGB, which is RGB565 with the bytes swapped for
- * this QSPI controller - so getting a brightness back out means undoing
- * both. Written out here rather than guessed at, because a test that
- * unpacks the colour wrongly will still compare two numbers and still
- * pass or fail for reasons of its own. */
-static int panel_luminance(gfx_color_t c)
-{
-    const unsigned v = (unsigned)((c >> 8) | ((c & 0xFFu) << 8));
-    const unsigned r = ((v >> 11) & 0x1Fu) * 255u / 31u;
-    const unsigned g = ((v >>  5) & 0x3Fu) * 255u / 63u;
-    const unsigned b = ( v        & 0x1Fu) * 255u / 31u;
-    return (int)((299u * r + 587u * g + 114u * b) / 1000u);
 }
 
 /* ONE MONOTONE RAMP, not two independently-shifted tones that each had to
