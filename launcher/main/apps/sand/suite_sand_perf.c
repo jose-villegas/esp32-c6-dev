@@ -465,31 +465,26 @@ static void test_turning_a_settled_pool_to_landscape_fits_in_the_frame_budget(vo
         "turning the board must move water, not create or destroy it - the "
         "cell COUNT changes as the pool re-levels, the mass must not");
 
-    /* UNPEGGED - THIS NUMBER IS A PLACEHOLDER AND MUST BE RE-PEGGED FROM A
-     * REAL CAPTURE BEFORE THIS TEST MEANS ANYTHING.
-     *
-     * This suite cannot be run on a laptop (it is DEVICE_BUILD, and
-     * esp_timer_get_time() has no host equivalent), and the session that
-     * wrote it does not flash the board. Run
-     *
-     *     ./launcher/test/run_device_tests.sh
-     *
-     * read the "portrait->landscape turn on a settled ... pool" line out of
-     * the capture, and replace the number below with measured * 0.9,
-     * rounded, stating the measurement and its date here the way every other
-     * budget in this file does - see docs/Sand/Perf-Round-Guide.md, "Peg or
-     * re-peg budgets from what the capture actually measured", and "Never
-     * raise a budget".
-     *
-     * 14000 is borrowed from test_a_screen_of_water_fits_in_the_frame_
-     * budget's own screen-wide-collapse figure purely so this compiles and
-     * runs; it is a guess about a scene nobody has measured yet, in either
-     * direction, and it is not a budget. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(14000, (int)per_step,
+    /* MEASURED 41,509 us per step on device, 2026-09-06, this row's first
+     * real measurement (capture_ref_main_20260906_185911.md). Budget is
+     * that x 0.9 = 37,358, rounded DOWN to 37,300 so the target is never
+     * looser than the convention. */
+
+    /* THE 14000 THIS REPLACES WAS NEVER A BUDGET - it was borrowed from
+     * the water screen so the row would compile, and said so. It also
+     * misled a reader into reporting a 167% regression that never
+     * happened, by dividing it by 0.9 as if it were pegged. */
+
+    /* WORTH KNOWING BEFORE OPTIMISING THIS ROW: the impulse flight pass
+     * never runs here at all - s->impulse_count is 0 for all 390 steps,
+     * host-counted 2026-09-06 - and a host pass map puts ~48% of the cost
+     * in cross-flow, ~1% reactions, ~1.5% gas. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(37300, (int)per_step,
         "turning the board a quarter turn with a settled pool on it must "
         "still fit in a frame or two - the pool re-levels across the whole "
-        "grid width, so the cross-flow search is the thing to suspect. "
-        "THIS BUDGET IS UNPEGGED: see the comment above it");
+        "grid width, so the cross-flow search is the thing to suspect, and "
+        "a host pass map agrees at ~48%. A reduction target at measured x "
+        "0.9, so failing means the work is not done yet");
 }
 
 #ifdef SAND_HOST_PROBE
