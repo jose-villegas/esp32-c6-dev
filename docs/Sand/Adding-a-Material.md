@@ -23,9 +23,9 @@ burns** is `reactions[]`. Neither constrains the other.
 flowchart LR
     subgraph MOVE["materials[] - how it MOVES (hot table)"]
         direction TB
-        M1["KIND_STATIC\nstone, wood, ember"]
+        M1["KIND_STATIC\nstone, wood"]
         M2["KIND_POWDER\nsand"]
-        M3["KIND_LIQUID\nwater"]
+        M3["KIND_LIQUID\nwater, lava"]
         M4["KIND_GAS\ngas, fire, steam, smoke"]
     end
 
@@ -33,7 +33,7 @@ flowchart LR
         direction TB
         R1["inert\nsand, water, steam, smoke"]
         R2["fuel\ngas, wood"]
-        R3["heat source\nfire, ember"]
+        R3["heat source\nfire, lava"]
         R4["conductor\nstone"]
     end
 
@@ -49,11 +49,16 @@ flowchart LR
     style R4 fill:#3d6b8a,color:#fff
 ```
 
-**Ember is the proof the axes are independent**: `KIND_STATIC`, the same
-kind as motionless stone, and simultaneously a full heat source that
-decays, ignites its neighbours, conducts and flares. A `KIND_POWDER`
-material that is also flammable needs a `reactions[]` row and *nothing
-else* - no new pass, no movement code, no branch anywhere.
+**Lava is the clearest proof the axes are independent** - its own comment
+in `material.c` says exactly that: `KIND_LIQUID`, the same kind as
+ordinary water, and simultaneously a heat source that ignites its
+neighbours and flares, with not one line of movement code anywhere
+knowing about the combination. (Ember made the same point once, as a
+`KIND_STATIC` material that was also a heat source - see "Lesson: the
+obvious material is sometimes the wrong one" below for why it folded into
+wood instead.) A `KIND_POWDER` material that is also flammable needs a
+`reactions[]` row and *nothing else* - no new pass, no movement code, no
+branch anywhere.
 
 Colour convention, used consistently in every diagram in this folder:
 
@@ -196,7 +201,7 @@ The current ladder, which any new material has to slot into somewhere:
 
 ```mermaid
 flowchart LR
-    E["empty\n0"] --> S["steam\n5"] --> K["smoke\n7"] --> G["gas\n10"] --> F["fire\n15"] --> SN["snow\n15"] --> X["oil\n22"] --> W["water\n30"] --> AC["acid\n38"] --> LV["lava\n45"] --> A["sand\n60"] --> D["wood/ember\n150"] --> T["stone / glass\n200"]
+    E["empty\n0"] --> S["steam\n5"] --> K["smoke\n7"] --> G["gas\n10"] --> F["fire\n15"] --> SN["snow\n15"] --> X["oil\n22"] --> W["water\n30"] --> AC["acid\n38"] --> LV["lava\n45"] --> GP["gunpowder\n50"] --> A["sand\n60"] --> DT["dirt\n62"] --> D["wood/ember\n150"] --> T["stone / glass\n200"]
 
     style E fill:#2a2a2a,color:#fff
     style S fill:#3d6b8a,color:#fff
@@ -210,11 +215,19 @@ flowchart LR
     style X fill:#a87a3d,color:#fff
     style LV fill:#8a3d3d,color:#fff
     style AC fill:#4a7c59,color:#fff
+    style GP fill:#a87a3d,color:#fff
+    style DT fill:#a87a3d,color:#fff
 ```
 
 Oil at 22 and lava at 45 straddle water deliberately: oil floats, lava
 sinks, and both fall out of one rule rather than any material-specific
-code.
+code. Gunpowder at 50 sits between lava and sand on purpose: it sinks in
+every liquid on the board (water 30, acid 38, lava 45), and sand (60) and
+dirt (62) rest on it rather than mixing in - a powder never sinks through
+another powder at rest here (see `sand.c`'s own comment on why weight alone
+earns no such move), so the gap to sand only matters under an impulse,
+where a blast sorts the heavier grit out. Real black powder is lighter than quartz sand
+too, so the ladder position and the physical intuition happen to agree.
 
 Note which mechanism each kind goes through, because it decides whether
 a density relationship needs code at all. A **powder** moves via
@@ -302,11 +315,24 @@ SHADES(lo,hi)"]
 ```
 
 1. **`material.h`**: add the new `material_id_t` enum value, before
-   `MAT_COUNT`.
+   `MAT_COUNT`. **If no ordinary slot is free** - it currently is not; see
+   "The material budget, and what is left" in
+   [`Architecture.md`](Architecture.md) - a genuinely stateless material
+   still has a home behind `MATX(k)` (`k < MATERIAL_EXTENDED_COUNT`, 8, not
+   16 - gunpowder's split spent the other half of that nibble, see below).
+   A material that needs real `KIND_POWDER`/`KIND_LIQUID`/`KIND_GAS`
+   physics or a variant, and cannot wait for the extended range's
+   cold-pass tricks, is the harder case gunpowder's own half-row split
+   was built for - not a route to reuse casually, since it costs half of
+   whatever is left of the extended range and doubles the hot table
+   (`materials[]` → `MATERIAL_ROWS`, 32 rows, indexed by `cell >> 3`); read
+   the budget section before reaching for it a second time.
 2. **`material.c`**: add a `materials[]` row and a `palette[]` block. The
    block needs its own designator - `[MAT_YOURS * MATERIAL_VARIANTS] =`
    followed by `SHADES(lo, hi)` - which is what stops it depending on
-   where in the list it sits. `MATERIAL_MAX` stays 16 either way.
+   where in the list it sits. `MATERIAL_MAX` stays 16 either way - it
+   counts nibble values, not table rows, so it did not move even when
+   `materials[]` itself doubled for gunpowder's split.
 
    The designators are not decoration. The palette used to be positional,
    and twice a block added or removed in the middle shifted every block
@@ -319,7 +345,28 @@ SHADES(lo,hi)"]
    itself a heat source, it conducts heat, it smokes, it does something
    other than vanish when quenched, or it flares a flame - it also needs
    a row in the *second* table, `reaction_t reactions[]` (same header,
-   same file).
+   same file). Several more fields joined this table for gunpowder, and
+   apply to any material with similar behaviour of its own: `lit_from`
+   (for a `burn_decay != 0` material, the first variant code that counts
+   as "burning" - wood is 1, so its own unlit/lit split is variant 0 vs.
+   anything else, unchanged; a material whose burning state shares its
+   variant with something else, like gunpowder sharing 3 bits with a
+   dry-tone/moisture split, sets this higher so `cell_is_burning()` still
+   knows which codes mean lit); `explodes` (a blast radius - non-zero
+   means the cell can detonate via `sand_explode()`, checked once it
+   **burns out**, i.e. when its `burn_decay` countdown reaches
+   `lit_from`, and only if it is one corner of a 2x2 that is all lit;
+   otherwise, or with no impulse buffer live, it becomes plain fire
+   instead - ignition and heat write the *lit* code, they never detonate
+   directly); `soaked_to`/`soaked_chance` (what a *saturated* cell -
+   moisture at `moist_max` - has a chance/256 per step of becoming
+   instead, checked only once the cell is actually full so an inert
+   material with `soaked_to = 0` never rolls); and `tones`/`moist_max`,
+   which are encoding, not reaction behaviour - they size the
+   dry-tone/moisture split a `dries != 0` material's variant reads (dirt:
+   8 tones, moisture 1-7; gunpowder: 3 tones, moisture 1-4, because its
+   variant is only 3 bits wide and the eighth code is spent on
+   `lit_from` instead).
 
    **An absent row is not neutral.** It is all-zero, and zero means
    something different for each field: never catches, never a heat

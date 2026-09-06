@@ -197,7 +197,17 @@ anywhere taxes the same pool, and neither a clean compile nor a clean host
 run says whether the largest contiguous block a device-only allocation
 needs still exists after the addition. Diff `.bss`/`.data` size for
 **every** build variant, not just release; trust
-`heap_caps_get_largest_free_block()` over "total free heap."
+`heap_caps_get_largest_free_block()` over "total free heap." This class is
+now caught mechanically: `launcher/tools/check_static_ram.py` predicts the
+largest contiguous block from every build's map file and fails `idf.py
+build` if the framebuffer or a real-size grid would no longer fit.
+
+When checking memory live rather than at link time, compare
+`heap_caps_get_largest_free_block(MALLOC_CAP_DMA)` only against
+`heap_caps_get_free_size(MALLOC_CAP_DMA)`, never against
+`esp_get_free_heap_size()` — that sums a second, physically separate DMA
+region no large allocation can ever use, manufacturing a "fragmentation"
+gap that was actually 12 bytes (beads esp32c6-8h2).
 
 ---
 

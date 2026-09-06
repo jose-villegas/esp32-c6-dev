@@ -119,7 +119,21 @@ convention: an app's own big buffers get malloc'd once and kept; anything
 optional (screenshots, debug overlays, future dev tooling) must be
 malloc'd-on-use and freed-after, never a permanent static, and must be
 checked with `idf.py -B build.dev size` / `build.diag size` — not just
-`build.release`, which does not even compile that code in.
+`build.release`, which does not even compile that code in. The build now
+refuses to link an image whose statics would leave no room for the
+framebuffer plus one grid, for exactly that reason — see
+`launcher/tools/check_static_ram.py`.
+
+A device heap trace on 2026-09-06 (beads esp32c6-8h2) mapped the DMA-capable
+memory precisely: one main region of 404 KiB, plus a second, physically
+separate ~11 KiB region (the ROM-stack area, handed back by `heap_init` at
+startup) that is never contiguous with the main one and so can never serve a
+large allocation. Real fragmentation *inside* the main region, read straight
+off a heap block map, was 12 bytes — not the ~20 KiB once believed. `esp_get_
+free_heap_size()` sums both regions; `heap_caps_get_largest_free_block()`
+only ever reports from one. Reading them side by side, as POST used to,
+manufactures a gap that means nothing; free and largest must be read from
+the *same* `heap_caps_*(MALLOC_CAP_DMA)` pool before comparing them.
 
 ### Task stacks are not the heap
 

@@ -477,13 +477,66 @@ The project had separately wanted a gravity-oriented shine for glass and,
 for a while, had not managed to land one - **that has since shipped**,
 independently, as `material_shine_direction()`: a pure, stateless function
 returning a Q8 unit vector (minus gravity, the same convention
-`liquid_spec[]` uses) that turns glass and metal's `MATERIAL_HATCHED`
-band from a fixed diagonal into one that sweeps with the tilt. Two
-different mechanisms solving related problems - `liquid_spec[]` is a
+`liquid_spec[]` uses, then turned 45 degrees left on the panel so the
+bands lean across gravity rather than lying flat against it) that turns
+glass and metal's `MATERIAL_HATCHED` band from a fixed diagonal into one
+that sweeps with the tilt. Two different mechanisms solving related
+problems - `liquid_spec[]` is a
 precomputed per-mask table read by index, this is two numbers computed
 once a frame and carried straight into the hatch's own per-pixel walk -
 worth comparing both before reaching for either as a template for a third
 material's shine.
+
+### Cullet's colour cycle - a shade can name a moving target instead of a fixed one
+
+Cullet (sand's reserved top band, `SAND_CULLET_BASE`..`MATERIAL_VARIANTS - 1`
+- "sand that used to be glass") used to work the way every other speckled
+shade does: the stored nibble picked one fixed colour out of a small ramp,
+for good. The four cullet shades still work that way for the *byte* - a
+grain's shade never changes, which is what lets a heap of it stay visibly
+distinguishable from the dune it gets mixed into - but each shade's
+*colour* no longer is fixed. Each of the four now names a STARTING POINT,
+a quarter-turn apart, on a shared 16-entry cycle (`cullet_cycle[]`,
+material.c) that a per-frame phase (`material_set_cullet_phase()`, exactly
+the same shape as `material_set_foam_phase()` and kept just as separate a
+call, for the same reason: a different clock feeding a different material)
+steps through over real time. A heap of broken glass shimmers through four
+pale tints at once instead of sitting on one.
+
+The whole cycle is built from four pastel anchor colours (material.c, next
+to `cullet_cycle[]`) chosen to stay close together in both hue and
+lightness - the entire point of cullet is to read as ground glass catching
+the light, not as four materials taking turns, so a retune that let the
+cycle wander toward anything saturated would defeat the feature even while
+technically shipping it. `test_cullet_stays_pale_at_every_phase`
+(suite_sand.c) exists specifically to catch that kind of drift, floored
+against the darkest DUNE shade's own luminance rather than a fixed number,
+so it stays meaningful if the dune ramp itself is ever retuned.
+
+On the device the all-pale cycle read as too white, so one deliberate
+exception was added: rarely (`CULLET_GLINT_ONE_IN`, one grain in 192 per
+phase step), a cullet cell flashes pure white (`CULLET_GLINT`, material.c)
+instead of its pale cycle colour - a facet catching the light - and is
+back to pale the next step, a different few grains each time. A saturated
+version of the grain's own colour was tried first and dropped the same day:
+on the panel a sudden pink or green read as a different material, while a
+white flash reads as light. Which grain glints is decided by the same
+hash-plus-phase mix water's foam dither uses, so the glinting set changes
+with the phase at no extra cost - no clock of its own, no per-cell state.
+The roll is a modulo rather than a mask so the odds need not be a power of
+two; ordinary sand never reaches it.
+
+The simulation genuinely does not change at all for this: `material_
+colours()` is purely a function of the cell byte plus whatever per-frame
+state has been set on it (gravity, foam phase, now cullet phase), so a
+cell's displayed colour can move while every fingerprint test - which
+hashes cell bytes, never rendered pixels - stays green. What DOES have to
+move is `app_sand.c`'s repaint bookkeeping: a cullet cell's own row needs
+the same periodic-wake treatment the shine already gets
+(`row_has_cullet[]`, `CULLET_PHASE_MS`, `advance_cullet()`) or a heap that
+has stopped moving would repaint on nothing and freeze on whatever tint it
+happened to hold the moment it went still - the identical reasoning
+`row_has_shine[]` was built on, applied to a second, independent clock.
 
 ---
 

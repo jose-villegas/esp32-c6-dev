@@ -379,9 +379,12 @@ _Static_assert(
  * material - see reaction_t.burn_decay, and docs/Sand/Adding-a-Material.md
  * for this as a worked example. */
 /* Whole CELLS rather than material ids, because an extended material
- * cannot be named by an id - its low nibble is its identity (MATX() in
- * material.h). An ordinary material is written CELL_MAKE(id, 0) and its
- * variant is chosen the usual way when it is painted. */
+ * cannot be named by an id - for the static half its whole low nibble is
+ * its identity (MATX() in material.h); gunpowder only goes as far as bit 3
+ * of the low nibble (GUNPOWDER_CELL()), the bottom three bits being a code
+ * rather than part of what names it. An ordinary material is written
+ * CELL_MAKE(id, 0) and its variant is chosen the usual way when it is
+ * painted. */
 static const cell_t brushes[] = {
     CELL_MAKE(MAT_SAND, 0),  CELL_MAKE(MAT_WATER, 0),
     CELL_MAKE(MAT_STONE, 0), CELL_MAKE(MAT_GAS, 0),
@@ -390,6 +393,8 @@ static const cell_t brushes[] = {
     CELL_MAKE(MAT_ACID, 0),  CELL_MAKE(MAT_GLASS, 0),
     CELL_MAKE(MAT_SNOW, 0),  CELL_MAKE(MAT_DIRT, 0),
     MATX(MATX_ICE),      MATX(MATX_PLANT),
+    GUNPOWDER_CELL(0), /* dry, tone 0 - see brush_color()'s own comment for
+                         * why the panel tile itself paints a different code */
 };
 #define BRUSH_COUNT ((int)(sizeof(brushes) / sizeof(brushes[0])))
 
@@ -1016,6 +1021,15 @@ static int shine_uy_q8 = 181;
  * it changed, so whatever glass it had it still has. */
 static uint8_t row_has_shine[GRID_H_MAX];
 
+/* Which rows painted a CULLET cell last time they were painted - the same
+ * mechanism as row_has_shine[] just above, for the same reason: cullet's
+ * colour steps along its own cycle on a clock (CULLET_PHASE_MS below) with
+ * nothing in the cell byte ever changing to mark the row dirty on its own,
+ * so a settled heap of it would otherwise freeze on whatever tint it
+ * happened to be painted at the moment it stopped moving. Populated in
+ * paint_row_n() right beside row_has_shine[cy]'s own population point. */
+static uint8_t row_has_cullet[GRID_H_MAX];
+
 /* How much a WATER cell's grain hash is coarsened before it reaches
  * material_colours() - see the comment inside paint_row_n() where that
  * coarsening actually happens for the full account of why. 3 means an 8x8
@@ -1047,6 +1061,25 @@ static uint8_t row_has_shine[GRID_H_MAX];
  * twice as fast at double the frame rate and freeze solid if frames ever
  * stalled. */
 static uint32_t foam_elapsed_ms;
+
+/* How often the cullet colour cycle steps - see material_set_cullet_phase()
+ * in material.h for what the phase means and CULLET_CYCLE_LEN (material.h)
+ * for how many steps the cycle has. 250 ms a step, 4 s for a full 16-step
+ * loop: slow enough to read as a lazy shimmer catching the light rather
+ * than a strobe, and no faster than that has ever been asked for - the
+ * first constant to move if cullet ever reads too static (lower it) or too
+ * busy (raise it). Deliberately far slower than FOAM_PHASE_MS just above:
+ * foam is a fine dither meant to read as texture, cullet is a slow colour
+ * drift meant to read as light, and the two have no reason to share a rate
+ * just because they share this file. */
+#define CULLET_PHASE_MS 250
+
+/* Real time accumulated toward the next cullet phase step, carried across
+ * frames the same way shine_elapsed_ms and foam_elapsed_ms are - see
+ * advance_shine()'s own comment further down for the carry-the-remainder
+ * pattern this follows (unlike foam_elapsed_ms, which is never decremented -
+ * see advance_cullet() for why this one needs the sibling shape instead). */
+static uint32_t cullet_elapsed_ms;
 
 /*=============================================================================
  * A LIQUID INTERIOR'S LOCAL DEPTH - replaces a screen-position gradient with
@@ -1760,6 +1793,7 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
     gfx_color_t *out = fb + (cy * n) * GFX_WIDTH;
     row_has_shine[cy] = 0;
     row_has_liquid[cy] = 0;
+    row_has_cullet[cy] = 0;
 
     /* grid_w, not a parameter: it does not need to be a compile-time
      * constant the way n does - only the innermost dy/dx loops below are hot
@@ -1857,6 +1891,15 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
      * of. */
     int local_depth_herr = 0;
     const int ysign = local_depth_v_reverse ? 1 : -1;
+
+    /* CULLET row-repaint gate's own boundary - see row_has_cullet[]'s own
+     * comment above this function. The raw cell byte of the FIRST cullet
+     * shade: every value from here through + SAND_CULLET_SHADES - 1 is
+     * cullet, so testing membership is one unsigned subtract-and-compare
+     * against the byte itself, not a decode of the nibble followed by a
+     * range check on the variant alone. Computed once per row, not once per
+     * cell - it depends on nothing that varies inside this loop. */
+    const unsigned cullet_first = MAT_SAND * MATERIAL_VARIANTS + SAND_CULLET_BASE;
 
     for (int cx_i = 0; cx_i < grid_w; cx_i++) {
         const int cx = cx_first + cx_i * cx_step;
@@ -2094,6 +2137,17 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
             row_has_liquid[cy] = 1;
         }
 
+        /* row_has_cullet[]'s own population point - see that array's
+         * comment above this function for the mechanism. A raw range
+         * compare on the cell byte, not on material_colours()'s return
+         * (MATERIAL_FLAT alone cannot tell cullet apart from every other
+         * flat material), and not on `v`/CELL_VARIANT either - the point of
+         * `cullet_first` is to fold the material check and the variant
+         * range check into one unsigned compare. */
+        if ((unsigned)(row[cx] - cullet_first) < SAND_CULLET_SHADES) {
+            row_has_cullet[cy] = 1;
+        }
+
         gfx_color_t col[3];
         const material_pattern_t pat =
             material_colours(row[cx], hash, mask, depth, col);
@@ -2180,9 +2234,10 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
                 const bool grain = (((base + dx + dy) & 7) == 0) ||
                                    (((diff + dx - dy) & 7) == 0);
 
-                /* SHINE: a band travelling along the CURRENT GRAVITY
-                 * DIRECTION, advanced on a clock - see this function's own
-                 * top comment for why both halves of that matter. Projecting
+                /* SHINE: a band travelling against the CURRENT GRAVITY
+                 * DIRECTION, leaned 45 degrees (material_shine_direction()
+                 * owns that turn), advanced on a clock - see this function's
+                 * own top comment for why both halves of that matter. Projecting
                  * (dx, dy) onto shine_ux_q8/shine_uy_q8 is a plain 2D dot
                  * product in Q8 fixed point; the `>> 8` back down to pixel
                  * units is an arithmetic right shift, sign-extending on this
@@ -2310,6 +2365,38 @@ static bool advance_shine(uint32_t dt_ms)
     return true;
 }
 
+/* How many cullet phase steps have elapsed since the app started - climbs
+ * forever, never reset, unlike cullet_elapsed_ms's own carried remainder
+ * just below. material_colours() only ever reads this value already masked
+ * down to one cycle (material.c's own MAT_SAND case), so nothing downstream
+ * cares that it keeps growing - the same reasoning foam_elapsed_ms already
+ * relies on, just carried by a whole-step counter here instead of the raw
+ * millisecond count, because advance_cullet() (unlike foam's own setter
+ * call) needs a value that survives cullet_elapsed_ms being reset back
+ * toward 0 every tick. */
+static unsigned cullet_phase_index;
+
+/* Advances the cullet colour cycle, and says whether any row holding
+ * cullet needs to repaint - an exact sibling of advance_shine() just above,
+ * both in accumulate/compare/carry-the-remainder shape and in owning a
+ * piece of per-frame state that only actually moves once every several
+ * frames. Unlike advance_shine(), what it advances (cullet_phase_index)
+ * lives in material.c, not here - see material_set_cullet_phase()'s own
+ * comment in material.h for why this is a call of its own, separate from
+ * every other per-frame setter this file makes. */
+static bool advance_cullet(uint32_t dt_ms)
+{
+    cullet_elapsed_ms += dt_ms;
+    if (cullet_elapsed_ms < CULLET_PHASE_MS) {
+        return false;
+    }
+    const uint32_t steps = cullet_elapsed_ms / CULLET_PHASE_MS;
+    cullet_elapsed_ms -= steps * CULLET_PHASE_MS;
+    cullet_phase_index += steps;
+    material_set_cullet_phase(cullet_phase_index);
+    return true;
+}
+
 /* Advances the local-depth wake clock, and says whether it fired this
  * frame - see LOCAL_DEPTH_WAKE_MS's own comment above paint_row_n() for why
  * this exists at all. Same accumulate/compare/carry-the-remainder shape as
@@ -2333,7 +2420,7 @@ static bool advance_local_depth_wake(uint32_t dt_ms)
     return true;
 }
 
-static void draw_dirty_rows(bool shine_moved, bool local_depth_woke)
+static void draw_dirty_rows(bool shine_moved, bool local_depth_woke, bool cullet_moved)
 {
     gfx_color_t *fb = gfx_framebuffer();
 
@@ -2381,6 +2468,21 @@ static void draw_dirty_rows(bool shine_moved, bool local_depth_woke)
         }
     }
 
+    /* THE SAME MECHANISM AGAIN, for cullet's colour cycle instead of the
+     * shine or local depth - see CULLET_PHASE_MS's own comment above for
+     * why a settled heap of cullet needs a periodic tick at all (nothing in
+     * the cell ever changes to mark its row dirty on its own). Only the
+     * rows that actually held a cullet cell last time they were painted,
+     * for the same affordability reason row_has_shine[] gates the first
+     * block above. */
+    if (cullet_moved) {
+        for (int cy = 0; cy < grid_h; cy++) {
+            if (row_has_cullet[cy]) {
+                dirty_rows[cy] = 1;
+            }
+        }
+    }
+
     /* 256 entries in flash, indexed by the raw cell byte: no material lookup,
      * no shade arithmetic, no colour conversion, and no RAM. */
     const gfx_color_t *pal = material_palette();
@@ -2410,10 +2512,10 @@ static void draw_dirty_rows(bool shine_moved, bool local_depth_woke)
      * ROW OFFSET, WITHOUT AN ACCUMULATOR"). Reversing here, rather than
      * juggling which array slot means "toward the surface" inside the depth
      * bookkeeping itself, is safe because nothing else in this loop depends
-     * on row order - dirty_rows[cy], row_run_x0/x1/n, row_has_shine[cy] and
-     * row_has_liquid[cy] are all indexed by cy directly, and
-     * gfx_mark_dirty() below only ever unions a bounding box, which does
-     * not care what order the boxes arrive in either. */
+     * on row order - dirty_rows[cy], row_run_x0/x1/n, row_has_shine[cy],
+     * row_has_liquid[cy] and row_has_cullet[cy] are all indexed by cy
+     * directly, and gfx_mark_dirty() below only ever unions a bounding box,
+     * which does not care what order the boxes arrive in either. */
     const bool reverse_rows = local_depth_v_reverse;
 
     for (int i = 0; i < grid_h; i++) {
@@ -2538,13 +2640,24 @@ static void draw_emitter_markers(void)
  * An ordinary brush cell carries no shade of its own - every entry in
  * brushes[] is CELL_MAKE(mat, 0) - so this substitutes a representative
  * shade (13 of 16) rather than showing variant zero specifically. An
- * extended cell cannot take that shortcut: for a MAT_EXTENDED cell the low
+ * extended STATIC cannot take that shortcut: for one of those cells the low
  * nibble names WHICH extended material this is, not a shade, so bumping it
  * the way an ordinary variant is bumped would silently turn one extended
  * material into a different one. material_palette() is indexed by the raw
- * cell byte, so an extended cell is simply looked up as itself instead. */
+ * cell byte, so a static is simply looked up as itself instead.
+ *
+ * Gunpowder is neither of those - its low three bits ARE a shade (tone or
+ * moisture, see GUNPOWDER_REACTION in material.c), but brushes[] paints it
+ * at GUNPOWDER_CELL(0), the darkest dry tone, which reads as barely more
+ * than the panel's own background. GUNPOWDER_CELL(2), dark red, is the one
+ * of the three dry tones that actually shows on the tile - see that
+ * palette entry's own comment - so the swatch shows that code regardless
+ * of which one gets painted. */
 static gfx_color_t brush_color(cell_t c)
 {
+    if (cell_is_gunpowder(c)) {
+        return material_palette()[GUNPOWDER_CELL(2)];
+    }
     return material_palette()[
         cell_is_extended(c) ? c : CELL_MAKE(CELL_MATERIAL(c), 13)];
 }
@@ -2862,8 +2975,8 @@ static void draw_palette(const input_t *input)
              * microui.c hashes the label string): every brush in
              * BRUSH_COUNT has a distinct display name - Sand, Water,
              * Stone, Gas, Fire, Wood, Oil, Lava, Acid, Glass, Snow, Dirt,
-             * Ice, Plant (material.c's own name tables) - so no two tiles
-             * this loop draws can ever hash to the same id. */
+             * Ice, Plant, Gunpowder (material.c's own name tables) - so no
+             * two tiles this loop draws can ever hash to the same id. */
             const char *name = material_name(brushes[i]);
             mu_layout_set_next(ctx, mu_rect(ix, iy, iw, ih), 0);
             const int clicked = mu_button(ctx, name);
@@ -2939,11 +3052,17 @@ static void draw_palette(const input_t *input)
              *   not eligible            nothing, as before -
              *                           material_can_emit() is false for
              *                           every KIND_STATIC material (stone,
-             *                           glass, the whole extended range),
-             *                           so the absence of a badge is what
-             *                           makes that eligibility rule visible
-             *                           on the panel instead of a fact
-             *                           someone has to be told separately.
+             *                           glass, the STATIC half of the
+             *                           extended range - ice, plant, leaf,
+             *                           metal, root). Gunpowder is the one
+             *                           extended-range brush this rule does
+             *                           NOT hide: it is KIND_POWDER, so it
+             *                           gets a badge like any ordinary
+             *                           powder. The absence or presence of
+             *                           a badge is what makes that
+             *                           eligibility rule visible on the
+             *                           panel instead of a fact someone has
+             *                           to be told separately.
              *
              * The border and fill are a FIXED pair, not derived from the
              * face the way the bezel above is - see PALETTE_BADGE_BORDER_
@@ -3568,14 +3687,14 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
              * draw_dirty_rows(): the markers are drawn straight over the
              * grid's own pixels, not stored in it, so a full repaint of the
              * grid alone would erase them without this. Nothing here calls
-             * advance_shine() or advance_local_depth_wake(), or passes
-             * either's result along - the simulation is paused while the
-             * panel is open, so this repaint happens only on an actual
-             * orientation change, never once per frame; ticking either clock
-             * on a static canvas would be paying an animation cost for a
-             * picture that already looks right. */
+             * advance_shine(), advance_local_depth_wake() or advance_cullet(),
+             * or passes any of their results along - the simulation is
+             * paused while the panel is open, so this repaint happens only
+             * on an actual orientation change, never once per frame; ticking
+             * any of the three clocks on a static canvas would be paying an
+             * animation cost for a picture that already looks right. */
             mark_sand_fully_dirty();
-            draw_dirty_rows(false, false);
+            draw_dirty_rows(false, false, false);
             draw_emitter_markers();
             palette_drawn_quarter = quarter;
         }
@@ -3682,14 +3801,17 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
     count_awake(&awake_blocks, &awake_cells);
 #endif
 
-    /* The local-depth wake gets its own clock tick here, alongside the
-     * shine's, for the same reason it gets its own elapsed-time counter and
-     * its own row array rather than sharing either with the shine - see
-     * LOCAL_DEPTH_WAKE_MS's own comment above paint_row_n(). Both are driven
-     * by this same dt_ms because both need real elapsed time, not a frame
-     * count, but they are two independent ticks at two independently tuned
-     * rates, not one clock wearing two hats. */
-    draw_dirty_rows(advance_shine(dt_ms), advance_local_depth_wake(dt_ms));
+    /* The local-depth wake and the cullet cycle each get their own clock
+     * tick here, alongside the shine's, for the same reason each gets its
+     * own elapsed-time counter and its own row array rather than sharing
+     * any of it with the shine - see LOCAL_DEPTH_WAKE_MS's own comment above
+     * paint_row_n() and CULLET_PHASE_MS's own comment further up this file.
+     * All three are driven by this same dt_ms because all three need real
+     * elapsed time, not a frame count, but they are three independent
+     * ticks at three independently tuned rates, not one clock wearing three
+     * hats. */
+    draw_dirty_rows(advance_shine(dt_ms), advance_local_depth_wake(dt_ms),
+                     advance_cullet(dt_ms));
 
     /* After the rows, every frame - see draw_emitter_markers()'s own
      * comment for why once would not be enough. */

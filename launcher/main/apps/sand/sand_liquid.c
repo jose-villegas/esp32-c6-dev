@@ -271,7 +271,8 @@ static inline int give_mass(sand_t *s, uint8_t *to_row, int tx, int w,
  * matters. */
 static inline bool liquid_may_move(sand_t *s, uint8_t id)
 {
-    const int m = (s->mobility >= 0) ? s->mobility : materials[id].mobility;
+    const int m = (s->mobility >= 0) ? s->mobility
+                                     : material_by_id((material_id_t)id)->mobility;
 
     /* Zero reads as NO VISCOSITY here, not as "never moves", and the
      * direction of that default is the whole point. `mobility` began as a
@@ -510,7 +511,7 @@ bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
      * levelling passes can flatten it. One direction, and let
      * equalise_liquids() do the smoothing. */
     if (sink_through_lighter_liquid(s, row, prow, x, y, tx0, ty0, w, grain,
-                                    &materials[mat_id])) {
+                                    material_by_id((material_id_t)mat_id))) {
         return true;
     }
 

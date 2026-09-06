@@ -25,10 +25,16 @@ rediscover the Git Bash/`idf.py` trap this repo already paid for once.
    high nibble       low nibble
 ```
 
-The material id indexes a 16-row table (`materials[MATERIAL_MAX]`,
-`material.c`) that is `const` - memory-mapped from flash, zero bytes of
-RAM. What the variant *means* depends entirely on the material sitting in
-that row:
+The material id indexes `materials[]` (`material.c`), `const` -
+memory-mapped from flash, zero bytes of RAM. That table is `MATERIAL_ROWS`
+(32) rows deep, not 16: every ordinary id is written once and lands in two
+identical rows (`material_of()` indexes by `cell >> 3`, not the id nibble
+alone), purely so id 15's low nibble can be split by its own top bit into
+two halves with independent physics - gunpowder is why, and "The material
+budget, and what is left" below is the full story. For every ordinary
+material this is invisible: same field values, same one shift-and-load in
+the hot path. What the variant *means* depends entirely on the material
+sitting in that row:
 
 | Material's `decay` | Variant means | Example |
 |---|---|---|
@@ -36,8 +42,8 @@ that row:
 | `0` (immortal) and `kind == KIND_LIQUID` | fill level, 1-15 | water |
 | non-zero (transient) | life remaining, counts down to 0 = gone | gas, fire |
 | `heat_ramp != 0` | **temperature, 0-15, resting at 3** - and the palette index, so the cell's colour *is* its temperature. Below 3 is frost, above it is heat | glass, stone |
-| `burn_decay != 0` | **how much is left to burn**; 0 is unlit, and anything else means the cell is on fire | wood |
-| `dries != 0` | **read by STATE, not a fixed bit split**: variant 0-7 is a dry tone, 8-14 is moisture 1-7, 15 is unused - see below | dirt |
+| `burn_decay != 0` | **how much is left to burn**; how "unlit" and "lit" are spelled is per-material (`reaction_t.lit_from`), see below | wood (variant 0 unlit, non-zero lit); gunpowder (code 7 is its only lit state, the top of its 3-bit variant) |
+| `dries != 0` | **read by STATE, not a fixed bit split**: dry tones first, then moisture 1..`moist_max` - the exact split is per-material (`reaction_t.tones`/`moist_max`), see below | dirt (8 tones, moisture 1-7, code 15 unused); gunpowder (3 tones, moisture 1-4, then code 7 borrowed by `burn_decay` for lit - only 3 bits of variant to spend, see the budget section) |
 
 Reusing one nibble for three different jobs is deliberate, not a
 shortcut: the alternative is a second byte per cell, which at this grid
@@ -47,9 +53,9 @@ for the exact budget.
 
 ## The material table, today
 
-All 16 slots are now spoken for: 14 ordinary materials, id 15 given over
-to the extended range (below), and id 0 is empty. Slots that hold nothing
-are zeroed to an inert inline material (`kind = KIND_STATIC`,
+All 16 ordinary-id slots are spoken for: 14 ordinary materials, id 15
+given over to the extended range (below), and id 0 is empty. Slots that
+hold nothing are zeroed to an inert inline material (`kind = KIND_STATIC`,
 `density = 255`) so a corrupt cell byte can never crash anything, only sit
 there as an immovable block.
 
@@ -70,7 +76,8 @@ there as an immovable block.
 | 12 | acid | `KIND_LIQUID` | falls | `density=38` (sinks in water, floats on lava), `mobility=220`; dissolves what opts in |
 | 13 | glass | `KIND_STATIC` | never | `density=200`; made from sand by heat, the **only** thing acid cannot eat. Carries a temperature, like stone, and unlike stone it shatters on thermal shock |
 | 14 | snow | `KIND_POWDER` | falls | `density=15` (floats on water **and** oil), `scatter=90` (drifts), `repose=9` (~42°); the only **cold** material. Melts in any liquid, keeps indefinitely on dry ground |
-| 15 | *extended* | one shared row | - | not a material: the low nibble names one of sixteen more. `MATX_ICE`, `MATX_PLANT`, `MATX_LEAF`, `MATX_METAL` so far |
+| 15, `0xF0`-`0xF7` | *extended statics* | one shared row, `KIND_STATIC` | - | not a material: the low 3 bits name one of `MATERIAL_EXTENDED_COUNT` (8) further statics, 3 spare. `MATX_ICE`, `MATX_PLANT`, `MATX_LEAF`, `MATX_METAL`, `MATX_ROOT` so far |
+| 15, `0xF8`-`0xFF` | gunpowder | `KIND_POWDER` | falls | `density=50`, `slip=80`, `repose=8`, `scatter=30`. The other half of id 15's row, split off by bit 3 of the cell byte rather than a slot of its own - see below. 3-bit variant (`GUNPOWDER_CELL()`/`cell_is_gunpowder()`): 3 dry tones, then moisture 1-4, then code 7 is **lit** - a burning fuse cell, same state-carrying trick as wood's `burn_decay` variant, just sharing the 3 bits dirt's pattern already uses for tone/moisture |
 
 Every field on `material_t` is read from the innermost loop, several
 times per cell per step, which is why the struct is kept small with the
@@ -109,6 +116,75 @@ it stay.
 | acid | 0 | - | - | 0 | 0 | 0 | - | 0 | **60** | 0 | - |
 | glass | 0 | - | - | 0 | **220** | 0 | - | 0 | 0 | **0** (immune) | **lava**, by ramp |
 | snow | 0 | - | - | 0 | 0 | 0 | - | 0 | 0 | 0 | **water** (120) |
+| gunpowder | 200 | - | **lit** (code 7, a heat source - not fire) | 0, but **burn_decay 16** | 0 | 0 | **soaked** (quenched to wet, not unlit) | 0 | 0 | **200** | **lit** (24) |
+
+Gunpowder catches like a `burn_decay` material, not like gas: `ignites_to`
+and `heats_to` both name its own **lit** cell (code 7) rather than
+`MAT_FIRE` - what a burn-down material ignites *into* is itself, carrying
+a new variant, not a different material. A lit cell is a heat source in
+its own right (ignites neighbours, so a trail of powder burns along; boils
+adjacent water), and it counts down every step
+(`burn_decay = 16`, roughly sixteen steps of fuse per cell) via the same
+`tick_decay_at()` wood already uses, generalised by a new field,
+`reaction_t.lit_from` - the first variant code that counts as "burning"
+(wood: 1; gunpowder: 7), so `cell_is_burning()` stops assuming unlit is
+always variant 0. Two gunpowder-only wrinkles on top of the shared
+mechanism: it is never smothered by neighbours the way a buried wood fire
+would be (`explodes != 0` opts a material out of `smothered()` - it
+carries its own oxidiser, and a fuse buried in its own pile has to keep
+burning or nothing inside a pile ever goes off), and quenching it with
+water writes moisture at `moist_max` (soaked) rather than the unlit code,
+or it would relight from an adjacent lit cell on the very next step.
+
+Only at **burn-out** does `explodes` (blast radius, 20) get read: if the
+cell is one corner of a 2x2 whose other three cells are also lit gunpowder
+and the impulse buffer is live, it detonates (`sand_explode()`); otherwise
+it becomes an ordinary `MAT_FIRE` cell, the same no-buffer fallback the
+confined-gas blast already relies on. That neighbour check is what keeps a
+one-wide trail or a lone lit cell from ever blasting. A fully-lit 3x3 was
+asked for first and made blasts rare enough on the device to look broken:
+burn-out rolls are independent per cell, so by the time any cell burns
+out the neighbours lit before it are usually already fire, and a whole
+3x3 alight at once existed only in the brief window behind the fuse
+front. Three lit neighbours in one quadrant is what a lit pile actually
+presents at burn-out.
+
+A big pile's blasts still land one at a time across several frames rather
+than all landing on the same step, and the mechanism that actually
+guarantees that is `SAND_GUNPOWDER_BLAST_COOLDOWN` (8, board-wide,
+`sand_reactions.c`): after a detonation the board waits that many steps
+before another may fire, ticked down once per reactions pass, so at most
+one detonation fires no matter how many 2x2s burn out qualifying in the
+same step. Raising it spaces a pile's blasts further apart in time
+without changing how big any one of them is, and 0 lifts the limit;
+`sand_set_fuse_cooldown()` overrides it at runtime for tests. Each blast's
+core and thrown grains removing the cells around it from every 2x2 they
+were part of helps too - a corner already consumed by an earlier blast
+this same step cannot also qualify a second one - but that is a secondary
+effect of the geometry, not what bounds the cost; the cap is what does.
+Two earlier designs - immediate detonation on ignition, then a
+boundary-only check - were measured on-device and dropped for costing the
+same or more; see
+[`Sand-Simulation.md`](Sand-Simulation.md#fire-chemistry-wood-embers-steam-and-a-working-boiler)
+for the full trigger and `soaked_to`/`soaked_chance` (saturated powder has
+an 8-in-256 chance per step to become a full `MAT_OIL` cell instead of
+drying out - the other field that fits none of these columns). Moisture
+damps the `flammability` roll itself (`f >>= 2 * moisture`, generic to any
+`dries != 0` material), which is why gunpowder needs no separate "is it
+wet" branch here.
+
+**Gunpowder is not soil.** A new `reaction_t` field, `soil` (nonzero:
+plants may root in, sprout from, drink from and conduct water into this
+material), replaces the old `dries != 0` test at every plant/root site
+that meant "this is soil" - `find_water()`, `step_one_sprouting_cell()`,
+`step_one_rooting_cell()`, `step_one_conducting_cell()`,
+`spend_soil_moisture()`. Dirt sets `soil = 1`; nobody else, gunpowder
+included, even though gunpowder now has a moisture codec of its own.
+`dries != 0` still means exactly what it always did - "this variant can
+mean moisture" - and moisture DIFFUSION between same-species cells and
+percolation keep reading it; only the narrower "is this ground a root can
+use" question moved to `soil`, because a fuse buried in a garden bed was
+never meant to be something a tree could water itself from.
 
 ### Heat that accumulates
 
@@ -266,16 +342,20 @@ which is deliberate, and should be a decision rather than a surprise.
 ### The material budget, and what is left
 
 A cell is one byte: four bits of material, four of variant. Zero is empty,
-so there are **15 material slots**: **13 ordinary materials**, one free,
-and `MAT_EXTENDED` - which is not a material but a doorway to sixteen more - sand, water,
-stone, gas, fire, wood, steam, smoke, oil, lava, acid, glass, snow, and
-then `MAT_EXTENDED`. One ordinary slot free, and sixteen extended ones of
-which one is used.
+so there are **15 material slots**: **14 ordinary materials** - sand,
+water, stone, gas, fire, wood, steam, smoke, dirt, oil, lava, acid, glass,
+snow - and `MAT_EXTENDED`, a doorway to more. This used to say one ordinary
+slot was still free; that was stale the moment dirt shipped (id 9, above)
+and stayed wrong in this file for a while after. **Zero ordinary slots are
+free.** Corrected here rather than left to be discovered a second time.
 
-Four ways to make more room, cheapest first - two of which mostly do not,
-and one that looks like a way and is not. The short version: the extended
-range is the real answer, and the single remaining full-physics slot should
-be saved for something that has to move or carry a variant.
+Five ways to make more room, cheapest first - two of which mostly do not,
+and one that looks like a way and is not. The short version: reinterpret a
+nibble first, fold a state into an existing material second, spend the
+extended range on anything stateless third, and only split an extended
+half-row - gunpowder's route - when a material needs real physics and no
+ordinary slot is left to give it one. Packing the whole byte stays the
+last resort.
 
 **Reinterpret a nibble.** Free, and already the pattern: liquids read the
 variant as fill, transients as life remaining, glass and stone as
@@ -358,27 +438,31 @@ variant was spare. Steam and smoke fail on both counts at once.
 
 **Add an extended range behind the last slot** - *built*. Material id 15 is
 `MAT_EXTENDED`, and a cell carrying it reads its low nibble as naming one of
-sixteen further materials. So far: `MATX_ICE`, `MATX_PLANT`, `MATX_LEAF`,
-`MATX_METAL`.
+further materials - sixteen of them, until gunpowder needed real physics
+and this section's own "what they cannot have" below ruled every one of
+the sixteen out (see "Split an extended half-row" further down). What is
+left of this doorway after that split is the **static** half, `0xF0`-
+`0xF7`, eight codes: `MATX_ICE`, `MATX_PLANT`, `MATX_LEAF`, `MATX_METAL`,
+`MATX_ROOT` so far, three spare.
 
 Three facts make it free in the sweep, and all three are properties of how
 the tables are already indexed:
 
 | | what happens |
 | --- | --- |
-| `material_of()` | indexes `materials[]` by the nibble - id 15 is **one shared row**, so the hot path does not change at all |
-| `palette[256]` | is indexed by the **raw cell byte**, so sixteen distinct colours come for free with no change whatsoever |
+| `material_of()` | indexes `materials[]` by `cell >> 3` - the static half is **one shared row** of the doubled table, so the hot path pays nothing extra for how many of the eight codes are used |
+| `palette[256]` | is indexed by the **raw cell byte**, so eight distinct colours come for free with no change whatsoever |
 | `reaction_of()` | is used only in `sand_reactions.c` - the **cold** table, where decoding the extended id costs nothing that matters |
 
-So the sixteen can each have their own colour and their own reaction row -
-their own flammability, acid resistance, heat behaviour, whatever - while
-`sand_step()` continues to treat them as one material.
+So the eight statics can each have their own colour and their own reaction
+row - their own flammability, acid resistance, heat behaviour, whatever -
+while `sand_step()` continues to treat them as one material.
 
-What they cannot have is their own **physics** or a **variant**. They share
-one `density`, `kind`, `slip`, `repose` and `scatter`, because that is the
-row the hot path reads; and the low nibble is spent naming which one they
-are, so there is nothing left for a shade, a fill level, a life or a
-temperature.
+What a static extended code cannot have is its own **physics** or a
+**variant**. They share one `density`, `kind`, `slip`, `repose` and
+`scatter`, because that is the row the hot path reads; and the low bits are
+spent naming which one they are, so there is nothing left for a shade, a
+fill level, a life or a temperature. That is exactly the wall gunpowder hit.
 
 The obvious reading of that is "inert static solids only" - coloured brick,
 decorative block, an ore that acid or fire treats differently. That is what
@@ -420,15 +504,61 @@ is a test for it.
 A reaction can produce one too: `place_reacted()` takes a spec that is
 either an ordinary id or a whole `MATX(k)` byte, and the two cannot be
 confused because an ordinary id is well under 0xF0. Without that an
-extended material could only ever be painted, never made.
+extended material could only ever be painted, never made. `MATX(k)`'s own
+mask is `& 0x07` now, not `& 0x0F` - a static's low bits only ever address
+the eight codes on its own side of the split (`MATERIAL_EXTENDED_COUNT`),
+guarded by a `_Static_assert` for exactly the same reason nothing may
+randomise the identity nibble above: silently wrapping into gunpowder's
+half would be the same class of quiet corruption.
 
-Which makes the budget:
+Which made the budget, right up until gunpowder:
 
-- **one slot** with full physics, worth saving for something that has to
-  move or carry a variant - another liquid, powder or transient;
-- **fifteen more** inert solids behind the extended range, disturbing
-  nothing that already exists;
-- packing the whole byte only after both are spent.
+- **zero** ordinary slots with full physics - dirt spent the last one;
+- **eleven** more inert solids behind the extended range (sixteen codes,
+  five used), disturbing nothing that already exists;
+- packing the whole byte only after both were spent.
+
+That is precisely the corner gunpowder was built into. It needs
+`KIND_POWDER` movement - pile, pour, sink in a liquid, be thrown by a
+blast - and a variant, a shade plus a moisture level: exactly what "what a
+static extended code cannot have" above rules out, and there was no
+ordinary slot left to give it one instead. Packing the whole byte (below)
+would also solve it, but is a hot-loop refactor out of scope for landing
+one material - see "Split an extended half-row" next.
+
+**Split an extended half-row** - *built, for gunpowder*. A nibble has a top
+bit like any other value: split `MAT_EXTENDED`'s low nibble by its own bit
+3, and the two halves become two independent rows in `materials[]` -
+`0xF0`-`0xF7` stays the extended-statics doorway above, unchanged in
+everything but size, and `0xF8`-`0xFF` becomes one ordinary `KIND_POWDER`
+material (gunpowder) with its own density, slip, repose, scatter, and a
+real 3-bit variant to spend on a state split exactly like dirt's.
+
+The mechanism: `materials[]` grows from 16 rows to `MATERIAL_ROWS` (32),
+indexed by `cell >> 3` rather than the id nibble alone. Every ordinary
+material is written once and lands in two identical rows of the doubled
+table (`TWIN_ROW()`, `material.c`), so for the fourteen ordinary materials
+this is invisible - same field values, same one shift-and-load in the hot
+path, same instruction count. Only id 15 reads as two different rows
+depending on bit 3, which is the entire trick: the table doubled so that
+one nibble value could stop being one thing.
+
+The costs, stated plainly rather than left implicit:
+
+| | before | after gunpowder |
+| --- | --- | --- |
+| extended statics | 16 codes, 5 used, 11 spare | 8 codes, 5 used, **3 spare** |
+| `materials[]` (hot table) | 16 rows, 192 B of flash | 32 rows, **384 B** of flash |
+| control frame-budget rows | pinned (`sand_step`, `aligned(32)`, [`Tuning-At-a-Glance.md`](Tuning-At-a-Glance.md#the-layout-lottery)) | **unmeasured** against the doubled table - a flash-layout-lottery question, not a logic one |
+
+Half of what was left of the extended range's own doorway, spent on one
+material, is a real price - three spare static codes is not much room for
+the next inert solid that wants one. It is still the cheapest thing on
+this list that buys a material genuine physics once no ordinary slot
+remains: the alternative, packing the whole byte, is a hot-loop refactor,
+not an afternoon. Whether the split stays this way, or a future material
+instead argues for finally packing the byte, is the maintainer's call, not
+one this page makes for them.
 
 **Pack the byte.** Drop the fixed 4+4 split for a flat 0-255 index with a
 per-material base offset, giving each material only as many variant codes
@@ -483,6 +613,16 @@ breaks no behaviour and nothing else would notice.
 
 - **Flat** is the default and stays free. One colour, whole block, the same
   tight loop it always used.
+
+  Sand's own reserved CULLET band (`SAND_CULLET_BASE`) is still FLAT - one
+  colour, same tight loop - but a TIME-VARYING one: each of the four cullet
+  shades is a starting point on a shared colour cycle that a per-frame
+  phase steps through, so a heap of broken glass shimmers even while every
+  cell's stored byte sits perfectly still, with a rare grain flashing pure
+  white for one step as a glint. It repaints on its own clock the same way the shine does
+  (`row_has_cullet[]`, `CULLET_PHASE_MS`, `app_sand.c`) - see
+  docs/Sand/Shading-and-Colour.md's own section on it for the full
+  mechanism.
 - **Speckled** (stone) picks its shade from the cell's POSITION rather than
   its variant. Stone used to carry a random shade and a wall looked like
   rock because of it; spending the variant on temperature took that away.
@@ -499,13 +639,16 @@ breaks no behaviour and nothing else would notice.
   one every eight pixels each way, over three colours: the body, a quiet
   **grain** that does not move or care about gravity, and a brighter
   **shine** that does both. The shine is a band that travels on a clock
-  AND sweeps along whichever direction gravity currently points - a Q8
-  unit vector (`material_shine_direction()`) recomputed once a frame and
-  projected onto each pixel, so tilting the board visibly rotates which
-  way the band runs rather than merely picking between two fixed
-  diagonals. That binary version is what an earlier attempt tried first,
-  and it never became visible: two diagonals differing only in which way
-  they lean was too fine a difference for the eye to catch on this grid.
+  AND sweeps against gravity, turned 45 degrees to the left on the panel -
+  a Q8 unit vector (`material_shine_direction()`) recomputed once a frame
+  and projected onto each pixel, so tilting the board visibly rotates
+  which way the band runs rather than merely picking between two fixed
+  diagonals. The 45-degree lean is deliberate: with the sweep pointing
+  straight up gravity, the bands lay exactly across it, and on the device
+  a slant was wanted instead. That binary version is what an earlier
+  attempt tried first, and it never became visible: two diagonals
+  differing only in which way they lean was too fine a difference for the
+  eye to catch on this grid.
   Movement was what finally sold it as a surface catching light rather
   than a texture printed on one; a continuously rotating angle is the
   second attempt at making direction read too, layered on top of the

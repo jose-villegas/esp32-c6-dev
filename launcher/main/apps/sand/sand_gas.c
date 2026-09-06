@@ -53,7 +53,7 @@ static uint16_t gas_mask(void)
 {
     uint16_t mask = 0;
     for (int m = 0; m < MATERIAL_MAX; m++) {
-        if (materials[m].kind == KIND_GAS) {
+        if (material_by_id((material_id_t)m)->kind == KIND_GAS) {
             mask |= (uint16_t)(1u << m);
         }
     }
@@ -515,8 +515,11 @@ static inline bool equalise_gas_one_row_cell(sand_t *s, uint8_t *row, int x,
 
     /* Per-material now, not a pass-wide constant - see material.h's own
      * comment on `sight` for why: two materials can share this pass
-     * (gas, fire) and disperse by different amounts. */
-    const int sight = materials[id].sight;
+     * (gas, fire) and disperse by different amounts. material_of(c), not
+     * material_by_id(id): `c` is the cell this `id` was just extracted
+     * from, and only material_of() finds the right row for every cell
+     * byte, gunpowder included, now that nibble 15 is two rows. */
+    const int sight = material_of(c)->sight;
 
     bool stayed_in_row = false;
     int  tx = 0;
@@ -624,10 +627,21 @@ void sand_step_gas(sand_t *s, int gx, int gy, int dx, int dy,
      * every gas slide, unconditionally, so they would never fire. Built
      * fresh here against the reversed vector instead - cheap enough
      * (MATERIAL_MAX is 16) that duplicating compute_driven()'s own loop
-     * shape inline is simpler than sharing it. */
+     * shape inline is simpler than sharing it.
+     *
+     * MATERIAL_MAX (16), not MATERIAL_ROWS (32), and indexed below by the
+     * plain material nibble (`mat_id`, step_one_gas_grain()'s own local),
+     * not a row: this is only ever built and read for KIND_GAS cells, and
+     * no gas material lives in the extended range (MAT_EXTENDED, nibble
+     * 15) that MATERIAL_ROWS's twin-row split exists for in the first
+     * place - fire, smoke, steam and gas are all ordinary ids well under
+     * it. Nothing here ever needs to tell a gunpowder row from a static
+     * one, so the plain per-id table sand.c's own step_one_grain() moved
+     * away from (see its own driven_row comment) is still the right shape
+     * here. */
     bool driven_gas[MATERIAL_MAX][2];
     for (int m = 0; m < MATERIAL_MAX; m++) {
-        const int repose = materials[m].repose;
+        const int repose = material_by_id((material_id_t)m)->repose;
         driven_gas[m][0] = driven_by_gravity(rslide_a[0], rslide_a[1], -gx,
                                              -gy, repose);
         driven_gas[m][1] = driven_by_gravity(rslide_b[0], rslide_b[1], -gx,
