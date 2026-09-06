@@ -62,6 +62,27 @@ scripts/check-format.sh <file.c> [<file.h> ...]         # format in place
 scripts/check-format.sh --check <file.c> [<file.h> ...]  # verify only
 ```
 
+**No comment longer than 300 characters.** A run of consecutive `//` lines
+counts as one comment; length is the prose, markers and `*` gutters stripped,
+so re-wrapping never changes the score. File and section header banners
+(`/*====`) are exempt — asked to fit, a model deletes the rule rather than the
+prose. The rule is aimed at comments beside code.
+
+```sh
+scripts/check-comment-length.sh                 # whole repo, 20 worst listed
+scripts/check-comment-length.sh --changed main  # only comments a change touches
+scripts/check-comment-length.sh --files         # per-file counts
+```
+
+Enforcement is a PostToolUse hook (`scripts/hooks/comment_length_hook.py`)
+that blocks an Edit or Write whose *own new text* carries an over-long
+comment — the backlog in the tree is somebody's cleanup, not the current
+edit's problem. The hook script is tracked; the settings entry pointing at it
+is not (`.claude/*` is gitignored), so a fresh clone or worktree has the rule
+without the enforcement until a `.claude/settings.local.json` names it. As of
+2026-09-06 the tree still holds ~2,065 comments over the limit, 79% of them
+in the sand app; `--comments-only <ref>` proves a bulk trim moved no code.
+
 Requires a **host** compiler (not the ESP32 toolchain) for the host tests:
 Windows `winget install BrechtSanders.WinLibs.POSIX.UCRT`, Debian/Ubuntu
 `apt install build-essential`, macOS `xcode-select --install`.
@@ -236,7 +257,19 @@ delegates writing one Unity test *body* the same way, from a spec you write
 style, and `--regression-commit <SHA>` can prove the test actually fails on
 the pre-fix code, automating this repo's own "watch it fail before it
 passes" rule. See `docs/Model-Delegation-Workflow.md`'s "Related, narrower
-tooling" section for both.
+tooling" section for both. `scripts/trim-comments-local.sh` shortens
+over-long comments the same local-Ollama way, but hands the model one
+comment's PROSE and never a line of code — the rewrite goes back into that
+comment's own span, so a bad generation can only produce a bad sentence, and
+a file that ends up differing in anything but comments is discarded. A
+comment it cannot get under the limit keeps its original text. `--review`
+then checks each rewrite for dropped numbers, dropped named functions and
+dropped negations (no model needed for those — that check alone caught every
+known-bad rewrite in the trial that chose this design), before asking a
+reviewer model for a verdict on meaning; `--review-packet` writes the
+prose-only pairs out for a reviewer the script cannot call itself. Expect
+~45 s per comment, and read the report: a local model does occasionally drop
+a WHY.
 
 ## Status
 

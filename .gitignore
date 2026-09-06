@@ -108,6 +108,10 @@ launcher/tools/results/
 # gitignored by the same pattern rather than listed per app.
 launcher/main/apps/*/tools/results/
 
+# And once more for scripts/ - trim_comments_local.py's review report and its
+# model transcript. The branch it produces is the artifact worth keeping.
+scripts/results/
+
 # Captured .bmp files from tools/screenshot.sh - scratch output, not
 # something to commit.
 launcher/tools/screenshots/
