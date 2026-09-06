@@ -2453,10 +2453,10 @@ material_set_cullet_phase(unsigned phase) {
     cullet_phase = phase;
 }
 
-/* THIS FRAME'S GLASS PHASE - see material_set_glass_phase() and its own
- * comment in material.h for what drives it (gravity, not a clock) and why
- * that makes it signed. Zero until the first frame sets it, which is
- * exactly a level board's own reading - no drift yet to have accumulated. */
+/* THIS FRAME'S GLASS PHASE - see material_set_glass_phase()'s own comment
+ * in material.h for what drives it (a live gravity snapshot, not a
+ * clock). Zero until the first frame sets it - a reasonable default for
+ * anything reading material_colours() before a frame ever runs. */
 static int glass_phase;
 
 void

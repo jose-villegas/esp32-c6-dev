@@ -1980,11 +1980,11 @@ void material_set_foam_phase(unsigned phase);
  * itself. */
 void material_set_cullet_phase(unsigned phase);
 
-/* Called once per frame, before painting - a FOURTH clock, ticking by
- * GRAVITY rather than time: app_sand.c accumulates its own gravity
- * bearing (gravity_bearing_q16() there) times dt_ms and divides it down
- * (GLASS_PHASE_SCALE), so tilting either way runs this forward or back. */
+/* Called once per frame, before painting - not really a clock at all,
+ * unlike the three above: app_sand.c hands this a plain SNAPSHOT of
+ * gravity's current bearing (gravity_bearing_q16() there, scaled down by
+ * GLASS_PHASE_SCALE), not a value accumulated over time. */
 
-/* Signed, unlike foam's and cullet's phase - this one has a direction to
- * run in, not just a rate, and holding the board level leaves it still. */
+/* Signed, unlike foam's and cullet's phase - this one names a direction,
+ * not a rate, and holding any tilt steady leaves it exactly where it is. */
 void material_set_glass_phase(int phase);
