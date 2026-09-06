@@ -25,10 +25,10 @@
  * real per-cell hash, and a real LOCAL DEPTH walk (see compute_local_depth()
  * below), so liquid pools get the same depth-graded interior shading the
  * device shows. It also reproduces paint_row_n()'s own per-pixel HATCHED
- * pattern (see the shine block in web_render() below) - the travelling
- * glass shine, the woven diagonal grain, and water's foam dither (via
- * material_set_foam_phase(), advanced in web_step()) - using the same
- * material_shine_direction() and SHINE_* constants app_sand.c does. The
+ * pattern (see the shine block in web_render() below) - metal's travelling
+ * shine - and every other per-frame phase material_colours() reads: water's
+ * foam dither, glass's gravity-bearing gradient, cullet's colour cycle -
+ * using the same setter functions and constants app_sand.c does. The
  * simulation AND its rendering are the genuine, unmodified article; the one
  * thing this file does not do is app_sand.c's SPARSE, dirty-row-only
  * repaint - see compute_local_depth()'s own comment for why that never
@@ -114,6 +114,8 @@ static const cell_t brushes[] = {
 #define SHINE_STEP_MS  40
 #define SHINE_STEP_PX   2
 #define FOAM_PHASE_MS  90
+#define CULLET_PHASE_MS  250
+#define GLASS_PHASE_SHIFT 7
 
 static uint8_t   *grid;
 static impulse_t *impulse_buf;
@@ -164,6 +166,18 @@ static int      shine_uy_q8 = 181;
 /* Water's foam dither clock - see material_set_foam_phase()'s own comment
  * in material.h, and FOAM_PHASE_MS above. */
 static uint32_t foam_elapsed_ms;
+
+/* Cullet's colour-cycle clock - a time-driven step counter, same shape as
+ * foam's own, but kept as a whole-step count (not the raw millisecond
+ * carry) because material_colours() masks it down to one cycle itself - see
+ * app_sand.c's cullet_phase_index for why growth is harmless. */
+static uint32_t cullet_elapsed_ms;
+static unsigned cullet_phase_index;
+
+/* Glass's own phase needs no state at all - a pure function of THIS
+ * frame's gravity (gravity_bearing_q16() below), recomputed fresh every
+ * call. app_sand.c's own version also tracks whether it changed, only for
+ * a dirty-row decision this file has no use for. */
 
 /* True once web_init() has run - guards web_step()/web_render() against a
  * stray call before the grid exists, the same role failed's RUNNING-with-
@@ -284,6 +298,22 @@ uint32_t web_brush_swatch(int index)
  * rather than smoothing into it, so there is no startup lurch either way.
  *-------------------------------------------------------------------------*/
 
+/* Exact port of app_sand.c's own gravity_bearing_q16() - a trig-free,
+ * monotonic bearing in Q16 quarter-turns, which material_set_glass_phase()
+ * (below) shifts down into glass's own phase. See that function's own
+ * comment for the L1-pseudoangle trick this is. */
+static int gravity_bearing_q16(int gx, int gy)
+{
+    const int64_t ax = gx < 0 ? -(int64_t)gx : (int64_t)gx;
+    const int64_t ay = gy < 0 ? -(int64_t)gy : (int64_t)gy;
+    const int64_t denom = ax + ay;
+    if (denom == 0) {
+        return 0;
+    }
+    const int64_t p_q16 = ((int64_t)gx << 16) / denom;
+    return (int)(gy < 0 ? (p_q16 - 65536) : (65536 - p_q16));
+}
+
 EMSCRIPTEN_KEEPALIVE
 void web_step(uint32_t dt_ms, int ax, int ay, int az, int rotation)
 {
@@ -314,6 +344,15 @@ void web_step(uint32_t dt_ms, int ax, int ay, int az, int rotation)
     }
     foam_elapsed_ms += dt_ms;
     material_set_foam_phase(foam_elapsed_ms / FOAM_PHASE_MS);
+
+    cullet_elapsed_ms += dt_ms;
+    if (cullet_elapsed_ms >= CULLET_PHASE_MS) {
+        cullet_phase_index += cullet_elapsed_ms / CULLET_PHASE_MS;
+        cullet_elapsed_ms %= CULLET_PHASE_MS;
+        material_set_cullet_phase(cullet_phase_index);
+    }
+
+    material_set_glass_phase(gravity_bearing_q16(gx, gy) >> GLASS_PHASE_SHIFT);
 
     if (tilt_in_free_fall(&tilt)) {
         return;
