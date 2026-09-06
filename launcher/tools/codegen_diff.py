@@ -263,6 +263,12 @@ def build_variant_argv(base_argv, source_file, spec, out_obj):
                 f"codegen_diff: could not find {source_file!r} as a token "
                 f"in its own compile command to substitute {alt!r}"
             )
+        # A quoted #include resolves against the directory of the file doing
+        # the including, so an alternate source kept anywhere but beside the
+        # original stops finding its siblings - sand.c's own "sand_priv.h"
+        # is the first casualty. Naming that directory explicitly lets a
+        # variant live in a scratch folder, which is where you want it.
+        argv.insert(1, "-I" + str(Path(source_file).resolve().parent))
     elif spec:
         argv.extend(shlex.split(spec))
     return argv
