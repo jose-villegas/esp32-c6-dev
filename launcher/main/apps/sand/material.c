@@ -1871,7 +1871,18 @@ static const gfx_color_t palette[256] = {
  * outline still shifts with heat - just a third as far as the body does. */
 #define GLASS_RGB(v)      ((v) <= SAND_AMBIENT_HEAT ? GLASS_COOL(v) : (v) < SAND_SHOCK_HEAT ? GLASS_WARM(v) : GLASS_HOT(v))
 
-#define GLASS_EDGE_RGB(v) LERP(GLASS_RGB(v), GLASS_RGB(SAND_AMBIENT_HEAT), 10)
+/* Blends v ITSELF toward ambient before choosing a colour, not the two
+ * ENDPOINT colours after the fact the way STONE_EDGE_RGB still does. */
+
+/* Averaging a HOT cell's saturated orange with ambient's saturated blue
+ * in raw RGB space lands on green - a hue with nothing to do with
+ * either heat or ambient. */
+
+/* Blending the TEMPERATURE first keeps every edge colour a real point
+ * on glass's own COOL/WARM/HOT ramp instead. Stone's own endpoints stay
+ * close enough in hue that mixing its raw colours never hits this. */
+#define GLASS_EDGE_V(v)   ((v) + (((int)(SAND_AMBIENT_HEAT) - (int)(v)) * 10) / 15)
+#define GLASS_EDGE_RGB(v) GLASS_RGB(GLASS_EDGE_V(v))
 #define STONE_EDGE_RGB(v) LERP(STONE_RGB(v), STONE_RGB(SAND_AMBIENT_HEAT), 10)
 
 /* The far end of the live gravity gradient - GLASS_FROST only through
