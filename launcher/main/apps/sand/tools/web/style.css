@@ -26,7 +26,12 @@ html, body {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
-  justify-content: center;
+  /* NOT centered - a bigger render size widens this row, and centering
+   * would shift the canvas's own top-left corner sideways on the page
+   * every time. Anchoring to the start keeps that corner at a fixed
+   * point (this padding) regardless of render size, so "top-left of the
+   * canvas" stays a stable place to aim a click at. */
+  justify-content: flex-start;
   gap: 20px;
   min-height: 100%;
   padding: 20px;

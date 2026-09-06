@@ -73,6 +73,19 @@ emcc -O3 -std=c11 -DNDEBUG -Wall -Wextra \
     -s EXPORTED_RUNTIME_METHODS='["ccall","cwrap","HEAPU8"]' \
     -s ENVIRONMENT=web
 
-cp "$SCRIPT_DIR/index.html" "$SCRIPT_DIR/app.js" "$SCRIPT_DIR/style.css" "$DIST_DIR/"
+cp "$SCRIPT_DIR/app.js" "$SCRIPT_DIR/style.css" "$DIST_DIR/"
 
-echo "Built $DIST_DIR/sand.wasm - serve $DIST_DIR/ with any static file server."
+# Cache-bust index.html's own three references, so a browser (or a CDN, or
+# GitHub Pages) that already cached an EARLIER deploy's app.js/style.css/
+# sand.js is forced to fetch this deploy's own copies instead of silently
+# mixing an old JS driver against a newer wasm build, or vice versa - the
+# two have to agree on things like web_init()'s own argument count. Keyed
+# to the commit (falls back to a timestamp outside a git checkout) so the
+# same source always gets the same URL rather than busting on every build.
+VERSION=$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || date +%s)
+sed -e "s/sand\.js\"/sand.js?v=$VERSION\"/" \
+    -e "s/app\.js\"/app.js?v=$VERSION\"/" \
+    -e "s/style\.css\"/style.css?v=$VERSION\"/" \
+    "$SCRIPT_DIR/index.html" > "$DIST_DIR/index.html"
+
+echo "Built $DIST_DIR/sand.wasm (v=$VERSION) - serve $DIST_DIR/ with any static file server."
