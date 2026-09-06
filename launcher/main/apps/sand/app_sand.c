@@ -203,7 +203,8 @@ static int cell, grid_w, grid_h, block_cols, block_rows;
  * blast: it reads as MORE powerful despite being physically smaller,
  * which is the whole reason "grains outside the footprint" was adopted
  * as this mechanic's own pass/fail criterion in the first place (see
- * that test's own comment in suite_sand.c - "the user's own criterion").
+ * that test's own comment in suite_sand_dune_blast.c - "the user's own
+ * criterion").
  *
  * 50 px (25 cells at CELL_MIN) IS THE ANSWER TO A SPECIFIC QUESTION, not
  * a round number: the largest radius whose exact_disc_count() (sand.c)
@@ -682,14 +683,14 @@ static void mark_sand_fully_dirty(void)
 #if CONFIG_LAUNCHER_SELFTEST
 /* Can a fresh entry into this app still get everything it needs, right now?
  *
- * Every frame-budget row in suite_sand.c measures sand_step() on a grid the
- * TEST allocated. Nothing asserted that the app's own allocation still
- * succeeds - so the campaign could have been measuring a simulation this
- * device could no longer enter, and the first sign of it was a "no memory
- * for the grid" screen someone happened to notice after a capture. This is
- * the missing check, and it lives HERE rather than in the suite so that it
- * uses these constants: a copy of the sizes in the test file would drift
- * the first time one of them changed.
+ * Every frame-budget row in suite_sand_perf.c measures sand_step() on a
+ * grid the TEST allocated. Nothing asserted that the app's own allocation
+ * still succeeds - so the campaign could have been measuring a simulation
+ * this device could no longer enter, and the first sign of it was a "no
+ * memory for the grid" screen someone happened to notice after a capture.
+ * This is the missing check, and it lives HERE rather than in the suite so
+ * that it uses these constants: a copy of the sizes in the test file would
+ * drift the first time one of them changed.
  *
  * Allocates its own set rather than inspecting the app's, in the same order
  * the app uses - that order is load-bearing, see impulse_buf's own comment
@@ -1103,7 +1104,8 @@ static uint32_t cullet_elapsed_ms;
  * puddle with a rock poking through it dips back to a small depth right
  * where the rock breaks its surface, instead of painting straight through
  * the rock as if it were not there - "follows the shape of the puddle",
- * exactly what the second report above asked for. See suite_sand.c's
+ * exactly what the second report above asked for. See
+ * suite_sand_liquid_depth.c's
  * test_local_depth_follows_the_puddles_own_shape for the actual
  * before/after comparison, run through real sand_t/sand_step(), that
  * motivated this. THE OBSTACLE'S SHADOW THIS PRODUCES IS A KEPT, DELIBERATE
@@ -1721,8 +1723,9 @@ static void update_local_depth_gravity(int gx, int gy)
  * liquid-bearing row on the same bounded refresh cadence regardless of how
  * its edges flicker between rim and interior, so by the time a cell IS
  * classified interior its row was already fresh as of the last wake tick -
- * see test_a_settled_edge_does_not_flicker_stale_to_fresh in suite_sand.c
- * for the reproduction and the measured collapse this closes.
+ * see test_a_settled_edge_does_not_flicker_stale_to_fresh in
+ * suite_sand_liquid_depth.c for the reproduction and the measured collapse
+ * this closes.
  *
  * A SEPARATE clock from the shine's own, on purpose - not folded into one
  * shared tick for two features. Different feature, different rate,
@@ -1951,7 +1954,7 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
          * and that is exactly what asking neighbouring cells the same
          * question buys: they now agree on whether to foam, in blocks,
          * instead of disagreeing one cell at a time. See
-         * test_foam_blobs_are_bigger_than_one_cell in suite_sand.c.
+         * test_foam_blobs_are_bigger_than_one_cell in suite_sand_foam.c.
          *
          * No new parameter anywhere for this - `hash` is simply computed
          * differently before it is handed to material_colours(), which

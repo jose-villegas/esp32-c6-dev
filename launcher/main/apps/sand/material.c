@@ -1523,8 +1523,8 @@ _Static_assert(SAND_AMBIENT_HEAT > 0 && SAND_AMBIENT_HEAT < SAND_SHOCK_HEAT && S
  * - because cullet's job is to read as ground glass catching the light, not
  * as four materials taking turns. A cycle that wandered into anything
  * saturated would stop looking like glass and start looking like confetti;
- * see test_cullet_stays_pale_at_every_phase in suite_sand.c, which exists
- * to catch exactly that on a retune.
+ * see test_cullet_stays_pale_at_every_phase in suite_sand_tone.c, which
+ * exists to catch exactly that on a retune.
  *
  * The one deliberate exception is the GLINT (CULLET_GLINT below): a rare
  * grain flashes pure white for one phase step - a facet catching the light
@@ -1647,7 +1647,7 @@ static const gfx_color_t palette[256] = {
                                     * The bright end is deliberately held
                                     * DOWN, and the exact figures are
                                     * measured rather than eyeballed
-                                    * (suite_sand.c pins both):
+                                    * (suite_sand_combustion.c pins both):
                                     *
                                     *   - at equal life, steam is at least
                                     *     89 luminance brighter than smoke,
@@ -2239,7 +2239,8 @@ material_set_gravity(int gx, int gy) {
          * positive specular term (facing away from gravity, wants to be
          * BRIGHTER) has to SUBTRACT from the index rather than add to it.
          * Getting this backwards inverts the whole effect - see
-         * test_a_liquid_rim_catches_the_light_from_above in suite_sand.c,
+         * test_a_liquid_rim_catches_the_light_from_above in
+         * suite_sand_liquid_depth.c,
          * which exists specifically to catch that mistake rather than
          * trust the arithmetic by eye. */
         liquid_spec[mask] = (int8_t)(-fx_round_div(spec_q8 * SPEC_STRENGTH, 256));
@@ -2355,7 +2356,7 @@ material_shine_direction(int gx, int gy, int *ux_q8, int *uy_q8) {
  * threshold 2, for instance, only 2 of the 8 hash values foam at any given
  * phase, so the rim is never all-on or all-off regardless of which mixing
  * is used - that property was never XOR's to provide. See
- * test_foam_never_stalls_between_frames in suite_sand.c, which pins BOTH
+ * test_foam_never_stalls_between_frames in suite_sand_foam.c, which pins BOTH
  * halves: the foam set is never degenerate (all-on/all-off) at any single
  * phase, AND no two consecutive phases, across a full cycle of eight,
  * produce an identical set at any of the three thresholds.
@@ -2414,7 +2415,7 @@ static const gfx_color_t water_foam = GFX_RGB(0xE8F6FF);
  * - has to never foam at any hash or phase, whatever the other three
  * entries are, or foam stops meaning "the water is moving" and starts
  * meaning "the water exists" - see
- * test_a_flat_rim_still_never_foams in suite_sand.c, which pins exactly
+ * test_a_flat_rim_still_never_foams in suite_sand_foam.c, which pins exactly
  * that after this change. */
 static const uint8_t water_foam_threshold[WATER_FOAM_CURVATURE_MAX + 1] = {
     0, /* curvature 0, flat   - no foam at all */

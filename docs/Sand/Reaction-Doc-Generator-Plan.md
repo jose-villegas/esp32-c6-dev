@@ -317,7 +317,7 @@ wait on it.
 
 Two items that DO touch source are therefore *not* phase 1, and get their
 own small change: the `material.h` comment-order fix below, and the
-table-integrity test for `suite_sand.c`. Phase 2's `REACTION_DOC` edits
+table-integrity test for the sand test suite (`suite_sand_*.c`). Phase 2's `REACTION_DOC` edits
 `sand_reactions.c` and is likewise its own step.
 
 Deliberately ships with **no hand-written text at all**: every adverb takes
@@ -355,8 +355,9 @@ rules from the table, not a shared walk.
 
 ## A test worth adding, as its own change
 
-`suite_sand.c` asserts individual reaction values but never sweeps the
-tables. Add one test that walks both and asserts every `_to` target names
+The sand test suite (`suite_sand_*.c`) asserts individual reaction values
+but never sweeps the tables. Add one test that walks both and asserts
+every `_to` target names
 something that exists — a material id below `MAT_COUNT`, or a cell spec
 whose extended nibble has a name in `extended_names[]`. A row pointing at a
 dead slot is a live bug nothing would currently catch, and the generator

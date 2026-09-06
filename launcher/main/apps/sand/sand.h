@@ -628,7 +628,7 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * is a real, reusable capability, not something specific to the
  * mechanism that first needed it - and now exercised directly by
  * test_a_dislodged_wall_keeps_falling_even_if_its_first_push_roll_fails
- * (suite_sand.c), which uses it to place a KIND_STATIC cell airborne on
+ * (suite_sand_impulse.c), which uses it to place a KIND_STATIC cell airborne on
  * demand without needing a real explosion or reaction to get one there,
  * so it can pin down step_impulses()'s own gravity-drift behaviour in
  * isolation.
@@ -689,8 +689,8 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  *
  * WAS 4, LOWERED TO 2 - the first of these three constants to actually be
  * swept rather than guessed, against the host measurement this mechanic
- * had been missing until suite_sand.c's dune scene arrived: grains landing
- * outside a settled dune's own footprint, averaged over independent
+ * had been missing until suite_sand_dune_blast.c's dune scene arrived:
+ * grains landing outside a settled dune's own footprint, averaged over independent
  * sand_init() seeds (a single hardcoded-seed host test cannot tell a
  * genuine improvement from a lucky roll). Swept one knob at a time first
  * (20 seeds each, this constant against 200/250/255 SAND_EXPLODE_INITIAL_
@@ -759,7 +759,7 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * airborne cells; AFTER, all 40 seeds show airborne sand, peaking at 8 -
  * material rearranging became material visibly flying. See
  * test_a_stone_chunk_thrown_into_a_sand_bed_launches_sand_airborne
- * (suite_sand.c), which pins this exact scene and these exact figures.
+ * (suite_sand_impulse.c), which pins this exact scene and these exact figures.
  *
  * 104, SO A FULL-SPEED (255) ENTRY COVERS THREE CELLS AND A SPENT ONE
  * STILL COVERS EXACTLY ONE, UNCHANGED - 1 + 255/104 = 3, and integer
@@ -769,7 +769,7 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * entry's own behaviour, and every test written against the old
  * one-cell-per-roll design, byte-for-byte unchanged - see
  * test_a_sub_divisor_speed_impulse_never_moves_more_than_one_cell_a_step
- * (suite_sand.c), which pins exactly this.
+ * (suite_sand_impulse.c), which pins exactly this.
  *
  * NO SEPARATE CAP - there used to be one, SAND_IMPULSE_CELLS_PER_STEP_MAX,
  * standing on its own so a future retune of this divisor could not
@@ -822,7 +822,7 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * no energy exit) - both stale the moment the loop that produced them
  * changed again, which is exactly why this number gets re-measured rather
  * than trusted to still be right. Swept over the shift itself, 32 seeds,
- * cells of travel (plow_total_distance(), suite_sand.c), air and water
+ * cells of travel (plow_total_distance(), suite_sand_impulse.c), air and water
  * unaffected by this constant at any value (air displaces nothing; water
  * is KIND_LIQUID and impulse_drag_of() charges liquids nothing regardless
  * of shift), so only dirt moves:
@@ -851,7 +851,7 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * than one to exhaust its own energy budget) is the pre-powder-drag
  * baseline, kept in the table only to show the shape the sweep moves
  * across, not as a candidate. See
- * test_a_thrown_chunk_stops_near_the_rim_of_a_dirt_bank (suite_sand.c) for
+ * test_a_thrown_chunk_stops_near_the_rim_of_a_dirt_bank (suite_sand_impulse.c) for
  * the pin this figure is checked against. */
 #define SAND_IMPULSE_DRAG_POWDER_SHIFT  2
 
@@ -918,7 +918,7 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  *
  * 32, LOWERED FROM 64, AND THE MEASUREMENT SAYS IT BARELY MATTERS. Run
  * against the two-wall scene (test_the_two_wall_explosion_scene_...,
- * suite_sand.c, 100 seeds, 284 tracked entries) the two floors give:
+ * suite_sand_impulse.c, 100 seeds, 284 tracked entries) the two floors give:
  *
  *     floor 64   >=1 bounce 205   >=2 45   >=3 0
  *     floor 32   >=1 bounce 208   >=2 48   >=3 3
@@ -1060,8 +1060,8 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  *
  * PUBLIC, unlike CRACK_MAX - docs/Sand/Reaction-Table.md already names
  * this constant as part of the described contract, and test_the_cool_
- * off_chain_is_bounded (suite_sand.c) has to assert against its real
- * value rather than a hand-copied literal that silently goes stale the
+ * off_chain_is_bounded (suite_sand_reaction_encoding.c) has to assert
+ * against its real value rather than a hand-copied literal that silently goes stale the
  * next time this is retuned.
  *
  * Briefly doubled to 16 and put back: reaching FURTHER per event turned
@@ -1209,7 +1209,7 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * more than one step to actually roll a move can fall under this gate
  * before it ever gets the chance to relay again - confirmed the hard way,
  * not just reasoned about: test_a_cascading_impulse_moves_more_than_one_
- * cell (suite_sand.c), a fixed-seed scene that cascaded reliably before,
+ * cell (suite_sand_materials.c), a fixed-seed scene that cascaded reliably before,
  * started failing the moment SPEED_DECAY_SHIFT landed. MIN_SPEED 1 (gate
  * >= 2) makes the cascade's own artificial cutoff almost never the
  * reason a chain stops - the roll's own exhaustion (rng_chance with a
@@ -1382,7 +1382,8 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * side's local mass genuinely outweighs the other's that the roll tips.
  *
  * That fixes a pour of ACID onto a pool of water cleanly -
- * test_a_relentless_pour_of_acid_overwhelms_a_pool_of_water (suite_sand.c)
+ * test_a_relentless_pour_of_acid_overwhelms_a_pool_of_water
+ * (suite_sand_reaction_encoding.c)
  * checks it with an A/B (bias on vs off) comparison and passes. The
  * reverse direction does NOT get the same clean win, and this constant
  * alone cannot fix it: acid's density (38) is higher than water's (30),
@@ -1391,7 +1392,8 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * mechanism assumes - but water sits and floats on TOP of acid instead,
  * so the acid cells actually being bitten stay backed by the deep acid
  * pool underneath them the whole time, never reading as isolated at all.
- * test_a_relentless_pour_of_water_overwhelms_a_pool_of_acid (suite_sand.c)
+ * test_a_relentless_pour_of_water_overwhelms_a_pool_of_acid
+ * (suite_sand_reaction_encoding.c)
  * documents this directly: biasing the roll measurably HURTS that
  * direction rather than helping it (3451 tap-side acid cells biased vs
  * 3623 unbiased at the same step count), so that test asserts on sheer
@@ -2288,7 +2290,7 @@ void sand_set_fuse_cooldown(sand_t *s, int steps);
  * same reason: a test that wants a qualifying gas/steam pocket to
  * collapse (or never collapse) deterministically cannot wait out a
  * natural roll and stay fast the way test_a_2x2_block_of_steam_
- * condenses_into_one_water_cell (suite_sand.c) already does for the
+ * condenses_into_one_water_cell (suite_sand_metal.c) already does for the
  * sibling mechanic this one extends. Clamped to [0, 255] exactly like
  * every other chance-in-256 setter in this file. */
 void sand_set_acid_rain(sand_t *s, int chance);
