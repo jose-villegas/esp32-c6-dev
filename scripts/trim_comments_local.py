@@ -20,6 +20,12 @@ still applies is DELETED entirely rather than shortened: git log already owns
 that history, and every deletion is flagged in both reports for a human to
 confirm nothing load-bearing went with it.
 
+A comment over `--skip-over` is left untouched rather than attempted at all -
+wave 1 found that everything past ~2500 chars bundles several topics no
+single rewrite can hold, and every one of those needed reverting and manual
+splitting anyway. Skipping them outright saves the retries that would only
+be thrown away, and the report lists them so they're not silently forgotten.
+
 Usage:
   trim_comments_local.py [options] [<path>...]     (default: the sand app)
 
@@ -27,6 +33,9 @@ Options:
   --limit N       character aim, retried against (default 300)
   --ceiling N     hard cap - a result over this is left unresolved, original
                   text kept (default 500)
+  --skip-over N   don't even attempt a comment past this length - it needs
+                  manual splitting, not compression (default 1500, 0 to
+                  disable and attempt everything)
   --model NAME    ollama model (default qwen2.5-coder:32b-instruct-q4_K_M)
   --retries N     attempts per comment before giving up (default 3)
   --banners       also rewrite file/section header banners (off: their `====`
@@ -206,6 +215,16 @@ def trim_file(path, opts, log, results):
     source = open(path, encoding="utf-8", errors="replace").read()
     width = wrap_width(source)
     targets = [c for c in scan(path, source) if c.length > opts["limit"]]
+    if opts["skip_over"]:
+        # Wave 1 found that anything this large is bundling several topics a
+        # single ~300-500 char rewrite cannot hold - every one of the 16 over
+        # ~2500 chars needed reverting and manually splitting instead. Don't
+        # burn retries chasing a compression that review will just undo.
+        skipped = [c for c in targets if c.length > opts["skip_over"]]
+        for c in skipped:
+            results.setdefault("skipped", []).append(
+                {"path": path, "line": c.line, "before": c.length})
+        targets = [c for c in targets if c.length <= opts["skip_over"]]
     if not opts["banners"]:
         targets = [c for c in targets if not c.is_banner]
     if not targets:
@@ -434,6 +453,12 @@ def write_report(path, results, opts, seconds):
                 f" (pure change history - git log owns it),"
                 f" left alone: {len(u)}\n")
         f.write(f"- prose removed: {saved:,} characters\n")
+        skipped = results.get("skipped") or []
+        if skipped:
+            f.write(f"- **skipped (over {opts['skip_over']} chars, needs "
+                    f"manual splitting instead): {len(skipped)}**\n")
+            for r in sorted(skipped, key=lambda r: -r["before"]):
+                f.write(f"  - {r['path']}:{r['line']} ({r['before']} chars)\n")
         if results["rejected"]:
             f.write(f"- **files discarded (code would have moved): "
                     f"{', '.join(results['rejected'])}**\n")
@@ -466,7 +491,7 @@ def write_report(path, results, opts, seconds):
 def main(argv):
     opts = {"limit": 300, "ceiling": 500, "model": DEFAULT_MODEL, "retries": 3,
             "banners": False, "max": 0, "dry_run": False,
-            "review_model": DEFAULT_REVIEW_MODEL}
+            "review_model": DEFAULT_REVIEW_MODEL, "skip_over": 1500}
     report = "scripts/results/comment-trim.md"
     pairs = "scripts/results/comment-trim.json"
     review_only, packet = False, ""
@@ -477,6 +502,8 @@ def main(argv):
             opts["limit"] = int(next(it))
         elif arg == "--ceiling":
             opts["ceiling"] = int(next(it))
+        elif arg == "--skip-over":
+            opts["skip_over"] = int(next(it))
         elif arg == "--model":
             opts["model"] = next(it)
         elif arg == "--retries":
