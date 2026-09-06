@@ -23,6 +23,7 @@ const tiltBtn = document.getElementById("tilt-btn");
 const tiltPad = document.getElementById("tilt-pad");
 const tiltHandle = document.getElementById("tilt-handle");
 const qualitySelect = document.getElementById("quality");
+const renderScaleSelect = document.getElementById("render-scale");
 const modeButtons = [...document.querySelectorAll(".mode")];
 const fsBtn = document.getElementById("fullscreen-btn");
 const fsTarget = document.getElementById("app");
@@ -246,22 +247,20 @@ if (requestFs) {
     }));
 }
 
-// Shared by the quality selector, the orientation toggle, and the initial
-// load below - anything that changes web_init()'s own two parameters goes
-// through here, so the canvas's raster size/aspect-ratio and the palette's
-// selection (web_init() resets brush_index to 0 internally, same as a
-// fresh sand_enter() would) never drift out of step with whichever grid
-// actually exists now.
+// Shared by the quality selector, the render-scale selector, the
+// orientation toggle, and the initial load below - anything that changes
+// web_init()'s own parameters goes through here, so the canvas's raster
+// size/aspect-ratio and the palette's selection (web_init() resets
+// brush_index to 0 internally, same as a fresh sand_enter() would) never
+// drift out of step with whichever grid actually exists now.
 function reinitSim() {
-  web_init(Number(qualitySelect.value), landscape ? 1 : 0);
+  web_init(Number(qualitySelect.value), landscape ? 1 : 0,
+    Number(renderScaleSelect.value));
   screenW = web_screen_w();
   screenH = web_screen_h();
-  // web_pixels_ptr() only returns a real address once web_init() has
-  // allocated the buffer - which just happened, on the line above. The
-  // buffer address is stable across every LATER web_init() call (see
-  // web_pixels_ptr()'s own comment in web_sand.c), so re-reading it here
-  // on every reinit is a formality, not a requirement - but it is what
-  // makes that guarantee airtight rather than assumed.
+  // MUST re-read every time now, not just once: web_init() resizes the
+  // pixel buffer whenever render scale changes, so its address moves - see
+  // web_pixels_ptr()'s own comment in web_sand.c.
   pixelsPtr = web_pixels_ptr();
   canvas.width = screenW;
   canvas.height = screenH;
@@ -272,6 +271,7 @@ function reinitSim() {
 }
 
 qualitySelect.addEventListener("change", reinitSim);
+renderScaleSelect.addEventListener("change", reinitSim);
 
 orientationBtn.addEventListener("click", () => {
   landscape = !landscape;
@@ -328,7 +328,7 @@ function frame(now) {
 
 SandModule().then((mod) => {
   Module = mod;
-  web_init = Module.cwrap("web_init", "number", ["number", "number"]);
+  web_init = Module.cwrap("web_init", "number", ["number", "number", "number"]);
   web_step = Module.cwrap("web_step", null,
     ["number", "number", "number", "number", "number"]);
   web_input = Module.cwrap("web_input", null,

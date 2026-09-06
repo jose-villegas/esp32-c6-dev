@@ -189,33 +189,36 @@ static int ready;
  * Setup
  *-------------------------------------------------------------------------*/
 
-/* `landscape` swaps which of DEVICE_W/DEVICE_H is screen_w vs screen_h -
- * see screen_w/screen_h's own comment above for why that alone is a
- * complete landscape mode, with nothing to rotate anywhere else: the grid
- * this allocates is genuinely (DEVICE_H/cell_px) cells wide by
- * (DEVICE_W/cell_px) cells tall in landscape, not a portrait grid drawn
- * sideways, so "down" - gravity's own +y, the tilt pad's own drag axis,
- * touch input's own y coordinate - already means the same visual direction
- * either way without this file doing any extra transform. */
+/* `landscape` swaps DEVICE_W/DEVICE_H - see screen_w/screen_h's own
+ * comment above. `scale` multiplies both first: 368x448 is a physical
+ * panel limit app_sand.c cannot avoid, but nothing here DMAs to a screen,
+ * so scale plus cell_px=1 reaches a real 1:1 grid, past qualities[]. */
 EMSCRIPTEN_KEEPALIVE
-int web_init(int cell_px_in, int landscape)
+int web_init(int cell_px_in, int landscape, int scale)
 {
-    cell_px  = cell_px_in > 0 ? cell_px_in : 2;
-    screen_w = landscape ? DEVICE_H : DEVICE_W;
-    screen_h = landscape ? DEVICE_W : DEVICE_H;
+    cell_px = cell_px_in > 0 ? cell_px_in : 2;
+    if (scale < 1) {
+        scale = 1;
+    }
+    const int w = DEVICE_W * scale;
+    const int h = DEVICE_H * scale;
+    screen_w = landscape ? h : w;
+    screen_h = landscape ? w : h;
     grid_w   = screen_w / cell_px;
     grid_h   = screen_h / cell_px;
 
     free(grid);
     free(impulse_buf);
     free(depth_buf);
+    free(pixels);
 
     grid        = malloc((size_t)grid_w * grid_h);
     depth_buf   = malloc((size_t)grid_w * grid_h);
     impulse_buf = malloc((size_t)WEB_IMPULSE_MAX * sizeof(*impulse_buf));
-    if (!pixels) {
-        pixels = malloc((size_t)DEVICE_W * DEVICE_H * 4);
-    }
+    /* Used to be allocated once, at a fixed DEVICE_W*DEVICE_H - safe only
+     * while every screen size was that same pair. `scale` breaks that, so
+     * this is now sized fresh every call - see web_pixels_ptr(). */
+    pixels = malloc((size_t)screen_w * screen_h * 4);
     if (!grid || !depth_buf || !pixels) {
         ready = 0;
         return 0;
@@ -559,13 +562,10 @@ static void compute_local_depth(void)
     }
 }
 
-/* The pixel buffer's own address, for JS to read directly out of wasm
- * memory (via HEAPU8) after each web_render() call - see web_render()'s own
- * comment for why this file owns the buffer rather than exposing raw
- * malloc()/free() across the wasm boundary. Valid only after web_init() has
- * run once; the address does not change across a later web_init() call
- * (the buffer is allocated once and reused - see web_init() above), so JS
- * only needs to read this once, right after the first init. */
+/* The pixel buffer's own address, for JS to read out of wasm memory (via
+ * HEAPU8) after web_render(). NOT stable across web_init() any more -
+ * that now resizes the buffer every call (see its own comment) - so JS
+ * must re-read this after every web_init(), not just the first. */
 EMSCRIPTEN_KEEPALIVE
 uint8_t *web_pixels_ptr(void)
 {
