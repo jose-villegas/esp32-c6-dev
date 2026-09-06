@@ -1460,6 +1460,75 @@ void sand_host_probe_run_water_over_lava(void)
 }
 #endif
 
+/* The gunpowder basin scene (build_gunpowder_basin_scene(),
+ * suite_sand_scenes.c), shared with the coverage test that proves the
+ * chain-detonation really spans several bursts and reaches fuel
+ * outside the vessel. Closes half of bd esp32c6-4d9. */
+
+/* NINETY STEPS, NO SETTLING - matching the coverage test exactly, so
+ * this times the same run already proved to reach every path it
+ * claims to. See GUNPOWDER_BASIN_MEASURED_STEPS's own comment
+ * (suite_sand_scenes.c) for the timeline that window came from. */
+
+/* THE ASSERTION BELOW IS NOT A BUDGET - nobody has run this on a
+ * device yet. A loose PROVISIONAL ceiling, this file's own convention
+ * for a first-run scene - see test_the_water_over_lava_scene_fits_in_
+ * the_frame_budget's comment for two invented figures that were wrong. */
+
+/* REPLACE THIS with a real figure the first time it runs on a device:
+ * measured * 0.9, rounded - the same reduction-target method every
+ * other row in this section uses - and say what was measured, not a
+ * number chosen to keep this row passing. */
+static void test_the_gunpowder_basin_scene_fits_in_the_frame_budget(void)
+{
+    uint8_t   *big      = malloc((size_t)REAL_W * REAL_H);
+    uint8_t   *blocks   = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    impulse_t *impulses = malloc((size_t)GUNPOWDER_BASIN_IMPULSE_MAX * sizeof *impulses);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+    TEST_ASSERT_NOT_NULL(impulses);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 61u);
+    sand_enable_sleeping(&real, blocks);
+    sand_set_scatter(&real, SAND_SCATTER_PER_MATERIAL);
+    sand_set_decay(&real, SAND_DECAY_PER_MATERIAL);
+    sand_set_mobility(&real, SAND_MOBILITY_PER_MATERIAL);
+    sand_enable_impulses(&real, impulses, GUNPOWDER_BASIN_IMPULSE_MAX);
+
+    build_gunpowder_basin_scene(&real);
+
+    const int64_t start = esp_timer_get_time();
+    const int steps = GUNPOWDER_BASIN_MEASURED_STEPS;
+    for (int i = 0; i < steps; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+    const int64_t per_step = (esp_timer_get_time() - start) / steps;
+
+    ESP_LOGI("device_tests", "gunpowder basin scene, %dx%d: %lld us per step",
+             REAL_W, REAL_H, (long long)per_step);
+
+    free(big);
+    free(blocks);
+    free(impulses);
+
+    TEST_ASSERT_LESS_THAN_MESSAGE(500000, (int)per_step,
+        "PROVISIONAL ceiling, not yet measured on a device - see this "
+        "test's own comment. Once measured this row becomes measured x "
+        "0.9, rounded, the same reduction-target method every other "
+        "row in this section uses - not a number chosen to keep this "
+        "row passing");
+}
+
+#ifdef SAND_HOST_PROBE
+/* Host-only timing probe - the gunpowder basin scene (see the
+ * full-step control's own wrapper for the pattern). */
+void sand_host_probe_run_gunpowder_basin(void)
+{
+    test_the_gunpowder_basin_scene_fits_in_the_frame_budget();
+}
+#endif
+
 /* --- gfx_present() cost against real sand scenes ------------------------
  *
  * Every frame-budget test above times sand_step() alone, with no drawing at
