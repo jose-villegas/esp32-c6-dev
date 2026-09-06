@@ -221,9 +221,17 @@ Two ways to see raw sensor readings without adding any code:
 
 ## Suspected memory pressure
 
-- **POST's boot-time check** - fails outright (not just a warning) below
-  `MIN_FREE_HEAP` in `main/boot/post.c`, and reports free heap plus the
-  largest free DMA-capable block on every boot, release included.
+- **POST's boot-time check** - fails outright (not just a warning) when the
+  largest free DMA-capable block falls below `MIN_LARGEST_DMA_BLOCK` in
+  `main/boot/post.c`, and reports that block plus free DMA heap on every
+  boot, release included. Both figures come from `MALLOC_CAP_DMA`; reading
+  either against `esp_get_free_heap_size()` compares different pools and
+  invents a fragmentation gap that is not there (see
+  [Board-and-Memory.md](Board-and-Memory.md)).
+- **A dev build's `HEAPMARK` boot lines** - free and largest-contiguous DMA
+  at each boot phase, plus one heap block map where the framebuffer lands.
+  This is the fastest way to tell a static-footprint problem from an
+  allocation-order one, and it is what settled that question in one boot.
 - **A `screenshot.sh` capture's `.json`** - `heap_free_bytes` (current) and
   `heap_min_free_bytes` (the low-water mark since boot - shows a transient
   allocation that already freed again, which `heap_free_bytes` alone
