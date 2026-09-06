@@ -70,64 +70,10 @@ typedef uint8_t cell_t;
 
 #define MATERIAL_VARIANTS   16
 
-/* WHERE ROOM TEMPERATURE SITS on a heat-ramping material's 0-15 variant.
- *
- * Not 0, and that is the whole point. With ambient at the bottom of the
- * range there is no such thing as colder than resting: a pane at 0 touched
- * by snow has nothing to lose, so it cannot change and cannot show that
- * anything happened. Snow beside glass looked identical to snow beside
- * nothing, which is exactly what it was.
- *
- * Ambient in the middle gives cold somewhere to go. Below it a pane is
- * FROSTED and visibly pale; above it, warming; far enough above, glowing
- * and about to break. Three levels of frost is not much resolution, but it
- * is the difference between a state you can see and one you cannot, and
- * the levels above ambient are the ones doing the interesting work. */
-/* SOIL reads its nibble by STATE rather than by a fixed field split: which
- * half of the value it is in says whether it holds a dry TONE or a wet
- * MOISTURE, rather than one bit always meaning tone and three always
- * meaning moisture regardless of which state the cell is actually in.
- *
- *     0 .. SOIL_DRY_TONES - 1     DRY. The value IS the tone, 0 palest to
- *                                 SOIL_DRY_TONES - 1 darkest-dry.
- *     SOIL_DRY_TONES ..           WET. moisture = value - (SOIL_DRY_TONES-1),
- *     SOIL_DRY_TONES - 1          1 up to SOIL_MOISTURE_MAX.
- *       + SOIL_MOISTURE_MAX
- *     MATERIAL_VARIANTS - 1       UNUSED. A corrupt cell here reads as
- *                                 moisture SOIL_MOISTURE_MAX in every
- *                                 accessor below AND in the palette (see
- *                                 material.c), rather than as an
- *                                 unpredictable eighth colour - one more
- *                                 value than the ranges above need, so it
- *                                 degrades instead of aliasing a real one.
- *
- * This was a fixed split instead - one bit of carried tone, three of
- * moisture, so SOIL_TONES was 2 - and it undersold dry soil specifically.
- * A WATERED bank had a real gradient, because moisture is laid out by
- * percolation cell by cell; a DRY one had exactly two colours, because two
- * tones is all one bit can ever say, and that is most of what a pile looks
- * like once it stops being watered. Splitting by state instead of by bit
- * position gives the dry side of the nibble every value the wet side does
- * not need at that moment - eight tones instead of two - and costs the wet
- * side nothing it was using: a saturated bed's own variation was always
- * going to be the moisture gradient itself, not an independent tone,
- * because that gradient is what percolation already draws down a pile.
- * The trade is real - a UNIFORMLY wet bed has one flat colour where it used
- * to have two - but a uniformly wet bed is the one case moisture itself
- * cannot shade regardless, and it is the rarer of the two flat cases this
- * fixes one of.
- *
- * Dry tone is also no longer noise. It is picked at POUR time, banded the
- * way sand's shade is (see random_cell() in sand.c), and re-picked at the
- * moment a cell crosses back to dry, biased by how wet its surroundings
- * still are right then (see soil_dry_out() in sand_reactions.c) - so a
- * pile that dried from the top down keeps that as a visible imprint:
- * pale where the front left nothing behind, darker wherever it was still
- * handing water off when it happened. Tone and moisture together are one
- * monotone luminance ramp across variants 0 through
- * SOIL_DRY_TONES - 1 + SOIL_MOISTURE_MAX (see material.c's SOIL_SHADES) -
- * bone-dry-palest at one end, saturated at the other, with nothing in
- * between reading as an unrelated colour. */
+/* Room temp 0-15 needs middle ambient for cold. SOIL: 0 to SOIL_DRY_TONES-1
+ * dry, SOIL_DRY_TONES to SOIL_DRY_TONES+SOIL_MOISTURE_MAX moist, last unused.
+ * Split states enhance dry tones, fix uniform wet bed, reduce noise. Tone and
+ * moisture form monotone from dry to saturated. */
 #define SOIL_DRY_TONES      8
 #define SOIL_MOISTURE_MAX   7
 
@@ -145,28 +91,15 @@ typedef uint8_t cell_t;
  * should not have to special-case the read. */
 #define CELL_SOIL_TONE(c)   CELL_VARIANT(c)
 
-/* Setting m > 0 makes a WET cell, and a wet cell carries no tone of its
- * own - see this block's own comment - so this DISCARDS whatever the
- * nibble held before, tone or moisture alike.
- *
- * NEVER call this with m == 0. There is no tone to fall back on once the
- * old one is gone, so a naive implementation has exactly one thing it can
- * write for "dry" - a fixed value, the same for every cell regardless of
- * where it is - which is precisely the flatness this whole re-encoding
- * exists to undo. A cell crossing to zero moisture has to go through
- * soil_dry_out() (sand_reactions.c) instead, which picks a tone from what
- * is still wet nearby rather than leaving every drying cell identical. */
+/* Setting m > 0 discards a cell's tone and moisture. NEVER use m == 0 as it
+ * leads to flatness; use soil_dry_out() instead for varied drying. */
 #define CELL_WITH_MOISTURE(c, m)                                          \
     CELL_MAKE(CELL_MATERIAL(c),                                          \
               (uint8_t)((SOIL_DRY_TONES - 1u) + ((m) & SOIL_MOISTURE_MAX)))
 
-/* Soil built from scratch, tone and moisture given separately - the one
- * place a caller MAY legitimately ask for moisture 0 with a specific tone,
- * because unlike CELL_WITH_MOISTURE above there is no prior cell whose
- * tone this would be throwing away: it is either brand new (random_cell()
- * picking a pour's tone) or the tone was already worked out by the caller
- * (soil_dry_out() itself). m > 0 wins and tone is ignored, the same "wet
- * has no tone" rule CELL_WITH_MOISTURE follows. */
+/* Soil built from scratch, tone and moisture separate. Caller may ask for m=0
+ * with specific tone. Tone ignored if m > 0, following "wet has no tone"
+ * rule. */
 #define CELL_SOIL(mat, tone, m)                                           \
     CELL_MAKE((mat), (uint8_t)((m) != 0                                  \
                                     ? (SOIL_DRY_TONES - 1u) +             \
@@ -175,61 +108,15 @@ typedef uint8_t cell_t;
 
 #define SAND_AMBIENT_HEAT 3
 
-/* The heat level at or above which a cell with `shatters_to` cracks rather
- * than merely cooling when something cold touches it.
- *
- * Lives here rather than beside the code that uses it because THREE things
- * have to agree on it: the rule, the palette (glass's ramp changes colour
- * at exactly this level, so "will shatter" is a visible state and not a
- * hidden counter), and the tests. It was a private #define in
- * sand_reactions.c, which is how the number and the colour would have
- * drifted apart the first time either moved.
- *
- * FOUR LEVELS ABOVE AMBIENT. The gap is the tuned quantity; the absolute
- * number is bookkeeping, and the palette is computed from it so it can be
- * moved without re-cutting sixteen colours by hand.
- *
- * Measured against the scene people actually build - a drawn glass ring
- * filled about half way with lava, snow poured over the top:
- *
- *     ambient + 6     2.8 panes broken, mean over 12 seeds
- *     ambient + 4     2.8
- *     ambient + 2     6.8
- *
- * The reason it has to be this low is worth writing down, because it is
- * not "heat travels too slowly". Measured at the point that actually
- * decides: the glass a snowflake is TOUCHING, at the moment it touches,
- * sits at 3.02 - room temperature - averaged over 3277 contact steps.
- * Not warm-but-not-quite. Ambient.
- *
- * Two things put it there. A half filled vessel puts the reachable glass -
- * the rim, above the lava line - several cells from the heat, and the
- * gradient decays about two levels per cell. And snow CHILLS what it
- * lands on, so the contact cell is being actively cooled by the very
- * thing that wants to shock it.
- *
- * Four asked the reachable glass to be four levels above where it can
- * get. Two is still a real requirement - a pane at rest or one level up
- * is safe, so ordinary glass beside ordinary weather does nothing - but
- * it is a requirement the scene can actually meet. */
+/* Heat level where cell with `shatters_to` cracks. THREE agree: rule,
+ * palette, tests. FOUR LEVELS ABOVE AMBIENT. Palette from gap. Ambient + 6:
+ * 2.8 panes. Ambient + 4: 2.8 panes. Ambient + 2: 6.8 panes. Must be low
+ * (touch 3.02). Snow chills contact. Four ensures safety. Two is minimum. */
 #define SAND_SHOCK_HEAT (SAND_AMBIENT_HEAT + 2)
 
-/* And the other end of the same rule: at or BELOW this, a sudden heat
- * source cracks the cell instead of warming it.
- *
- * Thermal shock is a large temperature CHANGE, not a high temperature, and
- * for a while only half of it existed - cold onto hot broke glass, hot onto
- * cold did not. That asymmetry showed up the moment anyone tried the
- * obvious inversion: chill a vessel with snow, then pour lava in. Nothing
- * happened, for no reason that could be explained to the person doing it.
- *
- * The half that was missing is also the more USABLE half. Pouring snow onto
- * a lava-filled vessel mostly makes water, and water quenches lava to
- * stone, so the snow tends to kill the heat before it ever reaches the
- * glass - measured on a filled ring, the lava had turned to stone and the
- * whole vessel had frosted over with only two panes broken. Frost the
- * vessel first and then introduce the heat, and the two meet at the glass
- * where they are supposed to. */
+/* Below, sudden heat cracks cells. Thermal shock, not high temp, breaks
+ * glass. Cold to hot breaks glass; hot to cold does not. Snow on lava makes
+ * water, quenching heat. Frost vessel, then add heat. */
 #define SAND_SHOCK_COLD (SAND_AMBIENT_HEAT - 2)
 
 /* A liquid cell holds between 1 and 15. Zero is not a very empty cell - it is
@@ -237,15 +124,9 @@ typedef uint8_t cell_t;
  * leaves an occupied cell holding nothing. */
 #define MASS_MAX 15
 
-/* How many cells of LOCAL DEPTH (app_sand.c's per-puddle depth walk) it
- * takes a liquid interior's shading to reach full saturation - see
- * material.c's DEPTH_SATURATE_CELLS, which is this value, for the shading
- * side of the story. Shared here, rather than left private to material.c,
- * because sand_liquid.c's pour-staleness fix needs the SAME distance to
- * decide how far a newly-claimed surface cell can possibly change any
- * cell's rendered depth - the two have to agree by construction, not by
- * coincidence, the way MATERIAL_EDGE_MASK_COUNT's own comment in material.c
- * warns two same-valued constants can quietly stop agreeing. */
+/* LOCAL DEPTH cells for shading saturation; shared with sand_liquid.c for
+ * pour-staleness fix. Matches MATERIAL_EDGE_MASK_COUNT to avoid constant
+ * disagreement. */
 #define MATERIAL_LIQUID_DEPTH_BAND 24
 
 /*---------------------------------------------------------------------------
@@ -270,106 +151,41 @@ typedef enum {
     MAT_DIRT,
     MAT_COUNT,
 
-    /* THE EXTENDED RANGE. Id 15 is not a material - it is an escape hatch.
-     * A cell whose nibble is MAT_EXTENDED reads its LOW nibble as naming
-     * one of sixteen further CODES, so the last slot buys sixteen byte
-     * values rather than one - not sixteen further MATERIALS, since
-     * gunpowder's half spends its eight codes on ONE material's variant
-     * instead of eight more distinct ones: eight inert STATICS (0xF0-0xF7,
-     * MATERIAL_EXTENDED_COUNT of them) and, since GUNPOWDER_BASE split the
-     * upper half of the nibble off, one real KIND_POWDER material spread
-     * across the other eight codes (0xF8-0xFF, MATERIAL_EXTENDED_CODES -
-     * MATERIAL_EXTENDED_COUNT of them - see MATERIAL_ROWS's own comment
-     * below for why the split exists at all).
-     *
-     * They cost nothing extra in the sweep, and the reason is entirely
-     * about how the tables are already indexed:
-     *
-     *   materials[]   is read by cell >> 3, so all eight statics share
-     *                 one row and all eight gunpowder codes share
-     *                 another, and material_of() stays one shift and one
-     *                 indexed load either way
-     *   palette[]     is read by the whole CELL BYTE, so each of the
-     *                 sixteen already has its own entry, for free
-     *   reactions[]   is read only by sand_reactions.c - the cold pass -
-     *                 so reaction_of() can afford to decode
-     *
-     * What they buy: their own colour and their own reactions. What the
-     * eight STATICS cannot have: their own physics, since
-     * materials[MATERIAL_ROW(MAT_EXTENDED)] is one shared row; or a
-     * variant, since their low three bits are spent saying which one they
-     * are. That confines them to inert static solids. Gunpowder is the one
-     * extended-range material that escapes both limits, at the cost of
-     * half the range. */
+    /* ID 15 is an escape hatch. MAT_EXTENDED reads 16 codes from the LOW
+     * nibble: 8 STATICS (0xF0-0xF7) and 1 KIND_POWDER split (0xF8-0xFF). No
+     * extra cost in sweep. materials[] uses cell >> 3, sharing one row for
+     * STATICS, another for KIND_POWDER. palette[] uses the whole cell byte,
+     * giving each its own entry. reactions[] are decoded in sand_reactions.c.
+     * STATICS have unique color/reactions, not physics/variant. KIND_POWDER
+     * escapes these limits, losing half range. */
     MAT_EXTENDED = 15   /* the last nibble value; asserted against
                          * MATERIAL_MAX below, which this enum comes
                          * too early to reference */
 } material_id_t;
 
-/* The table is padded to every value the nibble can hold.
- *
- * That turns material_of() into a plain array index: without it every lookup
- * needs a bounds check, and those happen several times per cell per step. The
- * padding is flash, which is free, and the CPU is not - the same trade as the
- * 256-entry palette.
- *
- * The unused slots are inert: static, and denser than anything real. A corrupt
- * cell therefore becomes an immovable block rather than something that could
- * confuse the simulation. */
+/* The table pads nibble values, making material_of() a direct array index.
+ * Without padding, each lookup needs bounds checking, reducing performance.
+ * Flash storage is used as it's free, though CPU usage rises. Unused slots
+ * are static and dense, blocking corrupted cells in simulations. */
 #define MATERIAL_MAX 16
 
-/* SAND's shade range is split near the top, and the top band is CULLET:
- * sand that used to be glass.
- *
- * Free for the same reason soil's dry tones cost nothing beyond the
- * moisture range they sit beside (material.h's SOIL_DRY_TONES comment) -
- * sand's variant is already a shade, so saying "this grain came from a
- * pane" costs no bits at all, only four of the sixteen shades it could
- * have been. Twelve is still far more variation than a dune needs.
- *
- * Shattered glass was already placed at the very top of the ramp, being
- * whatever place_reacted() hands a new cell, so it was already the
- * brightest sand there is - and it did not read, for two reasons the band
- * fixes together. It was one flat value, so a broken pane was a slab of
- * uniform colour; and the top of a ramp is still on that ramp, so
- * "brightest sand" and "sand" are the same warm tan a shade apart. The
- * cullet band is a different HUE - pale and cool, the colour of ground
- * glass rather than of beach.
- *
- * The SHADE is still permanent, which is what makes cullet permanent at
- * all: sand's stored nibble never changes, so a heap keeps the memory of
- * having been a window, and mixing it into an ordinary dune leaves the two
- * visibly distinguishable. What the shade MEANS is not fixed any more,
- * though - it used to simply name one of four fixed pale colours. Now it
- * names which QUARTER of a shared, slowly-advancing colour cycle a grain
- * starts at (material_set_cullet_phase(), material_colours()'s own MAT_SAND
- * case, both material.c), so a heap of cullet keeps shimmering through
- * several pale tints at once, offset a quarter-cycle apart, without one
- * byte of the simulation ever being touched to do it. */
+/* SAND's top band, CULLET, symbolizes shattered glass. It's free, being
+ * already a shade, and is the brightest due to its position. CULLET has a
+ * distinct, pale, cool hue that shimmers through various tints as part of a
+ * shared, slow color cycle. */
 #define SAND_DUNE_SHADES    12
 #define SAND_CULLET_BASE    SAND_DUNE_SHADES
 #define SAND_CULLET_SHADES  (MATERIAL_VARIANTS - SAND_CULLET_BASE)
 
-/* How many steps the cullet colour cycle has - see cullet_cycle[] and
- * material_colours()'s own MAT_SAND case, both material.c, for the array
- * this sizes and the arithmetic that walks it. Public (not local to
- * material.c) because host tests need to name it too - see
- * suite_sand_tone.c's own cullet phase tests - rather than re-deriving 16
- * as a magic number
- * that could silently drift from the real constant on a retune.
- *
- * A power of two, so material_colours() wraps the index with a mask rather
- * than a per-cell modulo, and a multiple of SAND_CULLET_SHADES, so each of
- * the four cullet shades lands on an exact quarter-turn of the cycle - both
- * enforced by material.c's own _Static_assert, next to the array. */
+/* Cullet colour cycle steps - see cullet_cycle[] and material_colours()'s
+ * MAT_SAND case in material.c. Public for host tests in suite_sand_tone.c.
+ * Power of two for mask use and multiple of SAND_CULLET_SHADES for
+ * quarter-turn alignment, enforced by _Static_assert. */
 #define CULLET_CYCLE_LEN 16
 
-/* How many shades a freshly PAINTED grain may pick from. Everything else
- * gets the whole range; sand stops short of its reserved band, which is
- * what keeps the band meaning anything, and dirt stops short of the wet
- * range for the same reason - a freshly poured cell is dry by definition
- * (see random_cell() in sand.c), so it has no business picking a "shade"
- * from the half of the nibble that means moisture. */
+/* How many shades a freshly PAINTED grain may pick. Everything else gets the
+ * full range; sand skips its reserved band, and dirt skips the wet range, as
+ * a freshly poured cell is dry (see random_cell() in sand.c). */
 #define MATERIAL_SHADE_SPAN(m)                                            \
     ((m) == MAT_SAND ? SAND_DUNE_SHADES                                  \
                       : (m) == MAT_DIRT ? SOIL_DRY_TONES : MATERIAL_VARIANTS)
@@ -380,12 +196,9 @@ typedef enum {
  * GUNPOWDER_BASE), so eight codes remain for statics, three of them spare. */
 #define MATERIAL_EXTENDED_COUNT 8
 
-/* How many extended REACTION rows exist - sized by the whole low nibble
- * (16), not by MATERIAL_EXTENDED_COUNT, because extended_reactions[] and
- * extended_names[] still need one entry per BYTE VALUE 0xF0-0xFF:
- * entries 0-7 are the statics above, entries 8-15 are gunpowder's eight
- * variant codes, all sharing one GUNPOWDER_REACTION row (material.c) so
- * reaction_of() keeps its one-branch decode - see that function below. */
+/* How many extended REACTION rows exist? 16, covering BYTE VALUES 0xF0-0xFF.
+ * Entries 0-7 are statics, 8-15 share one GUNPOWDER_REACTION row, ensuring
+ * reaction_of() uses a single decode branch. */
 #define MATERIAL_EXTENDED_CODES 16
 
 _Static_assert(MAT_EXTENDED == MATERIAL_MAX - 1,
@@ -409,15 +222,9 @@ typedef enum {
     KIND_GAS,       /* rises, and disperses */
 } material_kind_t;
 
-/* Deliberately small, and with the movement fields first.
- *
- * Every one of these is read from the innermost loop, several times per cell
- * per step. The C6's cache line is 32 bytes, so a fat entry straddles two lines
- * and doubles the misses; keeping the whole row inside a few bytes keeps the
- * table resident.
- *
- * Note there is no colour here. The palette is the single source of that, and
- * duplicating it would be two places to change and one to forget. */
+/* Small, movement fields first. Read multiple times per cell per step. C6
+ * cache line is 32 bytes; compact entry avoids cache misses. No colour here;
+ * palette is the single source. Duplicating it would lead to errors. */
 typedef struct {
     uint8_t kind;      /* material_kind_t, narrowed - an enum is int-sized */
 
@@ -442,53 +249,23 @@ typedef struct {
      * straight, so a stream disperses instead of descending as a block. */
     uint8_t scatter;
 
-    /* Chance in 256, per step, that a grain's LIFE REMAINING (the variant
-     * nibble, for a transient material - see this file's top comment) ticks
-     * down by one. Zero means immortal: CELL_VARIANT keeps meaning whatever
-     * it means for that material's kind instead (a shade, or a liquid's fill
-     * level), and nothing ever clears the cell on its own. A material with
-     * decay != 0 gates variant-as-life, not its kind - a future transient
-     * material of a different kind could reuse this without a second field. */
+    /* 1 in 256 chance per step for a grain's LIFE REMAINING (variant nibble)
+     * to decrement. Zero means immortal: CELL_VARIANT remains constant. Decay
+     * != 0 enables variant-as-life, not kind. Transient materials can reuse
+     * without second field. */
     uint8_t decay;
 
-    /* Chance in 256, per step, that this cell attempts to move AT ALL.
-     * 255 means it moves every step it can, exactly like sand falls;
-     * lower values sit still on the steps the roll misses. Ignored while
-     * jostled (jostle != 0) - shaking bypasses this the same way it
-     * bypasses slide_chance()'s own resistance.
-     *
-     * Two kinds read it, and it is worth knowing they are the same idea
-     * under different names:
-     *
-     *   KIND_GAS     BUOYANCY. How eagerly a grain rises. See
-     *                step_one_gas_grain() in sand_gas.c.
-     *   KIND_LIQUID  VISCOSITY, inverted. Water at 255 flows freely;
-     *                oil at 90 is syrupy, moving on roughly a third of
-     *                its steps. See move_liquid_grain() and
-     *                equalise_liquids() in sand_liquid.c.
-     *
-     * Liquids ignored this field entirely until oil arrived, which meant
-     * every liquid flowed at exactly the same rate - a real complaint
-     * about how oil and water looked together, and the reason this field
-     * grew a second reader rather than the struct growing a field. There
-     * was room for neither: material_t is read several times per cell per
-     * step from the main sweep (see this file's own struct comment), and
-     * on the 32-bit target a ninth byte would push its stride from 12 to
-     * 16. A field that already meant "chance this cell tries to move"
-     * needed no second copy to mean it for a second kind.
-     *
-     * Powders leave it at zero and never read it: a grain of sand falls
-     * whenever it can, and its resistance is `slip`/`repose` instead. */
+    /* Each cell has a 1 in 256 chance to move per step. Lower values mean it
+     * moves less often. Ignored when jostled. KIND_GAS (BUOYANCY) and
+     * KIND_LIQUID (inverted VISCOSITY) use this. Liquids ignored it until oil
+     * was added, then used it like gases. Powders set it to zero. */
     uint8_t mobility;
 
-    /* How far along the perpendicular a KIND_GAS material's spread pass
-     * (equalise_gas() in sand_gas.c) will look for an empty cell to hop
-     * into. Used to be a single global constant (SAND_GAS_SIGHT) shared
-     * by every KIND_GAS material; per-material now so two materials
-     * sharing that pass - gas and fire - can disperse by different
-     * amounts (fire tighter, gas wider) without either one affecting
-     * the other. Meaningless outside a gas pass, so every other
-     * material leaves it at zero. */
+    /* How far a KIND_GAS material's spread pass (equalise_gas() in
+     * sand_gas.c) looks for an empty cell to hop into. Now per-material to
+     * allow gas and fire to disperse differently without affecting each
+     * other. Meaningless outside a gas pass, so other materials leave it at
+     * zero. */
     uint8_t sight;
 
     /* Cold: for the UI, never touched by the simulation. Last, so it cannot
@@ -496,22 +273,10 @@ typedef struct {
     const char *name;
 } material_t;
 
-/* THE HOT TABLE, and why it has thirty-two rows instead of sixteen.
- *
- * Every ordinary material still owns one row of physics, unchanged - the
- * split below is entirely about MAT_EXTENDED. Extended range 0xF0-0xFF used
- * to be one shared row (KIND_STATIC, id 15) because a static needs nothing
- * else. Gunpowder needs KIND_POWDER, and that physics cannot live in the
- * SAME row a static ice block reads - so the table is indexed by
- * `cell >> 3` (32 rows) instead of `cell >> 4` (16), splitting nibble 15's
- * row in two by bit 3 of the cell byte: 0xF0-F7 keeps the old static row,
- * 0xF8-FF gets a new one with real POWDER physics (see GUNPOWDER_BASE
- * below).
- *
- * Every ORDINARY material's row is simply written twice, at
- * MATERIAL_ROW(id) and MATERIAL_ROW(id) + 1 - see material.c's TWIN_ROW
- * macro - so material_of() stays one shift and one indexed load, same
- * instruction count as before the split. */
+/* HOT TABLE has 32 rows instead of 16 due to MAT_EXTENDED. Range 0xF0-0xFF is
+ * split into two rows by bit 3 of the cell byte. 0xF0-F7 uses static row,
+ * 0xF8-FF uses new row for POWDER physics. ORDINARY materials' rows are
+ * duplicated for consistency. */
 #define MATERIAL_ROWS 32
 
 _Static_assert(MATERIAL_ROWS == MATERIAL_MAX * 2,
@@ -537,204 +302,85 @@ static inline const material_t *material_of(cell_t c)
     return &materials[(c) >> 3];
 }
 
-/* For a caller that genuinely has an ordinary id - a table-building loop
- * over `m < MAT_COUNT`, random_cell() picking a material to spawn - rather
- * than a cell byte to decode. Deliberately NOT what a CELL_MATERIAL(cell)
- * extraction should feed: that throws away the bit that tells gunpowder
- * apart from an extended static, so anything derived from a cell must go
- * through material_of() above instead. Passing MAT_EXTENDED here reads as
- * the static row (MATERIAL_ROW(MAT_EXTENDED) is the LOWER of the twin
- * rows), which is the same default bare id 15 always meant. */
+/* For callers with an ordinary id, not a decoded cell byte. Avoids using
+ * CELL_MATERIAL(cell) which discards gunpowder info. Use material_of() for
+ * derived materials. Passing MAT_EXTENDED reads as static row, matching old
+ * id 15 behaviour. */
 static inline const material_t *material_by_id(material_id_t m)
 {
     return &materials[MATERIAL_ROW(m)];
 }
 
-/* How a material behaves in a fire - read ONLY by sand_reactions.c.
- *
- * A separate table rather than more fields on material_t, deliberately:
- * material_t is read several times per cell per step from the main sweep,
- * and its own comment above explains why keeping that row inside a cache
- * line matters. None of the fields below are read by any movement code, so
- * paying for them in the hot table's stride would be paying for nothing.
- * The cost of the split is that adding a material is now potentially two
- * rows instead of one - worth it, and the reason for it is here rather
- * than left to be rediscovered. */
+/* Material fire behaviour - read by sand_reactions.c. Separate table to avoid
+ * cache line overflow. Not used by movement code, so minimising stride cost
+ * is crucial. Adding a material may require two rows, deemed acceptable. */
 typedef struct {
-    /* Chance in 256, per adjacent burning cell, per step, that this
-     * material catches fire. 0 means it never burns. 255 means it catches
-     * the instant fire touches it - and, importantly, costs no random
-     * number at all (see try_ignite()), so a material at 255 leaves the
-     * RNG stream exactly as it was before this field existed. That is
-     * what keeps gas's behaviour, and every existing gas/fire test and
-     * device timing, bit-identical. */
+    /* Chance in 256 per adjacent burning cell per step for material to catch
+     * fire. 0 means never burns, 255 means catches instantly, no RNG cost
+     * (try_ignite()), preserving gas and fire test/device timing. */
     uint8_t flammability;
 
-    /* What this material becomes when it catches - a material_id_t,
-     * narrowed. Gas flashes straight to MAT_FIRE; a slower-catching fuel
-     * can char into something else instead, so it stays put and keeps
-     * burning rather than turning into a flame that immediately floats
-     * away (see MAT_WOOD's own row and sand_reactions.c's top comment for
-     * why that distinction exists at all). 0 (MAT_EMPTY) is read as
-     * MAT_FIRE, so a flammable material that does not care what it turns
-     * into gets the obvious default for free. */
+    /* Material ID when catching: MAT_FIRE for gas, other fuels may char,
+     * stay, and burn. MAT_EMPTY treated as MAT_FIRE. */
     uint8_t ignites_to;
 
-    /* Zero (the default, "ordinary ignition") for every material but
-     * gunpowder. Nonzero is a BLAST RADIUS in cells. Ignition itself
-     * (try_ignite_given(), try_heat_transform_given()) never reads this
-     * field for the radius - catching just writes the LIT code, through
-     * `ignites_to`/`heats_to` the same as any other burning material - but
-     * it is read in THREE places in step_one_burning_cell() (sand_
-     * reactions.c), not one, each asking a different question of it:
-     *
-     *   BURN-OUT   the actual blast. When a lit cell of this material's
-     *              `burn_decay` countdown reaches `lit_from` and would
-     *              otherwise simply vanish, find_lit_two_by_two() asks
-     *              whether the cell is one corner of a 2x2 that is all
-     *              still lit: if impulses are enabled and so,
-     *              sand_explode() fires at this radius (a fully-lit 3x3
-     *              was asked for first and made blasts rare enough to
-     *              look broken - see that helper's own comment); otherwise
-     *              the cell becomes plain MAT_FIRE, the gas pocket's own
-     *              fallback and for the same reason (sand_explode() is a
-     *              documented no-op with no impulse buffer). See
-     *              SAND_GUNPOWDER_BLAST_RADIUS's own comment below for why
-     *              16.
-     *   QUENCH     `!= 0` there stands in for "this material also has a
-     *              moisture codec", true only because gunpowder is
-     *              currently the one material with both - see that
-     *              branch's own comment for why the two questions are
-     *              different ones that happen to share an answer today.
-     *   SMOTHER    `== 0` skips smothered() outright: gunpowder carries
-     *              its own oxidiser, and a fuse buried in the middle of
-     *              its own pile has to keep burning or nothing inside a
-     *              pile would ever reach burn-out at all.
-     *
-     * REVISION: earlier versions blasted the instant ignition or heat
-     * touched the cell, one grain or one boundary cell at a time, which
-     * measured on the device as spending nearly every blast throwing
-     * gunpowder at gunpowder. See docs/Sand/Explosion-Plan.md for that
-     * history and the reasoning behind the fuse-and-2x2 model this field
-     * now describes. */
+    /* Zero (default) for materials except gunpowder. Nonzero is BLAST RADIUS
+     * in cells. In step_one_burning_cell(), if a lit cell's `burn_decay`
+     * reaches `lit_from`, find_lit_two_by_two() checks if it's a 2x2 fully
+     * lit corner. If impulses are enabled, it fires sand_explode() at the
+     * radius. Otherwise, it becomes MAT_FIRE. QUENCH (`!= 0`) applies to
+     * gunpowder. SMOTHER (`== 0`) skips smothered() as gunpowder
+     * self-oxidizes. See SAND_GUNPOWDER_BLAST_RADIUS for radius details. */
     uint8_t explodes;
 
-    /* Nonzero: this material only catches where it TOUCHES AIR - a cell
-     * with at least one empty cardinal neighbour. Zero, the default, means
-     * it catches anywhere fire reaches it, which is right for a solid.
-     *
-     * This is what makes a pool of liquid fuel burn off its surface
-     * instead of detonating through its whole volume the instant a spark
-     * lands on it. The interior cells of a pool are surrounded by more
-     * pool and never qualify; the ones along the top - and any exposed
-     * edge, which is correct too, a slick burns wherever it meets air -
-     * do. As each exposed layer converts and rises away, the layer under
-     * it becomes exposed in turn, so the pool is eaten from the top down
-     * without anything here needing to know which way is up.
-     *
-     * That last part is deliberate. "Only the top burns" is the obvious
-     * phrasing and would need a gravity vector, which this pass used to
-     * take and no longer does (see sand_step_reactions()). "Only what
-     * touches air burns" needs nothing, describes the same thing for any
-     * pool worth looking at, and is more nearly true besides. */
+    /* Nonzero: catches with air contact (one empty neighbor). Zero: catches
+     * on fire reach, suitable for solids. Burns liquid fuel pools from the
+     * surface, avoiding instant detonation. Interior cells don't qualify;
+     * only exposed edges do. No gravity vector needed (see
+     * sand_step_reactions()). */
     uint8_t needs_air;
 
-    /* Nonzero: this material IS a heat source, and sand_step_reactions()
-     * gives it a turn - decaying, quenching, smothering, igniting
-     * neighbours. Replaces the old `CELL_MATERIAL(c) != MAT_FIRE`
-     * dispatch, which cannot express two burning materials at once.
-     * Still keyed off the material, NOT off `kind`: fire is KIND_GAS and
-     * a future burning solid could be KIND_STATIC, and both of those
-     * kinds are shared with materials that must not burn (gas, stone). */
+    /* Nonzero: Material acts as heat source. `sand_step_reactions()` manages
+     * decay, quench, smother, and ignite neighbors. Replaces
+     * `CELL_MATERIAL(c) != MAT_FIRE` check. Uses material, not kind: fire is
+     * KIND_GAS, future burning solid could be KIND_STATIC, both shared with
+     * non-burning materials. */
     uint8_t burns;
 
-    /* BURNING AS A STATE RATHER THAN A MATERIAL. Non-zero means this
-     * material burns while its VARIANT is non-zero, and that variant is
-     * how much of it is left to burn - counted down at this chance in 256
-     * per step, exactly as `decay` counts a transient down.
-     *
-     * Wood is the one that has it, and it exists because ember used to be
-     * a whole material for this. Ember differed from wood in seven fields
-     * and only ONE of them - decay - was in the movement table; the other
-     * six were reactions. It was, in other words, wood in a different
-     * state, and it cost a slot because the tables are indexed by the
-     * material nibble alone and there was nowhere else for a state to
-     * live.
-     *
-     * There is now: the variant. Wood spends its shade on burn progress
-     * the way glass spends its on temperature, the dispatch in
-     * step_one_reacting_row() asks whether this cell is lit rather than
-     * whether this material burns, and ember stops needing to exist.
-     *
-     * `burns` and `burn_decay` are different claims and must not be
-     * confused. `burns` means ALWAYS a heat source - fire, lava. This
-     * means SOMETIMES, and the variant says when. */
+    /* BURNING AS A STATE. Non-zero `burns` means material burns while VARIANT
+     * is non-zero, counted down by this chance in 256 per step like `decay`.
+     * Wood uses it, replacing ember which differed in reactions. Wood uses
+     * shade for burn progress, `burns` indicates always a heat source,
+     * VARIANT indicates when. */
     uint8_t burn_decay;
 
-    /* THE FIRST CODE THAT COUNTS AS LIT, for a `burn_decay` material -
-     * see cell_is_burning() and tick_decay_at() (this file), the two
-     * places that read it. Wood's variant IS its whole burn-progress
-     * counter, unlit at 0 and lit at every value above, so wood's row
-     * sets this to 1 and both of those functions read exactly as they
-     * did before this field existed (`CELL_VARIANT(c) != 0`,
-     * `life <= 1`). Gunpowder's low bits are not a burn counter below
-     * this threshold at all - codes 0-2 are dry tones, 3-6 are moisture
-     * levels - so its row sets this to 7 (GUNPOWDER_LIT), the single
-     * code that means "on fire", and nothing below it is ever mistaken
-     * for embers. A material with no `burn_decay` never reads this
-     * field either, so it needs no entry of its own. */
+    /* `burn_decay` tracks burn progress. Wood: 0=unlit, >0=lit, starts at 1.
+     * Gunpowder: 0-2=dry, 3-6=moist, 7=lit. Unused materials ignore this
+     * field. */
     uint8_t lit_from;
 
-    /* Chance in 256, per step, per burning neighbour, that heat crosses
-     * ONE cell of this material - see conduct_heat() in
-     * sand_reactions.c. Rolled again for every further cell of the same
-     * conductor the heat has to cross, so crossing depth d succeeds with
-     * probability (conducts/256)^d: a thin wall conducts briskly and a
-     * thick one slowly, for free, with no second "how thick" constant.
-     * Meaningless for anything that never sits between a fire and
-     * something worth heating; left at zero for everything but the one
-     * material that exists to be a heat conductor. */
+    /* Heat crosses ONE cell with chance 1/256 per step per burning neighbour
+     * in conduct_heat() (sand_reactions.c). Chance decreases exponentially
+     * with crossing depth d: (conducts/256)^d. Meaningless for materials not
+     * between fire and something to heat; left at zero except for heat
+     * conductor material. */
     uint8_t conducts;
 
-    /* Chance in 256, per step, that a liquid conduct_heat() (sand_reactions.
-     * c) has already decided conducted heat reaches THIS step actually
-     * boils it into steam - a second roll, not the one `conducts` already
-     * made getting the heat there. 0, the default, means immune to
-     * conducted-heat boiling entirely; a liquid opts in by setting a
-     * nonzero figure, same idiom as `dissolves` below.
-     *
-     * Water sets a low figure so a poured stream can occasionally outpace
-     * evaporation over a hot stone crust rather than every drop flashing
-     * to steam the instant heat arrives. Acid, which also qualifies for
-     * conduct_heat()'s boiling branch, sets 255 (effectively always) so
-     * its own pre-existing instant-boil behaviour is unchanged now that
-     * this field exists to gate it. */
+    /* 1/256 chance per step that conduct_heat() boils liquid into steam,
+     * despite previous heat conduction. 0 means immune to boiling; nonzero
+     * values allow boiling. Water uses a low value to sometimes outpace
+     * evaporation, while acid uses 255 for instant boiling. */
     uint8_t boils;
 
-    /* What a `boils` roll above turns this liquid into - a material_id_t,
-     * narrowed, same idiom as `quench_to`. 0 means MAT_STEAM, so water
-     * (and every other liquid that never sets this) keeps the original,
-     * literal reading of "boils". Acid overrides it to MAT_GAS: acid
-     * boiling through a wall is not water and has no business leaving
-     * the same white kettle-steam behind - it already leaves MAT_GAS
-     * everywhere else it evaporates (step_one_dissolver_cell()'s
-     * `evaporates` roll, `fizz`'s dissolving residue), and conducted-heat
-     * boiling was the one path still hardcoded to steam regardless of
-     * which liquid was on the far side of the wall. */
+    /* `boils` roll converts this liquid into a material_id_t, using same
+     * idiom as `quench_to`. 0 means MAT_STEAM, keeping original for water.
+     * Acid overrides to MAT_GAS due to conducted-heat boiling hardcoded to
+     * steam. */
     uint8_t boils_to;
 
-    /* Chance in 256 that a burnt-out cell of this material leaves
-     * MAT_SMOKE behind instead of simply clearing.
-     *
-     * MAT_SMOKE and MAT_STEAM are near-identical rows in materials[] and
-     * were deliberately ONE material to begin with: both are a light gas
-     * that rises, spreads and fades, so a second row looked like pure
-     * duplication. It was not. Steam is water that got hot; smoke is fuel
-     * that burned out; and a fire dying in mid-air, nowhere near water,
-     * puffing bright white kettle-steam reads as a bug to anyone watching
-     * it happen. The two rows exist to be TOLD APART on screen, and the
-     * difference that actually matters is in the palette, not here. See
-     * sand_reactions.c's own top comment. */
+    /* 1/256 chance a burnt-out cell leaves MAT_SMOKE. MAT_SMOKE and MAT_STEAM
+     * are near-identical in materials[] but distinct for screen display.
+     * Steam is water; smoke is fuel. See sand_reactions.c. */
     uint8_t residue;
 
     /* What this material becomes when a liquid touches it - a
@@ -742,57 +388,26 @@ typedef struct {
      * every burning material did before steam existed. */
     uint8_t quench_to;
 
-    /* Chance in 256, per step, that this material emits a MAT_FIRE cell
-     * into an adjacent empty cell (try_flare(), sand_reactions.c) -
-     * meant for something that looks like it is licking a flame upward
-     * while staying PUT itself, left at zero for everything else. Ember
-     * (KIND_STATIC, never moves on its own) is the mechanic's original
-     * case; lava (KIND_LIQUID) sets it too, which is the one case where
-     * "staying put" is not guaranteed - try_flare() itself now SKIPS the
-     * roll entirely while a cell is still free-falling (nothing beneath
-     * it, gravity-relative), rather than rolling it every step of a long
-     * pour's fall, which used to make lava specifically the most
-     * expensive material to pour: many separate falling grains each
-     * spending several steps in open air, each independently rolling
-     * this every one of those steps, each successful roll latching
-     * may_have_burning for a fresh MAT_FIRE cell that then keeps burning
-     * (and eventually rolls `residue`, above, for its own smoke) long
-     * after the pour itself is done. */
+    /* Chance in 256 for this material to emit a MAT_FIRE cell into an
+     * adjacent empty cell (try_flare(), sand_reactions.c). Ember
+     * (KIND_STATIC) and lava (KIND_LIQUID) activate it. Free-falling cells
+     * skip this check to save computation. */
     uint8_t flare;
 
-    /* Chance in 256, per step, that a cell of this material DISSOLVES one
-     * of its four cardinal neighbours. Acid is the only thing that does.
-     *
-     * Paired with `dissolvable` below, on the other material: this is how
-     * hard the acid tries, that is how easily the target gives way. Both
-     * have to be nonzero for anything to happen, which is what lets a
-     * stone tank hold acid while the sand inside it disappears. */
+    /* 1/256 chance per step for a cell to dissolve one of its four cardinal
+     * neighbours. Acid is the only cause. Paired with `dissolvable`: acid's
+     * strength and target material's vulnerability. Both must be nonzero for
+     * effect. Allows stone tank to hold acid while sand inside dissolves. */
     uint8_t dissolves;
 
-    /* Chance in 256 that an attempt to dissolve THIS material succeeds.
-     *
-     * 0, the default, means immune - and that default is doing real work.
-     * A material is dissolvable only by opting in, so every material that
-     * existed before acid did, and every one added without a thought for
-     * it, is safe by omission. The alternative default would have acid
-     * quietly eating the walls of its own container, the floor, and the
-     * air, and the failure would look like acid working rather than like
-     * a field nobody set. */
+    /* Chance in 256 of dissolving THIS material. 0 means immune. Default 0
+     * protects existing materials. Opt-in required for dissolvable materials.
+     * Alternative default would cause acid to dissolve everything. */
     uint8_t dissolvable;
 
-    /* Chance in 256 that a cell this material dissolves leaves MAT_SMOKE
-     * behind instead of simply clearing - the fizz.
-     *
-     * Its own field rather than reusing `residue`, which fires when a
-     * BURNING cell runs out of life. Dissolving is a different event on a
-     * different cell (the target's, not the reactor's), and overloading
-     * one field to mean both is how `mobility` and `sight` ended up
-     * meaning different things to different kinds without saying so.
-     *
-     * Smoke rather than steam, deliberately: steam in this simulation is
-     * water that got hot (see sand_reactions.c's top comment), and acid
-     * fumes are not that. Smoke is the generic "something was destroyed
-     * here", which is what this is. */
+    /* Chance in 256 for dissolving cell to leave MAT_SMOKE; separate from
+     * `residue` to avoid field overload. Smoke represents generic
+     * destruction, not steam or acid fumes. */
     uint8_t fizz;
 
     /* Chance in 256, per step, that a cell of this material spontaneously
@@ -801,17 +416,10 @@ typedef struct {
      * only acid sets it. */
     uint8_t evaporates;
 
-    /* The inverse of evaporating: chance in 256, per step, that a 2x2
-     * square of four cells all holding this same material COLLAPSES into
-     * a single cell of `condenses_to`, at the square's own top-left
-     * corner, with the other three cleared to empty. 0, the default,
-     * means never; only steam sets it, turning a stray puff quietly back
-     * into a little water.
-     *
-     * Deliberately not a real thermal model - no cold surface to check
-     * for, no heat reading involved - which is what keeps this a rare
-     * cosmetic touch (fake condensation) rather than a second boiler to
-     * tune. See step_one_condensing_cell() in sand_reactions.c. */
+    /* Inverse of evaporating: 1/256 chance per step, a 2x2 square condenses
+     * into a single `condenses_to` cell at top-left, others cleared. 0 means
+     * never. Only steam activates. Not a real model; just cosmetic. See
+     * step_one_condensing_cell() in sand_reactions.c. */
     uint8_t condenses;
 
     /* What a successful `condenses` roll above produces - a
@@ -819,394 +427,136 @@ typedef struct {
      * its own trigger field. Meaningless while `condenses` is 0. */
     uint8_t condenses_to;
 
-    /* What HEAT alone turns this material into, without burning it, and
-     * the chance in 256 per step per adjacent heat source that it does.
-     *
-     * Sand names MAT_GLASS here. Its own pair of fields rather than
-     * reusing `flammability`/`ignites_to`, which would work mechanically -
-     * a burning neighbour, a roll, a material swap - and would be a lie:
-     * sand does not catch fire, and a field called `flammability` on sand
-     * would send the next reader looking for the flame. The same
-     * overloading is how `mobility` and `sight` came to mean different
-     * things to different kinds without saying so.
-     *
-     * Reached both by direct contact with a burning cell and through a
-     * conductor (conduct_heat()), so a fire under a stone slab makes glass
-     * of the sand on the other side exactly as it boils water there. */
+    /* HEAT transforms this material (MAT_GLASS) with a 256 per step chance
+     * per adjacent heat source. Separate fields for this, not
+     * `flammability`/`ignites_to`, as sand does not catch fire. `mobility`
+     * and `sight` have similar issues. Activated by direct contact or through
+     * conductors. */
     uint8_t heats_to;
     uint8_t heat_chance;
 
-    /* MELTS: chance in 256 per step of becoming `heats_to` while in direct
-     * contact with a burning LIQUID - lava - and only that. `heat_chance`
-     * above answers to any heat at all: fire, an ember, lava, or heat that
-     * has crossed a conductor. This is the narrower door, for a material
-     * that has to shrug off a flame and still give way to molten rock.
-     *
-     * Glass already draws that exact line, but it does it with a ramp:
-     * fire can raise a pane to shatterable and never to molten, because
-     * `cools` drains faster than a flame can bank (see glass's own row).
-     * That needs a variant to bank INTO, and an extended material has
-     * none - its low nibble is which material it is. So the distinction
-     * has to be made at the source instead of in the target's memory:
-     * lava is the one heat source that is a liquid, and contact with it
-     * is what this rolls on.
-     *
-     * Contact only - not through a conductor. Heat conducted through a
-     * wall has lost its source by the time it arrives, and "lava on the
-     * far side of stone melts what fire on the far side would not" is a
-     * distinction nobody could see the reason for on the panel. */
+    /* MELTS: 1/256 chance per step to become `heats_to` near lava or another
+     * heat source. Glass handles fire via ramp. Extended material melts only
+     * in lava. Heat through conductors doesn't count. */
     uint8_t melts;
 
-    /* THE IMPURE YIELD. Rolled off the SAME successful heat_chance roll
-     * above, not a trigger of its own: chance in 256 that a bone-dry cell
-     * converts into `flaw_to` instead of `heats_to`. 0, the default, means
-     * every successful roll is clean - exactly the behaviour before this
-     * field existed.
-     *
-     * Dirt names MAT_STONE here: a smelt run too fast, or ore that was
-     * never pure to begin with, comes out part stone rather than part
-     * metal. Rejected once as "a new field serving exactly one material"
-     * (docs/Sand/Metal-Smelting-Plan.md, "Decisions taken") - it still is,
-     * and that is fine; not every mechanic has to earn its keep across the
-     * whole table the way `heats_to` does.
-     *
-     * A flaw is not drawn independently per cell - see try_heat_transform()
-     * (sand_reactions.c) for the rolling-modulo clump that turns
-     * `flaw_chance` into NODULES of stone rather than a speckle. */
+    /* Rolled off `heat_chance`. Chance in 256 for a bone-dry cell to convert
+     * to `flaw_to` instead of `heats_to`. 0 means no flaw. `MAT_STONE`
+     * indicates impure smelts. `flaw_chance` does not trigger independently
+     * per cell; see `try_heat_transform()` for details. */
     uint8_t flaw_to;
     uint8_t flaw_chance;
 
-    /* THE RUINED YIELD. Rolled off the SAME successful heat_chance roll
-     * above, on a cell the wet-earth branch below would otherwise drive one
-     * moisture level off of: chance in 256 that the cell spoils into
-     * `spoils_to` outright instead. 0, the default, means wet cells never
-     * spoil - the moisture-draining behaviour runs exactly as it did before
-     * this field existed.
-     *
-     * Dirt names MAT_SAND here: clay fired too fast while it is still wet
-     * cracks rather than firing clean. Independent of `flaw_to` above by
-     * construction - a cell that spoils never reaches the dry branch at
-     * all, so the two chances are never rolled against the same event.
-     *
-     * Unconditional - rolled from the FIRST successful heat_chance roll a
-     * wet cell ever gets, no exemption. An earlier version tried to
-     * guarantee a free first puff of steam before any risk of spoiling by
-     * gating on the moisture value; see try_heat_transform()'s own comment
-     * (sand_reactions.c) for why that cannot work (ambient drying can beat
-     * heat to the first level, unrelated to this field entirely) and was
-     * removed rather than patched further. */
+    /* Rolled off successful heat_chance roll on wet cells, spoiling to
+     * `spoils_to` with 1/256 chance. 0 means no spoilage. Independent of
+     * `flaw_to`. Always rolled on first successful heat_chance. Earlier
+     * attempt to delay spoilage by moisture check was removed due to ambient
+     * drying issues. */
     uint8_t spoils_to;
     uint8_t spoils_chance;
 
-    /* HEAT THAT ACCUMULATES, rather than a roll that either fires or does
-     * not. Non-zero `heat_ramp` means this material banks heat in its own
-     * variant nibble instead of transforming on contact: each step beside a
-     * heat source it climbs one level with this chance, and only on reaching
-     * the top does it become `heats_to`.
-     *
-     * The point of it is that `heat_chance` alone CANNOT express "long
-     * exposure". A per-step roll has no memory, so a brief fierce flame and
-     * a slow banked fire accumulate identically - the only thing that
-     * separates them is heat draining back out, which is `cools`. Sand keeps
-     * the memoryless form because sand fusing is meant to be quick; glass
-     * melting to lava is meant to take a while and to be visible while it
-     * does, which is the other half of this: the nibble is what the palette
-     * indexes, so the heat level IS the colour and a heating pane glows.
-     *
-     * `cools` is the chance per step of losing a level with nothing heating
-     * it. Together the two set how long "long" is, and the ratio is what
-     * decides whether a fire can ever win at all: cooling faster than the
-     * ramp climbs means no flame of that size will EVER melt the pane, which
-     * is a legitimate thing to want and a very easy thing to do by accident.
-     * See test_a_lone_flame_never_melts_glass. */
+    /* Heat builds in a material's nibble, rising with `heat_ramp` chance to
+     * `heats_to`. `heat_chance` alone doesn't show long exposure. The
+     * nibble's heat is visible as color. `cools` is the chance to lose heat
+     * without gaining, setting exposure duration and melt resistance. */
     uint8_t heat_ramp;
     uint8_t cools;
 
-    /* COLD, which this simulation otherwise has no way to say.
-     *
-     * `chills` is the chance per step that this material pulls a heat level
-     * out of a neighbour that has one. Non-zero also MARKS the material as
-     * cold for thermal shock below - the two always want to travel together,
-     * so they are one field rather than two that can disagree.
-     *
-     * `chills` and `cools` do the same thing in the same units - remove one
-     * heat level, chance in 256 - and they are still two fields. What
-     * separates them is whose row they are on: `cools` belongs to the HOT
-     * material and drains it to nothing, `chills` belongs to the COLD one
-     * and drains a neighbour. Folding them into a single "rate this
-     * material removes heat", read as self-drain when it has a ramp and
-     * neighbour-drain when it does not, works mechanically and is exactly
-     * the mistake `mobility` and `sight` already made here: a field whose
-     * meaning switches on kind without saying so.
-     *
-     * They do not collapse to one NUMBER either. If a chilling neighbour
-     * merely re-ran the hot cell's own `cools`, snow would drain 6 in 256
-     * against a ramp of 12 and could never beat even a single flame. Snow's
-     * 40 against glass's 6 is most of a factor of seven, and that gap is
-     * the mechanic - it is what lets a bank of snow win a race that
-     * ambient cooling always loses.
-     *
-     * Snow is the only material with it, and adding it is what made thermal
-     * shock legible. Shock was first drafted as "heat on one side, water on
-     * the other", which fails as a design even though it works as a rule:
-     * nothing in the simulation says water is COLD, so a pane cracking next
-     * to it reads as "glass breaks near water" rather than as a temperature
-     * gradient. A material that is visibly, obviously cold fixes that
-     * without a temperature scale on anything but the glass itself. */
+    /* COLD: `chills` and `cools` reduce heat by one level (chance in 256).
+     * `chills` draws from neighbors, `cools` from self, creating thermal
+     * shock. Snow's `chills` (40) and glass's `cools` (6) ensure this effect.
+     * COLD avoids a flawed "heat-water" design without needing a temperature
+     * scale. */
     uint8_t chills;
 
-    /* CONVECTION: hot gas warming what it touches. Chance in 256 per step
-     * that this material raises the temperature of a neighbour that has
-     * one - without igniting anything, quenching anything, or being a heat
-     * source in any other sense.
-     *
-     * It is NOT `burns`, which was the cheap way to get the same heating
-     * and would have had smoke setting wood alight.
-     *
-     * This was measured three times against whether it helped SHATTER
-     * glass, and three times it did not - warmer air costs snow its life,
-     * because a pane above room temperature charges snow for touching it,
-     * and snow is the scarce thing. It is here for a different reason:
-     * heat rising into a vessel and warming it is TRUE, and it is now
-     * visible, because glass and stone both show their temperature. The
-     * rates are modest for exactly that reason - enough to see, not enough
-     * to make the cold side worthless.
-     *
-     * High relative to the ramps around it because the carriers are
-     * TRANSIENT. A wisp of smoke has to deposit what it is worth during a
-     * life measured in steps; a rate tuned as though it would sit there
-     * indefinitely deposits nothing before it is gone. */
+    /* CONVECTION: Hot gas warms neighbors with a 1 in 256 chance per step.
+     * Not 'burns'; warms snow to melt. Visible heating in vessels with modest
+     * rates, higher than carriers. */
     uint8_t warms;
 
-    /* Chance in 256 per step, per adjacent LIQUID cell, that this material
-     * gives up and becomes `heats_to`. Snow melting in water.
-     *
-     * A second trigger for the same transformation `heat_chance` drives,
-     * and a separate number because one number cannot serve both. Snow
-     * beside a flame should be gone almost at once - 120 in 256, two steps
-     * - and snow landing on a pond should not, or a snowfall over water
-     * would never be seen to land at all. The float is worth a moment:
-     * snow is lighter than water and rides on top of it, which is the only
-     * reason a drift ends up anywhere useful.
-     *
-     * Any liquid counts, not water alone. Nothing in this simulation is at
-     * a temperature except glass, so "liquid" is the closest thing to
-     * "warm and touching you everywhere" available, and oil or acid
-     * leaving snow untouched would need explaining in a way that melting
-     * does not. */
+    /* Chance in 256 per adjacent LIQUID cell for material to become
+     * `heats_to`. Snow melts in water or near flames (120 in 256 steps). Snow
+     * on ponds stays, allowing snowfall. Snow floats, representing warmth.
+     * Oil or acid not melting snow needs explanation. */
     uint8_t thaws;
 
-    /* SOAKING UP A LIQUID, which is a different thing from melting in one.
-     * Chance in 256 per step, per adjacent liquid cell, that this material
-     * takes a UNIT of that liquid into itself - the liquid is consumed, not
-     * merely survived, which is the whole difference from `thaws`.
-     *
-     * Where the unit goes depends on `soaks_to`:
-     *
-     *   non-zero   the cell BECOMES that material, at moisture 1. Sand
-     *              names dirt here: wet sand slowly turns into soil.
-     *   zero       the cell keeps what it is and its VARIANT rises. Dirt
-     *              names nothing, so watering dirt makes it wetter.
-     *
-     * One field pair rather than two mechanisms because it is one thing
-     * happening - something absorbing water - and the only question is
-     * whether the thing it absorbed into already existed. */
-    /* WETTING, on the LIQUID's side: whether this liquid is the sort of
-     * thing that soaks into something. Water is; oil, lava and acid are
-     * not.
-     *
-     * It has to be said explicitly because the absorbing side cannot tell.
-     * `soaks` is a property of sand and soil, and the obvious way to write
-     * the rule - take a unit of any adjacent KIND_LIQUID - reads perfectly
-     * and is wrong for three of the four liquids on the board. A bank of
-     * sand under oil turned entirely into saturated soil, and so did one
-     * under LAVA. Reported as oil soaking, which it was, along with
-     * everything else.
-     *
-     * Wetness is not the same question as fluidity, and only the liquid
-     * knows the answer. */
+    /* SOAKING UP A LIQUID, chance 1/256 per step, per adjacent liquid cell.
+     * Consumes liquid. Cell becomes `soaks_to` material at moisture 1 or
+     * variant rises if zero. `soaks` property indicates if liquid soaks in.
+     * Water soaks, oil, lava, acid do not. Wetness ≠ fluidity; liquid
+     * determines soak. */
     uint8_t wets;
 
     uint8_t soaks;
     uint8_t soaks_to;
 
-    /* THE MOISTURE CODEC'S SHAPE, table-driven - see moisture_of()/
-     * with_moisture()/soil_cell() (this file, above). `tones` is how many
-     * DRY codes this material's low bits hold (codes 0..tones-1); moisture
-     * 1..moist_max then occupies codes tones..tones+moist_max-1. Dirt sets
-     * 8 and 7 - the same SOIL_DRY_TONES/SOIL_MOISTURE_MAX every existing
-     * CELL_MOISTURE()/CELL_WITH_MOISTURE() caller already assumes, so this
-     * table and those macros MUST agree for dirt - see
-     * test_dirt_moisture_macros_and_codec_helpers_agree_on_every_byte
-     * (suite_sand_roots.c), which is what proves it.
-     *
-     * A second material with `dries != 0` needs its own pair here rather
-     * than reusing dirt's - gunpowder's codec is three dry tones plus four
-     * moisture levels (material.c's GUNPOWDER_REACTION), not eight and
-     * seven, because gunpowder only has THREE bits to spend (it shares
-     * nibble 15 with the extended statics - see GUNPOWDER_BASE) where dirt
-     * has the whole nibble. */
+    /* MOISTURE CODEC: `tones` holds DRY codes (0..tones-1); moisture
+     * (1..moist_max) uses codes tones..tones+moist_max-1.
+     * SOIL_DRY_TONES/SOIL_MOISTURE_MAX (8/7) align with
+     * CELL_MOISTURE()/CELL_WITH_MOISTURE(). New `dries != 0` materials need
+     * separate entries. Gunpowder uses 3 dry tones, 4 moisture levels
+     * (GUNPOWDER_REACTION), limited to 3 bits (GUNPOWDER_BASE). */
     uint8_t tones;
     uint8_t moist_max;
 
-    /* WHETHER A PLANT MAY TREAT THIS AS SOIL - a different question from
-     * `dries` below, which only says "this material's code can mean
-     * moisture". Gunpowder has `dries != 0` too (it has its own moisture
-     * codec, wetting and drying the same way dirt does) but a fuse is not
-     * ground: nothing may root in it, sprout from it, drink it dry or
-     * conduct water through it. Every site that asks "is this neighbour
-     * soil" - find_water(), step_one_sprouting_cell(),
-     * step_one_budding_cell() (through find_water()), step_one_rooting_
-     * cell(), step_one_conducting_cell(), spend_soil_moisture() - tests
-     * this instead of `dries`. Moisture DIFFUSION and percolation between
-     * two cells that are already the same species keep testing `dries`:
-     * that is wetness spreading, not a question of what counts as soil.
-     * Dirt sets this; nothing else does. */
+    /* WHETHER A PLANT MAY TREAT THIS AS SOIL - distinct from `dries`.
+     * Gunpowder has `dries != 0` but is not ground. Sites check this for soil
+     * properties instead of `dries`. Moisture diffusion and percolation
+     * within same species use `dries`. Only dirt sets this. */
     uint8_t soil;
 
-    /* And the way back: chance in 256 per step of losing one level of
-     * whatever `soaks` put in. Dirt drying out.
-     *
-     * Non-zero is also what MARKS a material's variant as moisture, the
-     * way heat_ramp marks it as temperature and burn_decay as how much is
-     * left to burn. A freshly drawn cell of one starts at zero - bone
-     * dry - which is why random_cell() has to know. */
+    /* Chance of losing one `soaks` level per step: 1 in 256. Marks material's
+     * moisture variant. Zero means bone dry, so `random_cell()` must
+     * initialise correctly. */
     uint8_t dries;
 
-    /* Zero (meaning "never") for every material but gunpowder. Nonzero
-     * `soaked_to`: what a cell of this material becomes, chance
-     * `soaked_chance` in 256 per step, once it is fully SATURATED
-     * (moisture_of(cell, r) == moist_max) - read in
-     * step_one_soaking_cell() (sand_reactions.c) after `held` is computed,
-     * gated on the saturation check so an unsaturated cell never rolls it
-     * and dirt (soaked_to == 0) never draws at all. Gunpowder names
-     * MAT_OIL here: soaked through, it slowly turns to oil rather than
-     * staying inert forever - one grain and the water it holds becoming
-     * one full oil cell, the same mass-not-conserved trade every other
-     * reaction that mints a liquid already makes. */
+    /* Zero materials except gunpowder. When fully saturated, cells turn to
+     * this with `soaked_chance` in 256 per step, checked after `held`.
+     * Gunpowder turns to oil: one grain plus water becomes one oil cell,
+     * ignoring mass. */
     uint8_t soaked_to;
     uint8_t soaked_chance;
 
-    /* GROWING. Chance in 256 per step that this material, touching soil
-     * with moisture in it, extends by one cell - and spends one level of
-     * that soil's moisture doing it. Water is what a plant grows ON, so
-     * water is what limits how far it gets.
-     *
-     * It grows AGAINST gravity, from the top of whatever column of itself
-     * it is part of rather than from the cell that happened to roll. That
-     * matters because a plant has no per-cell state to grow WITH: it is an
-     * extended material, so its low nibble is its identity and there is no
-     * variant left to hold a stem's height or a growth counter. Walking to
-     * the tip is how a stateless material still makes a tree instead of a
-     * one-cell shrub. */
+    /* 256 chance per step for material to grow by one cell if touching moist
+     * soil, spending one level of soil's moisture. Grows against gravity from
+     * column top. No per-cell state; identity in low nibble. Growth from tip
+     * creates tree, not shrub. */
     uint8_t grows;
 
-    /* FALLING, in the cold pass: chance/256 per step that this cell moves
-     * one step gravity-ward, if the cell it would move into is empty.
-     *
-     * Which is the sweep's job, and is here anyway, for a reason specific
-     * to the extended range: `kind` lives in materials[], and every
-     * extended material shares one row of it. Making the plant a
-     * KIND_POWDER so it could be poured like a grain would make ICE one
-     * too - and would break the plant itself, because a grown stem is made
-     * of the same material as the seed, so a column six cells tall would
-     * slump the moment it existed.
-     *
-     * Falling only into EMPTY is what separates the two cases without any
-     * per-cell state at all. A seed painted in mid-air has nothing under
-     * it and drops until it lands. A stem does not, because what is under
-     * every cell of it is the rest of the stem. The rule is the same; the
-     * board answers it differently. */
+    /* In the cold pass, with a 1/256 chance per step, objects with
+     * KIND_POWDER (like ICE) fall into empty cells. This distinguishes seeds
+     * from stems: seeds drop until they land, while stems remain upright,
+     * each cell supporting the next. */
     uint8_t falls;
 
-    /* WITHERING: chance/256 per step that this cell simply ceases to
-     * exist, when it can neither reach water through its own roots nor
-     * lean on a neighbour of whatever it hardens into.
-     *
-     * Growth is the only thing on this board that MAKES cells, and until
-     * now nothing took them away again except fire and acid. So every
-     * fragment a tree shed - a limb broken off by a tilt, a seed poured
-     * onto bare stone - was permanent, and the board slowly filled with
-     * green litter that could never do anything or go anywhere.
-     *
-     * The "or wood" half is what keeps it from being cruel. A grown tree
-     * whose soil has dried out keeps its foliage, because the foliage is
-     * touching the trunk; what withers is loose greenery with no tree and
-     * no water behind it, which is exactly the stuff that should not be
-     * lying around. */
+    /* WITHERING: Chance/256 per step for a cell to die if no water or
+     * neighbor. Growth adds cells, while fire and acid remove them. Fragments
+     * like limbs or seeds were permanent. "Or wood" keeps foliage on living
+     * trees. */
     uint8_t withers;
 
-    /* And what a long enough straight run of it turns into: `hardens_to`
-     * once `harden_run` cells line up along the gravity axis.
-     *
-     * A stem that has grown tall becomes a trunk. Measured along gravity
-     * only, so a creeper spreading sideways stays soft - "grew tall enough
-     * to be wood" is the reading, and a horizontal mat hardening into a
-     * plank floor is not.
-     *
-     * It also closes a loop that already existed: wood burns, and since
-     * burning became a STATE of wood rather than its own material, a tree
-     * can catch, be rained on halfway, and leave the soft growth around it
-     * alive. None of that needed anything new. */
+    /* `hardens_to` when `harden_run` cells align along gravity, making tall
+     * stems trunks. Creeper spread sideways remains soft. Burns as wood
+     * STATE, tree can catch fire and rain halfway, leaving soft growth alive. */
     uint8_t hardens_to;
     uint8_t harden_run;
 
-    /* And the chance in 256 that a run long enough actually hardens, on
-     * any one growth. It is a delay, not a gate: without it a run turns to
-     * wood the instant it is long enough, and wood does not grow, so a
-     * seedling became a post before it could put out a limb.
-     *
-     * Lower means greener and shaggier, higher means woodier and squatter.
-     * Measured over eight trees - see the roll in sand_reactions.c. */
+    /* 1/256 chance a run hardens, delaying wood formation. Lower values make
+     * trees greener and shaggier, higher values woodier and squatter.
+     * Measured over eight trees in sand_reactions.c. */
     uint8_t harden_chance;
 
-    /* What this material is PART OF: the other material its own body may
-     * be made of, for every question of the form "is this cell more of the
-     * same tree".
-     *
-     * It was `hardens_to` doing both jobs, which worked only for as long
-     * as the plant was the only material with either. The two are
-     * genuinely different questions - one is what a run of me BECOMES,
-     * the other is what I hold on to - and they part company the moment
-     * anything else joins a tree. Foliage is part of a tree and never
-     * hardens into anything.
-     *
-     * Read by the walks that decide whether a cell is anchored, whether a
-     * stem continues, how far it is to water, and whether a trunk is
-     * already thick enough. `hardens_to` is now read only where hardening
-     * actually happens. */
+    /* PART OF: other material in a tree. `hardens_to` now only for hardening.
+     * Read by walks for cell anchoring, stem continuation, water distance,
+     * and trunk thickness. */
     uint8_t clings_to;
 
-    /* ROOTING: one field, two readings, by which material's row it sits
-     * on - the same table-reuse `hardens_to` and `clings_to` already
-     * practise elsewhere in this struct.
-     *
-     * ON A GROWER (plant, wood): chance in 256 that SPENDING this
-     * material's own soil moisture (growing, budding, sprouting - see
-     * each of their own comments) also welds the CONTACT cell - the
-     * collar, where the stem actually touches ground - into `roots_to`.
-     * It exists because dirt is a powder and shifts: when the soil
-     * directly under a tree's collar slides away, find_water()'s walk
-     * down the stem finds neither stem nor ground below it and the tree
-     * simply stops growing, stranded above water it can no longer reach.
-     * A root embeds the tree in the bed instead of resting it on top of
-     * that bed, so a shifting surface cannot disconnect the two. This is
-     * a ONE-TIME SEED, gated (spend_soil_moisture(), sand_reactions.c) to
-     * `root_depth == 0` - it plants the first root under a bare collar
-     * and then gets out of the way; everything the root system becomes
-     * after that first cell grows the other way, below.
-     *
-     * ON ROOT ITSELF: chance in 256 that a root cell, touching a moist
-     * dirt neighbour, converts that neighbour into more root - see
-     * step_one_rooting_cell() (sand_reactions.c) and MATX_ROOT's own row
-     * (material.c) for the shape this produces. The conversion IS the
-     * water cost: a dirt cell's moisture lives in its own variant, and
-     * turning it into root discards that variant along with everything
-     * else the old cell was, so there is nothing left to separately
-     * spend. A root that already has several root neighbours does not
-     * roll at all - see ROOT_SURFACE_MAX (sand_reactions.c) - which is
-     * most of what keeps the system a filigree of roots instead of a
-     * block of them growing to fill the bed. */
+    /* ROOTING: Two readings per field. `hardens_to`, `clings_to` elsewhere.
+     * GROWER: 1/256 chance, SPENDING soil moisture welds CONTACT to
+     * `roots_to`, disconnects tree as dirt shifts. ONE-TIME SEED:
+     * (`root_depth == 0`) plants first root, then grows below. ON ROOT: 1/256
+     * chance converts moist dirt to root, costing variant, if <
+     * ROOT_SURFACE_MAX neighbours. */
     uint8_t roots;
     uint8_t roots_to;
 
