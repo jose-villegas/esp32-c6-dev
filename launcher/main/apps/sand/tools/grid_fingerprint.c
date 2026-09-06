@@ -39,6 +39,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
 
 #include "sand.h"
 #include "material.h"
@@ -295,6 +299,17 @@ static const struct {
 int main(void)
 {
     const int cell_count = FP_W * FP_H;
+
+#ifdef _WIN32
+    /* Byte-identical output (top comment) must hold ACROSS PLATFORMS: the
+     * baseline is checked in and compared against a fresh run, routinely
+     * from different machines. MinGW's CRT defaults stdout to text mode and
+     * rewrites every '\n' into "\r\n", so a Windows run disagreed with the
+     * LF baseline on every line whatever the simulation did - --check could
+     * not pass here, --update wrote a baseline that passed nowhere else.
+     * Same fix as dump_reactions.c beside this file. */
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
 
     printf("# grid fingerprint: %dx%d, %d steps per scene\n",
            FP_W, FP_H, FP_STEPS);
