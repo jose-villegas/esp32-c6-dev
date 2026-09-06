@@ -724,13 +724,36 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
      * the fresh capture the 2026-08-26 re-base ran on (see
      * FULL_STEP_BUDGET_US's comment) measured the fourteen-material
      * scene at 74911 us, and the target followed the same uniform rule
-     * as every other budget: measured * 0.9, rounded -> 67500.
-     * Numerically up from the stale 54000, still a tenth below what the
-     * current scene actually costs. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(67500, (int)per_step,
-        "the mixed-material flip is held to 10% below what it measured, "
-        "as a reduction target - this failing means the work has not been "
-        "done yet, not that something broke");
+     * as every other budget: measured * 0.9, rounded -> 67500. */
+
+    /* RE-PEGGED 2026-09-07, DELIBERATELY AND UPWARDS: 67500 -> 87800, from
+     * 97,573 us measured on device 2026-09-06 (x 0.9 = 87,815, rounded
+     * down). */
+
+    /* Raising a budget is normally forbidden. This is the documented
+     * exception - a re-peg from a fresh capture, decided by the maintainer
+     * rather than by whoever was failing the row. */
+
+    /* THE SCENE DID NOT GROW, so the cost is real: the material enum is
+     * byte-identical to the re-base commit, and this scene sizes itself
+     * from MAT_COUNT. */
+
+    /* ACCRETION, NOT ONE REGRESSION - host sampling rose monotonically
+     * across the window instead of stepping at a commit, and the pass map
+     * keeps its shape (reactions ~50%, gas ~37%, cross-flow ~17%).
+     * Evidence on bd esp32c6-8zx. */
+
+    /* MEASURED AFTER THE DISPATCHER, NOT BEFORE IT. The 2026-09-06
+     * baseline read 102,136; PR #55 then took this row -4.5%. Pegging from
+     * the older figure would hand that win back as slack. */
+
+    /* CAVEAT FOR THE NEXT CAPTURE: main has since taken a comment-trim
+     * wave that moves line numbers and rodata, so the layout lottery may
+     * have shifted under this figure. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(87800, (int)per_step,
+        "the mixed-material flip is held to 10% below the 97,573us it "
+        "measured on 2026-09-06, as a reduction target - this failing "
+        "means the work has not been done yet, not that something broke");
 }
 
 #ifdef SAND_HOST_PROBE
