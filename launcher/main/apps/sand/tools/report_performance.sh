@@ -273,7 +273,7 @@ echo "=== Generating performance report ==="
 # that a present costs as much as a step - measured 2026-08-28, when a
 # scattered scene turned out to spend a full-screen send every frame.
 python "$SCRIPT_DIR/report_performance.py" "$RAW_CAPTURE" "$OUT_MD" \
-    --source "$LAUNCHER_DIR/main/apps/sand/suite_sand.c" \
+    --source "$LAUNCHER_DIR/main/apps/sand/suite_sand_perf.c" \
     --source "$LAUNCHER_DIR/test/suites/suite_gfx.c"
 
 echo "=== Report:       $OUT_MD ==="
