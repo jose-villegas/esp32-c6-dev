@@ -553,8 +553,8 @@ static void queue_outward_impulse(sand_t *s, int cx, int cy, int dx, int dy,
      * radius" reads right and was measured, twice - once linear in the
      * squared distance (free, since d2 is already computed two lines
      * up), once a true linear falloff via sqrt - against the dune scene
-     * in suite_sand.c (test_the_sand_dune_scene_throws_grains_beyond_
-     * its_own_footprint). Both made the blast markedly WORSE by the
+     * in suite_sand_dune_blast.c (test_the_sand_dune_scene_throws_grains_
+     * beyond_its_own_footprint). Both made the blast markedly WORSE by the
      * scene's own numbers, not better: grains outside the footprint fell
      * from an average of 57 to 4 and 3 respectively, and average throw
      * distance fell from 71 to 55 and 48. The cells that actually
@@ -912,8 +912,9 @@ static void displace_disc(sand_t *s, int cx, int cy, int radius,
      * steam bursts, say, not yet wired up but exactly the shape of
      * caller this generality was always meant to survive. Do not
      * simplify this back to `s->impulse_max` - see
-     * test_two_overlapping_blasts_share_the_buffer_evenly (suite_sand.c)
-     * for a test that fails immediately if someone does. */
+     * test_two_overlapping_blasts_share_the_buffer_evenly
+     * (suite_sand_impulse.c) for a test that fails immediately if someone
+     * does. */
     const int disc_count = exact_disc_count(radius);
     const int room = s->impulse_max - s->impulse_count;
     const int keep = (disc_count < room) ? disc_count : room;
@@ -2646,10 +2647,10 @@ static void step_impulses(sand_t *s, int dx, int dy)
                  * smothered" invariant, since lava is never replaced with
                  * something else, only relocated by one cell. See
                  * test_a_thrown_static_chunk_conserves_lava_mass_on_sink
-                 * (suite_sand.c), which asserts total lava mass unchanged
-                 * and no lava cell deleted across a chunk sinking through
-                 * a pool. Dropping the exclusion is a deliberate design
-                 * choice, not an oversight: a thrown, ENERGETIC chunk sinks
+                 * (suite_sand_impulse.c), which asserts total lava mass
+                 * unchanged and no lava cell deleted across a chunk sinking
+                 * through a pool. Dropping the exclusion is a deliberate
+                 * design choice, not an oversight: a thrown, ENERGETIC chunk sinks
                  * into a liquid (including lava) the same way a dense
                  * powder already does under ordinary movement (lava's
                  * density is 45 against sand's 60 and dirt's 62) - and
@@ -2786,7 +2787,8 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * comments in sand.h for that history).
          *
          * DID INTERACT WITH THE CASCADE GATE - caught by
-         * test_a_cascading_impulse_moves_more_than_one_cell (suite_sand.c)
+         * test_a_cascading_impulse_moves_more_than_one_cell
+         * (suite_sand_materials.c)
          * failing the moment this landed: a relayed entry that takes more
          * than one step to roll a move now decays under the cascade's own
          * SAND_CASCADE_MIN_SPEED * SAND_CASCADE_SPEED_DIVISOR gate before
@@ -2858,7 +2860,7 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * can_impulse_enter_gravity_ward() is now the ONE predicate both
          * places ask (see that function's own comment), so the two cannot
          * disagree again - see test_an_energetic_static_chunk_over_a_
-         * powder_bank_still_sinks_to_the_bottom (suite_sand.c), which is
+         * powder_bank_still_sinks_to_the_bottom (suite_sand_impulse.c), which is
          * exactly the diagonal-opening case that regressed.
          *
          * SPENT IS SETTLED TOO, NOW - can_impulse_enter_gravity_ward()
@@ -2866,7 +2868,7 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * so an entry with nothing left only counts a genuinely
          * CELL_IS_EMPTY() candidate as an opening, same as the drift above
          * - see test_a_spent_static_chunk_rests_on_a_powder_bank_instead_
-         * of_sinking_forever (suite_sand.c) for the case this reopens on
+         * of_sinking_forever (suite_sand_impulse.c) for the case this reopens on
          * purpose: a spent chunk over a packed bank now correctly finds no
          * opening on its very first check and settles right there, rather
          * than the drift and this check disagreeing about it a second way.
@@ -2892,7 +2894,7 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * genuinely blocked AND blocked by exactly the one kind of
          * neighbour that can still move out of the way next step. See
          * test_a_chunk_stacked_on_an_in_flight_chunk_waits_instead_of_
-         * settling_and_both_eventually_land (suite_sand.c). */
+         * settling_and_both_eventually_land (suite_sand_impulse.c). */
         if (!rolled_move) {
             if (material_of(entry.cell)->kind == KIND_STATIC) {
                 const int rx = (int)((unsigned)entry.index % (unsigned)w);
@@ -3035,7 +3037,7 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * cell every entry already moved before this constant existed -
          * see that constant's own comment for why that has to stay exact,
          * and test_a_sub_divisor_speed_impulse_never_moves_more_than_one_
-         * cell_a_step (suite_sand.c) for the pin.
+         * cell_a_step (suite_sand_impulse.c) for the pin.
          *
          * NOT THE ONLY BUDGET ANY MORE - the hop loop below also carries
          * an ENERGY exit (see its own comment, right after `moved++`) that
@@ -3234,7 +3236,7 @@ static void step_impulses(sand_t *s, int dx, int dy)
              * `break` a few dozen lines up, and packed medium is not a
              * wall. Measured before this existed: a chunk thrown into a
              * dirt bank averaged 3.0 cells of penetration (32 seeds,
-             * plow_total_distance(), suite_sand.c) against the constant's
+             * plow_total_distance(), suite_sand_impulse.c) against the constant's
              * own stated intent of stopping at the rim, roughly one - see
              * test_a_thrown_chunk_stops_near_the_rim_of_a_dirt_bank for the
              * pin this closes.

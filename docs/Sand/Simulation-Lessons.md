@@ -202,7 +202,7 @@ rather than deleting:
   gravity-flip (a big settled pile, gravity reversed outright - the real
   worst case pouring and tilting produces, not the old single-material
   numbers above) 15733 us. ~~Both still over budget, both real regression
-  guards in `suite_sand.c` now, and both improved substantially without yet
+  guards in `suite_sand_perf.c` now, and both improved substantially without yet
   being solved - there is more here if anyone picks it back up, and the
   section below is the place to start rather than re-deriving the same
   three ruled-out theories again.~~ Moved further still, and picked back up
@@ -380,7 +380,7 @@ Net result of the whole investigation: full-occupancy passing again,
 settled-screen 613 us -> 319 us (still over a 300 us budget), water-collapse
 30454 us -> 22788 us (still over 16000 us), gravity-flip 17666 us -> 15733 us
 (still over 8000 us). ~~All four are real, load-bearing regression guards now
-(`suite_sand.c`'s frame-budget tests), not fixed - there is more here if
+(`suite_sand_perf.c`'s frame-budget tests), not fixed - there is more here if
 anyone picks this back up.~~ Picked back up - see
 [`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md)'s "A
 guard chain can cost more than what it guards" for the next round, and

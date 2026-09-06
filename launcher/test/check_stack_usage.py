@@ -23,8 +23,9 @@ chain above a fixture, not just the fixture's own frame), yet it catches
 both historical panics (24 KB and 4 KB) with two orders of magnitude to
 spare. Measured against the tree on 2026-09-03, the largest frame that
 clears the ceiling today is 864 bytes
-(test_a_direction_flip_does_not_corrupt_the_boundary_debounce, suite_sand.c)
-- so 1024 is not starving anything real, it is just below where the next
+(test_a_direction_flip_does_not_corrupt_the_boundary_debounce,
+suite_sand_liquid_depth.c since the suite_sand.c split) - so 1024 is not
+starving anything real, it is just below where the next
 genuine outlier would have to be caught.
 
 Seven functions already exceed it (PRE_EXISTING_STACK_DEBT below), now
@@ -96,17 +97,17 @@ STACK_FRAME_TOOLCHAIN_TOLERANCE = 0.25
 # esp32c6-3h9, the first thing this gate caught). It was moved to the heap
 # in 4a17e07 and now measures 1,632.
 PRE_EXISTING_STACK_DEBT = {
-    ("suite_sand.c",
-     "test_a_submerged_obstacle_casts_a_gravity_aligned_shadow"): 1632,
-    ("suite_sand.c",
+    ("suite_sand_liquid_depth.c",
+     "test_a_submerged_obstacle_casts_a_gravity_aligned_shadow"): 1648,
+    ("suite_sand_liquid_depth.c",
      "test_a_sparse_repaint_does_not_band_a_tall_liquid_column"): 1792,
-    ("suite_sand.c",
-     "test_a_settled_edge_does_not_flicker_stale_to_fresh"): 1488,
-    ("suite_sand.c",
+    ("suite_sand_liquid_depth.c",
+     "test_a_settled_edge_does_not_flicker_stale_to_fresh"): 1504,
+    ("suite_sand_liquid_depth.c",
      "test_the_blend_has_no_jump_crossing_45_degrees"): 1216,
-    ("suite_sand.c",
+    ("suite_sand_liquid_depth.c",
      "test_axis_lock_tremor_does_not_wipe_the_depth_debounce"): 1136,
-    ("suite_sand.c",
+    ("suite_sand_liquid_depth.c",
      "test_turning_a_settled_pool_to_landscape_does_not_flash_the_whole_body"):
         1088,
 }

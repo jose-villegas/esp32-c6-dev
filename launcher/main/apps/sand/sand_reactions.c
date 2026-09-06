@@ -3999,8 +3999,9 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
      * A second, independent roll on top of it, applied only to the
      * material's own natural figure, pushes the effective floor lower
      * without touching sand_set_evaporates()'s override path -
-     * test_acid_evaporates_into_gas_when_forced (suite_sand.c) still
-     * gets a deterministic single-step evaporation out of forcing 255,
+     * test_acid_evaporates_into_gas_when_forced
+     * (suite_sand_reaction_encoding.c) still gets a deterministic
+     * single-step evaporation out of forcing 255,
      * and sand_set_evaporates(s, 0) still disables it outright, exactly
      * as before. That second roll started at 1-in-4 (effective 1 in
      * 1024), was tightened to 1-in-20 (effective 1 in 5120) once still
@@ -4226,8 +4227,16 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
  * trail", and it is what a lit pile actually presents at burn-out time.
  * Cheaper too: at most four cells looked at per quadrant, with an early out.
  *
- * OFF-BOARD COUNTS AS NOT LIT. The board edge is never the inside of a
- * pile (see test_a_lit_cell_at_the_board_edge_never_detonates, suite_sand.c).
+ * OFF-BOARD COUNTS AS NOT LIT - lit_here() bounds-checks first, so a
+ * neighbour past the edge never counts as one of the three corners this
+ * looks for. That is narrower than this comment once claimed: an edge cell
+ * CAN still be the corner of a 2x2 that folds entirely inward (all three
+ * other corners on-board) and detonates like any interior one - the old
+ * "board edge never detonates" claim was retired for exactly that reason.
+ * What off-board-as-not-lit actually buys: a lit cell whose only lit
+ * neighbours are off-board or strung out in a single line never completes
+ * a square, wherever it sits - see test_a_one_wide_lit_trail_never_
+ * detonates (suite_sand_gunpowder.c).
  *
  * same_species(), not a raw material compare - gunpowder shares its high
  * nibble with the extended statics (GUNPOWDER_BASE, material.h), and a
@@ -4583,7 +4592,8 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
      * the stone cell just placed at the centre is immediately overwritten
      * by fresh fire. That is expected, pinned behaviour, not a bug to
      * chase - see test_buried_lava_bursts_into_stone_and_fire
-     * (suite_sand.c), which asserts the centre's real final material
+     * (suite_sand_lava_burial.c), which asserts the centre's real final
+     * material
      * rather than assuming it.
      *
      * A WHOLE-CELL EVENT, NOT A PER-NEIGHBOUR PROBE - sits out here rather
@@ -4617,12 +4627,12 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
      * it. covered_at()'s gravity-relative lid fixes that: the two
      * diagonal crust cells beside "straight up" count too, so a crust
      * alone lids an interior pool cell - see
-     * test_a_wide_pool_under_a_crust_bursts (suite_sand.c), the case that
-     * could not fire before this change. Those three cells and ONLY
+     * test_a_wide_pool_under_a_crust_bursts (suite_sand_lava_burial.c),
+     * the case that could not fire before this change. Those three cells and ONLY
      * those: the two perpendiculars beside the cell never count, because
      * a vessel's sides wall lava in rather than cover it, and letting
      * them count blew the sides out of every hand-drawn basin (see
-     * test_lava_in_a_wall_notch_never_bursts, suite_sand.c, and
+     * test_lava_in_a_wall_notch_never_bursts, suite_sand_lava_burial.c, and
      * cover_mask()'s own comment for the notch that did it). A pocket
      * with an open side still qualifies, as long as its lid is complete.
      *
@@ -4636,7 +4646,7 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
      * in the simulation either, and a bare conversion to stone is not a
      * wrong answer on its own (see
      * test_buried_lava_still_becomes_stone_with_impulses_off,
-     * suite_sand.c). */
+     * suite_sand_lava_burial.c). */
     const bool is_lava = mat->kind == KIND_LIQUID && rx->quench_to != 0;
     /* NATURAL rate or an override, and the difference decides whether the
      * second gate below applies at all - exactly the split

@@ -418,7 +418,8 @@ void test_blit_dither_matches_per_pixel_covers_reference(void)
  * row) rather than snapshotting the whole box into a stack array: this
  * suite is device-only (see this file's own top comment), so it runs on
  * the ESP-IDF main task's 3584-byte stack (CONFIG_ESP_MAIN_TASK_STACK_SIZE
- * - see suite_sand.c's own comments on that same budget), several frames
+ * - see the sand test suite's own comments on that same budget, e.g.
+ * suite_sand_locality.c or suite_sand_materials.c), several frames
  * deep into selftest_run()/suites_run_all() by the time this test's own
  * locals are live. A 40x40 gfx_color_t buffer is 3.2 KB - most of that
  * budget in one local; a 40-wide row is 80 bytes. */
@@ -804,7 +805,7 @@ void test_repeated_presents_stay_in_sync(void)
  * Every timing assertion below is a RATIO against a reference measured in
  * the same run - "under a tenth of a full frame", "cheaper than a whole
  * band" - which is what makes them immune to the flash-layout lottery
- * suite_sand.c's simulation tests ride (measured there at ~4%, and now
+ * suite_sand_perf.c's simulation tests ride (measured there at ~4%, and now
  * suspected to be quantised into two states rather than continuous - see
  * docs/Sand/Performance-Tuning-Attempts.md's "the layout lottery is
  * quantised"). But a ratio is structurally blind to a uniform slowdown: if
@@ -815,7 +816,7 @@ void test_repeated_presents_stay_in_sync(void)
  * band beats a whole one), the absolute asserts the cost has not drifted.
  *
  * Absolute budgets are affordable here in a way they are not for
- * suite_sand.c: these tests are BUS-BOUND, not layout-bound. Four device
+ * suite_sand_perf.c: these tests are BUS-BOUND, not layout-bound. Four device
  * captures of four different builds put the full-band reference at 3,405 /
  * 3,405 / 3,404 / 3,406 us - a 0.06% spread - so a number pegged here is
  * pegged to the QSPI clock, not to wherever the linker happened to put a
@@ -862,7 +863,7 @@ static void test_an_unchanged_frame_costs_almost_nothing(void)
 
 /* Decomposes a full-screen gfx_present() into raw QSPI bus time versus
  * everything gfx_present() itself adds on top of it - the question a
- * documented figure in suite_sand.c (the comment above FULL_STEP_BUDGET_US)
+ * documented figure in suite_sand_perf.c (the comment above FULL_STEP_BUDGET_US)
  * has stood on without ever having measured it directly: a "~9.6 ms
  * bus-time ceiling", stated there as a principle rather than a capture,
  * that this frame's budget was historically set to stay under. The
@@ -903,7 +904,7 @@ static void test_full_present_cost_splits_into_bus_time_and_overhead(void)
      * hold either to a tuned ceiling. PROVISIONAL: no device capture of
      * this split exists yet, so nothing tighter is asserted - re-peg (or
      * replace with a real ceiling on the overhead specifically) from the
-     * first device capture, the same convention suite_sand.c's
+     * first device capture, the same convention suite_sand_perf.c's
      * FULL_STEP_BUDGET_US comment documents for a newly-added measurement. */
     TEST_ASSERT_GREATER_THAN_INT_MESSAGE(1000, (int)raw_us,
         "the raw blit returned implausibly fast - did it actually wait for "
@@ -954,7 +955,7 @@ static void test_a_partial_change_costs_less_than_a_full_frame(void)
  * drains every queued band together at the end, so later bands' DMA
  * overlaps earlier bands' CPU-side setup. Seven bands sent in a real
  * frame come to 18,147 us, not 7 x 3,405 = 23,835 - that pipelined price
- * is what run_present_against_scene() in suite_sand.c measures, with its
+ * is what run_present_against_scene() in suite_sand_perf.c measures, with its
  * three present-cost tests. Sanity-checking one of those numbers against
  * the other by multiplying is not valid; the two measure different
  * things, and both are correct for what they measure. */

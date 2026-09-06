@@ -15,7 +15,7 @@ DIRAM is one pool behind .data/.bss AND the heap (see docs/Notes/
 Board-and-Memory.md, "Static growth taxes the heap too"). The single
 368x448x2 framebuffer (gfx_init(), launcher/main/gfx/gfx.c) must be one
 contiguous DMA allocation at boot, and the sand app's real-size grid (and
-the real-size fixtures in main/apps/sand/suite_sand.c) then need one
+the real-size fixtures in main/apps/sand/suite_sand_*.c) then need one
 contiguous 41,216-byte block after it. Twice, a static test buffer grew
 until the framebuffer - or the grid - no longer fit, and nothing caught it
 at build time: the host suite stayed green (it has megabytes of stack and
@@ -79,7 +79,7 @@ THE ARITHMETIC
 
   GRID_BYTES = 41,216 = 184 * 224: the sand app's grid at the real screen
   size (main/apps/sand/app_sand.c) and the STRESS_W*STRESS_H fixture of
-  the real-size tests in main/apps/sand/suite_sand.c.
+  the real-size tests in main/apps/sand/suite_sand_locality.c.
 
     predicted_largest_before_fb = usable_heap - PRE_FRAMEBUFFER_OVERHEAD_BYTES
     predicted_largest_after_fb  = usable_heap - FRAMEBUFFER_BYTES

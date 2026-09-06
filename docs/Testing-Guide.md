@@ -490,8 +490,8 @@ against.
    `CMakeLists.txt` and `run_tests.sh`.
 4. Guard anything needing hardware with `#ifdef DEVICE_BUILD`, including its
    `RUN_TEST` line. A suite can be portable and still have a device-only
-   section — `suite_sand.c` runs its rules on a host and its performance check
-   only on the chip.
+   section — the sand suite (`suite_sand_*.c`) runs its rules on a host and
+   its performance checks (`suite_sand_perf.c`) only on the chip.
 5. Break the implementation, confirm red, restore.
 
 ---
@@ -500,8 +500,8 @@ against.
 
 - `docs/Launcher-Architecture.md` — how an app plugs into the shell, and the
   folder layout the app-suite convention above assumes.
-- `docs/Sand/Sand-Simulation.md` — `suite_sand.c` is the largest suite in this
-  codebase; this is what it is actually testing.
+- `docs/Sand/Sand-Simulation.md` — the sand suite (`suite_sand_*.c`) is the
+  largest test suite in this codebase; this is what it is actually testing.
 - `docs/Notes/` — the hardware constraints behind the device-only
   performance tests. Start at `docs/Notes/README.md`.
 - `docs/Settings-App-Plan.md` — the Diagnostics app itself now follows the
