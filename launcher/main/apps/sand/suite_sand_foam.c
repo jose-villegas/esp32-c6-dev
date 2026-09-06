@@ -39,8 +39,8 @@
  * why no separate "is it moving" signal is wired in here or anywhere else.
  *
  * None of these four tests can reach into material.c's own `water_foam`
- * constant - it is file-static, the same way metal_shine and stone_speckle
- * already are, and these tests reach material_colours() only through
+ * constant - it is file-static, the same way stone_speckle already is,
+ * and these tests reach material_colours() only through
  * material.h same as any other caller. Instead they lean on
  * material_set_gravity(0, 0), which zeroes liquid_spec[] entirely (see that
  * function's own free-fall branch), so that "did NOT foam" has an exact,

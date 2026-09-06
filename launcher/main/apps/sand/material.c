@@ -2099,21 +2099,6 @@ static const gfx_color_t root_grain[ROOT_SHADES][8] = {
 };
 _Static_assert(ROOT_SHADES == 4, "root_grain[] above spells out one row per shade - add a row here too");
 
-/* Metal's woven line and travelling shine - the same HATCHED mechanism
- * glass uses in paint_row_n(), which is generic to anything hatched and
- * not glass-specific (the diagonal grain, the crossings, the travelling
- * band all key off the pattern, never the material). What glass gets that
- * metal cannot is a per-variant ramp to shade these by: an extended
- * material's low nibble is spent naming WHICH one it is rather than
- * holding a variant (see the MAT_EXTENDED case below), so there is one
- * dither tone and one shine tone here, not sixteen.
- *
- * Lifted off METAL_LIGHT rather than off metal_grain's own per-cell
- * wobble: a highlight that wobbled per cell would look chewed rather
- * than reflective, not brushed. */
-static const gfx_color_t metal_dither = GFX_RGB(LERP(METAL_LIGHT, 0xFFFFFF, 4));
-static const gfx_color_t metal_shine = GFX_RGB(LERP(METAL_LIGHT, 0xFFFFFF, 11));
-
 static const gfx_color_t stone_edge_speckle[MATERIAL_VARIANTS][8] = {
     STONE_EDGE_ROW(0),  STONE_EDGE_ROW(1),  STONE_EDGE_ROW(2),  STONE_EDGE_ROW(3),
     STONE_EDGE_ROW(4),  STONE_EDGE_ROW(5),  STONE_EDGE_ROW(6),  STONE_EDGE_ROW(7),
@@ -2387,9 +2372,9 @@ material_shine_direction(int gx, int gy, int *ux_q8, int *uy_q8) {
  * needs it. */
 
 /* FOAM's own colour - a side table, not a palette[] row, the same pattern
- * metal_shine and stone_speckle already use above: there is no spare slot
- * in palette[] for it, and a dither over an existing rim colour does not
- * need an indexed row of its own the way a fill level does.
+ * stone_speckle already uses above: there is no spare slot in palette[]
+ * for it, and a dither over an existing rim colour does not need an
+ * indexed row of its own the way a fill level does.
  *
  * Brighter and whiter than water's own palest ramp entry (0x77C4E8, the
  * shallow end of the SHADES() run in palette[] above) - foam has to read
@@ -2800,30 +2785,22 @@ material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_col
         case MAT_EXTENDED:
             /* Switched on the low nibble, which for these is their identity
          * rather than a variant - see MATX(). Anything without a grain of
-         * its own falls through to the flat palette entry below.
-         *
-         * Metal gets its own leading equality check, ahead of the guard
-         * below, because it returns a different PATTERN (HATCHED) rather
-         * than just a different colour - it cannot live inside the
-         * ternary, which only ever chooses a colour for one shared
-         * MATERIAL_SPECKLED return. That guard-plus-ternary shape below is
-         * otherwise untouched and back to the three materials it was
-         * measured at: a respelling of it into a switch cost 14% through
-         * the inlining cliff, and a single unhinted branch cost 26% of a
-         * benchmark, simulation byte-identical either way - see
-         * docs/Sand/Tuning-At-a-Glance.md. Adding metal's check ahead of it
-         * is one more cheap equality test per extended cell, not a
-         * restructure of the measured shape. */
-            if (v == MATX_METAL) {
-                out[0] = metal_grain[hash & 7u];
-                out[1] = metal_dither;
-                out[2] = metal_shine;
-                return MATERIAL_HATCHED;
-            }
-            if (v == MATX_PLANT || v == MATX_LEAF || v == MATX_ICE || v == MATX_ROOT) {
+         * its own falls through to the flat palette entry below. */
+
+            /* Metal used to need its own leading check here, because it
+         * once returned a different PATTERN (HATCHED - a woven line and
+         * a travelling shine). Dropped for reading as a printed grid
+         * rather than metal, the same reason glass's own hatch went. */
+
+            /* Guard-plus-ternary, measured at plant/leaf/ice/root: a
+         * switch cost 14% through the inlining cliff, an unhinted branch
+         * cost 26% of a benchmark - docs/Sand/Tuning-At-a-Glance.md.
+         * Metal joining is one more cheap test, not a restructure. */
+            if (v == MATX_PLANT || v == MATX_LEAF || v == MATX_ICE || v == MATX_ROOT || v == MATX_METAL) {
                 out[0] = (v == MATX_PLANT)  ? plant_grain[hash & 7u]
                          : (v == MATX_LEAF) ? leaf_grain[hash & 7u]
                          : (v == MATX_ICE)  ? ice_grain[hash & 7u]
+                         : (v == MATX_METAL) ? metal_grain[hash & 7u]
                                             : root_grain[root_shade(depth)][hash & 7u];
                 out[1] = out[0];
                 out[2] = out[0];
