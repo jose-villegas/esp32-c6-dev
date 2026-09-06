@@ -84,6 +84,13 @@ never merged; `git show` still works once that branch is fetched, or
   19.3% of cells were provably skippable and skipping them measured
   −0.1%, because the cells were already cheap to fall through. It also
   went stale mid-pass against flags armed during the same pass.
+  **The −0.1% is a HOST number and this entry is now in doubt** (bd
+  esp32c6-vk4, 2026-09-07): the host was measured understating executed
+  work by 2–6.6×, and round 6 shipped a change the host called +1% that
+  the device paid −7.4% for. The staleness objection stands on its own
+  and is reason enough not to rebuild this *as designed* — but "skipping
+  them measured −0.1%" is no longer evidence the skip is worthless. See
+  Perf-Round-Guide.md, "The one class where a host null means nothing".
 - **Per-move liquid narrowing of `mark_rows()`** (9, exp. B) — counted,
   exactly, as strictly less work (6,160 fewer calls/step) and still
   measured 14% *slower*, purely from where the extra branch moved the

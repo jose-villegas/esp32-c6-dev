@@ -39,6 +39,12 @@ Never skip step 1. Every round in this campaign that designed a fix before
 counting spent at least one device cycle on code the failing test never
 called or work that was already cheap to fall through.
 
+But step 1 tells you where the cost *is*, not what a change will *save*,
+and its host numbers have one measured blind spot: a candidate that stops
+executing work can read as zero on a laptop and win several percent on the
+board. Read "The one class where a host null means nothing" below before
+you drop a candidate because the host shrugged at it.
+
 ## Exact commands
 
 Host suite (portable suites, <1s):
@@ -169,6 +175,50 @@ for changes of work quantity. The factor neither this harness nor any x86
 host can see is flash placement against the 32 KB instruction cache. The
 route to that number, once a QEMU with TCG plugins exists, is sketched and
 half-built in `launcher/tools/oracle/`.
+
+### The one class where a host null means nothing (bd esp32c6-vk4)
+
+**A change that stops EXECUTING work can measure zero on the host and win
+several percent on the device.** Not a magnitude error - a sign error. The
+0.7x-2x range above does not hold here, and this has already cost this
+campaign real decisions.
+
+Measured 2026-09-07 with a probe built for the question: 32 dummy field
+tests per non-empty cell, one build executing them and one skipping them,
+gated on a `volatile` so both builds emit *identical* code (4,833
+instructions, same function inventory) and differ only in one `.data`
+initialiser. Each machine's delta against its own baseline for the same
+scene:
+
+| scene | host | device | device/host |
+|---|---:|---:|---:|
+| water | 33.7% | 67.3% | **2.0x** |
+| every-material flip | 5.0% | 32.9% | **6.6x** |
+
+So the host understates the cost of executed instructions by 2-6.6x
+relative to the surrounding simulation work. It is not that the device is
+uniformly slower - a uniform slowdown cancels in that ratio.
+
+**Do not write "i-cache" as the cause.** That was assumed twice and is
+still unproven. This part is single-issue in-order while the host is wide
+superscalar out-of-order, so 32 extra ALU ops cost ~32 cycles here and far
+less there through instruction-level parallelism alone; fetch and IPC both
+fit these numbers and the experiment cannot separate them. A separate test
+- growing flash-resident const data read per cell from 4 KB to 32 KB -
+measured *exactly zero* on device, which is weak evidence against the
+cache half. What is established is the effect, not the mechanism.
+
+Two consequences for how you run a round:
+
+- **A host null is not a reason to abandon a candidate that removes
+  executed work.** Round 6's own ceiling test measured +1% on host; the
+  device paid -7.4% for the same idea, and the round was nearly closed on
+  that null before the code was written.
+- **Candidates already retired on host nulls of this class are suspect
+  and may be worth re-testing on device.** Named: attempt 12's per-cell
+  "can this material react at all" mask, retired at -0.1%
+  (Performance-Tuning-Attempts.md, "Never retry"), and round 6's ceiling
+  test above.
 
 ```sh
 bash launcher/main/apps/sand/tools/perf_probe/build_probe.sh out/probe
