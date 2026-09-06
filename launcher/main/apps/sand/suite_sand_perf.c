@@ -2299,6 +2299,7 @@ void run_sand_perf_suite(void)
     RUN_TEST(test_the_boiler_scene_fits_in_the_frame_budget);
     RUN_TEST(test_the_wet_earth_scene_fits_in_the_frame_budget);
     RUN_TEST(test_the_water_over_lava_scene_fits_in_the_frame_budget);
+    RUN_TEST(test_the_gunpowder_basin_scene_fits_in_the_frame_budget);
 
     RUN_TEST(test_present_cost_against_a_falling_sand_scene);
     RUN_TEST(test_present_cost_against_the_lava_stress_scene);
