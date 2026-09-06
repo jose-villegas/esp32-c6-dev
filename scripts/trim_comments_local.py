@@ -218,15 +218,35 @@ META_REPLY = re.compile(
     r"^(?:i will|i'll|i am going to|let me) (?:now )?(?:reply|rewrite|"
     r"provide|shorten)\b|\bas an ai\b", re.I)
 
+# A reply that is ONLY an acknowledgement, with nothing else - observed
+# verbatim: "Understood." replacing real comment text outright. Anchored
+# start-to-end (not .search()) so this never matches a real rewrite that
+# merely happens to start with one of these words.
+BARE_ACK = re.compile(
+    r"^(?:understood|got it|sure|okay|ok|noted|acknowledged)\.?\s*"
+    r"(?:please (?:provide|send|give).*)?$", re.I)
+
+# Phrases that only exist in THIS script's own PROMPT/RETRY templates -
+# their presence in a reply means the model echoed the instruction back
+# instead of following it, also observed verbatim ("That was 102
+# characters, still over 100. Reword it shorter.").
+PROMPT_ECHO = re.compile(
+    r"characters,?\s*still over|reply with nothing but|cut prose|"
+    r"rewrite it shorter", re.I)
+
 
 def looks_like_meta_reply(prose):
-    """Catches a model talking ABOUT the task instead of doing it - observed
-    directly from an OmniRoute-routed model ("Your next reply should provide
-    the shortened comment or the word DELETE.") that was short enough to pass
-    every other check and would have been written into a live comment as-is.
-    Not exhaustive, just the shape actually seen; treated the same as an
-    empty reply - forces a retry rather than being accepted."""
-    return bool(META_REPLY.search(prose))
+    """Catches a model responding to the TASK rather than doing it. Three
+    shapes have been observed directly, all short enough to pass the length
+    check and easy to mistake for real content: talking about what it will
+    reply (META_REPLY - "Your next reply should provide..."), a bare
+    acknowledgement with nothing else (BARE_ACK - "Understood."), and an
+    echo of this script's own prompt wording back at it (PROMPT_ECHO -
+    "That was 102 characters, still over 100. Reword it shorter."). Not
+    exhaustive, just the shapes actually seen; treated the same as an empty
+    reply - forces a retry rather than being accepted."""
+    return bool(META_REPLY.search(prose) or BARE_ACK.match(prose.strip())
+                or PROMPT_ECHO.search(prose))
 
 
 def rewrap(comment, prose, width, source):
