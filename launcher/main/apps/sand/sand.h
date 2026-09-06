@@ -380,14 +380,13 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
 #define SAND_SPLASH_CHANCE_FLOOR       24
 #define SAND_SPLASH_CHANCE_STEP        140
 
-/* How fast a WATER or ACID impulse's own `speed` decays per step
- * (step_impulses()) - a right-shift, not the linear SAND_IMPULSE_SPEED_RAMP
- * subtraction every other material uses, so a splash hits hard and dies out
- * much faster than the linear ramp's own long tail. Scoped to water/acid
- * only - every other caller of sand_impulse() keeps the linear ramp. A
- * stronger shift starves the cascade relay sooner; retune
- * SAND_CASCADE_MIN_SPEED, not this, if the cascade reads as cut too short. */
-#define SAND_SPLASH_SPEED_DECAY_SHIFT  3
+/* How fast a WATER/ACID impulse's `speed` decays per CELL OF TRAVEL
+ * (impulse_decay(), sand.c) - a right-shift, not the linear
+ * SAND_IMPULSE_SPEED_RAMP every other material uses. BIGGER SHIFT MEANS
+ * SLOWER DECAY, NOT FASTER: `speed -= speed >> SHIFT`, so 1 leaves half
+ * per cell, 2 leaves 3/4 - easy to get backwards (a stale comment here
+ * once did). Scoped to water/acid only. */
+#define SAND_SPLASH_SPEED_DECAY_SHIFT  2
 
 /* CASCADE - a WATER/ACID impulse that moves relays its push into the SAME
  * material one step BEHIND where it started, so connected liquid moves as a
@@ -413,11 +412,13 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
 #define SAND_CASCADE_TRANSFER_MAX_PER_STEP  (SAND_CASCADE_MAX_PER_STEP - \
                                              SAND_CASCADE_RELAY_RESERVE)
 
-/* See acid_bubble() (sand_reactions.c). SPEED stays below
- * SAND_EXPLODE_INITIAL_SPEED's own ceiling so a bubble reads smaller than
- * a splash. */
+/* See acid_bubble() (sand_reactions.c). SPEED stays well below
+ * SAND_EXPLODE_INITIAL_SPEED so a bubble reads smaller than a splash;
+ * range is logarithmic in this value (the fine adjustment - see
+ * SAND_SPLASH_SPEED_DECAY_SHIFT for the coarse one, shared with water).
+ * CHANCE governs how many bubbles fire, not how high they arc. */
 #define SAND_ACID_BUBBLE_CHANCE 40
-#define SAND_ACID_BUBBLE_SPEED  220
+#define SAND_ACID_BUBBLE_SPEED  180
 
 /* DILUTION - water touching acid rolls to decide who wins (the winner boils
  * into vapour, the loser converts to the winner's material - see the ladder

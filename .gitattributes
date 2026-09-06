@@ -46,3 +46,15 @@
 # core.autocrlf, so this holds regardless of how any one clone is
 # configured, the same as the two rules above.
 *.md text eol=lf
+
+# Checked-in tool output that is diffed byte-for-byte against a fresh run,
+# the same reason as the docs above - main/apps/sand/tools/
+# fingerprint_baseline.txt is the first. It had no rule at all, so the
+# behaviour gate (report_fingerprint.sh --check) compared an LF baseline
+# against a Windows run's CRLF and failed on every line of every run,
+# independent of whether any grain had actually moved - a gate that cannot
+# pass teaches you to ignore it. The generator now forces its own stdout to
+# binary (grid_fingerprint.c, same as dump_reactions.c); this is the belt to
+# that braces, and covers the baseline arriving CRLF from a clone configured
+# with core.autocrlf=true, which no emitter fix can reach.
+*.txt text eol=lf
