@@ -3980,10 +3980,26 @@ step_one_acid_rain_cell(sand_t* s, int x, int y, int w, int h) {
     return true;
 }
 
-/* One row's scan sends only burning cells. Kind checks are skipped to avoid
- * treating static materials as heat sources. Non-reacting burning cells are
- * tracked in may_have_burning. Returns a bitmask to distinguish between
- * burning and dissolving cells, preventing incorrect board states. */
+/* One row's scan dispatches only burning cells, keyed on reaction_t.burns
+ * (material.h), NOT on kind == KIND_STATIC. Stone, ember, and every unused
+ * material slot share that kind, so a kind-based check here would treat
+ * plain stone as a heat source - the exact mistake caught before this
+ * shipped, back when fire was the only thing that could burn and MAT_FIRE
+ * was tried directly (see the plan this was built from). */
+
+/* PRESENCE, NOT ACTIVITY: a burning cell that neither reacts nor decays
+ * this step (no fuel or liquid touching it, roll not hit) still needs
+ * may_have_burning set - latched when the cell is IDENTIFIED as burning,
+ * before step_one_burning_cell() runs, mirroring step_one_gas_row's own
+ * already-fixed presence-not-movement pattern (sand_gas.c). Backwards, a
+ * quiet burning cell falls out of the bookkeeping while still on the
+ * grid, stranding its own eventual burn-out. */
+
+/* Returns a bitmask rather than a bool: a row may hold burning cells,
+ * dissolving ones, or both, and sand_step_reactions() clears the two
+ * may_have_* flags independently. Collapsing them into one answer would
+ * let a board of nothing but acid keep may_have_burning armed forever,
+ * and a board of quiet fire keep may_have_dissolver armed. */
 #define FOUND_BURNING     1u
 #define FOUND_DISSOLVER   2u
 #define FOUND_TEMPERATURE 4u
