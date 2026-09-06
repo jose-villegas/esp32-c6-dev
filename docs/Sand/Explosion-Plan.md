@@ -603,3 +603,36 @@ variant (to burn down as a fuse), which is exactly the criterion
 `Architecture.md` names for the last full-physics slot. That slot should
 be spent *after* this mechanic has been seen working, not before - if
 blasts read badly or cost too much, the slot is still banked.
+
+**Resolved, 2026-09-05.** The slot named above was already gone by the
+time gunpowder was built - dirt had spent it, and `Architecture.md`'s own
+"one ordinary slot free" text had gone stale without anyone noticing,
+which this note also corrects. What shipped instead: `MAT_EXTENDED`'s low
+nibble split by its own top bit, `0xF0`-`0xF7` staying the extended-statics
+doorway and `0xF8`-`0xFF` becoming gunpowder's own `KIND_POWDER` row with
+a real (3-bit) variant - `materials[]` doubled to `MATERIAL_ROWS` (32),
+indexed by `cell >> 3`, to make room for it. Full mechanism and costs
+(extended statics down to 8 codes, hot table to 384 B, controls unmeasured
+against it) in `Architecture.md`'s "The material budget, and what is
+left".
+
+**Revised, 2026-09-05, after device testing.** The fuse this paragraph
+imagined shipped after all - just not on the first attempt. The version
+above (immediate `sand_explode()` on ignition) is what actually landed
+first; a boundary-only variant on top of it came next, and the maintainer
+measured that one on the device and found it no cheaper. What replaced
+both is a real burn-down: gunpowder now has a **lit** state,
+code 7 of its own 3-bit variant - "to burn down as a fuse" needed exactly
+one more code out of the three bits this paragraph already asked for, not
+a fourth bit. Ignition and the qualifying heat hit write that lit code
+instead of blasting; a lit cell is a heat source like a burning log
+(ignites neighbours, so a trail burns along; counts down its own
+`burn_decay`, 16); only at burn-out does `reaction_t.explodes` (radius 20)
+get read, and only if the cell is one corner of a 2x2 that is all lit
+gunpowder and impulses are enabled - otherwise the cell becomes plain
+fire (a whole lit 3x3 was tried first and proved too rare to see). A pile still
+chain-detonates over several steps, exactly as this paragraph predicted,
+but now for the reason it names: a counter on the cell, not merely
+neighbour propagation racing to keep up. Full mechanism in
+`Architecture.md`'s "The reaction table" and `Sand-Simulation.md`'s
+"Fire chemistry" section.

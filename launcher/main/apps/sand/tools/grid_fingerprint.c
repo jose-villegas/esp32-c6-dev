@@ -251,6 +251,34 @@ static void scene_sealed_lava(sand_t *s)
     }
 }
 
+/* Scene 6: a dirt bank under standing water, soaking enabled - the
+ * moisture codec (soaking up, percolating, drying) sits entirely OUTSIDE
+ * every scene above: none of them ever call sand_set_soak(), so
+ * step_one_soaking_cell() - the function moisture_of()/with_moisture()
+ * (material.h) now route both dirt AND gunpowder through - could regress
+ * freely with this whole file staying green. Dry dirt shelved against a
+ * stone floor, watered from above, gives both the soaking-up transition
+ * and the percolation that spreads it downward through the bank real,
+ * sustained exercise over the whole budget - not just a first splash. */
+static void scene_wet_earth(sand_t *s)
+{
+    sand_set_soak(s, SAND_SOAK_PER_MATERIAL);
+
+    for (int x = 0; x < FP_W; x++) {
+        sand_set(s, x, FP_H - 1, FP_STONE);
+    }
+    for (int y = FP_H - 20; y < FP_H - 1; y++) {
+        for (int x = 4; x < 40; x++) {
+            sand_set(s, x, y, FP_DIRT);
+        }
+    }
+    for (int y = FP_H - 32; y < FP_H - 20; y++) {
+        for (int x = 8; x < 36; x++) {
+            sand_set(s, x, y, FP_WATER);
+        }
+    }
+}
+
 static const struct {
     const char *name;
     scene_fn    build;
@@ -261,6 +289,7 @@ static const struct {
     { "lava_quench", scene_lava_quench, 23u },
     { "fire_gas",    scene_fire_gas,    31u },
     { "sealed_lava", scene_sealed_lava, 41u },
+    { "wet_earth",   scene_wet_earth,   53u },
 };
 
 int main(void)

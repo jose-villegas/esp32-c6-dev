@@ -49,13 +49,22 @@ purpose:
   boiler](#fire-chemistry-wood-embers-steam-and-a-working-boiler), and
   [`Adding-a-Material.md`](Adding-a-Material.md) for how each of these
   uses this.
+- **Gunpowder** (`KIND_POWDER`, but a nibble of its own): the low nibble
+  splits by its own TOP bit instead of naming a shade - `0xF8`-`0xFF` is
+  gunpowder, sharing material id 15 (`MAT_EXTENDED`) with the extended
+  statics below but claiming the other half of that nibble for a real
+  `KIND_POWDER` material. Its own remaining 3 bits are a state split like
+  dirt's, just narrower: codes 0-2 are dry tones, 3-6 are moisture 1-4,
+  and 7 is a burning STATE (`GUNPOWDER_LIT`) rather than one more
+  moisture level - see [Fire chemistry](#fire-chemistry-wood-embers-steam-and-a-working-boiler)'s
+  own gunpowder passage for what lit does.
 
 ## Materials are a flash-resident table, not code
 
-`materials[MATERIAL_MAX]` (`material.c`) is `const`, so it is memory-mapped
-from flash and costs **zero bytes of RAM** - confirmed via `idf.py size`,
-not assumed. Adding a material is a row in that table, not a branch in the
-movement code:
+`materials[MATERIAL_ROWS]` (`material.c`) is `const`, so it is
+memory-mapped from flash and costs **zero bytes of RAM** - confirmed via
+`idf.py size`, not assumed. Adding a material is a row in that table, not
+a branch in the movement code:
 
 ```c
 typedef struct {
@@ -68,8 +77,16 @@ typedef struct {
 } material_t;
 ```
 
-The table is padded to the full 16 the nibble can address
-(`MATERIAL_MAX = 16`), with the unused slots filled inert (`KIND_STATIC`,
+`MATERIAL_ROWS` is **32**, not 16 - doubled once gunpowder split material
+id 15's nibble in two (see the encoding diagram above): `material_of()`
+indexes this table by `cell >> 3` instead of the id nibble alone, so an
+ordinary material's id maps to TWO adjacent rows (`MATERIAL_ROW(id)` and
+`MATERIAL_ROW(id) + 1`), written once through a small variadic macro and
+landing in both, while extended statics (`0xF0`-`0xF7`) share one row and
+gunpowder (`0xF8`-`0xFF`) shares the other - so the hot table doubled in
+flash size (192 B to 384 B) but stayed the same one shift, one indexed
+load in the sweep. The table is still padded to the full range the index
+can address, with unused slots filled inert (`KIND_STATIC`,
 `density = 255`). That turns every lookup into a plain array index with no
 bounds check - worth doing because it happens several times per cell, per
 step, and a corrupt cell byte becomes an immovable block instead of
@@ -389,7 +406,90 @@ changes its *kind* (fuel igniting into a gas, a liquid boiling into one)
 has to latch that kind's `may_have_*` flag, and getting it wrong is
 invisible to almost every other test.
 
-### Water cools, and lava can lose ground it cannot get back without a pour
+**Gunpowder has a fuse, not a detonator - it catches and burns like wood,
+and it is the burning-out that can end in a blast.** A flame or hot lava
+touching dry powder ignites it in the usual way (`flammability` 200, so it
+catches almost every time it is rolled), and heat alone, with nothing
+burning yet - lava resting beside it, or heat conducted through stone or
+metal, once the wet stage below has steamed any moisture off - reaches the
+same trigger from the heat-transform path. Either one writes code 7, the
+cell's **lit** state, in place of the plain `MAT_FIRE` a less flammable
+fuel would get. A lit cell is a heat source in its own right, exactly like
+a burning log: it ignites neighbouring dry powder (so a trail burns along,
+cell by cell), it can boil adjacent water, and it counts down its own
+`burn_decay` (16, roughly sixteen steps of fuse) every step via the same
+`tick_decay_at()` wood already uses - generalised by `reaction_t.lit_from`,
+the first variant code a `burn_decay` material treats as "burning" (wood:
+1; gunpowder: 7, since gunpowder's other six codes are already spoken for
+by dry tone and moisture). It is not smothered by its own neighbours the
+way a buried wood fire would be - `explodes != 0` opts a material out of
+that check, because gunpowder carries its own oxidiser and a fuse buried
+in the middle of a pile has to keep burning regardless. Water quenches a
+lit cell to **soaked** (moisture pinned at `moist_max`), not to the unlit
+code, or it would simply relight from an adjacent lit neighbour on the
+very next step.
+
+Only when a lit cell **burns out** - its countdown reaching `lit_from` -
+does the blast radius (`reaction_t.explodes`, 20 cells) get read at all:
+if it is one corner of a 2x2 whose other three cells (the board edge
+counts as not-lit) are also lit gunpowder, and the impulse buffer is
+live, it detonates (`sand_explode()`); otherwise it simply becomes an
+ordinary `MAT_FIRE` cell, the same no-buffer fallback the confined-gas
+blast already relies on, so a host test with impulses off still sees
+gunpowder burn down to fire like any other fuel. A thick pile's blasts
+land one at a time, spread across several frames, rather than one single
+blast on ignition or every qualifying 2x2 going off on the same step -
+guaranteed by `SAND_GUNPOWDER_BLAST_COOLDOWN` (8, board-wide,
+`sand_reactions.c`), the number of steps the board waits after a
+detonation before another may fire, ticked down once per reactions pass,
+so at most one fires however many 2x2s burn out qualifying together.
+Raising it spreads a pile's blasts further apart without making any one
+of them smaller; 0 lifts the limit. A blast also takes the
+lit cells around it out of every 2x2 they belonged to - they are fire or
+flying grains by their own burn-out - which helps the same spreading-out
+along independently, but is a secondary effect of the geometry, not what
+bounds the cost: the cap does that. A one-wide trail or a lone lit cell
+never blasts at all - there is no lit 2x2 to be part of. The rule started
+as a fully-lit
+3x3 and was loosened after device testing: with independent burn-out
+rolls the neighbours lit before a cell are usually already fire when it
+goes, and blasts became rare enough to look broken. This replaced two
+earlier designs before that, both measured on the device and found no
+cheaper: an immediate per-cell blast on ignition, and later a
+boundary-only check: the fuse model above is what shipped.
+
+Moisture damps the ignition roll before it happens, generically, for any
+`dries != 0` material: `f >>= SAND_DAMP_IGNITION_SHIFT * moisture` (shift
+2), so gunpowder's 200-in-256 base chance runs 200 → 50 → 12 → 3 → inert
+at moisture 4 - a damp charge misfires more often than it should, and a
+fully wet one (moisture pinned at `moist_max`, 4) cannot ignite at all
+until something dries it out. Drying happens the same two ways wet earth
+already dries: heat driving a level off as steam (the existing wet-earth
+stage of `try_heat_transform_given()`, once it reads moisture through the
+generic `moisture_of()` helper rather than dirt's own macros), or simple
+time (`dries = 1`, half dirt's own rate of 2 - powder holds water longer
+than soil does). A saturated cell - moisture pinned at `moist_max` -
+additionally has a small chance per step (`soaked_to`/`soaked_chance`, 8
+in 256) to give up being powder altogether and become a full `MAT_OIL`
+cell instead, the same "one grain plus its water becomes one liquid cell"
+shape other saturation reactions already use. Acid dissolves gunpowder at
+the same rate it dissolves sand (`dissolvable = 200`); nothing about
+being explosive changes how a cell disappears once acid is what is
+touching it.
+
+**Gunpowder is not soil.** Every plant/root site that used to test
+`dries != 0` to mean "this is ground a root can use" - `find_water()`,
+`step_one_sprouting_cell()`, `step_one_budding_cell()`,
+`step_one_rooting_cell()`, `step_one_conducting_cell()`,
+`spend_soil_moisture()` - now tests a new field, `reaction_t.soil`,
+instead. Dirt sets `soil = 1`; gunpowder does not, even though it now has
+a moisture codec of its own and would otherwise have matched every one of
+those `dries != 0` checks. Moisture DIFFUSION between same-species cells
+and percolation still read `dries`, unchanged - that question ("can this
+variant mean wetness") and "is this ground" are genuinely different
+questions once more than one material can be wet, and a fuse sitting in
+a garden bed was never meant to be something a tree could root into,
+drink from, or drain moisture out of.
 
 Stone and glass bank heat in the low nibble their `KIND_STATIC` never
 otherwise needed (material.h's own comment on the low nibble's per-material
@@ -516,11 +616,20 @@ innermost cell does have a complete lid. See
 **`sand_explode()` fills a core of radius `radius / SAND_EXPLODE_CORE_
 DIVISOR` with fire before it queues a single flight entry** (see
 `SAND_EXPLODE_CORE_DIVISOR`'s own comment, sand.h). At `SAND_LAVA_BURST_
-RADIUS` (8, `SAND_GAS_IGNITE_BLAST_RADIUS`'s own figure - the only other
-reaction-driven burst that exists) and divisor 5, that core radius is 1 -
-so the `MAT_STONE` this feature just wrote at the centre is immediately
-overwritten by fresh fire. That is pinned, expected behaviour (see
+RADIUS` (12) and divisor 5, that core radius is 2 - so the `MAT_STONE`
+this feature just wrote at the centre is immediately overwritten by fresh
+fire. That is pinned, expected behaviour (see
 `test_buried_lava_bursts_into_stone_and_fire`, `suite_sand.c`), not a bug.
+`SAND_LAVA_BURST_RADIUS` started at `SAND_GAS_IGNITE_BLAST_RADIUS`'s own
+figure (8, the only other reaction-driven burst that existed at the
+time), was raised to 16 once a radius-8 burst read as a barely-visible
+flicker on device (core radius 1, about five cells of flame), then
+brought back down to 12 once gunpowder existed: the one material whose
+whole point is to go off (`SAND_GUNPOWDER_BLAST_RADIUS`, material.h)
+should own the biggest reaction-driven blast on the board, and a lava
+burst is a side effect of a vessel, not a charge - 12 still gives a core
+radius of 2, about thirteen cells of flame, well past the original
+flicker.
 
 Not gated on `sand_enable_impulses()` having been called: `sand_explode()`
 is a documented no-op without it, so with impulses off the cell simply

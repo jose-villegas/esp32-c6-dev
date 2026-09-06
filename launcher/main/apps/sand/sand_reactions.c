@@ -305,7 +305,15 @@ place_cell(sand_t* s, int x, int y, size_t at, cell_t c) {
 static inline void
 place_reacted(sand_t* s, int x, int y, size_t at, uint8_t spec) {
     if (spec >= (MAT_EXTENDED << 4)) {
-        place_cell(s, x, y, at, (cell_t)spec); /* identity IS low nibble */
+        place_cell(s, x, y, at, (cell_t)spec); /* identity IS the low nibble,
+                                                 * but only for the static
+                                                 * half (0xF0-F7) - gunpowder
+                                                 * spends its low nibble's
+                                                 * bit 3 on identity and the
+                                                 * bottom three bits on a
+                                                 * code, same as any other
+                                                 * `spec` reaching here as a
+                                                 * whole byte */
         return;
     }
     const material_id_t mat = (material_id_t)spec;
@@ -612,6 +620,16 @@ try_heat_transform_given(sand_t* s, int nx, int ny, int w, int h, size_t at, cel
     if (r->heats_to == 0 || r->heat_chance == 0) {
         return false;
     }
+    /* A LIT CELL IS ALREADY `heats_to` - gunpowder's row makes `heats_to`
+     * its own lit code (GUNPOWDER_LIT_CELL), so a neighbour already
+     * burning would pass the roll below and place_reacted() the identical
+     * byte it holds already: an RNG draw and a wake spent every step doing
+     * nothing, for as long as the fuse stays lit. Rejected here, before
+     * that roll - `explodes != 0` singles out the one material this can
+     * happen to, so nothing else pays for the extra compare. */
+    if (r->explodes != 0 && cell_code(n) >= r->lit_from) {
+        return false;
+    }
     if ((int)(rng_next(&s->rng) & 0xFF) >= r->heat_chance) {
         return false;
     }
@@ -639,7 +657,7 @@ try_heat_transform_given(sand_t* s, int nx, int ny, int w, int h, size_t at, cel
      * 10. Saturated dirt therefore needs SOIL_MOISTURE_MAX + 1 successes
      * to reach metal instead of one, and each of the first
      * SOIL_MOISTURE_MAX is visible as steam. */
-    if (r->dries != 0 && CELL_MOISTURE(n) != 0) {
+    if (r->dries != 0 && moisture_of(n, r) != 0) {
         /* RUINED BY HASTE, off this SAME roll - see reaction_t.spoils_to's
          * own comment (material.h). Checked first, so a spoil pre-empts
          * the moisture-driving step below rather than competing with it:
@@ -677,13 +695,20 @@ try_heat_transform_given(sand_t* s, int nx, int ny, int w, int h, size_t at, cel
          * burning, not from a wetter cell of soil, so a cell driven bone
          * dry by fire has nothing nearby to leave an imprint of. See
          * soil_set_moisture()'s own comment for what 0 means here. */
-        s->cells[at] = soil_set_moisture(n, (uint8_t)(CELL_MOISTURE(n) - 1), 0);
+        s->cells[at] = soil_set_moisture(n, (uint8_t)(moisture_of(n, r) - 1), 0);
         mark_rows(s, ny, ny);
         wake_block_and_neighbors(s, nx, ny);
         emit_into_empty_neighbor(s, nx, ny, w, h, MAT_STEAM);
         return true;
     }
 
+    /* REVISION 2: `explodes` is no longer read here at all - gunpowder's
+     * heat path just falls straight through to the ordinary `yield =
+     * heats_to` below, exactly like any other material, because heats_to
+     * is GUNPOWDER_LIT_CELL (material.c) rather than MAT_FIRE. Heat lights
+     * the fuse; whether that fuse ends in a blast is now entirely
+     * step_one_burning_cell()'s burn-out question, not this function's -
+     * see reaction_t.explodes's own comment (material.h). */
     material_id_t yield = (material_id_t)r->heats_to;
 
     /* SMELT FLAW, CLUMPED. A second, independent roll per cell would give
@@ -884,10 +909,10 @@ cool_off_chain(sand_t* s, int x, int y, int w, int h, uint8_t product, int chanc
  * and lateral spread by the same amount, which nobody asked for; those
  * two still read `spread` directly below and are unaffected by this.
  *
- * A `#define` rather than a new reaction_t field: dirt is the only
- * material with `dries != 0`, so it is the only one that can ever reach
- * this branch at all, and a byte on every material's row for something
- * only one of them can use is exactly the shape
+ * A `#define` rather than a new reaction_t field: dirt and gunpowder are
+ * the only materials with `dries != 0`, so they are the only two that can
+ * ever reach this branch at all, and a byte on every material's row for
+ * something only two of them can use is exactly the shape
  * reactions[MAT_DIRT].flaw_to's own comment (material.c) already rejected
  * once - "a new field serving exactly one material" - for the identical
  * reason.
@@ -916,21 +941,36 @@ cool_off_chain(sand_t* s, int x, int y, int w, int h, uint8_t product, int chanc
  * moisture to zero funnels through here - see this function's callers -
  * so the SAME cell dries to the SAME look whichever of them did it.
  *
- * Direct, no scaling: SOIL_DRY_TONES - 1 and SOIL_MOISTURE_MAX are both 7,
- * so a neighbour's moisture value already IS a valid tone. That is a
- * constant agreeing with another constant by construction, not by luck -
- * see the _Static_assert right below, which is what stops the two from
- * quietly drifting apart the way MATERIAL_LIQUID_DEPTH_BAND's own comment
- * (material.h) warns two same-valued constants can. */
+ * SCALED THROUGH dry_tone_from_moisture() (material.h), not read straight
+ * in as a tone - `nearby_moisture` is a moisture value, 0..moist_max, and
+ * only byte-identical to a tone for a material whose tone and moisture
+ * ranges happen to be the same width. Dirt's are, by construction
+ * (SOIL_DRY_TONES - 1 == SOIL_MOISTURE_MAX, both 7, see the _Static_assert
+ * right below) so this is a no-op for dirt and the direct read this used
+ * to be was never wrong there. Gunpowder's are not (three tones against
+ * four moisture levels): passing its own moisture straight through would
+ * have clamped every neighbour above tone 2 to the same darkest shade
+ * instead of spreading across the three it actually has to work with. */
 static inline cell_t soil_dry_out(cell_t c, uint8_t nearby_moisture)
 {
-    return CELL_SOIL(CELL_MATERIAL(c), nearby_moisture, 0);
+    /* soil_cell(), the table-driven form of CELL_SOIL() (material.h) -
+     * reaction_of(c) rather than a hardcoded MAT_DIRT row, so this stays
+     * correct for whichever material actually called it. reaction_of(),
+     * NOT &reactions[CELL_MATERIAL(c)]: gunpowder's nibble is MAT_EXTENDED
+     * and its row lives in extended_reactions[], so the direct index read
+     * an all-zero row and a wet fuse drying one level landed on the LIT
+     * code instead (caught by test_wet_gunpowder_does_not_ignite_and_heat_
+     * dries_it_first). Byte-identical to CELL_SOIL() for dirt, since dirt's
+     * `.tones`/`.moist_max` are SOIL_DRY_TONES/SOIL_MOISTURE_MAX exactly. */
+    const reaction_t* r = reaction_of(c);
+    return soil_cell(c, dry_tone_from_moisture(nearby_moisture, r), 0, r);
 }
 
 _Static_assert(SOIL_DRY_TONES - 1 == SOIL_MOISTURE_MAX,
-               "soil_dry_out() reads a neighbour's moisture straight in as "
-               "a dry tone with no rescaling - the two ranges have to line "
-               "up exactly for every moisture value to land on a real tone");
+               "dry_tone_from_moisture() is identity for dirt only because "
+               "these two ranges are the same width - the fingerprint gate "
+               "is what actually proves soil_dry_out() stayed byte-"
+               "identical for dirt after this stopped being a direct read");
 
 /* Every site in this file that changes a soil cell's moisture calls this
  * instead of CELL_WITH_MOISTURE() directly, so the one that matters -
@@ -940,8 +980,9 @@ _Static_assert(SOIL_DRY_TONES - 1 == SOIL_MOISTURE_MAX,
  * comment). */
 static inline cell_t soil_set_moisture(cell_t c, uint8_t new_moisture, uint8_t nearby_moisture)
 {
-    return new_moisture != 0 ? CELL_WITH_MOISTURE(c, new_moisture)
-                             : soil_dry_out(c, nearby_moisture);
+    return new_moisture != 0
+               ? with_moisture(c, new_moisture, reaction_of(c))
+               : soil_dry_out(c, nearby_moisture);
 }
 
 /* One cell that soaks up liquid, or holds what it soaked.
@@ -963,12 +1004,28 @@ static inline cell_t soil_set_moisture(cell_t c, uint8_t new_moisture, uint8_t n
 static bool
 step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const reaction_t* r) {
     const cell_t c = row[x];
-    /* CELL_MOISTURE(), not the raw variant - a dry cell's variant is a
-     * TONE (material.h's own comment on soil's state split), and reading
-     * the whole nibble as wetness would make all but the very palest of
-     * freshly poured dirt look sodden and feed plants that were never
-     * watered. */
-    const uint8_t held = CELL_MOISTURE(c);
+    /* moisture_of(), not the raw code - a dry cell's code is a TONE
+     * (material.h's own comment on the moisture codec), and reading the
+     * whole code as wetness would make all but the very palest of freshly
+     * poured dirt look sodden and feed plants that were never watered. */
+    const uint8_t held = moisture_of(c, r);
+
+    /* SATURATION CAN MINT A NEW LIQUID - gunpowder's own reaction, checked
+     * before the soak loop below (which only ever raises `held` by one) so
+     * a cell already sitting at moist_max on entry gets its chance the
+     * same step it arrives there rather than one step late. `>=`, not
+     * `==`, for the same reason nothing else in this codec insists on
+     * exact equality against a clamped value. Short-circuits on
+     * `soaked_to != 0` before either of the other two tests, so a
+     * material that never sets it - dirt, and every material today - pays
+     * neither the moist_max comparison nor an RNG draw. */
+    REACTION_DOC(soaked_to, "once fully saturated, at a per-step chance");
+    if (r->soaked_to != 0 && held >= r->moist_max && (int)(rng_next(&s->rng) & 0xFF) < r->soaked_chance) {
+        const size_t at = (size_t)y * (size_t)w + (size_t)x;
+        place_reacted(s, x, y, at, r->soaked_to);
+        return true;
+    }
+
     bool beside_liquid = false;
 
     const int soaks = (s->soak >= 0) ? s->soak : r->soaks;
@@ -1017,14 +1074,15 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
                  * below is ignored - CELL_SOIL's own comment - so 0 is as
                  * good as anything. */
                 s->cells[(size_t)y * (size_t)w + (size_t)x] =
-                    CELL_SOIL(r->soaks_to, 0, 1);
+                    soil_cell(CELL_MAKE(r->soaks_to, 0), 0, 1,
+                             &reactions[r->soaks_to]);
                 latch_content_flags(s, s->cells[(size_t)y * (size_t)w + (size_t)x]);
                 mark_rows(s, y, y);
                 wake_block_and_neighbors(s, x, y);
                 return true;
             }
-            if (held < SOIL_MOISTURE_MAX) {
-                row[x] = CELL_WITH_MOISTURE(c, held + 1);
+            if (held < r->moist_max) {
+                row[x] = with_moisture(c, (uint8_t)(held + 1), r);
                 mark_rows(s, y, y);
                 wake_block_and_neighbors(s, x, y);
             }
@@ -1105,15 +1163,23 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
                 }
                 cost = give;
                 recv_m = give;
-                s->cells[nat] = CELL_SOIL(nr->soaks_to, 0, (uint8_t)give);
+                s->cells[nat] = soil_cell(CELL_MAKE(nr->soaks_to, 0), 0,
+                                         (uint8_t)give, &reactions[nr->soaks_to]);
                 latch_content_flags(s, s->cells[nat]);
-            } else if (CELL_MATERIAL(n) == CELL_MATERIAL(c)) {
-                give = (held - CELL_MOISTURE(n)) / 2;
+            } else if (same_species(n, c) && !cell_is_burning(n)) {
+                /* A LIT NEIGHBOUR IS NOT A DRIER ONE - moisture_of() reads
+                 * a lit fuse as 0 (its own lit-code carve-out), which looks
+                 * exactly like bone-dry soil to the gap calculation below
+                 * and would hand it a level, overwriting its lit byte with
+                 * an arbitrary moisture code and dousing it out of turn.
+                 * `n` is already loaded, so the check costs nothing a
+                 * failing gap check would not have. */
+                give = (held - moisture_of(n, nr)) / 2;
                 if (give == 0) {
                     continue; /* already even with this one */
                 }
-                recv_m = CELL_MOISTURE(n) + give;
-                s->cells[nat] = CELL_WITH_MOISTURE(n, (uint8_t)recv_m);
+                recv_m = moisture_of(n, nr) + give;
+                s->cells[nat] = with_moisture(n, (uint8_t)recv_m, nr);
                 cost = give;
             } else {
                 continue;
@@ -1183,7 +1249,13 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
             if (br->soaks == 0) {
                 continue;
             }
-            if (br->soaks_to != 0 || (br->dries != 0 && CELL_MOISTURE(below) < SOIL_MOISTURE_MAX)) {
+            /* !cell_is_burning(below): a lit fuse reads moisture 0 (its
+             * own lit-code carve-out) and would otherwise look like open
+             * room to percolate into, dousing it - `below` is already
+             * loaded, so this costs nothing a failing room check would
+             * not have. */
+            if (!cell_is_burning(below) &&
+                (br->soaks_to != 0 || (br->dries != 0 && moisture_of(below, br) < br->moist_max))) {
                 open[n_open++] = i;
             }
         }
@@ -1228,15 +1300,20 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
                 recv_m = give;
                 /* Arrives WET, so no tone of its own - the soaking
                  * branch above's own comment covers why. */
-                s->cells[nat] = CELL_SOIL(br->soaks_to, 0, (uint8_t)give);
+                s->cells[nat] = soil_cell(CELL_MAKE(br->soaks_to, 0), 0,
+                                          (uint8_t)give, &reactions[br->soaks_to]);
                 latch_content_flags(s, s->cells[nat]);
             } else {
-                const int room = (int)SOIL_MOISTURE_MAX - CELL_MOISTURE(below);
+                /* `below` already passed the open[] gate above, which
+                 * rejects a lit cell before it is ever a candidate - so the
+                 * write here can never land on one; see that gate's own
+                 * comment for why it matters at all. */
+                const int room = (int)br->moist_max - moisture_of(below, br);
                 if (give > room) {
                     give = room;
                 }
-                recv_m = CELL_MOISTURE(below) + give;
-                s->cells[nat] = CELL_WITH_MOISTURE(below, (uint8_t)recv_m);
+                recv_m = moisture_of(below, br) + give;
+                s->cells[nat] = with_moisture(below, (uint8_t)recv_m, br);
                 cost = give;
             }
             /* Same imprint rule as the diffusion hand-off above: a donor
@@ -1698,7 +1775,7 @@ find_water(sand_t* s, int x, int y, int w, int h, const reaction_t* r, cell_t se
                 if ((unsigned)ax < (unsigned)w && (unsigned)ay < (unsigned)h) {
                     const cell_t under = s->cells[(size_t)ay * (size_t)w + (size_t)ax];
                     if (!CELL_IS_EMPTY(under)
-                        && (reaction_of(under)->dries != 0 || under == (cell_t)r->roots_to)) {
+                        && (reaction_of(under)->soil != 0 || under == (cell_t)r->roots_to)) {
                         nx = tx;
                         ny = ty;
                         via_root = true;
@@ -1718,7 +1795,7 @@ find_water(sand_t* s, int x, int y, int w, int h, const reaction_t* r, cell_t se
             if (CELL_IS_EMPTY(c)) {
                 continue;
             }
-            if (reaction_of(c)->dries != 0) {
+            if (reaction_of(c)->soil != 0) {
                 nx = tx;
                 ny = ty;
                 on_soil = true;
@@ -1773,14 +1850,26 @@ find_water(sand_t* s, int x, int y, int w, int h, const reaction_t* r, cell_t se
                 cy += dy;
                 continue;
             }
-            if (CELL_IS_EMPTY(c) || reaction_of(c)->dries == 0) {
+            if (CELL_IS_EMPTY(c) || reaction_of(c)->soil == 0) {
                 return -1;
             }
             /* Two callers, opposite errands, one walk: growth is
              * looking for soil with something in it to spend, drinking
              * for soil with room to take more. */
-            if (wants_room ? CELL_MOISTURE(c) < SOIL_MOISTURE_MAX : CELL_MOISTURE(c) != 0) {
-                return (int)at;
+            {
+                const reaction_t* cr = reaction_of(c);
+                /* !cell_is_burning(c): the `soil == 0` reject just above
+                 * already keeps a lit fuse out of this walk entirely (D1 -
+                 * gunpowder is not soil), so this can never trip today; the
+                 * rule itself is "a lit cell never has room, and is never
+                 * read as holding water either", which is not specific to
+                 * gunpowder, so it is spelled out here rather than relied
+                 * on as a side effect of the reject above. */
+                if (!cell_is_burning(c) &&
+                    (wants_room ? moisture_of(c, cr) < cr->moist_max
+                                : moisture_of(c, cr) != 0)) {
+                    return (int)at;
+                }
             }
             cx += dx;
             cy += dy;
@@ -1827,8 +1916,12 @@ spend_soil_moisture(sand_t* s, int w, const reaction_t* r, int soil_at, uint8_t 
     /* Drunk by whatever is growing, not handed to another cell of soil -
      * there is no neighbour to bias a dry tone from, so a collar spent
      * down to nothing goes bone pale, the same as ambient drying with
-     * nothing wet beside it. */
-    s->cells[soil_at] = soil_set_moisture(soil, (uint8_t)(CELL_MOISTURE(soil) - amount), 0);
+     * nothing wet beside it.
+     *
+     * reaction_of(soil), not the grower's own `r` - moisture_of() needs
+     * the SOIL's codec (dirt's tones/moist_max), not the plant's. */
+    s->cells[soil_at] = soil_set_moisture(
+        soil, (uint8_t)(moisture_of(soil, reaction_of(soil)) - amount), 0);
     mark_rows(s, soil_at / w, soil_at / w);
 
     if (r->roots == 0 || contact_at < 0 || root_depth != 0) {
@@ -1955,7 +2048,7 @@ step_one_conducting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t
     (void)r;
 
     int src_at = -1, src_x = 0, src_y = 0, src_m = 0;
-    int dst_at = -1, dst_x = 0, dst_y = 0, dst_m = SOIL_MOISTURE_MAX;
+    int dst_at = -1, dst_x = 0, dst_y = 0, dst_m = 0;
 
     for (int k = 0; k < 8; k++) {
         const int* nd = ring_dir(down + k);
@@ -1965,13 +2058,32 @@ step_one_conducting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t
         }
         const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
         const cell_t c = s->cells[nat];
-        if (CELL_IS_EMPTY(c) || reaction_of(c)->dries == 0) {
-            continue; /* not soil: root, wood, stone, air */
+        if (CELL_IS_EMPTY(c)) {
+            continue;
         }
-        const int m = CELL_MOISTURE(c);
+        const reaction_t* cr = reaction_of(c);
+        if (cr->soil == 0) {
+            continue; /* not soil: root, wood, stone, air - and, since D1,
+                        * gunpowder: a fuse is not ground a root conducts
+                        * water through. */
+        }
+        const int m = moisture_of(c, cr);
         if (k == 0 || k == 1 || k == 7) {
-            /* Gravity-ward: a sink, if it has room. */
-            if (m < dst_m) {
+            /* Gravity-ward: a sink, if it has ROOM - its OWN
+             * reaction_of(c)->moist_max, not dirt's SOIL_MOISTURE_MAX. A
+             * fixed sentinel silently let a narrower-codec soil (gunpowder,
+             * before the `soil` field excluded it above) look "driest" at
+             * its own moisture ceiling and take one more level anyway,
+             * landing past moist_max on whatever code sits there next.
+             * !cell_is_burning(c) for the same reason: a lit cell reads
+             * moisture 0 (moisture_of()'s own lit-code carve-out) and would
+             * otherwise look like the most available sink there is -
+             * unreachable today (the `soil == 0` reject above already
+             * excludes gunpowder, the only burn_decay material with a
+             * moisture codec) but the rule is general, not
+             * gunpowder-specific, so it is checked here rather than relied
+             * on elsewhere. */
+            if (m < cr->moist_max && !cell_is_burning(c) && (dst_at < 0 || m < dst_m)) {
                 dst_m = m;
                 dst_at = (int)nat;
                 dst_x = nx;
@@ -1996,7 +2108,7 @@ step_one_conducting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t
      * this drains dry is biased by the sink it just carried water into,
      * post-transfer - see soil_dry_out()'s own comment. */
     s->cells[src_at] = soil_set_moisture(src, (uint8_t)(src_m - 1), (uint8_t)(dst_m + 1));
-    s->cells[dst_at] = CELL_WITH_MOISTURE(dst, (uint8_t)(dst_m + 1));
+    s->cells[dst_at] = with_moisture(dst, (uint8_t)(dst_m + 1), reaction_of(dst));
     mark_rows(s, src_y, src_y);
     mark_rows(s, dst_y, dst_y);
     wake_block_and_neighbors(s, src_x, src_y);
@@ -2006,7 +2118,7 @@ step_one_conducting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t
 
 /* One cell of ROOT, eating into the moist soil it touches - PART 2 of the
  * roots feature (docs/Sand/Sand-Simulation.md), and the whole growth
- * rule: find a neighbour that is dirt (reaction_of(c)->dries != 0) and
+ * rule: find a neighbour that is soil (reaction_of(c)->soil != 0) and
  * still holds moisture, roll a small chance, and convert it - which
  * consumes the moisture as the price of the conversion, the same "spend
  * the scarce thing" discipline growth, budding and sprouting already
@@ -2129,7 +2241,8 @@ step_one_rooting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
         }
         const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
         const cell_t n = s->cells[nat];
-        if (CELL_IS_EMPTY(n) || reaction_of(n)->dries == 0 || CELL_MOISTURE(n) == 0) {
+        if (CELL_IS_EMPTY(n) || reaction_of(n)->soil == 0 ||
+            moisture_of(n, reaction_of(n)) == 0) {
             continue;
         }
         int wgt = 1;
@@ -2196,7 +2309,7 @@ step_one_drinking_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* 
             continue;
         }
         const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
-        if (!CELL_IS_EMPTY(n) && materials[CELL_MATERIAL(n)].kind == KIND_LIQUID && reaction_of(n)->wets != 0) {
+        if (!CELL_IS_EMPTY(n) && material_of(n)->kind == KIND_LIQUID && reaction_of(n)->wets != 0) {
             lx = nx;
             ly = ny;
             break;
@@ -2222,8 +2335,12 @@ step_one_drinking_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* 
 
     pay_quench_cost(s, lx, ly, w);
 
+    /* `soil_at` already passed find_water()'s own soil/cell_is_burning
+     * gates, so this can never land on a lit fuse - see that function's
+     * own comment on the wants_room branch for why it matters at all. */
     const cell_t soil = s->cells[soil_at];
-    s->cells[soil_at] = CELL_WITH_MOISTURE(soil, (uint8_t)(CELL_MOISTURE(soil) + 1));
+    const reaction_t* sr = reaction_of(soil);
+    s->cells[soil_at] = with_moisture(soil, (uint8_t)(moisture_of(soil, sr) + 1), sr);
     mark_rows(s, soil_at / w, soil_at / w);
     wake_block_and_neighbors(s, soil_at % w, soil_at / w);
     return true;
@@ -2258,7 +2375,8 @@ step_one_sprouting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t*
             }
             continue;
         }
-        if (soil_at < 0 && reaction_of(n)->dries != 0 && CELL_MOISTURE(n) != 0) {
+        if (soil_at < 0 && reaction_of(n)->soil != 0 &&
+            moisture_of(n, reaction_of(n)) != 0) {
             soil_at = (int)nat;
         }
     }
@@ -2365,7 +2483,7 @@ step_one_budding_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
      * scarce thing rather than a probability. At one level each, buds
      * simply drank the pour and the forest ran away. */
     const cell_t soil = s->cells[soil_at];
-    if (CELL_MOISTURE(soil) < BUD_COST) {
+    if (moisture_of(soil, reaction_of(soil)) < BUD_COST) {
         return true;
     }
     if ((int)(rng_next(&s->rng) & 0xFF) >= r->buds) {
@@ -3064,7 +3182,7 @@ step_one_cold_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
         const reaction_t* nr = reaction_of(n);
 
         /* MELTING, from any liquid - see reaction_t.thaws. */
-        if (r->thaws != 0 && r->heats_to != 0 && materials[CELL_MATERIAL(n)].kind == KIND_LIQUID
+        if (r->thaws != 0 && r->heats_to != 0 && material_of(n)->kind == KIND_LIQUID
             && (int)(rng_next(&s->rng) & 0xFF) < r->thaws) {
             place_reacted(s, x, y, (size_t)y * (size_t)w + (size_t)x, (material_id_t)r->heats_to);
             return false;
@@ -3307,6 +3425,18 @@ step_one_tempered_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cons
  * final - tune on device like every other constant here. */
 #define SAND_GAS_IGNITE_BLAST_RADIUS 8
 
+/* How hard moisture damps a flammability roll in try_ignite_given() below -
+ * a right-shift per moisture LEVEL, not a flat penalty, so each further
+ * level costs proportionally more of what is left: gunpowder's 200 goes
+ * 200 -> 50 -> 12 -> 3 -> 0 across its four wet codes (moist_max 4), damp
+ * powder misfires far more often than dry, wet powder is inert outright,
+ * and only heat driving the moisture back down (try_heat_transform_given()'s
+ * wet-earth stage) or time makes it catch again. A shift rather than a
+ * per-level table because it falls out of one constant instead of a whole
+ * array, and "roughly a quarter as reliable per level" is exactly the
+ * texture wanted - no material asks for a different curve today. */
+#define SAND_DAMP_IGNITION_SHIFT     2
+
 /* Whether an igniting GAS cell at (x, y) is confined - touches at least
  * one KIND_STATIC neighbour - the cheap LOCAL stand-in for "pressure" that
  * bd esp32c6-zs8's design notes call for: gas in the open burns, the same
@@ -3363,8 +3493,11 @@ try_ignite_given(sand_t* s, int nx, int ny, int w, int h, size_t at, cell_t n) {
     /* Already alight. Without this a flame beside a burning log would keep
      * re-igniting it - place_reacted() writes a FULL variant, so every hit
      * would reset how much was left to burn and the log would never go
-     * out. */
-    if (r->burn_decay != 0 && CELL_VARIANT(n) != 0) {
+     * out. cell_is_burning() rather than the raw variant test it used to
+     * be, now that gunpowder's lit state is one specific CODE (7,
+     * GUNPOWDER_LIT) rather than "any nonzero variant" - see that
+     * function's own comment (material.h). */
+    if (cell_is_burning(n)) {
         return false;
     }
     if (r->needs_air && !touches_air(s, nx, ny, w, h)) {
@@ -3381,7 +3514,27 @@ try_ignite_given(sand_t* s, int nx, int ny, int w, int h, size_t at, cell_t n) {
      * stream for every existing gas/fire scene, changing results that
      * are currently exactly reproducible (the device frame-budget tests
      * depend on that). Checking first keeps them bit-identical. */
-    const int f = (s->flammability >= 0) ? s->flammability : r->flammability;
+    int f = (s->flammability >= 0) ? s->flammability : r->flammability;
+    /* Moisture damps the roll rather than blocking it outright - see
+     * SAND_DAMP_IGNITION_SHIFT's own comment above for the curve. Only a
+     * material with a moisture codec (`dries != 0`) pays for the
+     * moisture_of() lookup at all; every other material reads m == 0 and
+     * this whole block is a no-op. Dirt is one such material, and its
+     * flammability is 0 - rejected above before this line is ever reached
+     * - so every gunpowder-free scene stays bit-identical. Gunpowder is
+     * the one material that DOES reach here, and reaching here - damping
+     * a fuse's own re-ignition odds toward zero the wetter it gets - is
+     * the entire reason this field exists. */
+    REACTION_DOC(flammability, "damped further per moisture level, on any material with a moisture codec");
+    const uint8_t m = (r->dries != 0) ? moisture_of(n, r) : 0;
+    if (m) {
+        f >>= SAND_DAMP_IGNITION_SHIFT * m;
+    }
+    if (f <= 0) {
+        return false; /* before any RNG draw - a fully damped roll must not
+                          shift the RNG stream for scenes that never reach
+                          this material's moisture range */
+    }
     if (f < 255 && (int)(rng_next(&s->rng) & 0xFF) >= f) {
         return false;
     }
@@ -4057,6 +4210,105 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
     return false;
 }
 
+/* Whether (x, y) is one corner of a 2x2 block whose other three cells are
+ * lit cells of the SAME species as `grain` - any of the four 2x2 squares
+ * that contain it will do. The gate step_one_burning_cell()'s burn-out
+ * branch reads to decide whether a fuse ends in a blast or in plain fire
+ * (see reaction_t.explodes's own comment, material.h).
+ *
+ * 2x2, NOT 3x3. The first version asked for all eight neighbours lit, and
+ * on the device blasts became rare to the point of looking broken: burn-out
+ * rolls are independent per cell, so by the time any one cell burns out,
+ * the neighbours that were lit before it usually already are fire - a
+ * fully-lit 3x3 exists only in the brief window between the fuse front
+ * passing and the first burn-out behind it. Three lit neighbours in one
+ * quadrant is the smallest shape that still says "a body of powder, not a
+ * trail", and it is what a lit pile actually presents at burn-out time.
+ * Cheaper too: at most four cells looked at per quadrant, with an early out.
+ *
+ * OFF-BOARD COUNTS AS NOT LIT. The board edge is never the inside of a
+ * pile (see test_a_lit_cell_at_the_board_edge_never_detonates, suite_sand.c).
+ *
+ * same_species(), not a raw material compare - gunpowder shares its high
+ * nibble with the extended statics (GUNPOWDER_BASE, material.h), and a
+ * neighbour of static ice must never count as "more of this fuse" just
+ * because both happen to decode through MAT_EXTENDED. cell_code(n) >=
+ * r->lit_from, not cell_is_burning(n): reaction_of(n) would be this exact
+ * row anyway once same_species() has already agreed, so there is nothing
+ * left to re-derive - just the one threshold compare. */
+static inline bool
+lit_here(const sand_t* s, int nx, int ny, int w, int h, cell_t grain, const reaction_t* r) {
+    if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+        return false;
+    }
+    const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
+    return same_species(n, grain) && cell_code(n) >= r->lit_from;
+}
+
+/* `r`, from the caller - step_one_burning_cell() already has reaction_of(
+ * grain) in hand as `rx`, and it is the same row this function would
+ * otherwise re-derive from `grain` on every call. */
+static inline bool
+find_lit_two_by_two(const sand_t* s, int x, int y, int w, int h, cell_t grain, const reaction_t* r,
+                     int* out_dx, int* out_dy) {
+    for (int dy = -1; dy <= 1; dy += 2) {
+        if (!lit_here(s, x, y + dy, w, h, grain, r)) {
+            continue;
+        }
+        for (int dx = -1; dx <= 1; dx += 2) {
+            if (lit_here(s, x + dx, y, w, h, grain, r) && lit_here(s, x + dx, y + dy, w, h, grain, r)) {
+                *out_dx = dx;
+                *out_dy = dy;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/* SPEND THE 2x2 THAT QUALIFIED. The three lit cells that made this a
+ * blast become fire before sand_explode() runs, rather than being left for
+ * its core fill to catch on its own.
+ *
+ * NOT NEEDED AT TODAY'S RADIUS, and that is the point of keeping it rather
+ * than the reason for it. At SAND_GUNPOWDER_BLAST_RADIUS 16 and
+ * SAND_EXPLODE_CORE_DIVISOR 5 the core is radius 3, which already reaches
+ * every cell of the 2x2 - the two cardinals at distance 1 and the diagonal
+ * at distance root-two, both comfortably inside 3 - so sand_explode()'s
+ * own core fill turns all three to fire whether this runs or not. What
+ * this buys is the rule holding at ANY radius: tune
+ * SAND_GUNPOWDER_BLAST_RADIUS (or the divisor) down far enough and the
+ * core shrinks below root-two, at which point the diagonal corner would be
+ * left lit for the annulus to throw as a still-lit grain instead - free to
+ * land as the corner of some other 2x2 and blast again. Three cheap writes,
+ * once per blast, is what keeps "one 2x2, one blast, nothing lit leaves
+ * it" true independent of whatever the radius is tuned to next. */
+static inline void
+spend_lit_two_by_two(sand_t* s, int x, int y, int w, int dx, int dy) {
+    const int px[3] = {x + dx, x, x + dx};
+    const int py[3] = {y, y + dy, y + dy};
+    for (int i = 0; i < 3; i++) {
+        const size_t at = (size_t)py[i] * (size_t)w + (size_t)px[i];
+        place_reacted(s, px[i], py[i], at, MAT_FIRE);
+    }
+}
+
+/* STEPS BETWEEN FUSE BLASTS, board-wide: one blast, then this many steps
+ * before another may fire. 1 is one blast a step, 2 one every other step,
+ * and 0 lifts the limit entirely. A burn-out inside the wait becomes plain
+ * fire, exactly as one that found no lit 2x2 does.
+ *
+ * This is what bounds a big pile's burst cost per frame outright, instead
+ * of leaving the stagger to the luck of independent burn-out rolls - and
+ * it IS the cadence: a lit pile goes off at this rate for as long as it
+ * keeps presenting lit 2x2s, so raising it spaces a pile's detonations out
+ * in time without touching how big any one of them is (that is
+ * SAND_GUNPOWDER_BLAST_RADIUS) or how long a fuse burns before it reaches
+ * one (reaction_t.burn_decay). Board-wide rather than per pile because
+ * "per pile" would need a region walk, and one blast a frame is already
+ * more than the eye separates. */
+#define SAND_GUNPOWDER_BLAST_COOLDOWN 8
+
 /* One burning cell's turn, in priority order: burn down first (a cell
  * that vanishes this step gets no turn to react further - it cannot
  * both die and spread the same step, but it can leave smoke behind, see
@@ -4093,23 +4345,49 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
     const bool lit_state = rx->burn_decay != 0;
     const int burn_rate = (s->decay >= 0) ? s->decay : rx->burn_decay;
 
-    if (lit_state ? !tick_decay_at(s, row, x, y, &grain, mat_id, burn_rate)
+    if (lit_state ? !tick_decay_at(s, row, x, y, &grain, rx, burn_rate)
                   : !tick_decay(s, row, x, y, &grain, mat, mat_id)) {
-        /* Burned out. tick_decay() already cleared the cell and woke it -
-         * this only adds smoke on top, via place_reacted(), which
-         * overwrites the CELL_EMPTY tick_decay() just wrote and repeats
-         * the same wake/dirty bookkeeping. That double wake is harmless
-         * (mark_rows()/wake_block_and_neighbors() are both idempotent
-         * within a step) and far simpler than threading a "did it
-         * already wake this cell" flag back out of a shared, hot-header
-         * helper for a cold pass's cosmetic byproduct. */
+        /* Burned out. tick_decay()/tick_decay_at() already cleared the
+         * cell and woke it - everything below only decides what, if
+         * anything, is left in its place. `grain` still holds the byte
+         * that was there a moment ago (neither helper touches the local,
+         * only row[x]), which is what lets find_lit_two_by_two()
+         * below ask "was this a lit cell of MY species" without having
+         * to have cached that separately. */
+        /* THE FUSE REACHES ITS END. This is the BURN-OUT read of
+         * `explodes` - one of three, not the only one (see its own
+         * comment, material.h) - and the one that actually decides
+         * whether a blast happens, not at ignition. A lit cell that is
+         * one corner of a still-lit 2x2 detonates;
+         * anything less - a lone cell, a one-wide trail, the pile's own
+         * already-fired-and-now-plain-fire neighbours - just burns out
+         * to plain fire instead, exactly like an ordinary flame
+         * guttering. That is what staggers a big pile's blasts across
+         * several steps rather than landing them all in one: each
+         * blast's core and thrown grains take the lit cells around it
+         * out of every 2x2 they were part of, so the next blast has to
+         * come from a burn-out somewhere else in the pile. */
+        if (rx->explodes != 0) {
+            REACTION_DOC(explodes, "at burn-out, if it is one corner of a 2x2 that is all lit and the board's blast cooldown has run out");
+            int dx = 0, dy = 0;
+            if (s->impulse_buf != NULL && s->fuse_blast_wait == 0 &&
+                find_lit_two_by_two(s, x, y, w, h, grain, rx, &dx, &dy)) {
+                s->fuse_blast_wait = (uint8_t)((s->fuse_cooldown >= 0) ? s->fuse_cooldown
+                                                                       : SAND_GUNPOWDER_BLAST_COOLDOWN);
+                spend_lit_two_by_two(s, x, y, w, dx, dy);
+                sand_explode(s, x, y, rx->explodes);
+            } else {
+                place_reacted(s, x, y, at, MAT_FIRE);
+            }
+            return true;
+        }
         /* MAT_SMOKE, not MAT_STEAM: nothing here got wet, and a fire
          * puffing kettle-steam as it dies is the exact confusion the
          * two-material split exists to avoid - see this file's own top
          * comment. Hardcoded rather than a `smokes_to` field mirroring
          * quench_to, because every material that burns wants the same
          * residue; if one ever does not, that field is the change. */
-        const uint8_t residue = reaction_of(grain)->residue;
+        const uint8_t residue = rx->residue;
         if (residue != 0 && (int)(rng_next(&s->rng) & 0xFF) < residue) {
             place_reacted(s, x, y, at, MAT_SMOKE);
         }
@@ -4139,10 +4417,33 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
                      * there, just no longer alight - which is only expressible
                      * now that being alight is a state of the wood rather than
                      * a different material. Ember had to name something to
-                     * become, because the ember WAS the fire. */
-                    row[x] = CELL_MAKE(mat_id, 0);
-                    mark_rows(s, y, y);
-                    wake_block_and_neighbors(s, x, y);
+                     * become, because the ember WAS the fire.
+                     *
+                     * A material with a moisture codec (`rx->tones != 0`)
+                     * cannot go back to the unlit code 0 the same way: that
+                     * is a DRY tone, and quenching a lit grain of it ought
+                     * to leave it soaked, not merely unlit - a fuse doused
+                     * mid-burn is wet, and would otherwise sit right back
+                     * at the front of the flammability curve, ready to
+                     * relight off whatever neighbour just wet it. The
+                     * predicate is "has a moisture codec", not "explodes" -
+                     * today only gunpowder has either, but they are
+                     * different questions, and a future burn_decay
+                     * material with a codec and no blast should quench the
+                     * same soaked way. Written through place_cell() -
+                     * with_moisture()/cell_with_code(), never CELL_MAKE(),
+                     * which would clobber gunpowder's identity bits
+                     * (GUNPOWDER_BASE) the same way it would clobber an
+                     * ordinary material's - so may_have_moisture actually
+                     * latches for the freshly-soaked byte, instead of a raw
+                     * row[x] write the moisture pass could miss. */
+                    if (rx->tones != 0) {
+                        place_cell(s, x, y, at, with_moisture(grain, rx->moist_max, rx));
+                    } else {
+                        row[x] = CELL_MAKE(mat_id, 0);
+                        mark_rows(s, y, y);
+                        wake_block_and_neighbors(s, x, y);
+                    }
                 } else if (quench_to != 0) {
                     /* FIRE's quench_to (MAT_STEAM, material.c) models the
                      * quenching LIQUID flash-boiling at contact - the same
@@ -4243,11 +4544,25 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
      * of the same liquid, never covering, no matter how completely a
      * crust seals its surface. covered_at()'s gravity-relative lid
      * (cover_mask(), sand_priv.h) is what actually answers "is there a
-     * lid over it" for a wide pool. */
-    if (mat->kind != KIND_LIQUID && smothered(s, x, y, w, h, mat->density)) {
+     * lid over it" for a wide pool.
+     *
+     * SKIPPED OUTRIGHT for an `explodes` material - gunpowder carries its
+     * own oxidiser, unlike wood or a candle, which both need outside air
+     * to keep burning. A fuse buried in the middle of its own pile has to
+     * keep burning or nothing inside a pile would ever reach burn-out at
+     * all, and every blast would be stillborn at the one place a pile
+     * actually has enough neighbours lit to detonate. */
+    if (mat->kind != KIND_LIQUID && rx->explodes == 0 && smothered(s, x, y, w, h, mat->density)) {
         /* Burying a burning log smothers the BURN, not the log. Same
-         * reasoning as quenching one. */
-        row[x] = lit_state ? CELL_MAKE(mat_id, 0) : CELL_EMPTY;
+         * reasoning as quenching one. cell_with_code(grain, 0), not
+         * CELL_MAKE(mat_id, 0): the `rx->explodes == 0` gate above already
+         * keeps gunpowder out of this branch, but CELL_MAKE(mat_id, 0) for
+         * anything in the extended range means MATX_ICE (mat_id reads as
+         * MAT_EXTENDED there), not "this material, unlit" - cell_with_code()
+         * is correct for every material this branch can ever actually see,
+         * and reads exactly the same as CELL_MAKE(mat_id, 0) for every
+         * ordinary one, so wood's own behaviour does not change. */
+        row[x] = lit_state ? cell_with_code(grain, 0) : CELL_EMPTY;
         mark_rows(s, y, y);
         wake_block_and_neighbors(s, x, y);
         return true;
@@ -4264,7 +4579,7 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
      * the cell becomes MAT_STONE via place_reacted(), then sand_explode()
      * fires at that same spot. sand_explode() FIRST fills a core of
      * radius `radius / SAND_EXPLODE_CORE_DIVISOR` with fire (sand.h) - at
-     * SAND_LAVA_BURST_RADIUS(8) and divisor 5 that core radius is 1, so
+     * SAND_LAVA_BURST_RADIUS(12) and divisor 5 that core radius is 2, so
      * the stone cell just placed at the centre is immediately overwritten
      * by fresh fire. That is expected, pinned behaviour, not a bug to
      * chase - see test_buried_lava_bursts_into_stone_and_fire
@@ -4836,6 +5151,12 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
  * which way gravity points. */
 void
 sand_step_reactions(sand_t* s) {
+    /* One tick of the fuse-blast cooldown per pass, before any cell gets a
+     * turn - so the step a blast fires on is the step it starts waiting
+     * from, so a cooldown of 1 lets the very next step blast again. */
+    if (s->fuse_blast_wait != 0) {
+        s->fuse_blast_wait--;
+    }
     /* Dissolving is not a fire reaction and must not be gated behind one:
      * acid has to work on a board with no flame anywhere. */
     /* Heat is a third independent reason to run, not a rider on fire: glass
@@ -4896,7 +5217,7 @@ sand_step_reactions(sand_t* s) {
         if (r->heat_ramp != 0 || (r->heats_to != 0 && (r->heat_chance != 0 || r->melts != 0))) {
             theirs_bits[m] |= PAIR_HEAT_RESPONSIVE;
         }
-        if (materials[m].kind == KIND_LIQUID) {
+        if (material_by_id((material_id_t)m)->kind == KIND_LIQUID) {
             if (r->wets != 0) {
                 theirs_bits[m] |= PAIR_WETS;
             }
@@ -4911,7 +5232,21 @@ sand_step_reactions(sand_t* s) {
             theirs_bits[m] |= PAIR_DISSOLVABLE;
         }
     }
-    for (int k = 0; k < MATERIAL_EXTENDED_COUNT; k++) {
+    /* MATERIAL_EXTENDED_CODES (16), not _COUNT (8): every code sharing
+     * nibble 15 - statics AND gunpowder alike - has to feed
+     * theirs_bits[MAT_EXTENDED], since a PROBE only ever knows "this
+     * neighbour's material nibble is MAT_EXTENDED", not which half.
+     * Gunpowder's own row is far from inert (real flammability,
+     * heat_chance, dissolvable - GUNPOWDER_REACTION, material.c), but the
+     * widening is safe regardless: theirs_bits[MAT_EXTENDED] is one shared
+     * bucket, ORed across every code in the nibble, and the eight STATICS
+     * alone already set all three bits this loop can ever produce - ice
+     * heats and melts (PAIR_HEAT_RESPONSIVE), plant and leaf both burn
+     * (PAIR_IGNITABLE), plant, leaf and metal all dissolve
+     * (PAIR_DISSOLVABLE). Gunpowder's contribution ORs into bits that were
+     * already on, so this widening cannot change theirs_bits[MAT_EXTENDED]'s
+     * value no matter what gunpowder's own row says. */
+    for (int k = 0; k < MATERIAL_EXTENDED_CODES; k++) {
         const reaction_t* r = &extended_reactions[k];
         if (r->heat_ramp != 0 || (r->heats_to != 0 && (r->heat_chance != 0 || r->melts != 0))) {
             theirs_bits[MAT_EXTENDED] |= PAIR_HEAT_RESPONSIVE;

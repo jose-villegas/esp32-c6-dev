@@ -40,12 +40,13 @@
 /* And how far it JUMPS each time, rather than stepping to the next
  * shade along. Walking the band one shade at a time put consecutive
  * pours two shades apart - about twenty points of luminance, which is
- * a layer you have to look for. Five is coprime with both 12 (sand's
- * dune band), 16 (snow's) and 8 (dirt's dry tones, SOIL_DRY_TONES), so
- * it still visits every shade before repeating, it just does not visit
- * them in order. Any span this stride has to serve belongs in that list:
- * a span sharing a factor with 5 would quietly stop reaching some of its
- * shades at all. */
+ * a layer you have to look for. Five is coprime with 12 (sand's dune
+ * band), 16 (snow's), 8 (dirt's dry tones, SOIL_DRY_TONES) and 3
+ * (gunpowder's dry tones, GUNPOWDER_REACTION's `.tones`), so it still
+ * visits every shade before repeating, it just does not visit them in
+ * order. Any span this stride has to serve belongs in that list: a span
+ * sharing a factor with 5 would quietly stop reaching some of its shades
+ * at all. */
 #define POUR_BAND_STRIDE 5u
 
 /* `band` is where in the shade band this pour is centred, worked out
@@ -58,14 +59,14 @@ static cell_t random_cell(sand_t *s, material_id_t material, int band)
 {
     /* A liquid's variant is an amount, not a shade, so a fresh cell is a full
      * one. Giving it a random level would be pouring random quantities. */
-    if (materials[material].kind == KIND_LIQUID) {
+    if (material_by_id(material)->kind == KIND_LIQUID) {
         return CELL_MAKE(material, MASS_MAX);
     }
     /* A transient material's variant is life remaining, not a shade either -
      * see material.h's top comment and the `decay` field it documents.
      * Fresh gas starts at full life so it fades from vivid to gone, rather
      * than spawning already partway decayed. */
-    if (materials[material].decay != 0) {
+    if (material_by_id(material)->decay != 0) {
         return CELL_MAKE(material, MATERIAL_VARIANTS - 1);
     }
     /* A heat-ramping material's variant is a TEMPERATURE, not a shade
@@ -102,13 +103,18 @@ static cell_t random_cell(sand_t *s, material_id_t material, int band)
      * uniformity to speak before this, and now speaks the way a dune
      * always could. */
     if (reactions[material].dries != 0) {
+        const reaction_t *r = &reactions[material];
         int tone = band + (int)rng_below(&s->rng, 3) - 1;
         if (tone < 0) {
             tone = 0;
-        } else if (tone >= SOIL_DRY_TONES) {
-            tone = SOIL_DRY_TONES - 1;
+        } else if (tone >= r->tones) {
+            tone = r->tones - 1;
         }
-        return CELL_SOIL(material, (uint8_t)tone, 0);
+        /* soil_cell(), the table-driven form of CELL_SOIL() - see
+         * material.h. Byte-identical for dirt (r->tones ==
+         * SOIL_DRY_TONES), and the form that keeps working if a second
+         * material ever sets `dries != 0`. */
+        return soil_cell(CELL_MAKE(material, 0), (uint8_t)tone, 0, r);
     }
     /* Not the whole range: sand keeps its top four shades for cullet, so
      * a painted dune can never accidentally contain grains that claim to
@@ -134,6 +140,28 @@ static cell_t random_cell(sand_t *s, material_id_t material, int band)
     return CELL_MAKE(material, (uint8_t)shade);
 }
 
+/* GUNPOWDER'S own picker - random_cell() above cannot take it, because it
+ * is not a plain material_id_t: gunpowder's identity bits are the top five
+ * bits of the byte, not a nibble random_cell() could CELL_MAKE() from. Its
+ * variant is a dry TONE, exactly like dirt's own branch in random_cell()
+ * above (band +/- 1, clamped) - just over the narrower span gunpowder's
+ * three bits actually have room for (GUNPOWDER_REACTION's `.tones`, see
+ * material.c), and built through GUNPOWDER_CELL() instead of CELL_SOIL().
+ * `band` arrives already folded into that span - see
+ * material_shade_span_cell(), which sand_spawn_cell() uses for exactly
+ * this reason. */
+static cell_t random_gunpowder(sand_t *s, int band)
+{
+    const reaction_t *r = reaction_of(GUNPOWDER_BASE);
+    int tone = band + (int)rng_below(&s->rng, 3) - 1;
+    if (tone < 0) {
+        tone = 0;
+    } else if (tone >= r->tones) {
+        tone = r->tones - 1;
+    }
+    return GUNPOWDER_CELL((uint8_t)tone);
+}
+
 /*---------------------------------------------------------------------------
  * Grid access
  *-------------------------------------------------------------------------*/
@@ -148,6 +176,8 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->sweep_flip = false;
     s->liquid_flip = false;
     s->gas_flip   = false;
+    s->fuse_blast_wait = 0;
+    s->fuse_cooldown   = -1;   /* see sand_set_fuse_cooldown() */
     /* The THIRD copy of this list, and the one that made the other two
      * hard to see. Four of the five flags were reset here by hand and
      * may_have_temperature was not, so a sand_t reused across tests
@@ -316,13 +346,15 @@ static bool try_spawn_one(sand_t *s, int x, int y, cell_t spec, int band)
      * helper sand_set() uses, because this list existing twice is what
      * let the brush and the setter disagree about snow.
      *
-     * An extended material is written exactly as given: its low nibble is
+     * An extended STATIC is written exactly as given: its low nibble is
      * its identity, so there is no variant for random_cell() to pick and
-     * picking one would change which material it is. */
-    const cell_t cell = cell_is_extended(spec)
-                        ? spec
-                        : random_cell(s, (material_id_t)CELL_MATERIAL(spec),
-                                      band);
+     * picking one would change which material it is. Gunpowder is neither
+     * a static nor a plain id - it gets its own picker, random_gunpowder(),
+     * for the tone its own three identity-adjacent bits actually hold. */
+    const cell_t cell = cell_is_extended(spec)  ? spec
+                        : cell_is_gunpowder(spec) ? random_gunpowder(s, band)
+                                                  : random_cell(s, (material_id_t)CELL_MATERIAL(spec),
+                                                                band);
     s->cells[y * s->w + x] = cell;
     latch_content_flags(s, cell);
     mark_move(s, x, y, x, y);
@@ -338,8 +370,11 @@ int sand_spawn_cell(sand_t *s, int cx, int cy, int radius, cell_t spec)
 {
     int filled = 0;
     const int r2 = radius * radius;
-    /* Once for the whole brushful - see random_cell(). */
-    const int span = MATERIAL_SHADE_SPAN((material_id_t)CELL_MATERIAL(spec));
+    /* Once for the whole brushful - see random_cell(). material_shade_span_
+     * cell(), not the plain id-only macro, because `spec` may be gunpowder
+     * (whose span is 3, read off its own reaction row) rather than a
+     * material_id_t CELL_MATERIAL() could safely extract a span for. */
+    const int span = material_shade_span_cell(spec);
     const int band = (int)(((s->pour_phase >> POUR_BAND_SHIFT) *
                             POUR_BAND_STRIDE) % (unsigned)span);
 
@@ -1395,6 +1430,11 @@ void sand_set_lava_cooloff(sand_t *s, int chance)
     }
 }
 
+void sand_set_fuse_cooldown(sand_t *s, int steps)
+{
+    s->fuse_cooldown = (steps < 0) ? -1 : (steps > 255 ? 255 : steps);
+}
+
 void sand_set_lava_burst(sand_t *s, int chance)
 {
     if (chance < 0) {
@@ -1427,14 +1467,29 @@ void sand_set_acid_dilute_mass_bias(sand_t *s, int bias)
  * the liquid branch did. */
 
 
-/* Whether each slide is driven at this tilt, for each material - depends
- * only on the direction and the material's angle of repose, so it is worked
- * out once per step for all sixteen materials rather than recomputed for
- * every one of 41,000 cells. */
-static void compute_driven(bool driven[MATERIAL_MAX][2], const int *slide_a,
+/* Whether each slide is driven at this tilt, for each ROW of the hot table -
+ * depends only on the direction and the row's angle of repose, so it is
+ * worked out once per step for all thirty-two rows rather than recomputed
+ * for every one of 41,000 cells.
+ *
+ * Indexed by cell >> 3 (MATERIAL_ROWS rows), not by the material nibble
+ * (MATERIAL_MAX ids) the way this used to read materials[] - see
+ * MATERIAL_ROWS's own comment in material.h for why the hot table has
+ * thirty-two rows at all. Read directly off `materials[]` rather than
+ * through material_by_id(), which only ever resolves an ORDINARY id to its
+ * row pair and cannot reach gunpowder's row (MATERIAL_ROW(MAT_EXTENDED) +
+ * 1) at all - this loop wants every row in the table, gunpowder's included,
+ * not just the sixteen an id can name.
+ *
+ * Byte-identical for every ORDINARY material: TWIN_ROW (material.c) writes
+ * the same repose into both of a material's rows, so driven[2*id] and
+ * driven[2*id + 1] always agree, whichever twin a grain's own cell byte
+ * happens to select - see step_one_grain()'s own comment on `driven_idx`
+ * for the read side of that guarantee. */
+static void compute_driven(bool driven[MATERIAL_ROWS][2], const int *slide_a,
                            const int *slide_b, int gx, int gy)
 {
-    for (int m = 0; m < MATERIAL_MAX; m++) {
+    for (int m = 0; m < MATERIAL_ROWS; m++) {
         const int repose = materials[m].repose;
         driven[m][0] = driven_by_gravity(slide_a[0], slide_a[1], gx, gy, repose);
         driven[m][1] = driven_by_gravity(slide_b[0], slide_b[1], gx, gy, repose);
@@ -1481,7 +1536,7 @@ static bool step_one_grain(sand_t *s, uint8_t *row, uint8_t *prow,
                            uint8_t *arow, uint8_t *brow, int x, int y, int w,
                            int dx, int dy, const int *slide_a,
                            const int *slide_b, int load_dx, int load_dy,
-                           int jostle, bool driven[MATERIAL_MAX][2])
+                           int jostle, bool driven[MATERIAL_ROWS][2])
 {
     const cell_t grain = row[x];
     const material_t *mat = material_of(grain);
@@ -1498,14 +1553,19 @@ static bool step_one_grain(sand_t *s, uint8_t *row, uint8_t *prow,
         return false;
     }
 
-    const uint8_t mat_id  = CELL_MATERIAL(grain);
     const uint8_t density = mat->density;
 
     /* Liquids move an AMOUNT rather than a whole grain - see
      * move_liquid_grain() in sand_liquid.c, and sand_step_liquids() below
      * for the rest of a liquid's behaviour, which is NOT gravity-ward and
-     * so cannot join this sweep. */
+     * so cannot join this sweep. `mat_id` computed here, not above with
+     * `density`: the powder path below never reads a plain material id at
+     * all any more, only `driven_row` (its own comment, below) - so
+     * computing it unconditionally for every grain would cost every
+     * powder cell on the board a CELL_MATERIAL() nobody past this branch
+     * uses. */
     if (mat->kind == KIND_LIQUID) {
+        const uint8_t mat_id = CELL_MATERIAL(grain);
         return move_liquid_grain(s, row, prow, x, y, dx, dy,
                                  slide_a, slide_b, grain, mat_id);
     }
@@ -1524,8 +1584,25 @@ static bool step_one_grain(sand_t *s, uint8_t *row, uint8_t *prow,
         }
     }
 
+    /* The ROW this grain's OWN cell byte selects (cell >> 3, material_of()'s
+     * own index), not `mat_id` above - see MATERIAL_ROWS's own comment in
+     * material.h. try_slide_impl()'s `driven_row` parameter (sand_priv.h)
+     * exists for exactly one purpose - indexing `driven[]` inside
+     * pick_slide_order() - and is never read as a material id anywhere
+     * downstream, so handing it a row index instead of the plain material
+     * nibble costs nothing.
+     *
+     * For every ORDINARY material this is byte-identical to passing
+     * `mat_id`: TWIN_ROW (material.c) gives both of a material's rows the
+     * same repose, so driven[grain >> 3] and driven[mat_id] agree whichever
+     * twin a grain happens to be sitting in. It only starts to differ for
+     * the one nibble that is NOT a twin pair - MAT_EXTENDED - where it
+     * finally tells a static (row MATERIAL_ROW(MAT_EXTENDED), repose 0)
+     * apart from gunpowder (the next row up, repose 8) instead of both
+     * reading the static's figure. */
+    const uint8_t driven_row = (uint8_t)(grain >> 3);
     return try_slide_impl(s, row, prow, arow, brow, x, y, w, dx, dy, slide_a,
-                          slide_b, load_dx, load_dy, jostle, grain, mat_id,
+                          slide_b, load_dx, load_dy, jostle, grain, driven_row,
                           density, mat, driven);
 }
 
@@ -1548,12 +1625,12 @@ bool try_fall_or_scatter(sand_t *s, uint8_t *row, uint8_t *prow,
 bool try_slide(sand_t *s, uint8_t *row, uint8_t *prow, uint8_t *arow,
                uint8_t *brow, int x, int y, int w, int dx, int dy,
                const int *slide_a, const int *slide_b, int load_dx,
-               int load_dy, int jostle, cell_t grain, uint8_t mat_id,
+               int load_dy, int jostle, cell_t grain, uint8_t driven_row,
                uint8_t density, const material_t *mat,
-               bool driven[MATERIAL_MAX][2])
+               bool driven[][2])
 {
     return try_slide_impl(s, row, prow, arow, brow, x, y, w, dx, dy, slide_a,
-                          slide_b, load_dx, load_dy, jostle, grain, mat_id,
+                          slide_b, load_dx, load_dy, jostle, grain, driven_row,
                           density, mat, driven);
 }
 
@@ -1711,7 +1788,7 @@ static void step_one_row(sand_t *s, int y, int w, int dx, int dy,
                          const int *slide_a, const int *slide_b, int x_step,
                          int load_dx, int load_dy, int jostle,
                          uint8_t settled_bit, uint16_t is_liquid,
-                         bool driven[MATERIAL_MAX][2])
+                         bool driven[MATERIAL_ROWS][2])
 {
     sweep_ctx_t ctx = {
         .s = s,
@@ -2175,12 +2252,11 @@ static void impulse_charge_displacement(sand_t *s, impulse_t *entry,
     const int w = s->w;
     const size_t old_index = entry->index;
     const cell_t displaced = s->cells[new_index];
-    const uint8_t mat_id = CELL_MATERIAL(entry->cell);
     const uint8_t impact_speed = entry->speed;
 
     if (!CELL_IS_EMPTY(displaced) &&
-        (materials[mat_id].kind == KIND_STATIC ||
-         materials[mat_id].kind == KIND_POWDER)) {
+        (material_of(entry->cell)->kind == KIND_STATIC ||
+         material_of(entry->cell)->kind == KIND_POWDER)) {
         const uint8_t drag = impulse_drag_of(displaced);
         entry->speed = (entry->speed > drag) ? (uint8_t)(entry->speed - drag)
                                               : 0;
@@ -2428,7 +2504,14 @@ static void step_impulses(sand_t *s, int dx, int dy)
              * sealing in, so it is ALWAYS actively ramping while it waits
              * for a turn to actually move. */
             const uint8_t lost_mat = CELL_MATERIAL(entry.cell);
-            if (reactions[lost_mat].heat_ramp != 0) {
+            /* reaction_of(entry.cell), not reactions[lost_mat] - lost_mat
+             * is only the high nibble, and for anything in the extended
+             * range (MAT_EXTENDED) that nibble is shared by the statics AND
+             * gunpowder, with the real row selected by the low bits
+             * reaction_of() already knows how to read. reactions[lost_mat]
+             * for such a byte silently reads reactions[MAT_EXTENDED] - a
+             * row nothing in the extended range actually has - instead. */
+            if (reaction_of(entry.cell)->heat_ramp != 0) {
                 const cell_t here = s->cells[entry.index];
                 if (!CELL_IS_EMPTY(here) && CELL_MATERIAL(here) == lost_mat) {
                     entry.cell = here;
@@ -2524,7 +2607,7 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * falling" to "still has outward energy left", which is
          * backwards - the whole point is that it keeps falling well
          * after the outward push has spent itself. */
-        if (materials[mat_id].kind == KIND_STATIC) {
+        if (material_of(entry.cell)->kind == KIND_STATIC) {
             const int gx = (int)((unsigned)entry.index % (unsigned)w);
             const int gy = (int)((unsigned)entry.index / (unsigned)w);
             int gcand[3][2];
@@ -2811,7 +2894,7 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * test_a_chunk_stacked_on_an_in_flight_chunk_waits_instead_of_
          * settling_and_both_eventually_land (suite_sand.c). */
         if (!rolled_move) {
-            if (materials[mat_id].kind == KIND_STATIC) {
+            if (material_of(entry.cell)->kind == KIND_STATIC) {
                 const int rx = (int)((unsigned)entry.index % (unsigned)w);
                 const int ry = (int)((unsigned)entry.index / (unsigned)w);
                 int rcand[3][2];
@@ -2864,7 +2947,7 @@ static void step_impulses(sand_t *s, int dx, int dy)
                         }
                     }
                 }
-            } else if (materials[mat_id].kind == KIND_POWDER &&
+            } else if (material_of(entry.cell)->kind == KIND_POWDER &&
                        entry.speed >= SAND_IMPULSE_BOUNCE_MIN_SPEED) {
                 /* A THROWN GRAIN GETS THE SAME "STILL AIRBORNE, DON'T
                  * SETTLE" TREATMENT A THROWN CHUNK ALREADY GETS, ABOVE -
@@ -3060,8 +3143,8 @@ static void step_impulses(sand_t *s, int dx, int dy)
                  * wall mostly intact. */
                 if (mat_id == MAT_WATER || mat_id == MAT_ACID) {
                     entry.dir = (entry.dir + 4) & 7;
-                } else if ((materials[mat_id].kind == KIND_STATIC ||
-                            materials[mat_id].kind == KIND_POWDER) &&
+                } else if ((material_of(entry.cell)->kind == KIND_STATIC ||
+                            material_of(entry.cell)->kind == KIND_POWDER) &&
                            entry.speed >= SAND_IMPULSE_BOUNCE_MIN_SPEED) {
                     const int normal = blocker_normal(s, x, y, entry.dir);
                     const int reflected = (normal < 0)
@@ -3353,7 +3436,7 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
     s->last_step_dx = dx;
     s->last_step_dy = dy;
 
-    bool driven[MATERIAL_MAX][2];
+    bool driven[MATERIAL_ROWS][2];
     compute_driven(driven, slide_a, slide_b, gx, gy);
 
     /* Sweep AGAINST the direction of travel, on both axes.

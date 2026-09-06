@@ -206,7 +206,7 @@ static inline uint16_t liquid_mask(void)
 {
     uint16_t mask = 0;
     for (int m = 0; m < MATERIAL_MAX; m++) {
-        if (materials[m].kind == KIND_LIQUID) {
+        if (material_by_id((material_id_t)m)->kind == KIND_LIQUID) {
             mask |= (uint16_t)(1u << m);
         }
     }
@@ -794,13 +794,13 @@ static inline void latch_content_flags(sand_t *s, cell_t cell)
      * when a soaker has anything to do; a cell already holding moisture
      * arms it because drying has to outlive the puddle.
      *
-     * CELL_MOISTURE(), not the raw variant - a dry cell's variant is a
-     * TONE (material.h's own comment on soil's state split), and testing
-     * the whole nibble latched this for SOIL_DRY_TONES - 1 of every
-     * SOIL_DRY_TONES dry cells for good, arming the soak/dry pass forever
-     * on soil that was never wet at all. */
+     * moisture_of(), not the raw code - a dry cell's code is a TONE
+     * (material.h's own comment on the moisture codec), and testing the
+     * whole code latched this for `tones - 1` of every `tones` dry cells
+     * for good, arming the soak/dry pass forever on soil that was never wet
+     * at all. */
     if (mat->kind == KIND_LIQUID ||
-        (r->dries != 0 && CELL_MOISTURE(cell) != 0)) {
+        (r->dries != 0 && moisture_of(cell, r) != 0)) {
         s->may_have_moisture = true;
     }
 }
@@ -848,27 +848,38 @@ static inline void mark_move(sand_t *s, int x0, int y0, int x1, int y1)
  *
  * Split out for materials whose variant is life but whose movement row
  * says decay 0 - wood, which is not a transient and must not be treated as
- * one by anything else, but does count down while it is burning. */
+ * one by anything else, but does count down while it is burning.
+ *
+ * Reads/writes through cell_code()/cell_with_code() (material.h), not
+ * CELL_VARIANT()/CELL_MAKE(), and burns out at `r->lit_from` rather than a
+ * hardcoded 1 - the general form gunpowder needs now that "lit" is not
+ * always the whole nibble counting down to zero. Byte-identical for wood
+ * (lit_from 1, and cell_code()/cell_with_code() agree with CELL_VARIANT()/
+ * CELL_MAKE() for every non-gunpowder byte): `life <= 1` is exactly what
+ * `life <= r->lit_from` reads as there. Takes the reaction row itself
+ * rather than a bare material id, so the burn-out threshold is read once
+ * from the same row the caller already loaded instead of re-deriving it
+ * here. */
 static inline bool tick_decay_at(sand_t *s, uint8_t *row, int x, int y,
-                                 cell_t *grain, uint8_t mat_id, int decay)
+                                 cell_t *grain, const reaction_t *r, int decay)
 {
     if (decay == 0) {
         return true;
     }
-    const uint32_t r = rng_next(&s->rng);
-    if ((int)(r & 0xFF) >= decay) {
+    const uint32_t roll = rng_next(&s->rng);
+    if ((int)(roll & 0xFF) >= decay) {
         return true;
     }
 
-    const uint8_t life = CELL_VARIANT(*grain);
-    if (life <= 1) {
+    const uint8_t life = cell_code(*grain);
+    if (life <= r->lit_from) {
         row[x] = CELL_EMPTY;
         mark_rows(s, y, y);
         wake_block_and_neighbors(s, x, y);
         return false;
     }
 
-    *grain = CELL_MAKE(mat_id, life - 1);
+    *grain = cell_with_code(*grain, (uint8_t)(life - 1));
     row[x] = *grain;
     mark_rows(s, y, y);
     return true;
@@ -1239,7 +1250,7 @@ static inline bool try_fall_or_scatter_impl(sand_t *s, uint8_t *row,
  * the same way. */
 static inline void pick_slide_order(uint32_t r, uint8_t *arow, uint8_t *brow,
                                     const int *slide_a, const int *slide_b,
-                                    uint8_t mat_id, bool driven[MATERIAL_MAX][2],
+                                    uint8_t driven_row, bool driven[][2],
                                     uint8_t **first_row, int *first_dx,
                                     int *first_dy, bool *first_driven,
                                     uint8_t **second_row, int *second_dx,
@@ -1247,14 +1258,14 @@ static inline void pick_slide_order(uint32_t r, uint8_t *arow, uint8_t *brow,
 {
     if (r & 1) {
         *first_row  = arow; *first_dx  = slide_a[0]; *first_dy  = slide_a[1];
-        *first_driven = driven[mat_id][0];
+        *first_driven = driven[driven_row][0];
         *second_row = brow; *second_dx = slide_b[0]; *second_dy = slide_b[1];
-        *second_driven = driven[mat_id][1];
+        *second_driven = driven[driven_row][1];
     } else {
         *first_row  = brow; *first_dx  = slide_b[0]; *first_dy  = slide_b[1];
-        *first_driven = driven[mat_id][1];
+        *first_driven = driven[driven_row][1];
         *second_row = arow; *second_dx = slide_a[0]; *second_dy = slide_a[1];
-        *second_driven = driven[mat_id][0];
+        *second_driven = driven[driven_row][0];
     }
 }
 
@@ -1297,9 +1308,9 @@ static inline bool try_slide_impl(sand_t *s, uint8_t *row, uint8_t *prow,
                                   int w, int dx, int dy, const int *slide_a,
                                   const int *slide_b, int load_dx,
                                   int load_dy, int jostle, cell_t grain,
-                                  uint8_t mat_id, uint8_t density,
+                                  uint8_t driven_row, uint8_t density,
                                   const material_t *mat,
-                                  bool driven[MATERIAL_MAX][2])
+                                  bool driven[][2])
 {
     const uint32_t r = rng_next(&s->rng);
 
@@ -1307,7 +1318,7 @@ static inline bool try_slide_impl(sand_t *s, uint8_t *row, uint8_t *prow,
     int      first_dx,    second_dx;
     int      first_dy,    second_dy;
     bool     first_driven, second_driven;
-    pick_slide_order(r, arow, brow, slide_a, slide_b, mat_id, driven,
+    pick_slide_order(r, arow, brow, slide_a, slide_b, driven_row, driven,
                      &first_row, &first_dx, &first_dy, &first_driven,
                      &second_row, &second_dx, &second_dy, &second_driven);
 
@@ -1353,12 +1364,22 @@ bool try_fall_or_scatter(sand_t *s, uint8_t *row, uint8_t *prow,
                          const int *slide_b, cell_t grain,
                          uint8_t density, int scatter);
 
+/* `driven_row` and `bool driven[][2]`, not `mat_id` and `driven[MATERIAL_
+ * MAX][2]` - this is only ever used to index `driven[]`, and the array's
+ * declared bound was never enforced (a function parameter's outer array
+ * dimension decays to a plain pointer either way), only misleading:
+ * step_one_grain() (sand.c) calls the _impl form of this directly with a
+ * driven[MATERIAL_ROWS][2] backing array indexed by a whole ROW
+ * (grain >> 3, up to 31), while sand_gas.c calls this exported wrapper
+ * with its own driven_gas[MATERIAL_MAX][2] indexed by a plain material id
+ * (up to 15) - two different real bounds behind the same shape, so naming
+ * either one here was never accurate for both callers. */
 bool try_slide(sand_t *s, uint8_t *row, uint8_t *prow, uint8_t *arow,
                uint8_t *brow, int x, int y, int w, int dx, int dy,
                const int *slide_a, const int *slide_b, int load_dx,
-               int load_dy, int jostle, cell_t grain, uint8_t mat_id,
+               int load_dy, int jostle, cell_t grain, uint8_t driven_row,
                uint8_t density, const material_t *mat,
-               bool driven[MATERIAL_MAX][2]);
+               bool driven[][2]);
 
 /* Whether a grain may slide in direction (mx, my) at all, given gravity
  * (gx, gy) and its material's angle of repose. Moved here from sand.c
