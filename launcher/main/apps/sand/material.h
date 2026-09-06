@@ -70,10 +70,51 @@ typedef uint8_t cell_t;
 
 #define MATERIAL_VARIANTS   16
 
-/* Room temp 0-15 needs middle ambient for cold. SOIL: 0 to SOIL_DRY_TONES-1
- * dry, SOIL_DRY_TONES to SOIL_DRY_TONES+SOIL_MOISTURE_MAX moist, last unused.
- * Split states enhance dry tones, fix uniform wet bed, reduce noise. Tone and
- * moisture form monotone from dry to saturated. */
+/* WHERE ROOM TEMPERATURE SITS on a heat-ramping material's 0-15 variant. Not
+ * 0, and that is the whole point. With ambient at the bottom of the range
+ * there is no such thing as colder than resting: a pane at 0 touched by snow
+ * has nothing to lose, so it cannot change and cannot show that anything
+ * happened. Snow beside glass looked identical to snow beside nothing, which
+ * is exactly what it was. Ambient in the middle gives cold somewhere to go.
+ * Below it a pane is FROSTED and visibly pale; above it, warming; far enough
+ * above, glowing and about to break. Three levels of frost is not much
+ * resolution, but it is the difference between a state you can see and one
+ * you cannot, and the levels above ambient are the ones doing the interesting
+ * work. SOIL reads its nibble by STATE rather than by a fixed field split:
+ * which half of the value it is in says whether it holds a dry TONE or a wet
+ * MOISTURE, rather than one bit always meaning tone and three always meaning
+ * moisture regardless of which state the cell is actually in. 0 ..
+ * SOIL_DRY_TONES - 1 DRY. The value IS the tone, 0 palest to SOIL_DRY_TONES -
+ * 1 darkest-dry. SOIL_DRY_TONES .. WET. moisture = value -
+ * (SOIL_DRY_TONES-1), SOIL_DRY_TONES - 1 1 up to SOIL_MOISTURE_MAX. +
+ * SOIL_MOISTURE_MAX MATERIAL_VARIANTS - 1 UNUSED. A corrupt cell here reads
+ * as moisture SOIL_MOISTURE_MAX in every accessor below AND in the palette
+ * (see material.c), rather than as an unpredictable eighth colour - one more
+ * value than the ranges above need, so it degrades instead of aliasing a real
+ * one. This was a fixed split instead - one bit of carried tone, three of
+ * moisture, so SOIL_TONES was 2 - and it undersold dry soil specifically. A
+ * WATERED bank had a real gradient, because moisture is laid out by
+ * percolation cell by cell; a DRY one had exactly two colours, because two
+ * tones is all one bit can ever say, and that is most of what a pile looks
+ * like once it stops being watered. Splitting by state instead of by bit
+ * position gives the dry side of the nibble every value the wet side does not
+ * need at that moment - eight tones instead of two - and costs the wet side
+ * nothing it was using: a saturated bed's own variation was always going to
+ * be the moisture gradient itself, not an independent tone, because that
+ * gradient is what percolation already draws down a pile. The trade is real -
+ * a UNIFORMLY wet bed has one flat colour where it used to have two - but a
+ * uniformly wet bed is the one case moisture itself cannot shade regardless,
+ * and it is the rarer of the two flat cases this fixes one of. Dry tone is
+ * also no longer noise. It is picked at POUR time, banded the way sand's
+ * shade is (see random_cell() in sand.c), and re-picked at the moment a cell
+ * crosses back to dry, biased by how wet its surroundings still are right
+ * then (see soil_dry_out() in sand_reactions.c) - so a pile that dried from
+ * the top down keeps that as a visible imprint: pale where the front left
+ * nothing behind, darker wherever it was still handing water off when it
+ * happened. Tone and moisture together are one monotone luminance ramp across
+ * variants 0 through SOIL_DRY_TONES - 1 + SOIL_MOISTURE_MAX (see material.c's
+ * SOIL_SHADES) - bone-dry-palest at one end, saturated at the other, with
+ * nothing in between reading as an unrelated colour. */
 #define SOIL_DRY_TONES      8
 #define SOIL_MOISTURE_MAX   7
 
