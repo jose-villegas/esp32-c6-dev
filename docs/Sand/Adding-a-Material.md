@@ -701,9 +701,9 @@ puff is caught at whatever point in its life you happen to look at it, so
 only non-overlapping *ranges* make every cell unambiguous.
 
 **When two materials differ mainly in appearance, write a test that
-asserts the appearance.** Everything else in `suite_sand.c` tests
-behaviour, and a future palette tweak would break this feature while
-passing every one of them.
+asserts the appearance.** Everything else in the sand test suite (split
+across `suite_sand_*.c`) tests behaviour, and a future palette tweak
+would break this feature while passing every one of them.
 
 ---
 
@@ -867,11 +867,13 @@ number goes in a comment next to the constant and the probe is disposable.
   reproducible device frame-budget captures valid. Adding an unconditional
   roll to a shared path silently invalidates every timing number in the
   repo.
-- **Never widen a shared test grid to fit one test.** `suite_sand.c`'s
-  `wide` grid is 32 cells across; a test needing more cells changes how
+- **Never widen a shared test grid to fit one test.** `suite_sand_common.h`'s
+  `WIDE_W`/`WIDE_H` grid size (32 cells across, reused by a `wide` grid in
+  several `suite_sand_*.c` files) - a test needing more cells changes how
   many cells every *other* test drawing on that grid rolls random numbers
   over, cascading into unrelated failures. Give the outlier its own grid -
-  see `test_conduction_stops_at_the_reach_cap`.
+  see `test_conduction_stops_at_the_reach_cap`
+  (`suite_sand_reaction_encoding.c`).
 - **Palette blocks carry their own `[MAT_X * MATERIAL_VARIANTS] =`
   designator.** They used to be positional and it bit twice: a block added
   or removed mid-list shifts every one after it, and the symptom is a
@@ -903,7 +905,8 @@ number goes in a comment next to the constant and the probe is disposable.
 
 ## Testing
 
-Follow `suite_sand.c`'s existing conventions - host-portable, direct
+Follow the sand test suite's existing conventions (split across
+`suite_sand_*.c`) - host-portable, direct
 assertions, not visual inspection (see `docs/Testing-Guide.md` for why).
 The gas tests are a reasonable template for a new `KIND`:
 

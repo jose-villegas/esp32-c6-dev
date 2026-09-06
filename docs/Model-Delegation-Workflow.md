@@ -85,8 +85,9 @@ doing the typing, not you privately drafting the same text.
    not silently absorbed into "the parts that need context." Go through
    every file the plan touches and list each self-contained change as its
    own line (e.g. "material.h: two new reaction_t fields + comments",
-   "material.c: dirt's row gains four fields", "suite_sand.c: rewrite
-   test X's assertion", "docs/Foo.md: revise the 'Decisions' paragraph").
+   "material.c: dirt's row gains four fields", "suite_sand_materials.c:
+   rewrite test X's assertion", "docs/Foo.md: revise the 'Decisions'
+   paragraph").
    Every line on that list is a delegation candidate by default; only pull
    one back to do yourself if it genuinely cannot be specified without
    context a model would have to reconstruct from scratch (a novel
@@ -271,7 +272,7 @@ doing the typing, not you privately drafting the same text.
    test loop exists to catch before it reaches a device. Fix it, re-run,
    and consider whether the fix needs its own regression test (it did,
    here - see `test_acid_evaporates_into_gas_when_forced` in
-   `suite_sand.c`).
+   `suite_sand_reaction_encoding.c`).
 
 10. **Commit only when asked. Push/merge only when asked**, and even then,
     check the git mechanics below before assuming a plain `git merge` or

@@ -12,8 +12,9 @@
 #
 # The hole was not theoretical. A rendering change referred to three
 # identifiers declared further down the file; the host suite passed, a
-# -fsyntax-only pass over suite_sand.c passed, and the error only appeared
-# on the device, where it stopped an unrelated performance run.
+# -fsyntax-only pass over the sand test suite (suite_sand_*.c) passed,
+# and the error only appeared on the device, where it stopped an unrelated
+# performance run.
 #
 # So: syntax-only, with stand-in headers (stubs/) for the handful of IDF
 # and BSP things these files include. Nothing is linked and nothing runs.

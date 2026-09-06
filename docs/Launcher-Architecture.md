@@ -365,7 +365,7 @@ main/apps/sand/
 ├── sand_reactions.c  fire chemistry: ignition, spread, burnout      (pure)
 ├── sand_priv.h       small inline helpers shared by the .c files above
 ├── row_runs.c/.h     per-row dirty-span detection and reconciliation (pure)
-├── suite_sand.c      tests for the automaton               (pure + a device block)
+├── suite_sand_*.c    tests for the automaton, split by topic (pure + a device block)
 ├── suite_row_runs.c  tests for row_runs                                (pure)
 ├── suite_tilt.c      tests for the tilt filter                         (pure)
 └── tools/            sand-only host tooling (sweeps, report generators)

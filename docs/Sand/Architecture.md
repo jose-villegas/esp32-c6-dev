@@ -332,8 +332,9 @@ types, wrong format strings - which is the class that was getting through.
 
 It found its own reason for existing: a rendering change referred to three
 identifiers declared further down the file, the host suite passed, a
-`-fsyntax-only` pass over `suite_sand.c` passed, and the error surfaced on
-the device where it stopped an unrelated performance run.
+`-fsyntax-only` pass over the sand test suite (`suite_sand_*.c`) passed,
+and the error surfaced on the device where it stopped an unrelated
+performance run.
 
 Not a substitute for building on device. A stub declares only what the real
 header is used for, so a new IDF call needs a line adding to it first -
@@ -1109,7 +1110,7 @@ post-materials-wave tree (`performance_20260826_150930`, reproduced by
 a second capture to within 4 µs on every test) re-measured all
 thirteen scenes, and every budget was re-set to a uniform reduction
 target of measured × 0.9, rounded - see `FULL_STEP_BUDGET_US`'s
-comment in `suite_sand.c` for the full reasoning. Nothing passes by
+comment in `suite_sand_perf.c` for the full reasoning. Nothing passes by
 decree, nothing was ratcheted up to what the code happens to cost:
 each budget sits a tenth below its own fresh measurement, and each
 test stops failing only when that tenth is actually won.
@@ -1175,7 +1176,7 @@ See [`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md).
 
 ## The thirteen device frame-budget tests
 
-All `#ifdef DEVICE_BUILD`-only, in `suite_sand.c`, run against the real
+All `#ifdef DEVICE_BUILD`-only, in `suite_sand_perf.c`, run against the real
 184x224 grid rather than the 8x8 host-test fixture. Eight of the thirteen
 have a real device number behind them - see each test's own comment for
 the reasoning behind its specific budget. The five added by the twelfth

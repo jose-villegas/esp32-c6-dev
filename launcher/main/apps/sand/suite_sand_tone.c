@@ -559,7 +559,7 @@ static void test_each_material_is_painted_the_way_it_should_be(void)
             /* hash 1, not 0: hash 0 at the rest phase (0, this file's
              * default) is the one combination that glints cullet
              * (material.c's MAT_SAND case, CULLET_GLINT_ONE_IN's own
-             * comment) - see suite_sand.c's CULLET GLINT tests for that
+             * comment) - see this file's own CULLET GLINT tests for that
              * roll on its own terms, checked deliberately rather than by
              * accident here. */
             const material_pattern_t pat =
