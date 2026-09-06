@@ -205,28 +205,35 @@ static const int reaction_dirs[4][2] = {
 
 /* PAIR_BITS - one byte per (mine, theirs) material-id ordered pair,
  * classifying a neighbour probe before it ever loads reaction_of() or
- * draws from the RNG. Replaces s->heat_mask/s->wet_mask (both folded in
- * here) and adds three more of the same shape: sand_step_reactions()'s own
- * top comment explains why an O(16x16) rebuild every PASS, never cached
- * across steps, cannot go stale against a sand_set_* table override or a
- * cell created mid-pass - everything said there applies here unchanged,
- * this is that same mechanism widened to five probes instead of two.
- *
- * HONESTY NOTE, because it shapes what this table actually is: every bit
- * below except PAIR_DENSER depends only on `theirs` - the neighbour being
- * probed - never on `mine`. That is not an oversight; it is what this
- * file's chemistry mostly IS (see this file's own top comment and
- * docs/Sand/Reaction-Table.md): a probe's outcome today is almost always a
- * fact about the neighbour's own reaction row, independent of what is
- * doing the probing, which is exactly why the two 1-D masks this table
- * absorbs already worked. Storing five theirs-only bits in a 16x16 shape
- * costs nothing beyond the four-theirs-only-bits' own broadcast loop below
- * (still O(16), same as heat_mask/wet_mask always cost) and buys one
- * consistent lookup shape for every consumer in this file, including the
- * one bit (PAIR_DENSER) that is genuinely pairwise. See pair_theirs_bits()
- * just below for how a caller with no real `mine` (try_heat_transform has
- * none - see its own call sites) reads the theirs-only bits without
- * inventing one. */
+ * draws from the RNG. Replaces s->heat_mask/s->wet_mask (both folded
+ * in here) and adds three more of the same shape. */
+
+/* sand_step_reactions()'s own top comment explains why an O(16x16)
+ * rebuild every PASS, never cached across steps, cannot go stale
+ * against a sand_set_* table override or a cell created mid-pass -
+ * everything said there applies here unchanged, this is that same
+ * mechanism widened to five probes instead of two. */
+
+/* HONESTY NOTE, because it shapes what this table actually is: every
+ * bit below except PAIR_DENSER depends only on `theirs` - the
+ * neighbour being probed - never on `mine`. That is not an oversight;
+ * it is what this file's chemistry mostly IS (see this file's own top
+ * comment and docs/Sand/Reaction-Table.md). */
+
+/* A probe's outcome today is almost always a fact about the
+ * neighbour's own reaction row, independent of what is doing the
+ * probing, which is exactly why the two 1-D masks this table absorbs
+ * already worked. */
+
+/* Storing five theirs-only bits in a 16x16 shape costs nothing beyond
+ * the four-theirs-only-bits' own broadcast loop below (still O(16),
+ * same as heat_mask/wet_mask always cost) and buys one consistent
+ * lookup shape for every consumer in this file, including the one bit
+ * (PAIR_DENSER) that is genuinely pairwise. */
+
+/* See pair_theirs_bits() just below for how a caller with no real
+ * `mine` (try_heat_transform has none - see its own call sites) reads
+ * the theirs-only bits without inventing one. */
 #define PAIR_HEAT_RESPONSIVE (1u << 0) /* theirs could pass try_heat_transform()'s first two gates - was heat_mask */
 #define PAIR_WETS            (1u << 1) /* theirs is a liquid whose reaction row wets - was wet_mask */
 #define PAIR_IGNITABLE       (1u << 2) /* theirs has a nonzero flammability - try_ignite()'s own first reject */
@@ -250,20 +257,24 @@ pair_theirs_bits(uint8_t theirs) {
  * every caller that already looked the cell up once does not have to
  * multiply out y*w+x a second time - with every piece of bookkeeping a
  * new cell needs. Everything in this file that creates a cell goes
- * through here.
- *
- * The may_have_* latching is the reason this exists rather than being
+ * through here. */
+
+/* The may_have_* latching is the reason this exists rather than being
  * three lines at each call site. This pass can create cells of a KIND
- * different from what was there a moment ago - fuel igniting into fire
- * or ember, and (once quenching and heat conduction exist) a liquid
- * boiling into steam - and forgetting to latch the right may_have_* flag
- * for the material just created leaves that cell sitting frozen on the
- * grid forever, because the pass gated on that flag early-returns
- * without ever looking at it again. That failure is invisible to any
- * test that happens to create the same kind of cell some OTHER way in
- * the same scene, which is most of them. Mirrors sand_set()'s own
- * independent-ifs block, for exactly the same reason it is written that
- * way there. */
+ * different from what was there a moment ago - fuel igniting into
+ * fire or ember, and (once quenching and heat conduction exist) a
+ * liquid boiling into steam. */
+
+/* Forgetting to latch the right may_have_* flag for the material just
+ * created leaves that cell sitting frozen on the grid forever, because
+ * the pass gated on that flag early-returns without ever looking at it
+ * again. */
+
+/* That failure is invisible to any test that happens to create the
+ * same kind of cell some OTHER way in the same scene, which is most of
+ * them. Mirrors sand_set()'s own independent-ifs block, for exactly
+ * the same reason it is written that way there. */
+
 /* `spec` is either an ordinary material id, or a whole extended cell byte
  * (MATX(k), whose high nibble is MAT_EXTENDED). The two cannot be confused
  * because an ordinary id is at most MAT_COUNT - 1, well under 0xF0.
@@ -392,65 +403,72 @@ static inline cell_t soil_set_moisture(cell_t c, uint8_t new_moisture, uint8_t n
  * comment for details. Tune on device once ore is available. */
 #define HEAT_FLAW_CLUMP 5
 
-/* FORCED INLINE, and that is a performance fix rather than a preference.
- *
- * The wet-earth branch below (723fac6) pushed this function past GCC's
- * size heuristic. At the commit before it the symbol does not exist at
- * all - inlined at all four call sites - and at 723fac6 it is emitted
- * out of line with a cold .part.0 split beside it, so every scene that
- * carries heat pays for a call it did not used to make.
- *
- * The flaw/spoils branches added after this measurement grow the function
- * further still, in the same direction the wet-earth branch already did -
- * this has NOT been re-measured on device. If a future capture shows the
- * cost climbing again, look here first rather than assuming the ratio
- * above still holds.
- *
- * Host, best of seven with all five candidates interleaved, simulation
+/* FORCED INLINE, and that is a performance fix rather than a
+ * preference. */
+
+/* The wet-earth branch below (723fac6) pushed this function past
+ * GCC's size heuristic. At the commit before it the symbol does not
+ * exist at all - inlined at all four call sites - and at 723fac6 it is
+ * emitted out of line with a cold .part.0 split beside it, so every
+ * scene that carries heat pays for a call it did not used to make. */
+
+/* The flaw/spoils branches added after this measurement grow the
+ * function further still, in the same direction the wet-earth branch
+ * already did - this has NOT been re-measured on device. If a future
+ * capture shows the cost climbing again, look here first rather than
+ * assuming the ratio above still holds. */
+
+/* Host, best of seven with all five candidates interleaved, simulation
  * byte-identical either way: full screen of fire -12.1%, lava stress
  * -6.5%, four liquids -5.1%, thermal shock -4.8%, and both liquid-free
- * controls flat. Measure-by-deleting the wet-earth branch outright is
- * WORSE than this (-9.5% on fire against -12.1%), which is what says the
- * cost is the shape of the code and not the work that branch does.
- *
- * Both obvious alternatives lost, measured rather than reasoned: hinting
- * the branch unlikely with __builtin_expect - the idiom
+ * controls flat. */
+
+/* Measure-by-deleting the wet-earth branch outright is WORSE than this
+ * (-9.5% on fire against -12.1%), which is what says the cost is the
+ * shape of the code and not the work that branch does. */
+
+/* Both obvious alternatives lost, measured rather than reasoned:
+ * hinting the branch unlikely with __builtin_expect - the idiom
  * move_liquid_grain() uses in sand_liquid.c - moved nothing, and
- * splitting the branch into its own noinline function bought about 1%,
- * because it shrank this function without getting it back under the
- * threshold.
- *
- * Forcing an inline is not free on this chip, and this campaign has
- * twice measured it costing more than the call once the loop outgrew the
- * 32 KB i-cache (attempts 07 and 08). This forces four call sites at
- * once, so it is a bet only a device capture can settle - that capture
- * is pending as this lands. If it disagrees with the host, take this
- * attribute back out: the revert is the finding, not a failure.
- */
+ * splitting the branch into its own noinline function bought about
+ * 1%, because it shrank this function without getting it back under
+ * the threshold. */
+
+/* Forcing an inline is not free on this chip, and this campaign has
+ * twice measured it costing more than the call once the loop outgrew
+ * the 32 KB i-cache (attempts 07 and 08). This forces four call sites
+ * at once, so it is a bet only a device capture can settle - that
+ * capture is pending as this lands. */
+
+/* If it disagrees with the host, take this attribute back out: the
+ * revert is the finding, not a failure. */
+
 /* Turns (nx, ny) into whatever reaction_t.heats_to names, if it is in
- * bounds and the roll succeeds - heat WITHOUT burning.
- *
- * Sand into glass is the only use today. Kept apart from try_ignite_given()
- * rather than folded into it because the two are different events that
- * happen to share a trigger: one is combustion and consumes fuel, the
- * other is a phase change and consumes nothing. A material can sensibly
- * have both, neither, or one.
- *
- * SPLIT IN TWO for stage 2 of bd esp32c6-iu5's pair-matrix restructure -
- * this self-contained wrapper (bounds check, cell load, PAIR_HEAT_
+ * bounds and the roll succeeds - heat WITHOUT burning. */
+
+/* Sand into glass is the only use today. Kept apart from
+ * try_ignite_given() rather than folded into it because the two are
+ * different events that happen to share a trigger: one is combustion
+ * and consumes fuel, the other is a phase change and consumes
+ * nothing. A material can sensibly have both, neither, or one. */
+
+/* SPLIT IN TWO for stage 2 of bd esp32c6-iu5's pair-matrix restructure
+ * - this self-contained wrapper (bounds check, cell load, PAIR_HEAT_
  * RESPONSIVE gate) for the three call sites that have no neighbour of
- * their own already loaded (step_one_cold_cell()'s two, conduct_heat()'s
- * one - all completely unchanged by this split, same signature, same
- * bytes at the source level), and try_heat_transform_given() below for the
- * fourth: the shared ignite+heat walk in step_one_burning_cell(), which
- * loads the neighbour and its pair_bits[][] byte once for BOTH probes and
- * has no reason to pay this wrapper's redundant second load and second
- * gate test. Every call this wrapper makes to the core below happens
- * after this wrapper has done its own three prologue steps, so nothing
- * about what a neighbour must pass to reach the core changed - only who
- * does the checking, and how many times.
- *
- * Returns whether it changed anything. */
+ * their own already loaded (step_one_cold_cell()'s two,
+ * conduct_heat()'s one - all completely unchanged by this split, same
+ * signature, same bytes at the source level), and
+ * try_heat_transform_given() below for the fourth. */
+
+/* The fourth is the shared ignite+heat walk in step_one_burning_cell(),
+ * which loads the neighbour and its pair_bits[][] byte once for BOTH
+ * probes and has no reason to pay this wrapper's redundant second load
+ * and second gate test. */
+
+/* Every call this wrapper makes to the core below happens after this
+ * wrapper has done its own three prologue steps, so nothing about what
+ * a neighbour must pass to reach the core changed - only who does the
+ * checking, and how many times. Returns whether it changed anything. */
 static inline __attribute__((always_inline)) bool
 try_heat_transform(sand_t* s, int nx, int ny, int w, int h) {
     if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
@@ -531,29 +549,35 @@ try_heat_transform_given(sand_t* s, int nx, int ny, int w, int h, size_t at, cel
          * own comment (material.h). Checked first, so a spoil pre-empts
          * the moisture-driving step below rather than competing with it:
          * a cell either cracks to `spoils_to` this roll, or it dries by
-         * one level as it always did - never both from one success.
-         *
-         * UNCONDITIONAL - no "exempt the first roll" gate, on purpose. An
-         * earlier version of this gated on `CELL_MOISTURE(n) <
-         * SOIL_MOISTURE_MAX`, trying to guarantee a cell always puffs one
-         * free level of steam before it is ever at risk. That reasoning
-         * had a hole: dirt also dries AMBIENTLY (this same `dries` field,
-         * ticking every step regardless of any heat source - see the
-         * MOISTURE SPREADS block above), so a cell can already be below
-         * SOIL_MOISTURE_MAX by the time HEAT ever touches it for the first
-         * time, at which point the gate reads as "already used its
-         * exemption" when it never actually got one. At dirt's own rates
-         * (heat_chance 10, dries 5) that race is won by ambient drying
-         * roughly a third of the time - rare enough to hide behind a low
-         * spoils_chance, and exactly what broke
-         * test_watered_dirt_steams_before_it_smelts once spoils_chance was
-         * rebalanced high enough to matter. No amount of moisture-based
-         * gating can fix it without a spare bit dirt's variant does not
-         * have (material.c's own comment: "Dirt's variant is fully
-         * spent"). So: no gate. A cell CAN now spoil on the very first
-         * heat contact it ever gets, with no warning puff first - which is
-         * the correct reading of "even stronger" besides: wet ore cracking
-         * on first contact, not after a polite warning, is the point. */
+         * one level as it always did - never both from one success. */
+
+        /* UNCONDITIONAL - no "exempt the first roll" gate, on purpose.
+         * An earlier version of this gated on `CELL_MOISTURE(n) <
+         * SOIL_MOISTURE_MAX`, trying to guarantee a cell always puffs
+         * one free level of steam before it is ever at risk. */
+
+        /* That reasoning had a hole: dirt also dries AMBIENTLY (this
+         * same `dries` field, ticking every step regardless of any
+         * heat source - see the MOISTURE SPREADS block above), so a
+         * cell can already be below SOIL_MOISTURE_MAX by the time HEAT
+         * ever touches it for the first time, at which point the gate
+         * reads as "already used its exemption" when it never actually
+         * got one. */
+
+        /* At dirt's own rates (heat_chance 10, dries 5) that race is
+         * won by ambient drying roughly a third of the time - rare
+         * enough to hide behind a low spoils_chance, and exactly what
+         * broke test_watered_dirt_steams_before_it_smelts once
+         * spoils_chance was rebalanced high enough to matter. */
+
+        /* No amount of moisture-based gating can fix it without a
+         * spare bit dirt's variant does not have (material.c's own
+         * comment: "Dirt's variant is fully spent"). So: no gate. */
+
+        /* A cell CAN now spoil on the very first heat contact it ever
+         * gets, with no warning puff first - which is the correct
+         * reading of "even stronger" besides: wet ore cracking on
+         * first contact, not after a polite warning, is the point. */
         REACTION_DOC(spoils_to, "if wet when heat reaches it");
         if (r->spoils_to != 0 &&
             (int)(rng_next(&s->rng) & 0xFF) < r->spoils_chance) {
@@ -653,34 +677,40 @@ crack_run(sand_t* s, int x, int y, int w, int h, material_id_t from, material_id
 /* Walks a chain of lava-cooling events outward from (x, y), where the
  * burning liquid that stood there has already become `product` (this
  * chain's own caller placed it, immediately before calling this). Each
- * link rolls `chance`; on success it picks ONE cardinal neighbour still
- * holding the SAME burning liquid, freezes it to `product` too, and
- * repeats from there. A failed roll, no eligible neighbour, or
- * SAND_LAVA_COOLOFF_MAX_CHAIN links stop it - see that constant's own
- * comment (sand.h) for why it lives there rather than here.
- *
- * "Still the same burning liquid" is answered by comparing the
- * neighbour's OWN quench_to against `product`, rather than by carrying a
- * `from` material id through every link - reaction_of(n)->quench_to ==
- * product is true for exactly the same cells CELL_MATERIAL(n) == (the
- * original lava's id) would have picked out, since only a burning LIQUID
- * whose own quench product is `product` can be the thing this chain
- * started from (see the KIND_LIQUID gate at both call sites, which is
- * what keeps fire - quench_to MAT_STEAM, KIND_GAS - from ever reaching
- * here at all). Lava is the only material satisfying that today, but the
- * test itself makes no assumption of being the only one - it would keep
- * meaning the right thing if a second burning liquid arrived with its own
- * distinct quench_to.
- *
- * ITERATIVE, NOT RECURSIVE. A chain through a real pool can legitimately
- * want to run several cells deep, and recursion would grow the call stack
- * by one frame per link - on a chip with 368 KB of usable RAM and no
- * MMU-backed guard page (docs/Notes/README.md), a chain long enough to
- * matter is also long enough to be dangerous. This only ever has one
- * live cursor (the current end of the chain), unlike crack_run()'s
- * frontier array above, which explores several directions in parallel -
- * so a plain loop is enough; there is nothing here for a stack to help
- * with. */
+ * link rolls `chance`; on success it picks ONE cardinal neighbour
+ * still holding the SAME burning liquid, freezes it to `product` too,
+ * and repeats from there. */
+
+/* A failed roll, no eligible neighbour, or SAND_LAVA_COOLOFF_MAX_CHAIN
+ * links stop it - see that constant's own comment (sand.h) for why it
+ * lives there rather than here. */
+
+/* "Still the same burning liquid" is answered by comparing the
+ * neighbour's OWN quench_to against `product`, rather than by carrying
+ * a `from` material id through every link - reaction_of(n)->quench_to
+ * == product is true for exactly the same cells CELL_MATERIAL(n) ==
+ * (the original lava's id) would have picked out. */
+
+/* That holds since only a burning LIQUID whose own quench product is
+ * `product` can be the thing this chain started from (see the
+ * KIND_LIQUID gate at both call sites, which is what keeps fire -
+ * quench_to MAT_STEAM, KIND_GAS - from ever reaching here at all). */
+
+/* Lava is the only material satisfying that today, but the test itself
+ * makes no assumption of being the only one - it would keep meaning
+ * the right thing if a second burning liquid arrived with its own
+ * distinct quench_to. */
+
+/* ITERATIVE, NOT RECURSIVE. A chain through a real pool can
+ * legitimately want to run several cells deep, and recursion would
+ * grow the call stack by one frame per link - on a chip with 368 KB of
+ * usable RAM and no MMU-backed guard page (docs/Notes/README.md), a
+ * chain long enough to matter is also long enough to be dangerous. */
+
+/* This only ever has one live cursor (the current end of the chain),
+ * unlike crack_run()'s frontier array above, which explores several
+ * directions in parallel - so a plain loop is enough; there is nothing
+ * here for a stack to help with. */
 static void
 cool_off_chain(sand_t* s, int x, int y, int w, int h, uint8_t product, int chance) {
     int cx = x, cy = y;
@@ -723,35 +753,39 @@ cool_off_chain(sand_t* s, int x, int y, int w, int h, uint8_t product, int chanc
  * != 0` (dirt, gunpowder). 15 is a quarter of dirt's old `spread` value (60). */
 #define SOIL_PERCOLATE_CHANCE 15
 
-/* THE DRYING-FRONT IMPRINT. A cell whose moisture just reached zero picks
- * its new dry tone here rather than through CELL_WITH_MOISTURE() directly
- * - see that macro's own comment (material.h) for why zero cannot go
- * through it like every other level does: there is no old tone left to
- * fall back on, so a naive write would land every drying cell on the same
- * fixed value, which is the flat, historyless dry soil this whole
- * re-encoding exists to fix.
- *
- * `nearby_moisture` is the one thing worth spending a read on: the
- * moisture level, 0 to SOIL_MOISTURE_MAX, of whatever cell this drying was
- * busy WATERING at the exact moment it ran out - the neighbour a hand-off
- * had just given a level to, or a root's own sink. Pass 0 where no such
- * neighbour exists (heat driving off a last puff of steam, ambient decay
- * with nothing beside it to receive anything, a plant drinking the last
- * level for itself) and the cell dries bone pale, which is correct: nothing
- * nearby stayed wet to leave an impression. Every site that can drive
- * moisture to zero funnels through here - see this function's callers -
- * so the SAME cell dries to the SAME look whichever of them did it.
- *
- * SCALED THROUGH dry_tone_from_moisture() (material.h), not read straight
- * in as a tone - `nearby_moisture` is a moisture value, 0..moist_max, and
- * only byte-identical to a tone for a material whose tone and moisture
- * ranges happen to be the same width. Dirt's are, by construction
- * (SOIL_DRY_TONES - 1 == SOIL_MOISTURE_MAX, both 7, see the _Static_assert
- * right below) so this is a no-op for dirt and the direct read this used
- * to be was never wrong there. Gunpowder's are not (three tones against
- * four moisture levels): passing its own moisture straight through would
- * have clamped every neighbour above tone 2 to the same darkest shade
- * instead of spreading across the three it actually has to work with. */
+/* THE DRYING-FRONT IMPRINT. A cell whose moisture just reached zero
+ * picks its new dry tone here rather than through CELL_WITH_MOISTURE()
+ * directly - see that macro's own comment (material.h) for why zero
+ * cannot go through it like every other level does: there is no old
+ * tone left to fall back on, so a naive write would land every drying
+ * cell on the same fixed value, which is the flat, historyless dry
+ * soil this whole re-encoding exists to fix. */
+
+/* `nearby_moisture` is the one thing worth spending a read on: the
+ * moisture level, 0 to SOIL_MOISTURE_MAX, of whatever cell this drying
+ * was busy WATERING at the exact moment it ran out - the neighbour a
+ * hand-off had just given a level to, or a root's own sink. */
+
+/* Pass 0 where no such neighbour exists (heat driving off a last puff
+ * of steam, ambient decay with nothing beside it to receive anything,
+ * a plant drinking the last level for itself) and the cell dries bone
+ * pale, which is correct: nothing nearby stayed wet to leave an
+ * impression. Every site that can drive moisture to zero funnels
+ * through here - see this function's callers - so the SAME cell dries
+ * to the SAME look whichever of them did it. */
+
+/* SCALED THROUGH dry_tone_from_moisture() (material.h), not read
+ * straight in as a tone - `nearby_moisture` is a moisture value,
+ * 0..moist_max, and only byte-identical to a tone for a material whose
+ * tone and moisture ranges happen to be the same width. */
+
+/* Dirt's are, by construction (SOIL_DRY_TONES - 1 == SOIL_MOISTURE_MAX,
+ * both 7, see the _Static_assert right below) so this is a no-op for
+ * dirt and the direct read this used to be was never wrong there.
+ * Gunpowder's are not (three tones against four moisture levels):
+ * passing its own moisture straight through would have clamped every
+ * neighbour above tone 2 to the same darkest shade instead of
+ * spreading across the three it actually has to work with. */
 static inline cell_t soil_dry_out(cell_t c, uint8_t nearby_moisture)
 {
     /* soil_cell() uses reaction_of(c) instead of hardcoded MAT_DIRT to handle
@@ -933,36 +967,40 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
     }
 
     /* PERCOLATION. Water in soil runs DOWNHILL, which diffusion alone
-     * cannot express and which is what bounds how deep a soaking gets.
-     *
-     * Half-the-difference settles at a gradient of one level per cell -
-     * and stops there, because half of a gap of one is zero. So the reach
-     * of a soaking was capped at the moisture range itself: a pile held
-     * under water wet its top seven rows into a perfect 7-6-5-4-3-2-1
-     * ramp and then froze, with dry sand underneath it for ever. Reported
-     * as dirt not wetting a whole pile "even fully submerged in water".
-     *
-     * Gravity is the missing term. This hand-off needs NO gradient - only
-     * room in the cell it is going to - so it does not stall, and it
-     * cannot ping-pong the way an ungated symmetric transfer would,
-     * because it only ever goes one way.
-     *
-     * It goes to ONE of the three cells gravity-ward - straight down or
-     * either diagonal - picked at random, and hands over HALF of what it
-     * holds. Both halves of that are what make it look like water rather
-     * than like a rising tide. A fixed direction and a single level would
-     * advance a flat sheet one row at a time, damping everything evenly;
-     * a wandering direction carrying a real share instead drives fingers
-     * down through the soil, which split when a wet cell sends half one
-     * way and half the other on a later step, and merge where two fingers
-     * meet. That is what water actually does in sand, and it is much the
-     * more interesting thing to watch.
-     *
-     * Every gate is checked before the roll, INCLUDING whether any of the
-     * three can take anything. Drawing a random number for soil with
-     * nowhere to send it would advance the RNG for every wet cell on the
-     * board and shift every decision downstream - the trap try_ignite()
-     * documents, and one this pass has already fallen into once. */
+     * cannot express and which is what bounds how deep a soaking gets. */
+
+    /* Half-the-difference settles at a gradient of one level per cell -
+     * and stops there, because half of a gap of one is zero. So the
+     * reach of a soaking was capped at the moisture range itself: a
+     * pile held under water wet its top seven rows into a perfect
+     * 7-6-5-4-3-2-1 ramp and then froze, with dry sand underneath it
+     * for ever. Reported as dirt not wetting a whole pile "even fully
+     * submerged in water". */
+
+    /* Gravity is the missing term. This hand-off needs NO gradient -
+     * only room in the cell it is going to - so it does not stall, and
+     * it cannot ping-pong the way an ungated symmetric transfer would,
+     * because it only ever goes one way. */
+
+    /* It goes to ONE of the three cells gravity-ward - straight down or
+     * either diagonal - picked at random, and hands over HALF of what
+     * it holds. Both halves of that are what make it look like water
+     * rather than like a rising tide. */
+
+    /* A fixed direction and a single level would advance a flat sheet
+     * one row at a time, damping everything evenly; a wandering
+     * direction carrying a real share instead drives fingers down
+     * through the soil, which split when a wet cell sends half one way
+     * and half the other on a later step, and merge where two fingers
+     * meet. That is what water actually does in sand, and it is much
+     * the more interesting thing to watch. */
+
+    /* Every gate is checked before the roll, INCLUDING whether any of
+     * the three can take anything. Drawing a random number for soil
+     * with nowhere to send it would advance the RNG for every wet cell
+     * on the board and shift every decision downstream - the trap
+     * try_ignite() documents, and one this pass has already fallen
+     * into once. */
     if (r->dries != 0 && held != 0) {
         /* The three gravity-ward cells: straight down, and down along each
          * perpendicular. Built from the settled direction, so they turn
@@ -1096,40 +1134,43 @@ step_one_warming_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
             continue;
         }
 
-        /* And something that CANNOT bank it melts outright.
-         *
-         * This branch was missing, and the gap had a shape worth naming:
-         * convection only ever knew how to warm a material whose variant
-         * is a temperature - glass and stone. Ice and snow have no such
-         * variant to climb. Ice structurally cannot: it is an extended
-         * material, so its low nibble is which material it IS, with no
-         * room left to hold a temperature at all.
-         *
-         * So steam walked straight past ice, and a boiler under a sheet of
-         * it did nothing - which is what it looked like on the device, and
-         * is wrong for the only reason that matters: steam is water at a
-         * hundred degrees and ice is water at zero.
-         *
-         * try_heat_transform() has had this second, memoryless branch all
-         * along for heat arriving by contact or through a wall. This is
-         * the same transform, reached by the third route.
-         *
-         * Only for something COLD, though - `chills`, which in this
+        /* And something that CANNOT bank it melts outright. */
+
+        /* This branch was missing, and the gap had a shape worth
+         * naming: convection only ever knew how to warm a material
+         * whose variant is a temperature - glass and stone. Ice and
+         * snow have no such variant to climb. Ice structurally cannot:
+         * it is an extended material, so its low nibble is which
+         * material it IS, with no room left to hold a temperature at
+         * all. */
+
+        /* So steam walked straight past ice, and a boiler under a
+         * sheet of it did nothing - which is what it looked like on
+         * the device, and is wrong for the only reason that matters:
+         * steam is water at a hundred degrees and ice is water at
+         * zero. */
+
+        /* try_heat_transform() has had this second, memoryless branch
+         * all along for heat arriving by contact or through a wall.
+         * This is the same transform, reached by the third route. */
+
+        /* Only for something COLD, though - `chills`, which in this
          * table is what being cold means. Not for anything with a
-         * heats_to at all, which was the first shape of this and is far
-         * too wide: sand's heats_to is glass, so a smoke cloud drifting
-         * over a dune would slowly vitrify it. Warm air thaws; it does
-         * not fire a kiln. Ice and snow are the whole of what this is
-         * for, and both of them chill.
-         *
-         * BOTH gates, deliberately. The gas has to be willing (`warms`)
-         * and the target has to be meltable at its own rate
-         * (`heat_chance`), so convection melts more slowly than a flame
-         * touching the same cell would. That is not only physical, it is
-         * a debt to the thermal-shock tuning: warmer air already costs
-         * snow its life, and snow is the scarce half of "chill it, then
-         * heat it". One gate would have made every boiler on the board a
-         * snow-eater. */
+         * heats_to at all, which was the first shape of this and is
+         * far too wide: sand's heats_to is glass, so a smoke cloud
+         * drifting over a dune would slowly vitrify it. Warm air
+         * thaws; it does not fire a kiln. Ice and snow are the whole
+         * of what this is for, and both of them chill. */
+
+        /* BOTH gates, deliberately. The gas has to be willing
+         * (`warms`) and the target has to be meltable at its own rate
+         * (`heat_chance`), so convection melts more slowly than a
+         * flame touching the same cell would. */
+
+        /* That is not only physical, it is a debt to the thermal-shock
+         * tuning: warmer air already costs snow its life, and snow is
+         * the scarce half of "chill it, then heat it". One gate would
+         * have made every boiler on the board a snow-eater. */
         if (nr->chills == 0 || nr->heats_to == 0 || nr->heat_chance == 0) {
             continue;
         }
@@ -1282,21 +1323,25 @@ step_one_falling_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
  * ground, so they never run out of lift the way the tip does. */
 #define TRUNK_WIDTH 3
 
-/* Where a plant drinks from: down through the plant itself to the ground,
- * then on down into the soil for the first of it holding any water.
- *
- * Two walks, and both have to wander. The first follows the STEM, trying
- * straight down and then either diagonal, because a branch has its own
- * trunk below it at an angle - a walk that only went straight down would
- * find empty air one cell below every limb, and limbs would be the only
- * part of a tree that could never grow. The second follows the SOIL, for
- * a different reason: moisture percolates, so the wettest earth is at the
- * bottom of a bed and the surface a tree stands on is the part that dries
- * first. A plant that drank only from the cell it touched stopped growing
- * with plenty of water two rows down.
- *
- * Both are bounded, and the whole thing runs in the cold pass for cells
- * that grow - which is a handful on any board that has any. */
+/* Where a plant drinks from: down through the plant itself to the
+ * ground, then on down into the soil for the first of it holding any
+ * water. */
+
+/* Two walks, and both have to wander. The first follows the STEM,
+ * trying straight down and then either diagonal, because a branch has
+ * its own trunk below it at an angle - a walk that only went straight
+ * down would find empty air one cell below every limb, and limbs would
+ * be the only part of a tree that could never grow. */
+
+/* The second follows the SOIL, for a different reason: moisture
+ * percolates, so the wettest earth is at the bottom of a bed and the
+ * surface a tree stands on is the part that dries first. A plant that
+ * drank only from the cell it touched stopped growing with plenty of
+ * water two rows down. */
+
+/* Both are bounded, and the whole thing runs in the cold pass for
+ * cells that grow - which is a handful on any board that has any. */
+
 /* `contact_at` is the grid index of the FIRST soil cell the stem walk
  * reaches - the collar, where the tree actually stands - or -1 if the
  * walk never gets there. `root_depth` is how many cells of root (see
@@ -1337,48 +1382,55 @@ find_water(sand_t* s, int x, int y, int w, int h, const reaction_t* r, cell_t se
         bool took_root = false;
 
         /* OUR OWN ROOT, STRAIGHT DOWN, BEFORE THE SCAN BELOW RUNS AT ALL.
-         *
-         * The ordering IS the mechanism, and getting it wrong is what made
-         * roots a single row rather than a system. The scan takes the
-         * first SOIL it finds and breaks, keeping stem only as a fallback
-         * - so the moment a collar cell rooted, the walk found the loose
-         * dirt sitting DIAGONALLY beside that root before it ever
-         * considered going THROUGH it. The contact therefore stayed on the
-         * surface row for ever, each conversion landing beside the last
-         * instead of beneath it. Measured on a watered bed at 20,000
-         * steps: three roots, every one of them at depth 0, spreading
-         * sideways. Reported from the device as roots never growing past
-         * the attachment point.
-         *
-         * The scan DOES stumble down eventually without this - once a
-         * whole surface row has rooted there is no dirt left beside it to
-         * find, so the fallback crosses a root and the contact drops a
-         * row. What it does not do is get there RELIABLY. Measured over
-         * six seeds at 20,000 steps, deepest root reached: 3/3/3/3/3/3
-         * with this check against 3/2/3/0/2/3 without, the zero being a
-         * tree that put out two roots and never left the surface. The
-         * trees come out bigger too (wood 86-159 against 18-102), which
-         * is the same cause seen from the other end: a walk that goes
-         * through its roots reaches the wetter soil underneath them.
-         *
-         * A tree stands ON its roots, and the ground that feeds it is
-         * what lies BELOW them, so the root has to be crossed before the
-         * soil beside it is considered. Straight down only: a root grows
-         * into the contact cell, which is always the cell gravity-ward,
-         * so that is the one direction a root column can occupy. A root
-         * found diagonally is still crossable through the fallback in the
-         * scan, for a stem that has wandered off the column. */
-        /* ONLY IF THERE IS GROUND UNDER IT, which is the other half and was
-         * missing at first. Preferring the root unconditionally commits the
-         * walk to it, and a root with nothing below it is a DEAD END: the
-         * walk arrives, finds no soil and no stem, and gives up - even
-         * though the soil it wanted was sitting diagonally beside the root
-         * all along. A bed one row deep on stone is exactly that shape, and
-         * it is the shape the whole feature's own regression test uses, so
-         * this turned "the tree survives its bed shifting" straight back
-         * into a failure. One cell of lookahead is the entire fix: cross a
-         * root when soil or more root lies under it, and otherwise leave
-         * the scan below to find the ground beside it. */
+         * The ordering IS the mechanism, and getting it wrong is what
+         * made roots a single row rather than a system. */
+
+        /* The scan takes the first SOIL it finds and breaks, keeping
+         * stem only as a fallback - so the moment a collar cell rooted,
+         * the walk found the loose dirt sitting DIAGONALLY beside that
+         * root before it ever considered going THROUGH it. The contact
+         * therefore stayed on the surface row for ever, each conversion
+         * landing beside the last instead of beneath it. */
+
+        /* Measured on a watered bed at 20,000 steps: three roots, every
+         * one of them at depth 0, spreading sideways. Reported from the
+         * device as roots never growing past the attachment point. */
+
+        /* The scan DOES stumble down eventually without this - once a
+         * whole surface row has rooted there is no dirt left beside it
+         * to find, so the fallback crosses a root and the contact drops
+         * a row. What it does not do is get there RELIABLY. */
+
+        /* Measured over six seeds at 20,000 steps, deepest root
+         * reached: 3/3/3/3/3/3 with this check against 3/2/3/0/2/3
+         * without, the zero being a tree that put out two roots and
+         * never left the surface. The trees come out bigger too (wood
+         * 86-159 against 18-102), which is the same cause seen from the
+         * other end: a walk that goes through its roots reaches the
+         * wetter soil underneath them. */
+
+        /* A tree stands ON its roots, and the ground that feeds it is
+         * what lies BELOW them, so the root has to be crossed before
+         * the soil beside it is considered. Straight down only: a root
+         * grows into the contact cell, which is always the cell
+         * gravity-ward, so that is the one direction a root column can
+         * occupy. A root found diagonally is still crossable through
+         * the fallback in the scan, for a stem that has wandered off
+         * the column. */
+
+        /* ONLY IF THERE IS GROUND UNDER IT, which is the other half and
+         * was missing at first. Preferring the root unconditionally
+         * commits the walk to it, and a root with nothing below it is a
+         * DEAD END: the walk arrives, finds no soil and no stem, and
+         * gives up - even though the soil it wanted was sitting
+         * diagonally beside the root all along. */
+
+        /* A bed one row deep on stone is exactly that shape, and it is
+         * the shape the whole feature's own regression test uses, so
+         * this turned "the tree survives its bed shifting" straight
+         * back into a failure. One cell of lookahead is the entire fix:
+         * cross a root when soil or more root lies under it, and
+         * otherwise leave the scan below to find the ground beside it. */
         if (r->roots_to != 0) {
             const int* fd = ring_dir(down);
             const int tx = cx + fd[0], ty = cy + fd[1];
@@ -1491,33 +1543,40 @@ find_water(sand_t* s, int x, int y, int w, int h, const reaction_t* r, cell_t se
 /* Every grower that spends a cell of soil moisture pays through here -
  * growing, budding and sprouting alike - see PART 1 of the roots
  * feature. It spends the moisture exactly as each site used to do
- * inline, then - separately, and only once the spend itself has already
- * happened - rolls whether the CONTACT cell (the collar, where the stem
- * actually touches ground) welds into the FIRST root of a new system.
- *
- * ONLY THE FIRST. `root_depth == 0` means find_water()'s stem walk
+ * inline, then - separately, and only once the spend itself has
+ * already happened - rolls whether the CONTACT cell (the collar, where
+ * the stem actually touches ground) welds into the FIRST root of a new
+ * system. */
+
+/* ONLY THE FIRST. `root_depth == 0` means find_water()'s stem walk
  * crossed no root at all on the way down - a bare collar - which is
  * exactly the case this exists for: a tree resting on top of its bed
  * rather than embedded in it, one shift of the soil away from being
  * stranded (see reaction_t.roots's own comment in material.h for the
- * bug this is the fix for). The moment that first root exists, PART 2 -
- * step_one_rooting_cell(), below, gated on the cell ITSELF being a root
- * rather than on anything spending moisture nearby - takes over growing
- * the system outward and downward on its own, cell eating cell, the way
- * an actual root network spreads. Gating this path shut once root_depth
- * is nonzero is what keeps the two from fighting over the same collar:
- * without it, every grow/bud/sprout event for the rest of the tree's
- * life keeps re-rolling here too, seeding fresh disconnected root cells
- * at whatever the CURRENT deepest contact happens to be, on top of a
- * system PART 2 is already growing outward from the first one.
- *
- * `soil_at` is never the cell that gets converted - it can be several
+ * bug this is the fix for). */
+
+/* The moment that first root exists, PART 2 - step_one_rooting_cell(),
+ * below, gated on the cell ITSELF being a root rather than on anything
+ * spending moisture nearby - takes over growing the system outward and
+ * downward on its own, cell eating cell, the way an actual root
+ * network spreads. */
+
+/* Gating this path shut once root_depth is nonzero is what keeps the
+ * two from fighting over the same collar: without it, every
+ * grow/bud/sprout event for the rest of the tree's life keeps
+ * re-rolling here too, seeding fresh disconnected root cells at
+ * whatever the CURRENT deepest contact happens to be, on top of a
+ * system PART 2 is already growing outward from the first one. */
+
+/* `soil_at` is never the cell that gets converted - it can be several
  * rows down the ROOT_REACH walk in find_water(), and a root planted
  * there would be a disconnected woody speck in the middle of the bed,
- * anchoring nothing. `contact_at` is -1 for a caller that never reaches
- * soil at all (step_one_drinking_cell()'s find_water() call, which
- * passes a scratch int instead of caring); this function is simply not
- * called in that case, since drinking never spends soil moisture. */
+ * anchoring nothing. */
+
+/* `contact_at` is -1 for a caller that never reaches soil at all
+ * (step_one_drinking_cell()'s find_water() call, which passes a
+ * scratch int instead of caring); this function is simply not called
+ * in that case, since drinking never spends soil moisture. */
 static void
 spend_soil_moisture(sand_t* s, int w, const reaction_t* r, int soil_at, uint8_t amount, int contact_at,
                      int root_depth) {
@@ -1572,35 +1631,41 @@ spend_soil_moisture(sand_t* s, int w, const reaction_t* r, int soil_at, uint8_t 
  * on the panel for feel, not more measurement for depth. */
 #define ROOT_CONDUCT_CHANCE 64
 
-/* One cell of ROOT, carrying water DOWN through itself - a conduit.
- *
- * Why a root system needs this at all: depth is bounded by water, not by
- * heading. A root can only eat moist soil, a bed watered from the top
- * dries from the top, and measured over thirty seeds the moist front the
- * fingers chase was gone before they reached the floor - every saturated
- * bed 98-99% dry after 20,000 steps, not one live tip beside a moist cell,
- * and on a dry bed watered at the collar alone a mean deepest root of 5.7
- * rows of 19. Steeper direction weights narrowed the system and did not
- * deepen it (ROOT_WEIGHT_DOWN's own comment). So the water has to be
- * brought to where the roots want to go, and that is what real roots do:
- * they carry it.
- *
- * The rule: take one level from the WETTEST soil among the five
- * neighbours beside or above this root, put it into the DRIEST soil among
- * the three beneath it. Moves only, never makes - the same conservation
- * step_one_soaking_cell()'s percolation keeps - and only ever one way,
- * gravity-ward, so it cannot ping-pong against diffusion. The sink is the
- * next cell a tip wants to eat, and a fresh tip is itself a conduit, so
- * the moisture front and the root front move down together: depth is
- * EARNED, a level of water at a time, rather than handed out by a weight.
- *
- * Sides count as sources, not only "above". A column of root has more
- * root above each cell, not soil - only its top cell would ever conduct
- * if the source had to be overhead. Drawing from the wet soil flanking
- * each cell is what lets a whole column drain the surface layer downward.
- *
- * Every gate before the roll, the file's rule: with no source or no sink
- * this touches neither the grid nor the RNG. */
+/* One cell of ROOT, carrying water DOWN through itself - a conduit. */
+
+/* Why a root system needs this at all: depth is bounded by water, not
+ * by heading. A root can only eat moist soil, a bed watered from the
+ * top dries from the top, and measured over thirty seeds the moist
+ * front the fingers chase was gone before they reached the floor -
+ * every saturated bed 98-99% dry after 20,000 steps, not one live tip
+ * beside a moist cell, and on a dry bed watered at the collar alone a
+ * mean deepest root of 5.7 rows of 19. */
+
+/* Steeper direction weights narrowed the system and did not deepen it
+ * (ROOT_WEIGHT_DOWN's own comment). So the water has to be brought to
+ * where the roots want to go, and that is what real roots do: they
+ * carry it. */
+
+/* The rule: take one level from the WETTEST soil among the five
+ * neighbours beside or above this root, put it into the DRIEST soil
+ * among the three beneath it. Moves only, never makes - the same
+ * conservation step_one_soaking_cell()'s percolation keeps - and only
+ * ever one way, gravity-ward, so it cannot ping-pong against
+ * diffusion. */
+
+/* The sink is the next cell a tip wants to eat, and a fresh tip is
+ * itself a conduit, so the moisture front and the root front move down
+ * together: depth is EARNED, a level of water at a time, rather than
+ * handed out by a weight. */
+
+/* Sides count as sources, not only "above". A column of root has more
+ * root above each cell, not soil - only its top cell would ever
+ * conduct if the source had to be overhead. Drawing from the wet soil
+ * flanking each cell is what lets a whole column drain the surface
+ * layer downward. */
+
+/* Every gate before the roll, the file's rule: with no source or no
+ * sink this touches neither the grid nor the RNG. */
 static bool
 step_one_conducting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
     const int down = ring_of(s->last_load_dx, s->last_load_dy);
@@ -1666,42 +1731,46 @@ step_one_conducting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t
     return true;
 }
 
-/* One cell of ROOT, eating into the moist soil it touches - PART 2 of the
- * roots feature (docs/Sand/Sand-Simulation.md), and the whole growth
- * rule: find a neighbour that is soil (reaction_of(c)->soil != 0) and
- * still holds moisture, roll a small chance, and convert it - which
- * consumes the moisture as the price of the conversion, the same "spend
- * the scarce thing" discipline growth, budding and sprouting already
- * rest on (reaction_t.roots's own comment, material.h).
- *
- * Moisture itself already has most of the shape - it percolates down
- * through a bed (step_one_soaking_cell()) and diffuses out from anything
- * drinking or pouring nearby - so a root reaching for whichever neighbour
- * still has water in it spreads wide near a wet surface and fingers
- * downward through a bed drying from the top. The first cut had no
- * direction weights at all on exactly that reasoning, and it was mostly
- * right: it was replaced by a SMALL skew, not a walk (see the pick below
- * for what the skew is and the measurement behind it), because near a wet
- * surface the sideways spread won so completely that depth only happened
- * at the angles the geometry favoured. An earlier draft before that walked
- * a stem-shaped run outward from the tree's collar instead, reusing
- * step_one_growing_cell()'s own site-roll-plus-fan-walk machinery; it was
- * dropped because a root does not need a stem's machinery to look like a
- * root, and because this rests on the same scarce-resource bound the rest
- * of the feature already uses rather than adding a second kind of bound
- * beside it.
- *
- * Bounded three ways, in the order that was actually measured to matter
- * - see the Roots section of docs/Sand/Sand-Simulation.md for the
- * numbers behind each:
- *   1. THE MOISTURE ITSELF. A cell with nothing to spend has nothing to
- *      grow into, and the total on a board is finite unless something
- *      keeps pouring more in - the same bound budding rests on.
- *   2. ROOT_SURFACE_MAX, above - a root already thick with root
- *      neighbours does not roll at all, which is what keeps the system
- *      a filigree rather than a block.
- *   3. `r->roots` itself, on MATX_ROOT's own row (material.c) - a small
- *      chance, the same discipline every other roll in this file uses. */
+/* One cell of ROOT, eating into the moist soil it touches - PART 2 of
+ * the roots feature (docs/Sand/Sand-Simulation.md), and the whole
+ * growth rule: find a neighbour that is soil (reaction_of(c)->soil !=
+ * 0) and still holds moisture, roll a small chance, and convert it -
+ * which consumes the moisture as the price of the conversion, the same
+ * "spend the scarce thing" discipline growth, budding and sprouting
+ * already rest on (reaction_t.roots's own comment, material.h). */
+
+/* Moisture itself already has most of the shape - it percolates down
+ * through a bed (step_one_soaking_cell()) and diffuses out from
+ * anything drinking or pouring nearby - so a root reaching for
+ * whichever neighbour still has water in it spreads wide near a wet
+ * surface and fingers downward through a bed drying from the top. */
+
+/* The first cut had no direction weights at all on exactly that
+ * reasoning, and it was mostly right: it was replaced by a SMALL skew,
+ * not a walk (see the pick below for what the skew is and the
+ * measurement behind it), because near a wet surface the sideways
+ * spread won so completely that depth only happened at the angles the
+ * geometry favoured. */
+
+/* An earlier draft before that walked a stem-shaped run outward from
+ * the tree's collar instead, reusing step_one_growing_cell()'s own
+ * site-roll-plus-fan-walk machinery; it was dropped because a root
+ * does not need a stem's machinery to look like a root, and because
+ * this rests on the same scarce-resource bound the rest of the feature
+ * already uses rather than adding a second kind of bound beside it. */
+
+/* Bounded three ways, in the order that was actually measured to
+ * matter - see the Roots section of docs/Sand/Sand-Simulation.md for
+ * the numbers behind each. FIRST, THE MOISTURE ITSELF: a cell with
+ * nothing to spend has nothing to grow into, and the total on a board
+ * is finite unless something keeps pouring more in - the same bound
+ * budding rests on. */
+
+/* SECOND, ROOT_SURFACE_MAX, above - a root already thick with root
+ * neighbours does not roll at all, which is what keeps the system a
+ * filigree rather than a block. THIRD, `r->roots` itself, on
+ * MATX_ROOT's own row (material.c) - a small chance, the same
+ * discipline every other roll in this file uses. */
 static bool
 step_one_rooting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
     /* Cheapest question first, and it rejects most already-thick columns
@@ -1723,49 +1792,56 @@ step_one_rooting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
 
     /* ALL EIGHT, not the four cardinals - compared directly, both ways,
      * against the same six seeds (docs/Sand/Sand-Simulation.md's Roots
-     * section): four gave a near-straight taproot, one or two cells wide,
-     * that only fanned out where moisture happened to pool against the
-     * stone floor; eight let a root step diagonally as it reaches for
-     * water, which is what actually produces the wandering, forking
-     * shape a root system is supposed to have - the difference is
-     * qualitative, not a rounding error, and it is the reason this rule
-     * bothers with ring_dir() at all instead of the plainer reaction_dirs
-     * four-neighbour scan sprouting and drinking already use.
-     *
-     * A WEIGHTED PICK, not the first match. The first cut took whichever
-     * moist neighbour the fixed ring order reached first, which is a
-     * uniform pick in disguise - and uniform is isotropic, so the shape
-     * of the moisture decided everything. Near a wet surface moisture
-     * spreads sideways, so the system spread sideways, and reported from
-     * the device as roots preferring the sides so strongly that deeper
-     * roots only happened at the few angles the geometry favoured.
-     *
-     * Two biases, both read off the grid with no state:
-     *   AWAY FROM ITS PARENT - the sum of the directions from this cell's
-     *     own root neighbours to it, `away`. A tip has one parent, so the
-     *     vector is strong and the tip keeps going the way it was going,
-     *     the same thing holds_line does for a stem without ever
-     *     remembering anything. A junction has several, they partly
-     *     cancel, and it is free to go any way - which is right for a
-     *     junction. A lone seed has none and is left to gravity.
-     *   GRAVITY-WARD - what actually buys depth: a root reaching for the
-     *     water percolating down beneath it rather than the water
-     *     diffusing beside it.
-     * THE TRUNK COUNTS AS A PARENT TOO. The first root a tree puts down
+     * section): four gave a near-straight taproot, one or two cells
+     * wide, that only fanned out where moisture happened to pool
+     * against the stone floor; eight let a root step diagonally as it
+     * reaches for water, which is what actually produces the
+     * wandering, forking shape a root system is supposed to have. */
+
+    /* The difference is qualitative, not a rounding error, and it is
+     * the reason this rule bothers with ring_dir() at all instead of
+     * the plainer reaction_dirs four-neighbour scan sprouting and
+     * drinking already use. */
+
+    /* A WEIGHTED PICK, not the first match. The first cut took
+     * whichever moist neighbour the fixed ring order reached first,
+     * which is a uniform pick in disguise - and uniform is isotropic,
+     * so the shape of the moisture decided everything. Near a wet
+     * surface moisture spreads sideways, so the system spread
+     * sideways, and reported from the device as roots preferring the
+     * sides so strongly that deeper roots only happened at the few
+     * angles the geometry favoured. */
+
+    /* Two biases, both read off the grid with no state. AWAY FROM ITS
+     * PARENT - the sum of the directions from this cell's own root
+     * neighbours to it, `away`. A tip has one parent, so the vector is
+     * strong and the tip keeps going the way it was going, the same
+     * thing holds_line does for a stem without ever remembering
+     * anything. */
+
+    /* A junction has several parents, they partly cancel, and it is
+     * free to go any way - which is right for a junction. A lone seed
+     * has none and is left to gravity. GRAVITY-WARD is the other bias -
+     * what actually buys depth: a root reaching for the water
+     * percolating down beneath it rather than the water diffusing
+     * beside it. */
+
+    /* THE TRUNK COUNTS AS A PARENT TOO. The first root a tree puts down
      * has no root neighbours at all, so its away-vector was zero and it
-     * was left to the gravity term alone - and it is the one root whose
-     * heading matters most, since everything else grows from it. The
-     * wood standing directly on top of it is what it grew from, so it
-     * enters the away-vector exactly as a parent root does (`clings_to`,
-     * the material the row says a root is part of), and the collar's
-     * first move is down and out from under the trunk rather than a
-     * coin-toss along the wet surface. Reported as roots still not going
-     * deep enough with the parent skew alone.
-     *
-     * Two draws, both after every gate: the `roots` roll, then the pick -
-     * the second is only ever drawn once the first has said a conversion
-     * happens, so a root with nothing moist beside it still touches the
-     * RNG exactly as often as before, which is not at all. */
+     * was left to the gravity term alone - and it is the one root
+     * whose heading matters most, since everything else grows from it. */
+
+    /* The wood standing directly on top of it is what it grew from, so
+     * it enters the away-vector exactly as a parent root does
+     * (`clings_to`, the material the row says a root is part of), and
+     * the collar's first move is down and out from under the trunk
+     * rather than a coin-toss along the wet surface. Reported as roots
+     * still not going deep enough with the parent skew alone. */
+
+    /* Two draws, both after every gate: the `roots` roll, then the pick
+     * - the second is only ever drawn once the first has said a
+     * conversion happens, so a root with nothing moist beside it still
+     * touches the RNG exactly as often as before, which is not at all. */
     int away_x = 0, away_y = 0;
     for (int d = 0; d < 8; d++) {
         const int* nd = ring_dir(d);
@@ -2364,34 +2440,42 @@ step_one_growing_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
         return true;
     }
 
-    /* Not on the first qualifying growth. Measuring the run from its foot
-     * means every cell of a stem re-measures it, so a run that is tall
-     * enough hardens the instant it gets there - and wood does not grow,
-     * so a seedling turned into a post before it ever put out a limb.
-     *
-     * The roll buys back a delay the old, broken version had by accident:
-     * it only counted when the cell that grew happened to be the one at
-     * the foot, which for a stem of n cells is about one time in n. One in
-     * eight, deliberately, rather than one in however tall it is. */
+    /* Not on the first qualifying growth. Measuring the run from its
+     * foot means every cell of a stem re-measures it, so a run that is
+     * tall enough hardens the instant it gets there - and wood does not
+     * grow, so a seedling turned into a post before it ever put out a
+     * limb. */
+
+    /* The roll buys back a delay the old, broken version had by
+     * accident: it only counted when the cell that grew happened to be
+     * the one at the foot, which for a stem of n cells is about one
+     * time in n. One in eight, deliberately, rather than one in however
+     * tall it is. */
+
     /* Hinted TAKEN, and that is a performance note rather than a
-     * comment. Everything below is the shaping pass, which is the largest
-     * block in this function and runs on one growth in eight of the few
-     * that get this far. Unhinted, GCC is free to splice it into the
-     * middle of a function that runs once per plant cell per step; the
-     * same mistake one branch along in sand_liquid.c cost 26% of a
-     * benchmark with the simulation byte-identical either way. See
-     * docs/Sand/Tuning-At-a-Glance.md.
-     *
-     * ONE IN FOUR, measured over eight trees. It was one in eight, chosen
-     * before the shaping pass existed - back when hardening produced a
-     * bare stick and delaying it was all that kept trees from being
-     * posts. Now that hardening also lays girth and hangs a crown, a
-     * shorter delay is better on every count: green stem halves (33 cells
-     * to 23), columns of stem hugging a trunk halve (8 to 4), and there
-     * is MORE wood rather than less (195 to 213), because a leader that
-     * turns to timber promptly goes on growing from its new tip. One in
-     * two is too far - wood falls to 166, since runs harden before they
-     * are long and wood does not grow. */
+     * comment. Everything below is the shaping pass, which is the
+     * largest block in this function and runs on one growth in eight
+     * of the few that get this far. */
+
+    /* Unhinted, GCC is free to splice it into the middle of a function
+     * that runs once per plant cell per step; the same mistake one
+     * branch along in sand_liquid.c cost 26% of a benchmark with the
+     * simulation byte-identical either way. See
+     * docs/Sand/Tuning-At-a-Glance.md. */
+
+    /* ONE IN FOUR, measured over eight trees. It was one in eight,
+     * chosen before the shaping pass existed - back when hardening
+     * produced a bare stick and delaying it was all that kept trees
+     * from being posts. */
+
+    /* Now that hardening also lays girth and hangs a crown, a shorter
+     * delay is better on every count: green stem halves (33 cells to
+     * 23), columns of stem hugging a trunk halve (8 to 4), and there is
+     * MORE wood rather than less (195 to 213), because a leader that
+     * turns to timber promptly goes on growing from its new tip. */
+
+    /* One in two is too far - wood falls to 166, since runs harden
+     * before they are long and wood does not grow. */
     if (__builtin_expect((int)(rng_next(&s->rng) & 0xFF) >= r->harden_chance, 1)) {
         return true;
     }
@@ -2573,35 +2657,37 @@ step_one_tempered_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cons
     const uint8_t temp = CELL_VARIANT(c);
 
     /* SPREAD ALONG THE MATERIAL first. A pane is a sheet of the same
-     * stuff, so a cell that has been chilled drags its neighbours down and
-     * a cell that has been heated pulls them up - which is what `conducts`
-     * has always meant, applied within the material rather than only to
-     * what is on the far side of it.
-     *
-     * Without this, only the single cell a flake is touching ever changes,
-     * and it barely changes: snow melts after a chill or two, so the cell
-     * sits one level off ambient and the colour shift is almost invisible.
-     * Spreading turns that into a patch of frost creeping outward from
-     * where the snow landed, which is both what it should look like and
-     * what makes the state readable at a glance.
-     *
-     * PUSHED onto neighbours rather than pulled from them, because pulling
-     * would mean a cell at ambient needing a turn to notice a frosted
-     * neighbour - and a cell at ambient never gets one. The same shape of
-     * bug as chilling being driven from the warm side.
-     *
-     * Only across a gap of 2 or more. A difference of one is left alone,
-     * so a smooth gradient across a wall survives instead of collapsing to
-     * a single flat temperature - which would erase the hot-inside,
-     * cold-outside difference the whole mechanic runs on. */
+     * stuff, so a cell that has been chilled drags its neighbours down
+     * and a cell that has been heated pulls them up - which is what
+     * `conducts` has always meant, applied within the material rather
+     * than only to what is on the far side of it. */
+
+    /* Without this, only the single cell a flake is touching ever
+     * changes, and it barely changes: snow melts after a chill or two,
+     * so the cell sits one level off ambient and the colour shift is
+     * almost invisible. Spreading turns that into a patch of frost
+     * creeping outward from where the snow landed, which is both what
+     * it should look like and what makes the state readable at a
+     * glance. */
+
+    /* PUSHED onto neighbours rather than pulled from them, because
+     * pulling would mean a cell at ambient needing a turn to notice a
+     * frosted neighbour - and a cell at ambient never gets one. The
+     * same shape of bug as chilling being driven from the warm side. */
+
+    /* Only across a gap of 2 or more. A difference of one is left
+     * alone, so a smooth gradient across a wall survives instead of
+     * collapsing to a single flat temperature - which would erase the
+     * hot-inside, cold-outside difference the whole mechanic runs on. */
+
     /* THE WET TEST RIDES THIS SAME WALK. Hoisted out from under `if
      * (r->conducts != 0)`, which now guards only the spread body below -
-     * every heat_ramp material also sets conducts today, so this changes
-     * no behaviour and draws no different RNG, it only stops the wet
-     * probe silently depending on a coupling that happened to be true
-     * rather than one that is actually guaranteed.
-     *
-     * Not on water's own row, on purpose: water is the most numerous
+     * every heat_ramp material also sets conducts today, so this
+     * changes no behaviour and draws no different RNG, it only stops
+     * the wet probe silently depending on a coupling that happened to
+     * be true rather than one that is actually guaranteed. */
+
+    /* Not on water's own row, on purpose: water is the most numerous
      * material on almost any board and would pay a four-neighbour scan
      * per cell per step for a feature that only ever matters while
      * something nearby is hot. Hot cells are scarce, and this pass
@@ -2642,39 +2728,43 @@ step_one_tempered_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cons
         wake_block_and_neighbors(s, nx, ny);
     }
 
-    /* COOLING GETS HARDER TO OUTRUN THE HOTTER IT IS. The drain scales with
-     * how far above room temperature the cell already is, so `cools` is the
-     * rate one level above ambient and every level above that costs more to
-     * hold.
-     *
-     * This is what lets one constant serve two jobs that pull opposite
+    /* COOLING GETS HARDER TO OUTRUN THE HOTTER IT IS. The drain scales
+     * with how far above room temperature the cell already is, so
+     * `cools` is the rate one level above ambient and every level above
+     * that costs more to hold. */
+
+    /* This is what lets one constant serve two jobs that pull opposite
      * ways. Getting a pane WARM should be easy - a single brush of fire
-     * ought to make it fragile, and with a flat drain it could not: a burst
-     * of fire peaked at 5 against a threshold of 9 and simply never got
-     * there. Getting a pane MOLTEN should stay hard, and with a flat drain
-     * the only way to fix the first was to raise the ramp, which dropped
-     * time-to-melt from ~450 steps to ~30 and threw away the whole point of
-     * a long exposure.
-     *
-     * Scaled, the same ramp does both: near ambient the drain is small and
-     * a single source climbs quickly, while near the top it grows until
-     * only several adjacent sources can push through it. One flame makes
-     * glass shatterable; a lava bath melts it.
-     *
-     * WET MAKES THE ABOVE-AMBIENT HALF STEEPER, ONLY. A quenching liquid
-     * sitting on a hot cell (see `wet`, above) multiplies this same drain
-     * by SAND_WET_COOLING_FACTOR (sand.h) - pouring water on hot stone or
-     * hot glass is what lets its banked heat actually come back down in a
-     * reasonable number of steps instead of the many dozens plain ambient
-     * cooling alone would take.
-     *
-     * GATED TO temp > SAND_AMBIENT_HEAT ON PURPOSE - the branch below this
-     * one, which warms a frosted cell back UP, is untouched by `wet`. That
-     * is what floors water at ambient rather than letting it act like
-     * snow: nothing here can ever push a cell below room temperature, so
-     * water can never reach SAND_SHOCK_COLD and thermally shock glass the
-     * way an actual chill (snow) can. Going below ambient stays snow/ice's
-     * job alone. */
+     * ought to make it fragile, and with a flat drain it could not: a
+     * burst of fire peaked at 5 against a threshold of 9 and simply
+     * never got there. */
+
+    /* Getting a pane MOLTEN should stay hard, and with a flat drain the
+     * only way to fix the first was to raise the ramp, which dropped
+     * time-to-melt from ~450 steps to ~30 and threw away the whole
+     * point of a long exposure. */
+
+    /* Scaled, the same ramp does both: near ambient the drain is small
+     * and a single source climbs quickly, while near the top it grows
+     * until only several adjacent sources can push through it. One
+     * flame makes glass shatterable; a lava bath melts it. */
+
+    /* WET MAKES THE ABOVE-AMBIENT HALF STEEPER, ONLY. A quenching
+     * liquid sitting on a hot cell (see `wet`, above) multiplies this
+     * same drain by SAND_WET_COOLING_FACTOR (sand.h) - pouring water on
+     * hot stone or hot glass is what lets its banked heat actually come
+     * back down in a reasonable number of steps instead of the many
+     * dozens plain ambient cooling alone would take. */
+
+    /* GATED TO temp > SAND_AMBIENT_HEAT ON PURPOSE - the branch below
+     * this one, which warms a frosted cell back UP, is untouched by
+     * `wet`. */
+
+    /* That is what floors water at ambient rather than letting it act
+     * like snow: nothing here can ever push a cell below room
+     * temperature, so water can never reach SAND_SHOCK_COLD and
+     * thermally shock glass the way an actual chill (snow) can. Going
+     * below ambient stays snow/ice's job alone. */
     unsigned drain = r->cools;
     if (temp > SAND_AMBIENT_HEAT) {
         drain *= (unsigned)(temp - SAND_AMBIENT_HEAT);
@@ -2816,46 +2906,56 @@ emit_into_empty_neighbor(sand_t* s, int x, int y, int w, int h, uint8_t spec) {
  * places ordinary MAT_FIRE in the first empty cardinal neighbour - see
  * emit_into_empty_neighbor() just above, which this now shares with the
  * wet-dirt stage of try_heat_transform(). Returns whether it placed
- * anything.
- *
- * SKIPPED OUTRIGHT WHILE THIS CELL IS STILL FALLING - reaction_t.flare's
- * own comment (material.h) is explicit that the mechanic is "meaningless
- * for anything that is not a static heat source with nothing above it -
- * left at zero for everything but the one material that needs to look
- * like it is licking a flame upward while STAYING PUT itself." Lava
- * later got a non-zero flare too, and lava is KIND_LIQUID - it moves,
- * including free-falling one cell per step for the whole length of a
- * pour, which the mechanic was never designed to run against: a poured
- * stream lands as many separate single-cell grains that each spend
- * several steps in open air before settling, and emit_into_empty_
- * neighbor()'s FIXED "up" first (reaction_dirs[0], not gravity-relative)
- * finds empty air on nearly every one of those falling steps, so a tall
- * pour rolled - and on a hit, placed - flare once per falling cell per
- * step of fall, not once per cell that actually settled. Each successful
- * roll is a fresh MAT_FIRE cell that then latches may_have_burning and
- * keeps the whole reactions pass alive until it burns out and rolls its
- * own residue chance for smoke - not yet measured against a real pour on
- * device, but the clear suspect for lava reading as the most expensive
- * material to pour.
- * SUPPORTED, gravity-relative (s->last_step_dx/dy - the same per-step
+ * anything. */
+
+/* SKIPPED OUTRIGHT WHILE THIS CELL IS STILL FALLING - reaction_t.flare's
+ * own comment (material.h) is explicit that the mechanic is
+ * "meaningless for anything that is not a static heat source with
+ * nothing above it - left at zero for everything but the one material
+ * that needs to look like it is licking a flame upward while STAYING
+ * PUT itself." */
+
+/* Lava later got a non-zero flare too, and lava is KIND_LIQUID - it
+ * moves, including free-falling one cell per step for the whole length
+ * of a pour, which the mechanic was never designed to run against: a
+ * poured stream lands as many separate single-cell grains that each
+ * spend several steps in open air before settling. */
+
+/* emit_into_empty_neighbor()'s FIXED "up" first (reaction_dirs[0], not
+ * gravity-relative) finds empty air on nearly every one of those
+ * falling steps, so a tall pour rolled - and on a hit, placed - flare
+ * once per falling cell per step of fall, not once per cell that
+ * actually settled. */
+
+/* Each successful roll is a fresh MAT_FIRE cell that then latches
+ * may_have_burning and keeps the whole reactions pass alive until it
+ * burns out and rolls its own residue chance for smoke - not yet
+ * measured against a real pour on device, but the clear suspect for
+ * lava reading as the most expensive material to pour. */
+
+/* SUPPORTED, gravity-relative (s->last_step_dx/dy - the same per-step
  * dithered direction the movement sweep just used, so "is there
  * anything to fall onto" matches what the sweep itself would ask), and
  * off-grid reads as STONE (sand_at()'s own convention) so falling off
  * the bottom edge still counts as supported rather than perpetually
- * airborne. A settled
- * pool's cells all have something beneath them (the floor, or more of
- * the same pool) and flare exactly as before; a falling grain does not,
- * and now skips the roll entirely rather than spending it on a cell that
- * is about to move again next step regardless.
- *
- * KIND_STATIC IS EXEMPT FROM THIS CHECK - ember, the mechanic's original
- * case, is defined by never moving on its own (material_kind_t's own
- * comment: "never moves"), so "nothing beneath it" says nothing about
- * whether it is about to fall - it never falls, supported or not, the
- * ordinary gravity sweep does not touch KIND_STATIC at all. Applying the
- * falling check to ember too made an unsupported (but perfectly settled,
- * by ember's own definition of settled) ember cell refuse to flare,
- * which is exactly backwards for the mechanic's own original case. */
+ * airborne. */
+
+/* A settled pool's cells all have something beneath them (the floor,
+ * or more of the same pool) and flare exactly as before; a falling
+ * grain does not, and now skips the roll entirely rather than spending
+ * it on a cell that is about to move again next step regardless. */
+
+/* KIND_STATIC IS EXEMPT FROM THIS CHECK - ember, the mechanic's
+ * original case, is defined by never moving on its own
+ * (material_kind_t's own comment: "never moves"), so "nothing beneath
+ * it" says nothing about whether it is about to fall - it never falls,
+ * supported or not, the ordinary gravity sweep does not touch
+ * KIND_STATIC at all. */
+
+/* Applying the falling check to ember too made an unsupported (but
+ * perfectly settled, by ember's own definition of settled) ember cell
+ * refuse to flare, which is exactly backwards for the mechanic's own
+ * original case. */
 static inline bool
 try_flare(sand_t* s, int x, int y, int w, int h, const material_t* mat,
          uint8_t flare) {
@@ -2960,32 +3060,34 @@ conduct_heat(sand_t* s, int x, int y, int w, int h) {
          * be boiled by heat. This tested `kind == KIND_LIQUID` alone, and
          * lava is a liquid, so lava on the far side of a conductor was
          * boiled into steam by the heat of other lava - through a stone
-         * pillar, a glass wall, anything that conducts.
-         *
-         * It never showed up in a plain pool because a pool has no
+         * pillar, a glass wall, anything that conducts. */
+
+        /* It never showed up in a plain pool because a pool has no
          * conductor running through it. It showed up the moment anyone
          * drew a vessel by hand: measured, a vessel with one-cell stone
          * pillars in it lost 83% of its lava in 200 steps while a
          * flat-floored one lost none, with steam coming off the top the
          * whole time. Water and oil in the same vessel were untouched,
-         * which is what proved it was not a liquid-movement bug.
-         *
-         * Exactly the rule neighbor_quenches() already applies at the
+         * which is what proved it was not a liquid-movement bug. */
+
+        /* Exactly the rule neighbor_quenches() already applies at the
          * other end: a liquid that burns is not a coolant. It is not a
          * kettle either. */
-        /* A liquid that BURNS is a heat source and cannot be boiled by
-         * heat. A liquid that is FLAMMABLE is fuel, and heat reaching it
+
+        /* A liquid that is FLAMMABLE is fuel, and heat reaching it
          * should light it rather than evaporate it - oil in a hot pan
-         * catches fire; it does not turn into steam.
-         *
-         * That second half was missing, and the symptom was oil vanishing
+         * catches fire; it does not turn into steam. */
+
+        /* That second half was missing, and the symptom was oil vanishing
          * near heat. Measured before the fix: 180 units of oil in a stone
          * pan over a fire went to ZERO in sixty steps, leaving fourteen
-         * cells of steam - steam being the tell, since oil has no business
-         * producing any. Same shape as lava being boiled by its own
-         * conducted heat, one material along: this test was written when
-         * water was the only liquid that could be on the far side of a
-         * wall, and it has been wrong for every liquid added since. */
+         * cells of steam - steam being the tell, since oil has no
+         * business producing any. */
+
+        /* Same shape as lava being boiled by its own conducted heat, one
+         * material along: this test was written when water was the only
+         * liquid that could be on the far side of a wall, and it has
+         * been wrong for every liquid added since. */
         if (bm->kind == KIND_LIQUID && reaction_of(bc)->burns == 0 && reaction_of(bc)->flammability == 0) {
             /* Boils cells near the conductor. Steam rises cell-by-cell via
              * try_bubble() (sand_gas.c). Replaces old surface-boiling method.
@@ -3026,90 +3128,69 @@ conduct_heat(sand_t* s, int x, int y, int w, int h) {
     return acted;
 }
 
-/* One dissolver cell's turn: evaporate on a low roll, or else eat one
- * cardinal neighbour and pay for it.
- *
- * Evaporation is checked first and returns immediately - unconditional,
- * with no dissolve roll or neighbour involved, so a cell that evaporates
- * this step does not also get a free bite the same step.
- *
- * Two rolls, on two different materials, and both have to pass: this
- * cell's `dissolves` (how hard the acid tries) and the neighbour's
- * `dissolvable` (how easily it gives way). Splitting it that way is what
- * lets one acid figure produce different rates against sand, wood and
- * stone without acid knowing any of their names - and `dissolvable`
- * defaulting to zero is what keeps acid from eating the container it is
- * standing in, the floor it is standing on, or the air above it.
- *
- * The bite always costs the acid something - never a free eat - but how
- * much varies by what it ate. Against oil and the generic sand/wood/stone
- * targets, the ordinary cost is one unit of mass via the same
- * pay_quench_cost() a liquid pays to put out a fire (the liquid is
- * CONSUMED rather than merely consulted), but a separate, much higher
- * death-roll can spend the whole cell in one bite instead - deliberately,
- * so the acid itself has a real chance to run out rather than dissolving
- * an unbounded amount of anything while remaining a single cell forever.
- * That "acid never pays" mistake is the one oil-soaked ash made before
- * soaking became a real transfer, and worth naming twice because it is
- * the easy one to make.
- *
- * At most one neighbour per step, so a cell of acid surrounded by sand
- * eats into it rather than opening a hole on all four sides at once.
- * Returns whether it dissolved anything. */
-/* ACID BUBBLES - a flat, non-decaying chance-in-256 per exposed acid cell,
- * per step, that pops a single grain up off the surface. "Flying pixels
- * above it, almost like it's bubbling, or carbonated" was the ask - a
- * CONTINUOUS, AMBIENT look, not a reaction to any specific event, which is
- * also why the chance itself never decays (see SAND_ACID_BUBBLE_CHANCE's
- * own comment in sand.h): a bubble that gets rarer the longer a pool has
- * existed would read as the fizz running out, not as carbonation.
- *
- * REPLACED THE OLD "LANDED HARD" TRIGGER splash_displace() used to share
- * with water, 2026-09-01. That trigger fired from wherever a landing event
- * happened to occur, and a real-scene reproduction (a symmetric pool,
- * poured continuously into its own centre) found those events
- * concentrating hard against whichever wall ordinary cross-flow levelling
- * happened to reach first - not a bug in any one line (ruled out one at a
- * time: the disc-seeding math, the diagonal-slide try-order, block
- * alignment, the liquid_flip/sweep_flip alternation, exact pool/pour
- * centring all still reproduced it), but an emergent, self-reinforcing
- * consequence of "where a splash triggers" being entirely determined by
- * wherever ordinary physics happens to pile material up first.
- *
- * LIVES HERE, NOT IN move_liquid_grain() (sand_liquid.c) WHERE IT FIRST
- * LANDED - moved the same day, once a REAL calm puddle on device never
- * bubbled at all. move_liquid_grain() only runs for cells the MAIN SWEEP
- * visits, and the main sweep skips any block marked settled under block-
- * sleeping (sand_enable_sleeping(), see step_one_row()'s own skip in
- * sand.c) - exactly what a calm, undisturbed puddle becomes within a few
- * quiet steps. A host test never caught this because it never enabled
- * sleeping, so it always visited every cell regardless of settled state -
- * a blind spot in the test, not evidence the mechanism worked on device.
- * This pass (sand_step_reactions(), called from step_one_reacting_row()
+/* ACID BUBBLES - a flat, non-decaying chance-in-256 per exposed acid
+ * cell, per step, that pops a single grain up off the surface. "Flying
+ * pixels above it, almost like it's bubbling, or carbonated" was the
+ * ask - a CONTINUOUS, AMBIENT look, not a reaction to any specific
+ * event. */
+
+/* The chance itself never decays (see SAND_ACID_BUBBLE_CHANCE's own
+ * comment in sand.h): a bubble that gets rarer the longer a pool has
+ * existed would read as the fizz running out, not as carbonation. */
+
+/* REPLACED THE OLD "LANDED HARD" TRIGGER splash_displace() used to
+ * share with water, 2026-09-01. That trigger fired from wherever a
+ * landing event happened to occur, and a real-scene reproduction (a
+ * symmetric pool, poured continuously into its own centre) found those
+ * events concentrating hard against whichever wall ordinary cross-flow
+ * levelling happened to reach first. */
+
+/* Not a bug in any one line (ruled out one at a time: the disc-seeding
+ * math, the diagonal-slide try-order, block alignment, the
+ * liquid_flip/sweep_flip alternation, exact pool/pour centring all
+ * still reproduced it), but an emergent, self-reinforcing consequence
+ * of "where a splash triggers" being entirely determined by wherever
+ * ordinary physics happens to pile material up first. */
+
+/* LIVES HERE, NOT IN move_liquid_grain() (sand_liquid.c) WHERE IT
+ * FIRST LANDED - moved the same day, once a REAL calm puddle on device
+ * never bubbled at all. move_liquid_grain() only runs for cells the
+ * MAIN SWEEP visits, and the main sweep skips any block marked settled
+ * under block-sleeping (sand_enable_sleeping(), see step_one_row()'s
+ * own skip in sand.c) - exactly what a calm, undisturbed puddle
+ * becomes within a few quiet steps. */
+
+/* A host test never caught this because it never enabled sleeping, so
+ * it always visited every cell regardless of settled state - a blind
+ * spot in the test, not evidence the mechanism worked on device. */
+
+/* This pass (sand_step_reactions(), called from step_one_reacting_row()
  * below) is NOT gated by block-sleeping at all - see this file's own
  * comment on why dissolving and cooling already needed that, for the
- * identical reason: acid dissolving a neighbour, wood cooling after its
- * fire went out, and now acid bubbling all have to keep happening on a
- * board with nothing else moving. Reached from the SAME `r->dissolves`
- * branch step_one_dissolver_cell() already uses, since acid is the only
- * material with dissolves set at all - no separate flag needed, that
- * branch already runs on every acid cell every step this pass runs.
- *
- * NO dx,dy PARAMETER - unlike move_liquid_grain(), this pass carries no
- * gravity vector of its own (see sand_step_reactions()'s own signature).
- * s->last_step_dx/last_step_dy (sand.h) is the same "which way is down"
- * accessor growth already reads here for an identical reason - the
- * dithered direction of the step just taken, written once in sand.c
- * before this pass runs, not stale from an earlier step.
- *
- * "RIM" MEANS EXPOSED, NOT ANY PARTICULAR SHAPE - the one cell directly
- * AGAINST gravity from this one is empty.
- *
- * DIRECTION IS UP, WITH A SMALL SPREAD - one of the three ring directions
- * centred on straight against gravity (that direction and its two
- * immediate diagonals), not splash_displace()'s full outward ring: a
- * bubble breaking the surface has no "point of impact" to spray outward
- * from, it just pops. */
+ * identical reason: acid dissolving a neighbour, wood cooling after
+ * its fire went out, and now acid bubbling all have to keep happening
+ * on a board with nothing else moving. */
+
+/* Reached from the SAME `r->dissolves` branch step_one_dissolver_cell()
+ * already uses, since acid is the only material with dissolves set at
+ * all - no separate flag needed, that branch already runs on every
+ * acid cell every step this pass runs. */
+
+/* NO dx,dy PARAMETER - unlike move_liquid_grain(), this pass carries
+ * no gravity vector of its own (see sand_step_reactions()'s own
+ * signature). s->last_step_dx/last_step_dy (sand.h) is the same "which
+ * way is down" accessor growth already reads here for an identical
+ * reason - the dithered direction of the step just taken, written once
+ * in sand.c before this pass runs, not stale from an earlier step. */
+
+/* "RIM" MEANS EXPOSED, NOT ANY PARTICULAR SHAPE - the one cell directly
+ * AGAINST gravity from this one is empty. */
+
+/* DIRECTION IS UP, WITH A SMALL SPREAD - one of the three ring
+ * directions centred on straight against gravity (that direction and
+ * its two immediate diagonals), not splash_displace()'s full outward
+ * ring: a bubble breaking the surface has no "point of impact" to
+ * spray outward from, it just pops. */
 static void
 acid_bubble(sand_t* s, int x, int y) {
     const int dx = s->last_step_dx, dy = s->last_step_dy;
@@ -3125,6 +3206,39 @@ acid_bubble(sand_t* s, int x, int y) {
     sand_impulse(s, x, y, (i_up + spread + 8) & 7, SAND_ACID_BUBBLE_SPEED);
 }
 
+/* One dissolver cell's turn: evaporate on a low roll, or else eat one
+ * cardinal neighbour and pay for it. */
+
+/* Evaporation is checked first and returns immediately - unconditional,
+ * with no dissolve roll or neighbour involved, so a cell that evaporates
+ * this step does not also get a free bite the same step. */
+
+/* Two rolls, on two different materials, and both have to pass: this
+ * cell's `dissolves` (how hard the acid tries) and the neighbour's
+ * `dissolvable` (how easily it gives way). Splitting it that way is what
+ * lets one acid figure produce different rates against sand, wood and
+ * stone without acid knowing any of their names. */
+
+/* `dissolvable` defaulting to zero is what keeps acid from eating the
+ * container it is standing in, the floor it is standing on, or the air
+ * above it. */
+
+/* The bite always costs the acid something - never a free eat - but how
+ * much varies by what it ate. Against oil and the generic sand/wood/stone
+ * targets, the ordinary cost is one unit of mass via the same
+ * pay_quench_cost() a liquid pays to put out a fire (the liquid is
+ * CONSUMED rather than merely consulted). */
+
+/* A separate, much higher death-roll can spend the whole cell in one
+ * bite instead - deliberately, so the acid itself has a real chance to
+ * run out rather than dissolving an unbounded amount of anything while
+ * remaining a single cell forever. That "acid never pays" mistake is
+ * the one oil-soaked ash made before soaking became a real transfer,
+ * and worth naming twice because it is the easy one to make. */
+
+/* At most one neighbour per step, so a cell of acid surrounded by sand
+ * eats into it rather than opening a hole on all four sides at once.
+ * Returns whether it dissolved anything. */
 static bool
 step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const reaction_t* r) {
     /* r evaporates at 1/256. Puddles boost this. A second roll, starting at
@@ -3278,36 +3392,42 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
  * lit cells of the SAME species as `grain` - any of the four 2x2 squares
  * that contain it will do. The gate step_one_burning_cell()'s burn-out
  * branch reads to decide whether a fuse ends in a blast or in plain fire
- * (see reaction_t.explodes's own comment, material.h).
- *
- * 2x2, NOT 3x3. The first version asked for all eight neighbours lit, and
- * on the device blasts became rare to the point of looking broken: burn-out
- * rolls are independent per cell, so by the time any one cell burns out,
- * the neighbours that were lit before it usually already are fire - a
- * fully-lit 3x3 exists only in the brief window between the fuse front
- * passing and the first burn-out behind it. Three lit neighbours in one
- * quadrant is the smallest shape that still says "a body of powder, not a
- * trail", and it is what a lit pile actually presents at burn-out time.
- * Cheaper too: at most four cells looked at per quadrant, with an early out.
- *
- * OFF-BOARD COUNTS AS NOT LIT - lit_here() bounds-checks first, so a
- * neighbour past the edge never counts as one of the three corners this
- * looks for. That is narrower than this comment once claimed: an edge cell
- * CAN still be the corner of a 2x2 that folds entirely inward (all three
- * other corners on-board) and detonates like any interior one - the old
- * "board edge never detonates" claim was retired for exactly that reason.
- * What off-board-as-not-lit actually buys: a lit cell whose only lit
- * neighbours are off-board or strung out in a single line never completes
- * a square, wherever it sits - see test_a_one_wide_lit_trail_never_
- * detonates (suite_sand_gunpowder.c).
- *
- * same_species(), not a raw material compare - gunpowder shares its high
- * nibble with the extended statics (GUNPOWDER_BASE, material.h), and a
- * neighbour of static ice must never count as "more of this fuse" just
- * because both happen to decode through MAT_EXTENDED. cell_code(n) >=
- * r->lit_from, not cell_is_burning(n): reaction_of(n) would be this exact
- * row anyway once same_species() has already agreed, so there is nothing
- * left to re-derive - just the one threshold compare. */
+ * (see reaction_t.explodes's own comment, material.h). */
+
+/* 2x2, NOT 3x3. The first version asked for all eight neighbours lit,
+ * and on the device blasts became rare to the point of looking broken:
+ * burn-out rolls are independent per cell, so by the time any one cell
+ * burns out, the neighbours that were lit before it usually already
+ * are fire - a fully-lit 3x3 exists only in the brief window between
+ * the fuse front passing and the first burn-out behind it. */
+
+/* Three lit neighbours in one quadrant is the smallest shape that
+ * still says "a body of powder, not a trail", and it is what a lit
+ * pile actually presents at burn-out time. Cheaper too: at most four
+ * cells looked at per quadrant, with an early out. */
+
+/* OFF-BOARD COUNTS AS NOT LIT - lit_here() bounds-checks first, so a
+ * neighbour past the edge never counts as one of the three corners
+ * this looks for. That is narrower than this comment once claimed: an
+ * edge cell CAN still be the corner of a 2x2 that folds entirely
+ * inward (all three other corners on-board) and detonates like any
+ * interior one - the old "board edge never detonates" claim was
+ * retired for exactly that reason. */
+
+/* What off-board-as-not-lit actually buys: a lit cell whose only lit
+ * neighbours are off-board or strung out in a single line never
+ * completes a square, wherever it sits - see
+ * test_a_one_wide_lit_trail_never_detonates (suite_sand_gunpowder.c). */
+
+/* same_species(), not a raw material compare - gunpowder shares its
+ * high nibble with the extended statics (GUNPOWDER_BASE, material.h),
+ * and a neighbour of static ice must never count as "more of this
+ * fuse" just because both happen to decode through MAT_EXTENDED. */
+
+/* cell_code(n) >= r->lit_from, not cell_is_burning(n): reaction_of(n)
+ * would be this exact row anyway once same_species() has already
+ * agreed, so there is nothing left to re-derive - just the one
+ * threshold compare. */
 static inline bool
 lit_here(const sand_t* s, int nx, int ny, int w, int h, cell_t grain, const reaction_t* r) {
     if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
@@ -3510,32 +3630,33 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
     /* A burning LIQUID is never smothered. Being buried puts a flame out
      * because it starves it of air, and lava is not a flame - it is not
      * burning anything, it is simply hot, so burying it should bury
-     * something hot rather than delete it.
-     *
-     * Measured before this guard existed: a single lava cell walled in by
+     * something hot rather than delete it. */
+
+    /* Measured before this guard existed: a single lava cell walled in by
      * stone vanished on the very next step, and a vessel whose floor had
      * one-cell dimples - which is every vessel anyone draws by hand - lost
      * 83% of its lava within 200 steps, silently, with the flare still
      * bubbling off the top as it went. A flat-floored rectangle conserved
      * it perfectly, which is why the first probe found nothing and the
-     * report was right anyway.
-     *
-     * neighbor_smothers() already refuses to count a liquid NEIGHBOUR, for
+     * report was right anyway. */
+
+    /* neighbor_smothers() already refuses to count a liquid NEIGHBOUR, for
      * the mirror of this reason. This is the same rule applied to the cell
-     * doing the burning.
-     *
-     * The burst gate below (covered_at(), sand_priv.h - bd esp32c6-mqt/
+     * doing the burning. */
+
+    /* The burst gate below (covered_at(), sand_priv.h - bd esp32c6-mqt/
      * esp32c6-a2j) needs a DIFFERENT question for a burning LIQUID than
      * this smothered() call answers, and does not share it: smothered()
      * can never be true for any cell in a lava pool wider than one cell,
      * because a lava neighbour is KIND_LIQUID and neighbor_smothers()
      * never counts one - the pool's own sides and floor are always more
      * of the same liquid, never covering, no matter how completely a
-     * crust seals its surface. covered_at()'s gravity-relative lid
-     * (cover_mask(), sand_priv.h) is what actually answers "is there a
-     * lid over it" for a wide pool.
-     *
-     * SKIPPED OUTRIGHT for an `explodes` material - gunpowder carries its
+     * crust seals its surface. */
+
+    /* covered_at()'s gravity-relative lid (cover_mask(), sand_priv.h) is
+     * what actually answers "is there a lid over it" for a wide pool. */
+
+    /* SKIPPED OUTRIGHT for an `explodes` material - gunpowder carries its
      * own oxidiser, unlike wood or a candle, which both need outside air
      * to keep burning. A fuse buried in the middle of its own pile has to
      * keep burning or nothing inside a pile would ever reach burn-out at
@@ -3559,67 +3680,75 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
      * here (covered_from_above()/try_vent()/try_vent_chunk(), reaction_t.
      * vent_chance - removed by bd esp32c6-0f2, once this replacement had
      * shipped and proved out). Where venting used to throw the lid away,
-     * this converts the lava itself:
-     * the cell becomes MAT_STONE via place_reacted(), then sand_explode()
-     * fires at that same spot. sand_explode() FIRST fills a core of
-     * radius `radius / SAND_EXPLODE_CORE_DIVISOR` with fire (sand.h) - at
+     * this converts the lava itself: the cell becomes MAT_STONE via
+     * place_reacted(), then sand_explode() fires at that same spot. */
+
+    /* sand_explode() FIRST fills a core of radius `radius /
+     * SAND_EXPLODE_CORE_DIVISOR` with fire (sand.h) - at
      * SAND_LAVA_BURST_RADIUS(12) and divisor 5 that core radius is 2, so
-     * the stone cell just placed at the centre is immediately overwritten
-     * by fresh fire. That is expected, pinned behaviour, not a bug to
-     * chase - see test_buried_lava_bursts_into_stone_and_fire
+     * the stone cell just placed at the centre is immediately
+     * overwritten by fresh fire. That is expected, pinned behaviour, not
+     * a bug to chase - see test_buried_lava_bursts_into_stone_and_fire
      * (suite_sand_lava_burial.c), which asserts the centre's real final
-     * material
-     * rather than assuming it.
-     *
-     * A WHOLE-CELL EVENT, NOT A PER-NEIGHBOUR PROBE - sits out here rather
-     * than inside the STAGE 2 cascade walk below, the same reason the
-     * vent block that used to precede it sat out here too: this asks one
-     * question about the cell itself, not one question per neighbour
-     * direction.
-     *
-     * GATED ON THE SAME SHAPE cool_off_chain()'s own trigger (below) uses
-     * - burning KIND_LIQUID with a non-zero quench_to (lava's own
+     * material rather than assuming it. */
+
+    /* A WHOLE-CELL EVENT, NOT A PER-NEIGHBOUR PROBE - sits out here
+     * rather than inside the STAGE 2 cascade walk below, the same reason
+     * the vent block that used to precede it sat out here too: this
+     * asks one question about the cell itself, not one question per
+     * neighbour direction. */
+
+    /* GATED ON THE SAME SHAPE cool_off_chain()'s own trigger (below)
+     * uses - burning KIND_LIQUID with a non-zero quench_to (lava's own
      * MAT_STONE, material.c) - so only lava ever reaches this, resolved
-     * ONCE, here, before any neighbour work: a board with no lava (or any
-     * other burning liquid) costs one predicted-false compare and draws
-     * no random number at all.
-     *
-     * THE ROLL COMES BEFORE covered_at(), not after: at
+     * ONCE, here, before any neighbour work: a board with no lava (or
+     * any other burning liquid) costs one predicted-false compare and
+     * draws no random number at all. */
+
+    /* THE ROLL COMES BEFORE covered_at(), not after: at
      * SAND_LAVA_BURST_CHANCE's odds (sand.h, deliberately the rarest a
-     * single byte-wide roll can express) the roll is the cheap rejection,
-     * the 3-neighbour cover_mask() walk is not - so the overwhelmingly
-     * common case, a covered cell that simply loses this step's roll,
-     * never pays for the walk.
-     *
-     * covered_at() (sand_priv.h), NOT smothered()'s own all-4 == test -
-     * bd esp32c6-a2j, replacing cover_count() (bd esp32c6-mqt), which was
-     * wrong twice over: it counted four SCREEN-fixed cardinals instead of
-     * gravity-relative ones, and being built on neighbor_smothers()
-     * (which never counts a liquid neighbour) meant an interior cell of a
-     * pool wider than one cell could have at most one neighbour that
-     * ever counted - the crust directly above it - so a wide pool could
-     * never reach the threshold no matter how completely a crust sealed
-     * it. covered_at()'s gravity-relative lid fixes that: the two
-     * diagonal crust cells beside "straight up" count too, so a crust
-     * alone lids an interior pool cell - see
-     * test_a_wide_pool_under_a_crust_bursts (suite_sand_lava_burial.c),
-     * the case that could not fire before this change. Those three cells and ONLY
-     * those: the two perpendiculars beside the cell never count, because
-     * a vessel's sides wall lava in rather than cover it, and letting
-     * them count blew the sides out of every hand-drawn basin (see
-     * test_lava_in_a_wall_notch_never_bursts, suite_sand_lava_burial.c, and
-     * cover_mask()'s own comment for the notch that did it). A pocket
-     * with an open side still qualifies, as long as its lid is complete.
-     *
-     * NOT GATED ON s->impulse_buf, UNLIKE try_ignite_given()'s own
-     * gas_ignite_confined() caller above, which skips straight to a plain
-     * ignition when impulses are off so gas still catches fire either
-     * way. There is no equivalent fallback needed here: with impulses
-     * off, sand_explode() is a documented no-op (its own first line,
-     * sand.c) and this cell simply becomes stone with nothing thrown -
-     * exactly right, since no impulses means no explosions anywhere else
-     * in the simulation either, and a bare conversion to stone is not a
-     * wrong answer on its own (see
+     * single byte-wide roll can express) the roll is the cheap
+     * rejection, the 3-neighbour cover_mask() walk is not - so the
+     * overwhelmingly common case, a covered cell that simply loses this
+     * step's roll, never pays for the walk. */
+
+    /* covered_at() (sand_priv.h), NOT smothered()'s own all-4 == test -
+     * bd esp32c6-a2j, replacing cover_count() (bd esp32c6-mqt), which
+     * was wrong twice over: it counted four SCREEN-fixed cardinals
+     * instead of gravity-relative ones, and being built on
+     * neighbor_smothers() (which never counts a liquid neighbour) meant
+     * an interior cell of a pool wider than one cell could have at most
+     * one neighbour that ever counted - the crust directly above it. */
+
+    /* So a wide pool could never reach the threshold no matter how
+     * completely a crust sealed it - the flaw covered_at()'s
+     * gravity-relative lid (below) was written to fix. */
+
+    /* covered_at()'s gravity-relative lid fixes that: the two diagonal
+     * crust cells beside "straight up" count too, so a crust alone lids
+     * an interior pool cell - see test_a_wide_pool_under_a_crust_bursts
+     * (suite_sand_lava_burial.c), the case that could not fire before
+     * this change. */
+
+    /* Those three cells and ONLY those: the two perpendiculars beside
+     * the cell never count, because a vessel's sides wall lava in
+     * rather than cover it, and letting them count blew the sides out
+     * of every hand-drawn basin (see test_lava_in_a_wall_notch_never_
+     * bursts, suite_sand_lava_burial.c, and cover_mask()'s own comment
+     * for the notch that did it). A pocket with an open side still
+     * qualifies, as long as its lid is complete. */
+
+    /* NOT GATED ON s->impulse_buf, UNLIKE try_ignite_given()'s own
+     * gas_ignite_confined() caller above, which skips straight to a
+     * plain ignition when impulses are off so gas still catches fire
+     * either way. There is no equivalent fallback needed here: with
+     * impulses off, sand_explode() is a documented no-op (its own first
+     * line, sand.c) and this cell simply becomes stone with nothing
+     * thrown. */
+
+    /* Exactly right, since no impulses means no explosions anywhere
+     * else in the simulation either, and a bare conversion to stone is
+     * not a wrong answer on its own (see
      * test_buried_lava_still_becomes_stone_with_impulses_off,
      * suite_sand_lava_burial.c). */
     const bool is_lava = mat->kind == KIND_LIQUID && rx->quench_to != 0;
@@ -3647,49 +3776,58 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
      * iteration - one cell load, one pair_bits[mat_id][theirs] byte load -
      * and feed both probes from that one classification, instead of each
      * of try_ignite()/try_heat_transform() separately re-deriving the same
-     * three facts about the same cell (their own former bodies, still
-     * intact in try_heat_transform()'s wrapper for its other three callers
-     * - see that function's own comment). try_ignite_given()/
-     * try_heat_transform_given() (both above) are exactly the OLD try_
-     * ignite()/try_heat_transform() bodies with that shared prologue cut
-     * away - nothing past this point differs from before, so the RNG draw
-     * sequence is unchanged cell by cell, direction by direction: ignite
-     * is still tried before heat transform, for every direction, in the
-     * same reaction_dirs[] order as always. See sand_step_reactions()'s
-     * own comment for why this is safe to gate on the pair byte alone:
-     * PAIR_IGNITABLE/PAIR_HEAT_RESPONSIVE mean exactly what try_ignite_
-     * given()'s/try_heat_transform_given()'s own first real checks would
-     * have decided anyway - the fingerprint gate this stage is committed
-     * under proves it, not just this comment.
-     *
-     * Explicitly still NOT merged with the quench walk above or the
+     * three facts (their own former bodies, still intact in
+     * try_heat_transform()'s wrapper for its other three callers - see
+     * that function's own comment). */
+
+    /* try_ignite_given()/try_heat_transform_given() (both above) are
+     * exactly the OLD try_ignite()/try_heat_transform() bodies with that
+     * shared prologue cut away - nothing past this point differs from
+     * before, so the RNG draw sequence is unchanged cell by cell,
+     * direction by direction: ignite is still tried before heat
+     * transform, for every direction, in the same reaction_dirs[] order
+     * as always. */
+
+    /* See sand_step_reactions()'s own comment for why this is safe to
+     * gate on the pair byte alone: PAIR_IGNITABLE/PAIR_HEAT_RESPONSIVE
+     * mean exactly what try_ignite_given()'s/try_heat_transform_given()'s
+     * own first real checks would have decided anyway - the fingerprint
+     * gate this stage is committed under proves it, not just this
+     * comment. */
+
+    /* Explicitly still NOT merged with the quench walk above or the
      * conduct_heat() walk below - see this file's own top comment on why
      * those stay separate passes over the same four neighbours: merging
      * them would reorder RNG draws between the three walks, which the bd
-     * issue calls out as reordering-territory, not this stage's job.
-     *
-     * my_pair_row HOISTED OUT OF THE LOOP: mat_id is loop-invariant (this
+     * issue calls out as reordering-territory, not this stage's job. */
+
+    /* my_pair_row HOISTED OUT OF THE LOOP: mat_id is loop-invariant (this
      * cell's own material, fixed for all four directions), so pair_bits
      * [mat_id] is one row-base address good for the whole loop, rather
      * than a fresh pair_bits[mat_id][...] index - and therefore a fresh
-     * runtime multiply - every iteration. Tried BECAUSE the host probe
-     * (best of 7, twice) measured lava stress/four liquids/smoke+steam a
-     * couple percent SLOWER against stage 1 despite this stage's own
-     * objdump showing step_one_burning_cell() genuinely smaller - the
-     * multiply was the obvious suspect, since pair_theirs_bits()'s own
-     * MAT_EMPTY-row trick (stage 1) is a compile-time-zero offset the
-     * compiler folds away for free, and a runtime row index is not free
-     * the same way. Measured, not assumed to have fixed it: hoisting
-     * moved the host numbers by well under a percent, so the multiply was
-     * not the (or not the whole) explanation. Left in regardless - it is
-     * strictly no worse, plainly correct, and one less thing to suspect
-     * next time - but the regression itself is reported as-is below,
-     * unexplained, rather than claimed fixed. Per this project's own
-     * "host numbers mispredicting the device" lesson (docs/Sand/
-     * Performance-Tuning-Attempts.md): this stage removes real RNG-
-     * avoiding and load-avoiding work, which is exactly the shape of
-     * change host and device have disagreed on before - a device capture
-     * settles this, a host number alone does not. */
+     * runtime multiply - every iteration. */
+
+    /* Tried BECAUSE the host probe (best of 7, twice) measured lava
+     * stress/four liquids/smoke+steam a couple percent SLOWER against
+     * stage 1 despite this stage's own objdump showing
+     * step_one_burning_cell() genuinely smaller - the multiply was the
+     * obvious suspect, since pair_theirs_bits()'s own MAT_EMPTY-row
+     * trick (stage 1) is a compile-time-zero offset the compiler folds
+     * away for free, and a runtime row index is not free the same way. */
+
+    /* Measured, not assumed to have fixed it: hoisting moved the host
+     * numbers by well under a percent, so the multiply was not the (or
+     * not the whole) explanation. Left in regardless - it is strictly no
+     * worse, plainly correct, and one less thing to suspect next time -
+     * but the regression itself is reported as-is below, unexplained,
+     * rather than claimed fixed. */
+
+    /* Per this project's own "host numbers mispredicting the device"
+     * lesson (docs/Sand/Performance-Tuning-Attempts.md): this stage
+     * removes real RNG-avoiding and load-avoiding work, which is exactly
+     * the shape of change host and device have disagreed on before - a
+     * device capture settles this, a host number alone does not. */
+
     /* TRIGGER A of cool_off_chain() (above): doing the WORK of actually
      * converting a neighbour costs a burning LIQUID a small chance of
      * freezing itself. Resolved once, here, before the loop starts - not
@@ -3964,32 +4102,36 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
          * reasoning acid_bubble() above already gives for naming
          * MAT_ACID directly in the dissolves branch: this is inherently
          * about these two specific materials, not a trait a future
-         * material could opt into. Checked ahead of the ordinary
-         * condensing branch below since, with both windows now the same
-         * 2x2 size, a window this fires on can never also satisfy
-         * condensation (that needs four IDENTICAL cells; this needs a
-         * 2-and-2 split) - the ordering costs nothing, it just has to
-         * pick one.
-         *
-         * found |= ... on a hit is NOT optional the way it looks: the
+         * material could opt into. */
+
+        /* Checked ahead of the ordinary condensing branch below since,
+         * with both windows now the same 2x2 size, a window this fires
+         * on can never also satisfy condensation (that needs four
+         * IDENTICAL cells; this needs a 2-and-2 split) - the ordering
+         * costs nothing, it just has to pick one. */
+
+        /* found |= ... on a hit is NOT optional the way it looks: the
          * survivor (Acid or Water) is written at (x, y), the walk's own
          * current position, and the walk never revisits a cell it has
          * already passed this pass - so unlike every other branch here,
          * nothing else is going to give the new cell its own turn to
          * report FOUND_DISSOLVER/FOUND_MOISTURE, and the steam this
-         * collapse just consumed cannot report FOUND_CONDENSING either.
-         * Skipping this - as an earlier version of this branch did -
+         * collapse just consumed cannot report FOUND_CONDENSING either. */
+
+        /* Skipping this - as an earlier version of this branch did -
          * left may_have_dissolver/may_have_moisture/may_have_condenser
          * all cleared at the end of THIS SAME pass, stranding the new
          * cell inert (no bubbling, no boiling, no further dissolving)
          * until something unrelated re-armed one of the three; measured
          * directly, a rained acid cell sealed against stone ate nothing
          * across 200 steps where an identical sand_set()-placed acid
-         * cell in the same box ate normally. Over-arms by one bit when
-         * the flip lands on Water rather than Acid (FOUND_DISSOLVER is
-         * irrelevant to a water cell) - harmless, the same direction
-         * step_one_condensing_cell()'s own FOUND_CONDENSING report below
-         * already errs in (set before the roll is even known to hit). */
+         * cell in the same box ate normally. */
+
+        /* Over-arms by one bit when the flip lands on Water rather than
+         * Acid (FOUND_DISSOLVER is irrelevant to a water cell) -
+         * harmless, the same direction step_one_condensing_cell()'s own
+         * FOUND_CONDENSING report below already errs in (set before the
+         * roll is even known to hit). */
     stage_acid_rain:
         if (CELL_MATERIAL(c) == MAT_GAS || CELL_MATERIAL(c) == MAT_STEAM) {
             if (step_one_acid_rain_cell(s, x, y, w, h)) {
@@ -4158,29 +4300,31 @@ sand_step_reactions(sand_t* s) {
      * genuinely pairwise. Same discipline s->heat_mask/s->wet_mask used to
      * document in this exact spot, unchanged by widening from two bits to
      * five: written once per PASS from the live tables, read only by
-     * neighbour probes inside that same pass, never cached across steps -
-     * this is NOT the retired per-cell "can this material react at all"
+     * neighbour probes inside that same pass, never cached across steps. */
+
+    /* This is NOT the retired per-cell "can this material react at all"
      * mask (docs/Sand/Performance-Tuning-Attempts.md, "Never retry",
      * attempt 12), which went stale against a cell created behind the scan
      * pointer in the SAME pass because it was written once per CELL. A
      * sand_set_* table override between steps is picked up on the very
-     * next entry with nothing to invalidate.
-     *
-     * theirs_bits[] holds the five theirs-only bits (this file's own top
+     * next entry with nothing to invalidate. */
+
+    /* theirs_bits[] holds the five theirs-only bits (this file's own top
      * comment: everything except PAIR_DENSER, which is not stored at all)
      * per ordinary material id, exactly the two loops heat_mask/wet_mask
      * used to run separately, now merged into one pass over reactions[]
-     * plus the same MAT_EXTENDED aggregate heat_mask always needed -
-     * PAIR_IGNITABLE and PAIR_DISSOLVABLE both need it too, since plant/
-     * leaf/metal (extended_reactions[]) carry real flammability/dissolvable
-     * figures the way ice's heats_to always did. PAIR_WETS and
-     * PAIR_QUENCHES need no such pass: every extended material shares
-     * materials[MAT_EXTENDED].kind == KIND_STATIC (material.c; see
-     * material.h's own comment on the one shared physics row), so neither
-     * bit can ever be true for MAT_EXTENDED, exactly what the tests they
-     * replace already decided.
-     *
-     * The final nested loop broadcasts theirs_bits[] into every row of
+     * plus the same MAT_EXTENDED aggregate heat_mask always needed. */
+
+    /* PAIR_IGNITABLE and PAIR_DISSOLVABLE both need that same MAT_EXTENDED
+     * aggregate, since plant/leaf/metal (extended_reactions[]) carry real
+     * flammability/dissolvable figures the way ice's heats_to always did.
+     * PAIR_WETS and PAIR_QUENCHES need no such pass: every extended
+     * material shares materials[MAT_EXTENDED].kind == KIND_STATIC
+     * (material.c; see material.h's own comment on the shared physics
+     * row), so neither bit can ever be true for MAT_EXTENDED - exactly
+     * what the tests they replace already decided. */
+
+    /* The final nested loop broadcasts theirs_bits[] into every row of
      * pair_bits[][] - all sixteen rows read identically for a
      * pair_theirs_bits() caller, which is the whole point (this file's own
      * top comment on pair_theirs_bits()). At sixteen materials this is
@@ -4285,31 +4429,33 @@ sand_step_reactions(sand_t* s) {
     /* may_have_heat_holder is deliberately NOT cleared here, unlike the
      * five flags above. "Clear it at the end of the pass when nothing was
      * found, like the other five" is the obvious thing to write next, and
-     * it is wrong.
-     *
-     * The other five are safe to clear this way because the walk above
+     * it is wrong. */
+
+    /* The other five are safe to clear this way because the walk above
      * reads every cell that could have set them. may_have_heat_holder is
      * different: a cell with a heat_ramp can be CREATED during this very
      * pass, behind the scan pointer - lava quenching to stone is exactly
-     * this, going through place_cell() -> latch_content_flags() mid-row.
-     * The walk that already passed that cell's row never sees it, so
-     * `found` never gets a bit for it, and clearing here would wipe the
-     * flag latch_content_flags() had just armed a moment earlier. Nothing
-     * but another write would ever set it again, so convection onto that
-     * new stone would be dead for good.
-     *
-     * Measured, not assumed: a version of this with the end-of-pass clear
+     * this, going through place_cell() -> latch_content_flags() mid-row. */
+
+    /* The walk that already passed that cell's row never sees the newly
+     * created heat-holder, so `found` never gets a bit for it, and
+     * clearing here would wipe the flag latch_content_flags() had just
+     * armed a moment earlier. Nothing but another write would ever set it
+     * again, so convection onto that new stone would be dead for good. */
+
+    /* Measured, not assumed: a version of this with the end-of-pass clear
      * produced a different simulation from HEAD on two four-liquid scenes.
      * The arm-only version above is byte-identical to HEAD on all eight
-     * benchmark scenes tested.
-     *
-     * Never clearing it costs one case: a board that once held stone or
+     * benchmark scenes tested. */
+
+    /* Never clearing it costs one case: a board that once held stone or
      * glass and no longer does keeps paying the scan for ever. That is
      * exactly what such a board pays today, without this flag at all, so
      * the flag can never make anything slower than it already is - it can
      * only fail to help. What it does help is the board that has never
-     * held a heat-holder, and that is where the whole cost was.
-     * This project's convention for a flag like this is to ask who pays to
+     * held a heat-holder, and that is where the whole cost was. */
+
+    /* This project's convention for a flag like this is to ask who pays to
      * KEEP it true versus who reads it - and the answer here is nobody
      * pays any per-step upkeep at all, ever, once it is armed. */
 }
