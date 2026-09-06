@@ -2848,7 +2848,13 @@ material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_col
              * entries per temperature. Runs once per PAINTED cell, not
              * per pixel, so the blend costs nothing a table would save. */
             const unsigned frac = (unsigned)(((int)(hash & 0xFFu) + glass_phase) & 0xFF);
-            const gfx_color_t base = edge ? GLASS_EDGE_RGB(v) : GLASS_RGB(v);
+
+            /* uint32_t, NOT gfx_color_t - `base` is a raw 0xRRGGBB value,
+             * not yet packed by GFX_RGB() below. gfx_color_t is uint16_t,
+             * the PANEL format, and storing 24 bits into 16 silently drops
+             * red's own byte before LERP8 ever runs - this was the actual
+             * "glass reads green under heat": red truncated clean away. */
+            const uint32_t base = edge ? GLASS_EDGE_RGB(v) : GLASS_RGB(v);
             out[0] = GFX_RGB(LERP8(base, GLASS_GRADIENT_HI(v), frac));
             out[1] = out[0];
             out[2] = out[0];
