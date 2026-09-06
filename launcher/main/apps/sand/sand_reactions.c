@@ -5024,6 +5024,11 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
             step_one_burning_cell(s, row, x, y, w, h);
             continue;
         }
+        /* Past the safe default, not into it: cell_is_burning() below is
+         * provably false for a row that reached here (burns == 0, and the
+         * lit_from test just failed), so falling through would cost every
+         * unlit wood and gunpowder cell that test twice. */
+        goto stage_dissolve;
 
     stage_burn_any:
         /* The safe default (RSTAGE_BURN_ANY == 0) lands here rather than
