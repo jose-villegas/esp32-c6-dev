@@ -1476,9 +1476,18 @@ const reaction_t reactions[MATERIAL_MAX] = {
 
 #define GLASS_FROST   0xD6EEF8
 #define GLASS_AMBIENT 0x2E6B85
-#define GLASS_NEUTRAL 0x7E8E86
+#define GLASS_NEUTRAL 0x8C7E70
 #define GLASS_GLOW    0xC8701E
 #define GLASS_MOLTEN  0xFFD873
+
+/* Was 0x7E8E86 - G the highest channel, a sage green between AMBIENT's
+ * blue and GLOW's orange. STONE_NEUTRAL crosses that gap R-dominant
+ * instead (see MAT_GLASS's own reaction row above - "differ in ONE
+ * thing" - for why the two heat ramps were meant to track each other). */
+
+/* Reported as glass turning green under heat once the live gravity blend
+ * made this endpoint far more visible than the old per-cell wobble ever
+ * did. R-dominant now, the same shape stone's own transition uses. */
 
 /* The three segments, each mapped onto 0..15 for LERP. Every branch has to
  * compute without dividing by zero even where it is not selected, hence the
