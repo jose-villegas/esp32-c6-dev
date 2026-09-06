@@ -4950,9 +4950,43 @@ step_one_acid_rain_cell(sand_t* s, int x, int y, int w, int h) {
 #define FOUND_WITHERING   32u
 #define FOUND_CONDENSING  64u
 
+/* THE REACTION-STAGE DISPATCH TABLE - a computed-goto walk of the ladder
+ * below, skipping a row's statically-dead PREFIX instead of testing every
+ * field in order. Water, oil and metal match none of the fifteen fields
+ * and today walk all fifteen to find that out; this jumps them straight
+ * to the end. */
+
+/* The RSTAGE_* enum and reaction_first_stage() itself live in
+ * sand_priv.h, not here - a host test needs to call
+ * reaction_first_stage() directly to pin it against the walk below. */
+
+/* Two tables, not one: the key is NOT the material nibble - root, leaf,
+ * plant, ice and gunpowder share MAT_EXTENDED but carry sixteen
+ * different rows apiece. material_first_stage[] keys CELL_MATERIAL(c);
+ * extended_first_stage[] keys CELL_VARIANT(c), same split as
+ * reaction_of(). */
+
+/* Rebuilt once per PASS in sand_step_reactions(), beside pair_bits - see
+ * that rebuild's comment for the full reasoning: attempt 12's per-CELL
+ * mask went stale against a cell created mid-pass; a per-PASS rebuild
+ * from the live tables does not. */
+static uint8_t material_first_stage[MATERIAL_MAX];
+static uint8_t extended_first_stage[MATERIAL_EXTENDED_CODES];
+
 static unsigned
 step_one_reacting_row(sand_t* s, int y, int w, int h) {
     uint8_t* row = s->cells + (size_t)y * (size_t)w;
+
+    /* One indirect jump per cell, straight to the first stage this row
+     * could ever match - see the dispatch-table comment above this
+     * function. Everything from the landed label on is the unmodified
+     * stage walk this function has always run. */
+    static void* const stage_labels[RSTAGE_COUNT] = {
+        &&stage_burn_any,  &&stage_burn_always, &&stage_burn_check, &&stage_dissolve, &&stage_acid_rain,
+        &&stage_condense,  &&stage_heat_ramp,   &&stage_chill,      &&stage_warm,     &&stage_soak_dry,
+        &&stage_fall,      &&stage_wither,      &&stage_drink,      &&stage_root,     &&stage_grow,
+        &&stage_sprout,    &&stage_bud,         &&stage_end,
+    };
 
     unsigned found = 0;
     for (int x = 0; x < w; x++) {
@@ -4960,12 +4994,54 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
         if (CELL_IS_EMPTY(c)) {
             continue;
         }
-        const reaction_t* r = reaction_of(c);
+        /* The one decode branch reaction_of() already paid for, now also
+         * yielding the stage byte - a second, separate branch here to
+         * look up the stage table would spend exactly what this
+         * dispatcher exists to save. */
+        const reaction_t* r;
+        uint8_t stage;
+        if (CELL_MATERIAL(c) == MAT_EXTENDED) {
+            const uint8_t variant = CELL_VARIANT(c);
+            r = &extended_reactions[variant];
+            stage = extended_first_stage[variant];
+        } else {
+            const uint8_t mat = CELL_MATERIAL(c);
+            r = &reactions[mat];
+            stage = material_first_stage[mat];
+        }
+        goto* stage_labels[stage];
+
+    stage_burn_always:
+        found |= FOUND_BURNING;
+        step_one_burning_cell(s, row, x, y, w, h);
+        continue;
+
+    stage_burn_check:
+        /* burns == 0 here, or dispatch would have landed above - so
+         * cell_is_burning()'s own OR collapses to its second half. */
+        if (cell_code(c) >= r->lit_from) {
+            found |= FOUND_BURNING;
+            step_one_burning_cell(s, row, x, y, w, h);
+            continue;
+        }
+        /* Past the safe default, not into it: cell_is_burning() below is
+         * provably false for a row that reached here (burns == 0, and the
+         * lit_from test just failed), so falling through would cost every
+         * unlit wood and gunpowder cell that test twice. */
+        goto stage_dissolve;
+
+    stage_burn_any:
+        /* The safe default (RSTAGE_BURN_ANY == 0) lands here rather than
+         * on stage_burn_always/stage_burn_check above - both skip half of
+         * cell_is_burning()'s own test, and a slot that fell back from
+         * one of those would misreport instead of just walking on. */
         if (cell_is_burning(c)) {
             found |= FOUND_BURNING;
             step_one_burning_cell(s, row, x, y, w, h);
             continue;
         }
+
+    stage_dissolve:
         if (r->dissolves) {
             found |= FOUND_DISSOLVER;
             /* MAT_ACID specifically, not "anything that dissolves" - see
@@ -5010,6 +5086,7 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
          * irrelevant to a water cell) - harmless, the same direction
          * step_one_condensing_cell()'s own FOUND_CONDENSING report below
          * already errs in (set before the roll is even known to hit). */
+    stage_acid_rain:
         if (CELL_MATERIAL(c) == MAT_GAS || CELL_MATERIAL(c) == MAT_STEAM) {
             if (step_one_acid_rain_cell(s, x, y, w, h)) {
                 found |= FOUND_DISSOLVER | FOUND_MOISTURE | FOUND_CONDENSING;
@@ -5024,6 +5101,7 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
          * may_have_temperature, which steam already arms via `warms` but
          * which nothing keeps re-arming on a board with no heat-holder
          * anywhere. */
+    stage_condense:
         if (r->condenses != 0) {
             found |= FOUND_CONDENSING;
             if (step_one_condensing_cell(s, x, y, w, h, r)) {
@@ -5035,6 +5113,7 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
          * any other neighbour of a flame, so the common case - a board full
          * of glass and one candle - walks past nearly all of it on a
          * variant test. */
+    stage_heat_ramp:
         if (r->heat_ramp != 0) {
             if (CELL_VARIANT(c) != SAND_AMBIENT_HEAT && step_one_tempered_cell(s, row, x, y, w, h, r)) {
                 found |= FOUND_TEMPERATURE;
@@ -5044,6 +5123,7 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
         /* A cold cell keeps the flag set whether or not it melts this
          * step: a drift on dry ground has nothing to do now and still has
          * to be found later, when a liquid reaches it. */
+    stage_chill:
         if (r->chills != 0) {
             if (step_one_cold_cell(s, x, y, w, h, r)) {
                 found |= FOUND_TEMPERATURE;
@@ -5059,6 +5139,7 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
          * the actual question - is there a heat_ramp cell anywhere on the
          * grid at all - so a board of nothing but gas and fire never pays
          * for the neighbour scan below to find nothing. */
+    stage_warm:
         if (r->warms != 0 && s->may_have_temperature && s->may_have_heat_holder) {
             step_one_warming_cell(s, x, y, w, h, r);
             found |= FOUND_TEMPERATURE;
@@ -5067,6 +5148,7 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
         /* Soaking and drying. Reached by sand and dirt, which are on most
          * boards, so the cheap tests come first: the field check, then
          * may_have_liquid inside, and only then a neighbour scan. */
+    stage_soak_dry:
         if ((r->soaks != 0 || r->dries != 0) && step_one_soaking_cell(s, row, x, y, w, h, r)) {
             found |= FOUND_MOISTURE;
             continue;
@@ -5074,6 +5156,7 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
         /* Falling. First, because a seed still in the air has nothing to
          * grow from and no soil to look at - and because the cheapest
          * answer for everything else on the board is one zero field. */
+    stage_fall:
         if (r->falls != 0) {
             /* Armed by the cell EXISTING, not by it moving. A landed seed
              * reported nothing, so on a board holding one settled plant
@@ -5090,6 +5173,7 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
         /* Withering. Not gated on may_have_moisture, deliberately: the
          * cells this is for are the ones with no water anywhere near
          * them, on boards that may have none at all. */
+    stage_wither:
         if (r->withers != 0) {
             /* Armed by being PRESENT, exactly as the faller flag above
              * is, and for the same reason: a leaf that is safe this step
@@ -5105,6 +5189,7 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
          * move that water into the ground whether or not the tree has any
          * use for it this step. Gated on may_have_liquid, so a board with
          * no water on it pays one field test. */
+    stage_drink:
         if (r->drinks != 0 && s->may_have_liquid) {
             if (step_one_drinking_cell(s, x, y, w, h, r, c)) {
                 found |= FOUND_MOISTURE;
@@ -5117,6 +5202,7 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
          * pays out below, and must never take this branch - a plant cell's
          * own material is never equal to its `roots_to`, so this check alone
          * keeps the two rows apart without needing a second field. */
+    stage_root:
         if (r->roots != 0 && c == (cell_t)r->roots_to && s->may_have_moisture) {
             /* Conduct first, then eat: the level a root carries down this
              * step is the level the tip beneath it can grow into next. */
@@ -5131,6 +5217,7 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
         /* Growing. Reached only where there is soil with water in it,
          * which is what may_have_moisture already tracks - a plant on dry
          * ground costs one field test and nothing else. */
+    stage_grow:
         if (r->grows != 0 && s->may_have_moisture) {
             step_one_growing_cell(s, x, y, w, h, r);
             found |= FOUND_MOISTURE;
@@ -5138,6 +5225,7 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
         }
         /* Budding. Same gate as growing, and reached by unlit wood, which
          * falls through every branch above it. */
+    stage_sprout:
         if (r->sprouts != 0 && s->may_have_moisture) {
             if (step_one_sprouting_cell(s, x, y, w, h, r)) {
                 found |= FOUND_MOISTURE;
@@ -5145,11 +5233,13 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
         }
         /* Budding, on the same gate. Reached by wood, which falls through
          * every branch above it. */
+    stage_bud:
         if (r->buds != 0 && s->may_have_moisture) {
             if (step_one_budding_cell(s, x, y, w, h, r)) {
                 found |= FOUND_MOISTURE;
             }
         }
+    stage_end:;
     }
     return found;
 }
@@ -5272,6 +5362,19 @@ sand_step_reactions(sand_t* s) {
         for (int theirs = 0; theirs < MATERIAL_MAX; theirs++) {
             pair_bits[mine][theirs] = theirs_bits[theirs];
         }
+    }
+
+    /* material_first_stage[]/extended_first_stage[] - REBUILT HERE, EVERY
+     * PASS, the same discipline as pair_bits just above: written fresh
+     * from reactions[]/extended_reactions[] every pass, read only by
+     * step_one_reacting_row() within that same pass, never cached across
+     * steps. */
+    for (int m = 0; m < MAT_COUNT; m++) {
+        const bool is_acid_rain_material = (m == MAT_GAS || m == MAT_STEAM);
+        material_first_stage[m] = reaction_first_stage(&reactions[m], is_acid_rain_material);
+    }
+    for (int k = 0; k < MATERIAL_EXTENDED_CODES; k++) {
+        extended_first_stage[k] = reaction_first_stage(&extended_reactions[k], false);
     }
 
     const int w = s->w;

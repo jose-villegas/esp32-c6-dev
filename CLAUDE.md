@@ -62,9 +62,13 @@ scripts/check-format.sh <file.c> [<file.h> ...]         # format in place
 scripts/check-format.sh --check <file.c> [<file.h> ...]  # verify only
 ```
 
-**No comment longer than 300 characters.** A run of consecutive `//` lines
-counts as one comment; length is the prose, markers and `*` gutters stripped,
-so re-wrapping never changes the score. File and section header banners
+**300 characters is the aim for a comment; 500 is the hard ceiling**, for one
+that truly needs the room — say so by actually using the length, not by
+sitting at 320 out of habit. A run of consecutive own-line `//` lines, or of
+consecutive own-line `/* */` blocks with no code between them, counts as one
+comment; length is the prose, markers and `*` gutters stripped, so
+re-wrapping never changes the score and chopping one explanation into several
+adjacent blocks doesn't dodge it either. File and section header banners
 (`/*====`) are exempt — asked to fit, a model deletes the rule rather than the
 prose. The rule is aimed at comments beside code.
 
@@ -75,14 +79,15 @@ scripts/check-comment-length.sh --files         # per-file counts
 ```
 
 Enforcement is a PostToolUse hook (`scripts/hooks/comment_length_hook.py`)
-that blocks an Edit or Write whose *own new text* carries an over-long
-comment — the backlog in the tree is somebody's cleanup, not the current
-edit's problem. The hook script is tracked; the settings entry pointing at it
-is not (`.claude/*` is gitignored), so a fresh clone has the rule without the
-enforcement until a settings file names the script. Put that entry in
-`~/.claude/settings.json` rather than per-worktree — every worktree gets its
-own `.claude/`, and one user-level entry covers all of them. Guard it so a
-project without the script is a no-op:
+that blocks an Edit or Write whose *own new text* carries a comment past the
+500-char ceiling — the backlog in the tree is somebody's cleanup, not the
+current edit's problem, and the hook stays silent on anything at or under it
+even if above the 300 aim. The hook script is tracked; the settings entry
+pointing at it is not (`.claude/*` is gitignored), so a fresh clone has the
+rule without the enforcement until a settings file names the script. Put
+that entry in `~/.claude/settings.json` rather than per-worktree — every
+worktree gets its own `.claude/`, and one user-level entry covers all of
+them. Guard it so a project without the script is a no-op:
 
 ```sh
 f="$CLAUDE_PROJECT_DIR/scripts/hooks/comment_length_hook.py"
@@ -91,9 +96,13 @@ if [ -f "$f" ] && command -v python >/dev/null 2>&1; then python "$f"; else exit
 
 The guard is not cosmetic: `python <missing file>` exits 2, and 2 is the code
 that blocks the edit, so an unguarded user-level entry would refuse every
-write in every other project. As of
-2026-09-06 the tree still holds ~2,065 comments over the limit, 79% of them
-in the sand app; `--comments-only <ref>` proves a bulk trim moved no code.
+write in every other project. As of 2026-09-06, after a first local-model
+trim wave (296 shortened, 71 of those reverted on review for losing real
+reasoning - automated one-shot compression is the wrong tool for a comment
+bundling several distinct points, which needs manual splitting instead), the
+tree holds 1,736 comments over the 300 aim (1,084 over the 500 ceiling), 79%
+of them in the sand app; `--comments-only <ref>` proves a bulk trim moved no
+code.
 
 Requires a **host** compiler (not the ESP32 toolchain) for the host tests:
 Windows `winget install BrechtSanders.WinLibs.POSIX.UCRT`, Debian/Ubuntu
