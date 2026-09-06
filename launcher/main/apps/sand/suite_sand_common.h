@@ -74,6 +74,14 @@ extern uint8_t sleep_blocks[BLOCK_COLS * BLOCK_ROWS];
 extern uint8_t *wide_cells;
 extern sand_t   wide;
 
+/* The real screen size. Must match app_sand.c - duplicated rather than
+ * shared because sand.h has no business knowing the screen size (see the
+ * note at the top of sand.h). Used throughout the scenes/perf/blast
+ * portion of the split, well beyond the "on the real grid" section it was
+ * first written for. */
+#define REAL_W 184
+#define REAL_H 224
+
 /* A deliberately over-long grid, for reach-cap tests that cannot share
  * `wide`. CONDUCT_REACH_TEST mirrors sand_reactions.c's own
  * CONDUCT_REACH, which is private to that file; if the two ever drift
