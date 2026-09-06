@@ -104,7 +104,6 @@ $HERE/gfx_probe_stub.c
 $HERE/esp_timer_host.c
 $TEST_DIR/suites.c
 $TEST_DIR/timing.c
-$APP_SAND/suite_sand.c
 $APP_SAND/sand.c
 $APP_SAND/sand_liquid.c
 $APP_SAND/sand_gas.c
@@ -115,6 +114,19 @@ $APP_SAND/row_runs.c
 $APP_SAND/sand_ui.c
 $APP_SAND/tilt.c
 "
+
+# suite_sand.c grew past 32,000 lines and was split by topic into
+# suite_sand_common.c/suite_sand_scenes.c/suite_sand_motion.c/... (bd esp32c6
+# test-suite-refactor) - this probe needs all of them, the same as it needed
+# the one file before the split, since the scene builders and the
+# sand_host_probe_run_*() wrappers this probe calls now live in different
+# pieces of what used to be one file. suite_sand_ui.c is excluded - it was
+# never part of suite_sand.c and this probe never needed it before either.
+for f in "$APP_SAND"/suite_sand_*.c; do
+    [ "$(basename "$f")" = "suite_sand_ui.c" ] && continue
+    SOURCES="$SOURCES
+$f"
+done
 
 mkdir -p "$(dirname "$OUT")"
 
