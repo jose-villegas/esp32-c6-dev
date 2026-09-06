@@ -1813,6 +1813,13 @@ void build_gunpowder_basin_scene(sand_t *s)
     }
     sand_set(s, fx, fy, FIRE);
 
+    /* A SHELF UNDER EACH OUTSIDE STACK, drawn before they are painted.
+     * Without it the stacks stand on nothing: 900 of their 1,800 cells
+     * are liquid, so the window's first third times a waterfall landing
+     * alongside the detonation it exists to measure. */
+    gunpowder_basin_wall_run(s, iy1, ix0 - 26, ix0, false);
+    gunpowder_basin_wall_run(s, iy1, ix1, ix1 + 26, false);
+
     /* Outside, left of the vessel: water, then sand, then dirt, each
      * close enough for a breached wall or a flung ember to reach. */
     for (int y = iy0; y < iy0 + 15; y++)
