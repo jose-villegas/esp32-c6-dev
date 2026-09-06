@@ -1,19 +1,23 @@
 /*=============================================================================
- * Portable suite: the falling-sand automaton.
+ * Portable suite: the falling-sand automaton - frame-budget performance
+ * against the shared benchmark scenes, plus the app-level allocation
+ * selfcheck and a couple of full-grid acid-bubble tests.
  *
- * Runs on the host and on the board. Nothing here touches hardware - the grid
- * is a byte array and gravity is a pair of ints - which is the point: a rule
- * like "a grain slides off a pile" is far easier to state on a 5x5 grid than
- * to spot by eye on a 184x224 one at 40 fps.
+ * DEVICE_BUILD-only, almost entirely: wall-clock frame-budget assertions
+ * are meaningless on a host whose CPU speed bears no relation to the
+ * device's, so nearly every test below only compiles into the on-device
+ * selftest image, not the host runner - see each test's own #ifdef
+ * DEVICE_BUILD guard and RUN_TEST line.
  *
- * Grids are written out as text so a failure is readable:
- *   '.' empty, 'o' a grain.
+ * Split out of suite_sand.c (bd esp32c6 test-suite-refactor), which had grown
+ * past 32,000 lines across 500+ tests. Shared fixtures and assertion helpers
+ * live in suite_sand_common.{c,h}; the scene builders these frame-budget
+ * tests measure live in suite_sand_scenes.{c,h} - see those headers.
  *===========================================================================*/
-
-#include <math.h>   /* atan2()/M_PI - shadow_test_bearing()'s own comment
-                     * (this section's own gravity-alignment test) explains
-                     * why this one measurement uses floating point where
-                     * the rest of this file deliberately does not */
+#include <math.h>   /* not every file in the split still needs atan2()/M_PI,
+                     * but every file inherited suite_sand.c's own include
+                     * block rather than being pruned by hand, to keep the
+                     * split itself mechanical and low-risk */
 #include <stdlib.h>
 #include <string.h>
 
@@ -29,172 +33,17 @@
 #include "suites.h"
 
 #include "sand.h"
-/* Reaches past sand.h's own public surface on purpose - bd esp32c6-a2j's
- * exhaustive-shape-table test below exercises
- * cover_mask()/covered_at() (ring_dir() too) directly, and a rule that
- * rotates with gravity and is only ever exercised indirectly, through the
- * stochastic burst roll, at whatever gravity direction one scene happens
- * to use, is not really tested. sand_priv.h is pure portable logic
- * (static inline over a plain sand_t, no hardware) like the rest of what
- * this file already links against - the same reason sand_liquid.c and
- * sand_gas.c can include it too - so this is a wider view of the same
- * portable surface, not a step outside it. */
 #include "sand_priv.h"
-#include "util/intmath.h"   /* im_len() - mirrors app_sand.c's own
-                             * update_local_depth_gravity(), which projects
-                             * gravity onto each axis with the same helper
-                             * rather than re-deriving the weight from
-                             * |gx|+|gy| the way the old blend did */
-
-/* s/cells/fx/W/H/fixture()/load() and the rest of the split's shared
- * fixtures and assertion helpers now live in suite_sand_common.{c,h} -
- * see that header for why. */
+#include "util/intmath.h"
 #include "suite_sand_common.h"
+#include "suite_sand_scenes.h"
 
-/* --- water over lava: a continuous pour onto a sealed pool --------------
- *
- * REPLACES the vent-spam scene that used to occupy this section (bd
- * esp32c6-0f2 removed the vent machinery it measured; asked for
- * 2026-09-02, "we would just need to rebuild the vent scene it's simple,
- * water over lava, and re-peg the performance"). Its replacement -
- * covered lava converting to stone and bursting (bd esp32c6-mqt) - has no
- * mechanism left anywhere near as expensive as the vent scan this scene
- * used to hold open: one roll per covered lava cell per step, at odds of
- * roughly 1 in 256, with a 3-neighbour cover_mask() walk only after the
- * roll passes. A "burst spam" scene built the same way (many cells
- * forced-covered, chance pinned to maximum) would measure a real cost,
- * but not a REPRESENTATIVE one - production never pins the chance, and
- * the walk it is paying for is cheap. This scene instead measures the
- * ordinary, sustained thing a player actually does: pour water onto
- * lava. That single act chains through three separate reactions -
- * quench (direct water-lava contact converting to stone),
- * cool_off_chain() (that conversion's own cost paid outward into
- * neighbouring lava, sand_reactions.c), and the burst gate (once enough
- * of a stone crust has formed over what's left) - so a regression in any
- * of the three shows up here, not only in its own narrower correctness
- * test.
- *
- * DO NOT compare this row's numbers against the old vent-spam capture
- * that used to sit here. This is a different scene measuring a different
- * mechanism; the old figure describes a machinery that no longer exists,
- * not a slower or faster version of what replaced it. See test_the_
- * water_over_lava_scene_fits_in_the_frame_budget's own comment (below,
- * beside the other frame-budget tests) for the first-capture convention
- * this file already has for exactly this situation. */
-
-/* Half the grid lava, half water, in direct contact along one full-width
- * seam - not vent-spam's many small sealed pockets, because nothing here
- * needs to stay sealed: quench and cool_off_chain() only need lava
- * touching water at all, and the burst gate only needs enough of a crust
- * to form, which a wide, deep pool supplies on its own as the interface
- * quenches. A single seam this wide puts as many lava cells in
- * simultaneous contact with water as the grid can hold, which is the
- * worst case for the quench pass; the crust it leaves behind covers the
- * pool beneath it just as completely, which is the worst case for the
- * burst gate. */
-#define WATER_LAVA_LAVA_TOP (REAL_H / 2)
-
-/* Same real device impulse budget the vent-spam scene this replaces used
- * (that scene's own comment, git history, has the full account) - the
- * app's own buffer is sized APP_IMPULSE_MAX (2048), and this scene should
- * be fighting the same memory ceiling a real device pour actually has,
- * not a looser one a differently-sized test buffer would hide. */
-#define WATER_LAVA_IMPULSE_MAX 2048
-
-/* sand_set_lava_cooloff()/sand_set_lava_burst() forced to their maximum,
- * the same reasoning the vent-spam scene this replaces gave for forcing
- * sand_set_vent_chance(255) (git history): production leaves both
- * deliberately rare (SAND_LAVA_COOLOFF_CHANCE, SAND_LAVA_BURST_CHANCE,
- * sand.h), and a benchmark that mostly rolls "no" would not be measuring
- * the mechanisms it claims to. Quench itself has no chance to force - a
- * burning liquid touching a quenching one always converts - so only
- * these two need it. */
-static void build_water_over_lava_scene(sand_t *s)
-{
-    sand_set_lava_cooloff(s, 255);
-    sand_set_lava_burst(s, 255);
-
-    for (int y = 0; y < REAL_H; y++) {
-        for (int x = 0; x < REAL_W; x++) {
-            const cell_t c = (y < WATER_LAVA_LAVA_TOP)
-                                  ? CELL_MAKE(MAT_WATER, MASS_MAX)
-                                  : CELL_MAKE(MAT_LAVA, MASS_MAX);
-            sand_set(s, x, y, c);
-        }
-    }
-}
-
-/* This scene really does reach the three paths it claims to, checked the
- * same way this file's other scene tests are: build it through the same
- * function the device test uses, step it the same number of times, and
- * count - not "did the frame-budget test merely run without crashing".
- *
- * THREE INDEPENDENT SIGNALS, one per claimed path:
- *
- * - STONE PRESENT AT ALL proves quench fired - water touching lava
- *   converts it, and nothing else in this scene produces stone.
- *
- * - STONE COUNT BEYOND ONE SEAM'S WORTH proves cool_off_chain() carried
- *   the conversion beyond direct contact - a single interface exactly
- *   REAL_W cells wide is what quench alone could ever reach on its own
- *   in one pass, so a count past that many can only be the chain
- *   reaching cells that were never themselves touching water.
- *
- * - FIRE PRESENT proves the burst path fired - ordinary quench only ever
- *   produces stone (material.c's quench_to), so the only source of fire
- *   anywhere in this scene is sand_explode()'s own core fill on a burst
- *   (bd esp32c6-mqt's own comment, sand_reactions.c, pins that the
- *   centre cell ends up as fire, not the stone the burst itself just
- *   wrote). */
-static void test_the_water_over_lava_scene_reaches_the_quench_cooloff_and_burst_paths_it_claims(void)
-{
-    uint8_t *big    = malloc((size_t)REAL_W * REAL_H);
-    uint8_t *blocks = malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
-                              ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
-    impulse_t *impulses = malloc((size_t)WATER_LAVA_IMPULSE_MAX * sizeof *impulses);
-    TEST_ASSERT_NOT_NULL(big);
-    TEST_ASSERT_NOT_NULL(blocks);
-    TEST_ASSERT_NOT_NULL(impulses);
-
-    sand_t s;
-    sand_init(&s, big, REAL_W, REAL_H, 59u);
-    sand_enable_sleeping(&s, blocks);
-    sand_set_scatter(&s, SAND_SCATTER_PER_MATERIAL);
-    sand_set_decay(&s, SAND_DECAY_PER_MATERIAL);
-    sand_set_mobility(&s, SAND_MOBILITY_PER_MATERIAL);
-    sand_enable_impulses(&s, impulses, WATER_LAVA_IMPULSE_MAX);
-
-    build_water_over_lava_scene(&s);
-
-    for (int i = 0; i < 20; i++) {
-        sand_step(&s, 0, 1000, 0);
-    }
-
-    int stone = 0, fire = 0;
-    for (int y = 0; y < REAL_H; y++) {
-        for (int x = 0; x < REAL_W; x++) {
-            const int m = CELL_MATERIAL(sand_at(&s, x, y));
-            if (m == MAT_STONE) stone++;
-            else if (m == MAT_FIRE) fire++;
-        }
-    }
-
-    free(big);
-    free(blocks);
-    free(impulses);
-
-    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, stone,
-        "water touching lava must convert some of it to stone - if none "
-        "appeared, quench itself stopped firing");
-    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(REAL_W, stone,
-        "the stone count must exceed one seam's worth (REAL_W) of direct "
-        "contact - if it does not, cool_off_chain() stopped carrying the "
-        "conversion into lava that was never itself touching water");
-    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, fire,
-        "no burst means no fire anywhere in this scene - ordinary quench "
-        "only ever produces stone, so a zero count here means the burst "
-        "gate never fired at all");
-}
+/* build_water_over_lava_scene()/WATER_LAVA_IMPULSE_MAX and
+ * test_the_water_over_lava_scene_reaches_the_quench_cooloff_and_burst_paths_
+ * it_claims moved to suite_sand_scenes.{c,h} - the builder and its impulse
+ * budget are reused below by test_the_water_over_lava_scene_fits_in_the_
+ * frame_budget, the same reason the four-liquid/lava-stress/etc scene
+ * builders live there. */
 
 #ifdef DEVICE_BUILD
 #include <stdlib.h>
@@ -2342,7 +2191,7 @@ static void test_the_sand_app_can_still_allocate_everything_it_needs(void)
 }
 #endif /* DEVICE_BUILD */
 
-void run_sand_suite(void)
+void run_sand_perf_suite(void)
 {
     RUN_TEST(test_acid_bubbles_do_not_favour_one_wall);
     RUN_TEST(test_acid_bubbles_still_fire_once_the_block_is_asleep);
@@ -2355,7 +2204,6 @@ void run_sand_suite(void)
 
 
 
-    RUN_TEST(test_the_water_over_lava_scene_reaches_the_quench_cooloff_and_burst_paths_it_claims);
 
 
 
@@ -2389,4 +2237,4 @@ void run_sand_suite(void)
 #endif
 }
 
-SUITE_REGISTER(run_sand_suite);
+SUITE_REGISTER(run_sand_perf_suite);
