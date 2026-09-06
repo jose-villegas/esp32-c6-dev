@@ -116,7 +116,7 @@ it stay.
 | acid | 0 | - | - | 0 | 0 | 0 | - | 0 | **60** | 0 | - |
 | glass | 0 | - | - | 0 | **220** | 0 | - | 0 | 0 | **0** (immune) | **lava**, by ramp |
 | snow | 0 | - | - | 0 | 0 | 0 | - | 0 | 0 | 0 | **water** (120) |
-| gunpowder | 200 | - | **lit** (code 7, a heat source - not fire) | 0, but **burn_decay 8** | 0 | 0 | **soaked** (quenched to wet, not unlit) | 0 | 0 | **200** | **lit** (24) |
+| gunpowder | 200 | - | **lit** (code 7, a heat source - not fire) | 0, but **burn_decay 16** | 0 | 0 | **soaked** (quenched to wet, not unlit) | 0 | 0 | **200** | **lit** (24) |
 
 Gunpowder catches like a `burn_decay` material, not like gas: `ignites_to`
 and `heats_to` both name its own **lit** cell (code 7) rather than
@@ -124,7 +124,7 @@ and `heats_to` both name its own **lit** cell (code 7) rather than
 a new variant, not a different material. A lit cell is a heat source in
 its own right (ignites neighbours, so a trail of powder burns along; boils
 adjacent water), and it counts down every step
-(`burn_decay = 8`, roughly thirty steps of fuse per cell) via the same
+(`burn_decay = 16`, roughly sixteen steps of fuse per cell) via the same
 `tick_decay_at()` wood already uses, generalised by a new field,
 `reaction_t.lit_from` - the first variant code that counts as "burning"
 (wood: 1; gunpowder: 7), so `cell_is_burning()` stops assuming unlit is
@@ -136,7 +136,7 @@ burning or nothing inside a pile ever goes off), and quenching it with
 water writes moisture at `moist_max` (soaked) rather than the unlit code,
 or it would relight from an adjacent lit cell on the very next step.
 
-Only at **burn-out** does `explodes` (blast radius, 16) get read: if the
+Only at **burn-out** does `explodes` (blast radius, 20) get read: if the
 cell is one corner of a 2x2 whose other three cells are also lit gunpowder
 and the impulse buffer is live, it detonates (`sand_explode()`); otherwise
 it becomes an ordinary `MAT_FIRE` cell, the same no-buffer fallback the

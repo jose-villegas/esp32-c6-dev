@@ -1446,13 +1446,15 @@ _Static_assert(GUNPOWDER_LIT == GUNPOWDER_TONES + GUNPOWDER_MOIST_MAX,
  * reaction-driven blast on the board, on purpose: it started at 6, under
  * both, and on the device the gas pocket then read as the more meaningful
  * blast - wrong for the one material whose whole point is to go off - so
- * it took the lava burst's old 16 and the lava burst dropped to 12. Only
- * the hand-fired detonate mode (app_sand.c, ~25 cells) is larger. With
+ * it took the lava burst's old 16, the lava burst dropped to 12, and 16
+ * then went to 20 on a second look at the panel. Only the hand-fired
+ * detonate mode (app_sand.c, ~25 cells) is larger, and the impulse buffer
+ * (APP_IMPULSE_MAX 2048) is what stops this growing much further. With
  * blasts spaced out by a board-wide cooldown
- * (SAND_GUNPOWDER_BLAST_COOLDOWN) the radius is what carries the punch. The CORE that becomes fire is radius /
- * SAND_EXPLODE_CORE_DIVISOR (5, sand.h): three cells here, against one
- * for the gas pocket. */
-#define SAND_GUNPOWDER_BLAST_RADIUS 16
+ * (SAND_GUNPOWDER_BLAST_COOLDOWN), the radius is what carries the punch.
+ * The CORE that becomes fire is radius / SAND_EXPLODE_CORE_DIVISOR
+ * (5, sand.h): four cells here, against one for the gas pocket. */
+#define SAND_GUNPOWDER_BLAST_RADIUS 20
 
 /* Whether this cell is gunpowder - the high nibble is MAT_EXTENDED AND bit
  * 3 of the low nibble is set. Every gunpowder byte, whatever its 3-bit

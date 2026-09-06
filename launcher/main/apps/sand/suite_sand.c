@@ -16807,8 +16807,8 @@ static void test_fuse_blasts_are_capped_at_one_per_step(void)
     sand_set(&wide, 3, 2, GUNPOWDER_LIT_CELL);
     sand_set(&wide, 2, 3, GUNPOWDER_LIT_CELL);
     sand_set(&wide, 3, 3, GUNPOWDER_LIT_CELL);
-    /* Group B: columns 26-27 - 24 cells from group A, well past
-     * SAND_GUNPOWDER_BLAST_RADIUS (16), so neither blast can physically
+    /* Group B: columns 26-27 - 24 cells from group A, past
+     * SAND_GUNPOWDER_BLAST_RADIUS (20), so neither blast can physically
      * touch the other's room. */
     sand_set(&wide, 25, 2, STONE);
     sand_set(&wide, 25, 3, STONE);

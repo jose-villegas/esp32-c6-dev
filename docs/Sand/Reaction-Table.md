@@ -161,7 +161,7 @@ Typography carries the other three roles colour does not: *italic* is the verb d
 - *Catches* $\textcolor{#B19100}{\text{fire}}$ from $\textcolor{#B19100}{\text{fire}}$ or $\textcolor{#BF1B00}{\text{lava}}$.
 - It *turns into* $\textcolor{#FF8E29}{\text{lit gunpowder}}$ instead.
 - Once it is on fire, it *burns down*.
-- Burning out, it *detonates* instead of simply going out - blasting a 16-cell radius, but only if it is one corner of a 2x2 that is still alight.
+- Burning out, it *detonates* instead of simply going out - blasting a 20-cell radius, but only if it is one corner of a 2x2 that is still alight.
 - If $\textcolor{#1863A3}{\text{water}}$ or $\textcolor{#2B6F08}{\text{acid}}$ touches it, it goes out - but stays soaked.
 - Next to $\textcolor{#B19100}{\text{fire}}$ or $\textcolor{#BF1B00}{\text{lava}}$, it *catches light* instead.
 - It *soaks up* any $\textcolor{#1863A3}{\text{water}}$ it touches, and gets wetter.
@@ -366,7 +366,7 @@ countdown reaches `lit_from` and would otherwise simply vanish,
 one corner of any 2x2 square whose other three cells are also lit
 gunpowder - off-board counts as NOT lit. If so *and* the simulation has an
 impulse buffer (`s->impulse_buf != NULL`), the cell detonates via
-`sand_explode()` at `SAND_GUNPOWDER_BLAST_RADIUS` (16); otherwise - a lone
+`sand_explode()` at `SAND_GUNPOWDER_BLAST_RADIUS` (20); otherwise - a lone
 cell, a one-wide trail, impulses disabled entirely - it just becomes plain
 `MAT_FIRE`, the same fallback the confined-gas pocket already relies on
 for the same reason (`sand_explode()` is a documented no-op with no
