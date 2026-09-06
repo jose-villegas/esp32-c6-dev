@@ -25,13 +25,15 @@ const tiltPad = document.getElementById("tilt-pad");
 const tiltHandle = document.getElementById("tilt-handle");
 const qualitySelect = document.getElementById("quality");
 const renderScaleSelect = document.getElementById("render-scale");
+const simSpeedSelect = document.getElementById("sim-speed");
 const modeButtons = [...document.querySelectorAll(".mode")];
 const fsBtn = document.getElementById("fullscreen-btn");
 const fsTarget = document.getElementById("app");
 const orientationBtn = document.getElementById("orientation-btn");
 
 let Module, web_init, web_step, web_input, web_clear, web_set_brush,
-    web_brush_swatch, web_render, web_screen_w, web_screen_h, web_pixels_ptr;
+    web_brush_swatch, web_render, web_screen_w, web_screen_h, web_pixels_ptr,
+    web_set_sim_speed;
 let screenW = 448, screenH = 368;
 let pixelsPtr = 0;
 let mode = MODE_PAINT;
@@ -280,6 +282,12 @@ function reinitSim() {
 qualitySelect.addEventListener("change", reinitSim);
 renderScaleSelect.addEventListener("change", reinitSim);
 
+// No reinit needed - web_set_sim_speed() touches no buffer, so this can
+// take effect on the very next frame instead of tearing down the grid.
+simSpeedSelect.addEventListener("change", () => {
+  web_set_sim_speed(Math.round(Number(simSpeedSelect.value) * 256));
+});
+
 orientationBtn.addEventListener("click", () => {
   landscape = !landscape;
   orientationBtn.textContent = landscape ? "Portrait" : "Landscape";
@@ -342,6 +350,7 @@ SandModule().then((mod) => {
     ["number", "number", "number", "number", "number", "number", "number"]);
   web_clear = Module.cwrap("web_clear", null, []);
   web_set_brush = Module.cwrap("web_set_brush", null, ["number"]);
+  web_set_sim_speed = Module.cwrap("web_set_sim_speed", null, ["number"]);
   web_brush_swatch = Module.cwrap("web_brush_swatch", "number", ["number"]);
   web_screen_w = Module.cwrap("web_screen_w", "number", []);
   web_screen_h = Module.cwrap("web_screen_h", "number", []);

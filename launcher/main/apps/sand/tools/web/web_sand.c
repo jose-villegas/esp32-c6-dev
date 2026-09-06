@@ -148,6 +148,12 @@ static int brush_index;
 static uint32_t sim_accumulator_q8;
 static uint32_t pour_accumulator_ms;
 
+/* How fast simulated time advances vs real time, Q8 (256 = 1x) - see
+ * web_set_sim_speed(). Only the physics step rate scales; input timing and
+ * the visual phase clocks stay real-time, since neither is the simulation
+ * itself. */
+static int sim_speed_q8 = 256;
+
 /* This frame's gravity, cached by web_step() for web_render()'s own local-
  * depth walk (see compute_local_depth()) - which direction is "toward the
  * surface" for a liquid is a fact about gravity, not about the grid, and
@@ -271,6 +277,16 @@ void web_set_brush(int index)
     }
 }
 
+/* `speed_q8` is Q8 (256 = 1x) - JS sends Math.round(multiplier * 256), so
+ * this file stays free of float math, same as everything else here. No
+ * reinit needed: unlike quality/scale/orientation this touches no buffer,
+ * so it can change mid-simulation for free. */
+EMSCRIPTEN_KEEPALIVE
+void web_set_sim_speed(int speed_q8)
+{
+    sim_speed_q8 = speed_q8 > 0 ? speed_q8 : 256;
+}
+
 /* One representative RGB888 colour for brush `index`, for the HTML
  * palette's own swatch buttons. Exact port of app_sand.c's brush_color() -
  * see that function's own comment for why shade 13 (not variant 0), an
@@ -361,10 +377,19 @@ void web_step(uint32_t dt_ms, int ax, int ay, int az, int rotation)
         return;
     }
 
-    sim_accumulator_q8 += dt_ms * (uint32_t)flow;
+    /* Both flow and sim_speed_q8 are Q8, so their product needs the same
+     * >>8 back down any other Q8*Q8 multiply here does. SIM_MAX_CATCHUP
+     * scales the same way, so a deliberate 4x/8x speed is not mistaken for
+     * catch-up and clipped straight back down to 2 steps. */
+    const uint32_t effective_flow_q8 = ((uint32_t)flow * (uint32_t)sim_speed_q8) >> 8;
+    sim_accumulator_q8 += dt_ms * effective_flow_q8;
+    int steps_cap = (int)(((uint32_t)SIM_MAX_CATCHUP * (uint32_t)sim_speed_q8) / 256);
+    if (steps_cap < 1) {
+        steps_cap = 1;
+    }
     int steps = (int)(sim_accumulator_q8 / (SIM_STEP_MS * 256));
-    if (steps > SIM_MAX_CATCHUP) {
-        steps = SIM_MAX_CATCHUP;
+    if (steps > steps_cap) {
+        steps = steps_cap;
         sim_accumulator_q8 = 0;
     } else {
         sim_accumulator_q8 -= (uint32_t)steps * SIM_STEP_MS * 256;
