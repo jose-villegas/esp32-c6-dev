@@ -4307,7 +4307,7 @@ spend_lit_two_by_two(sand_t* s, int x, int y, int w, int dx, int dy) {
  * one (reaction_t.burn_decay). Board-wide rather than per pile because
  * "per pile" would need a region walk, and one blast a frame is already
  * more than the eye separates. */
-#define SAND_GUNPOWDER_BLAST_COOLDOWN 1
+#define SAND_GUNPOWDER_BLAST_COOLDOWN 3
 
 /* One burning cell's turn, in priority order: burn down first (a cell
  * that vanishes this step gets no turn to react further - it cannot
@@ -5153,7 +5153,7 @@ void
 sand_step_reactions(sand_t* s) {
     /* One tick of the fuse-blast cooldown per pass, before any cell gets a
      * turn - so the step a blast fires on is the step it starts waiting
-     * from, and a cooldown of 1 lets the next step blast again. */
+     * from, so a cooldown of 1 lets the very next step blast again. */
     if (s->fuse_blast_wait != 0) {
         s->fuse_blast_wait--;
     }

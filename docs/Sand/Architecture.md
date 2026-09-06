@@ -116,7 +116,7 @@ it stay.
 | acid | 0 | - | - | 0 | 0 | 0 | - | 0 | **60** | 0 | - |
 | glass | 0 | - | - | 0 | **220** | 0 | - | 0 | 0 | **0** (immune) | **lava**, by ramp |
 | snow | 0 | - | - | 0 | 0 | 0 | - | 0 | 0 | 0 | **water** (120) |
-| gunpowder | 200 | - | **lit** (code 7, a heat source - not fire) | 0, but **burn_decay 32** | 0 | 0 | **soaked** (quenched to wet, not unlit) | 0 | 0 | **200** | **lit** (24) |
+| gunpowder | 200 | - | **lit** (code 7, a heat source - not fire) | 0, but **burn_decay 16** | 0 | 0 | **soaked** (quenched to wet, not unlit) | 0 | 0 | **200** | **lit** (24) |
 
 Gunpowder catches like a `burn_decay` material, not like gas: `ignites_to`
 and `heats_to` both name its own **lit** cell (code 7) rather than
@@ -124,7 +124,7 @@ and `heats_to` both name its own **lit** cell (code 7) rather than
 a new variant, not a different material. A lit cell is a heat source in
 its own right (ignites neighbours, so a trail of powder burns along; boils
 adjacent water), and it counts down every step
-(`burn_decay = 32`, roughly eight steps of fuse per cell) via the same
+(`burn_decay = 16`, roughly sixteen steps of fuse per cell) via the same
 `tick_decay_at()` wood already uses, generalised by a new field,
 `reaction_t.lit_from` - the first variant code that counts as "burning"
 (wood: 1; gunpowder: 7), so `cell_is_burning()` stops assuming unlit is
@@ -151,7 +151,7 @@ presents at burn-out.
 
 A big pile's blasts still land one at a time across several frames rather
 than all landing on the same step, and the mechanism that actually
-guarantees that is `SAND_GUNPOWDER_BLAST_COOLDOWN` (1, board-wide,
+guarantees that is `SAND_GUNPOWDER_BLAST_COOLDOWN` (3, board-wide,
 `sand_reactions.c`): after a detonation the board waits that many steps
 before another may fire, ticked down once per reactions pass, so at most
 one detonation fires no matter how many 2x2s burn out qualifying in the
