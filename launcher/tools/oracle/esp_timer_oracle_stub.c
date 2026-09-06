@@ -11,11 +11,12 @@
  * time this returned would be fiction anyway - the oracle exists to replace
  * timing with instruction counts, not to approximate it. Returning a
  * constant 0 makes every FULL_STEP_BUDGET_US-style TEST_ASSERT in
- * suite_sand.c trivially true (elapsed = 0 < budget) instead of failing on
- * a number that was never meaningful under emulation - this is what "watch
- * for a switch elsewhere in this file over esp_timer_get_time() gating
- * something real" would mean, and there isn't one; every call site in
- * suite_sand.c's DEVICE_BUILD block is exactly this per-step budget shape.
+ * suite_sand_perf.c trivially true (elapsed = 0 < budget) instead of
+ * failing on a number that was never meaningful under emulation - this is
+ * what "watch for a switch elsewhere in this file over
+ * esp_timer_get_time() gating something real" would mean, and there isn't
+ * one; every call site in suite_sand_perf.c's DEVICE_BUILD block is
+ * exactly this per-step budget shape.
  *===========================================================================*/
 #include <stdint.h>
 

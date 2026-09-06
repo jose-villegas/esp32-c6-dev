@@ -13,13 +13,13 @@
 # It compiles the app suites for the target with -fstack-usage, using the
 # device profile's own ISA and codegen flags, and runs the same
 # check_stack_usage.py over the result. No device, no flash, no idf.py -
-# suite_sand.c is portable C, so the cross compiler alone is enough to get
-# real target frames.
+# the sand test suite (suite_sand_*.c) is portable C, so the cross
+# compiler alone is enough to get real target frames.
 #
 # WHY THIS IS WORTH RUNNING: the host gate is only useful if a frame that
 # fits on x86 cannot secretly be larger on RISC-V. Measured 2026-09-03 over
-# the 411 functions of suite_sand.c present in both builds: not one had a
-# larger frame on RISC-V than on x86 (median 0.40x, worst case 0.99x), and
+# the 411 functions of the sand test suite (suite_sand_*.c) present in
+# both builds: not one had a larger frame on RISC-V than on x86 (median 0.40x, worst case 0.99x), and
 # no function crossed the ceiling on device without also crossing it on the
 # host. The host is a conservative over-estimate, which is the safe
 # direction for a gate to be wrong in. Re-run this after a toolchain or

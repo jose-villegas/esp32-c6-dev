@@ -151,8 +151,9 @@ device: it is a suite that measured nothing, and the validator will say so.
 ### Attributing on the host, before touching the device
 
 Step 1's "host counters first" has a harness already:
-`launcher/main/apps/sand/tools/perf_probe/` compiles suite_sand.c itself
-with `-DDEVICE_BUILD` on a laptop, against a link-only gfx stub and a real
+`launcher/main/apps/sand/tools/perf_probe/` compiles the sand test suite's
+own sources (`suite_sand_*.c`) with `-DDEVICE_BUILD` on a laptop, against a
+link-only gfx stub and a real
 `esp_timer_get_time()`, and calls the actual frame-budget test bodies
 through the `SAND_HOST_PROBE` wrapper functions beside them - not a
 hand-copied scene, so it can't drift from what the device build measures.
@@ -180,8 +181,9 @@ This is the one host harness - do not build another one. Two per-round
 copies of this already accumulated in this tree days apart (bd
 esp32c6-o2s) before being merged back into this single directory; if a
 scene you need isn't in `--list`, add a `SAND_HOST_PROBE` wrapper next to
-its test body in suite_sand.c and a row in `perf_probe/probe_main.c`'s own
-scene table, rather than standing up a new probe next to this one.
+its test body in the relevant `suite_sand_*.c` file and a row in
+`perf_probe/probe_main.c`'s own scene table, rather than standing up a new
+probe next to this one.
 
 ### Comparing two rounds
 
@@ -254,8 +256,8 @@ that can re-record its own baseline has no baseline.
   slow).
 - **A capture is a measurement of a tree, not a project.** If you didn't
   just build the image yourself, check the self-test names in the raw log
-  against `RUN_TEST()` in the current `suite_sand.c` before trusting any
-  number from it — a stale capture has cost this campaign real time more
+  against `RUN_TEST()` in the current `suite_sand_*.c` files before
+  trusting any number from it — a stale capture has cost this campaign real time more
   than once.
 
 ## Budget rules
