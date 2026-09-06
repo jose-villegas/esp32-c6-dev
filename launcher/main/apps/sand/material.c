@@ -1881,7 +1881,17 @@ static const gfx_color_t palette[256] = {
 /* Blending the TEMPERATURE first keeps every edge colour a real point
  * on glass's own COOL/WARM/HOT ramp instead. Stone's own endpoints stay
  * close enough in hue that mixing its raw colours never hits this. */
-#define GLASS_EDGE_V(v)   ((v) + (((int)(SAND_AMBIENT_HEAT) - (int)(v)) * 10) / 15)
+#define GLASS_EDGE_V_RAW(v) ((v) + (((int)(SAND_AMBIENT_HEAT) - (int)(v)) * 10) / 15)
+
+/* Still crosses ONE boundary on its own: a cell only just past
+ * SAND_SHOCK_HEAT dampens down to 4, back into WARM's own blue-grey -
+ * read as the pane cooling off rather than merely dimming its glow. */
+
+/* Clamped to SAND_SHOCK_HEAT whenever the real v is already HOT, so a
+ * cell that has genuinely started glowing never shows a cooler band's
+ * colour at all. */
+#define GLASS_EDGE_V(v)                                                                                               \
+    (((v) >= SAND_SHOCK_HEAT && GLASS_EDGE_V_RAW(v) < SAND_SHOCK_HEAT) ? SAND_SHOCK_HEAT : GLASS_EDGE_V_RAW(v))
 #define GLASS_EDGE_RGB(v) GLASS_RGB(GLASS_EDGE_V(v))
 #define STONE_EDGE_RGB(v) LERP(STONE_RGB(v), STONE_RGB(SAND_AMBIENT_HEAT), 10)
 
