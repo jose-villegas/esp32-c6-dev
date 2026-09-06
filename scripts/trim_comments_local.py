@@ -65,6 +65,12 @@ Options:
   --max N         stop after N comments, for a smoke test
   --dry-run       write nothing; still produce the report
   --report PATH   markdown report (default scripts/results/comment-trim.md)
+  --log PATH      transcript log (default scripts/results/comment-trim
+                  {,-review}.server.log, matching --review below) - give
+                  each a distinct --report/--pairs/--log (and --review-report
+                  for the review pass) when running more than one instance
+                  at once against different files, or they will clobber each
+                  other's output.
 
 Reviewing a finished run - it writes its was/now pairs to
 scripts/results/comment-trim.json, and the review reads that back, so it can
@@ -81,6 +87,8 @@ run later, on another machine, or with a different reviewer:
                   a reviewer this script cannot call - a stronger model, or a
                   person. No code goes in them.
   --pairs PATH    the pairs file to review (default the one above)
+  --review-report PATH  where the review's own report goes (default
+                  scripts/results/comment-trim-review.md)
 """
 
 import json
@@ -546,6 +554,8 @@ def main(argv):
             "review_model": DEFAULT_REVIEW_MODEL, "skip_over": 1500}
     report = "scripts/results/comment-trim.md"
     pairs = "scripts/results/comment-trim.json"
+    review_report = "scripts/results/comment-trim-review.md"
+    log_path = None
     review_only, packet = False, ""
     paths = []
     it = iter(argv)
@@ -574,10 +584,14 @@ def main(argv):
             opts["dry_run"] = True
         elif arg == "--report":
             report = next(it)
+        elif arg == "--log":
+            log_path = next(it)
         elif arg == "--review":
             review_only = True
         elif arg == "--pairs":
             pairs = next(it)
+        elif arg == "--review-report":
+            review_report = next(it)
         elif arg == "--review-model":
             opts["review_model"] = next(it)
         elif arg == "--review-packet":
@@ -593,10 +607,12 @@ def main(argv):
             else DEFAULT_MODEL
 
     if review_only or packet:
-        return run_review(pairs, packet, opts, review_only)
+        review_log = log_path or "scripts/results/comment-trim-review.server.log"
+        return run_review(pairs, packet, opts, review_only, review_log,
+                          review_report)
 
     files = sources_under(paths or DEFAULT_PATHS)
-    log = "scripts/results/comment-trim.server.log"
+    log = log_path or "scripts/results/comment-trim.server.log"
     os.makedirs(os.path.dirname(log), exist_ok=True)
     open(log, "w", encoding="utf-8").close()
 
@@ -623,7 +639,7 @@ def main(argv):
     return 0
 
 
-def run_review(pairs, packet, opts, review_only):
+def run_review(pairs, packet, opts, review_only, log_path, out):
     """--review / --review-packet: judge a finished run's rewrites."""
     if not os.path.exists(pairs):
         print(f"no pairs file at {pairs} - run a trim first, or pass --pairs",
@@ -643,10 +659,9 @@ def run_review(pairs, packet, opts, review_only):
         if not review_only:
             return 0
 
-    log = "scripts/results/comment-trim-review.server.log"
+    log = log_path
     os.makedirs(os.path.dirname(log), exist_ok=True)
     open(log, "w", encoding="utf-8").close()
-    out = "scripts/results/comment-trim-review.md"
     review(rows, opts, log)
     write_review_report(out, rows, opts)
     flagged = sum(1 for r in rows if r.get("lost") or r.get("verdict"))
