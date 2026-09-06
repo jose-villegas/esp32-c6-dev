@@ -78,8 +78,20 @@ Enforcement is a PostToolUse hook (`scripts/hooks/comment_length_hook.py`)
 that blocks an Edit or Write whose *own new text* carries an over-long
 comment — the backlog in the tree is somebody's cleanup, not the current
 edit's problem. The hook script is tracked; the settings entry pointing at it
-is not (`.claude/*` is gitignored), so a fresh clone or worktree has the rule
-without the enforcement until a `.claude/settings.local.json` names it. As of
+is not (`.claude/*` is gitignored), so a fresh clone has the rule without the
+enforcement until a settings file names the script. Put that entry in
+`~/.claude/settings.json` rather than per-worktree — every worktree gets its
+own `.claude/`, and one user-level entry covers all of them. Guard it so a
+project without the script is a no-op:
+
+```sh
+f="$CLAUDE_PROJECT_DIR/scripts/hooks/comment_length_hook.py"
+if [ -f "$f" ] && command -v python >/dev/null 2>&1; then python "$f"; else exit 0; fi
+```
+
+The guard is not cosmetic: `python <missing file>` exits 2, and 2 is the code
+that blocks the edit, so an unguarded user-level entry would refuse every
+write in every other project. As of
 2026-09-06 the tree still holds ~2,065 comments over the limit, 79% of them
 in the sand app; `--comments-only <ref>` proves a bulk trim moved no code.
 
