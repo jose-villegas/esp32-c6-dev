@@ -16925,7 +16925,7 @@ static void test_a_longer_fuse_cooldown_delays_the_next_blast(void)
         "refusal below is the cooldown's doing and not a fuse still lit");
     TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STONE, b_wall,
         "a burn-out inside the cooldown must fall through to plain fire, "
-        "leaving its room's wall intact - at the shipped cooldown of 1 "
+        "leaving its room's wall intact - with no cooldown at all this "
         "this same 2x2 would have breached it");
 }
 

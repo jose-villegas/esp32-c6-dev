@@ -417,7 +417,7 @@ cell's **lit** state, in place of the plain `MAT_FIRE` a less flammable
 fuel would get. A lit cell is a heat source in its own right, exactly like
 a burning log: it ignites neighbouring dry powder (so a trail burns along,
 cell by cell), it can boil adjacent water, and it counts down its own
-`burn_decay` (32, roughly eight steps of fuse) every step via the same
+`burn_decay` (16, roughly sixteen steps of fuse) every step via the same
 `tick_decay_at()` wood already uses - generalised by `reaction_t.lit_from`,
 the first variant code a `burn_decay` material treats as "burning" (wood:
 1; gunpowder: 7, since gunpowder's other six codes are already spoken for
@@ -439,7 +439,7 @@ blast already relies on, so a host test with impulses off still sees
 gunpowder burn down to fire like any other fuel. A thick pile's blasts
 land one at a time, spread across several frames, rather than one single
 blast on ignition or every qualifying 2x2 going off on the same step -
-guaranteed by `SAND_GUNPOWDER_BLAST_COOLDOWN` (1, board-wide,
+guaranteed by `SAND_GUNPOWDER_BLAST_COOLDOWN` (3, board-wide,
 `sand_reactions.c`), the number of steps the board waits after a
 detonation before another may fire, ticked down once per reactions pass,
 so at most one fires however many 2x2s burn out qualifying together.
