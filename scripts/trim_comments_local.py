@@ -36,7 +36,20 @@ Options:
   --skip-over N   don't even attempt a comment past this length - it needs
                   manual splitting, not compression (default 1500, 0 to
                   disable and attempt everything)
-  --model NAME    ollama model (default qwen2.5-coder:32b-instruct-q4_K_M)
+  --model NAME    ollama model (default qwen2.5-coder:32b-instruct-q4_K_M),
+                  or an OmniRoute combo name when --via omniroute is set
+                  (default docs-update-free)
+  --via WHERE     ollama (default, local) or omniroute (routes to a free
+                  remote model via the `omniroute` CLI - no local GPU
+                  contention, confirmed $0 cost against the docs-update-free
+                  combo). CAUTION: the combo auto-selects a different
+                  underlying model per request, and at least one of them
+                  (gpt-oss:20b) has been observed replying with meta-
+                  commentary ("Your next reply should...") instead of the
+                  rewrite - short enough to pass the length check and easy
+                  to mistake for a real answer. Not used for the sand app's
+                  own trim runs for this reason; review its output harder
+                  than the local model's, or pin a single combo member.
   --retries N     attempts per comment before giving up (default 3)
   --banners       also rewrite file/section header banners (off: their `====`
                   rules do not survive re-wrapping)
@@ -73,6 +86,7 @@ from check_comment_length import code_only, scan  # noqa: E402
 
 DEFAULT_MODEL = "qwen2.5-coder:32b-instruct-q4_K_M"
 DEFAULT_REVIEW_MODEL = "mistral-nemo:latest"
+DEFAULT_COMBO = "docs-update-free"
 DEFAULT_PATHS = ["launcher/main/apps/sand"]
 
 PROMPT = """You shorten source-code comments. Rewrite the comment below so it \
@@ -108,15 +122,25 @@ Reply with nothing but the prose.
 """
 
 
-def ask(model, prompt, log):
+def ask(model, prompt, log, via="ollama"):
+    """`model` is an Ollama model name for via="ollama", or an OmniRoute
+    combo name for via="omniroute" - the two aren't interchangeable, callers
+    pick one deliberately (see --via/--combo)."""
     started = time.time()
     with open(log, "a", encoding="utf-8") as f:
-        f.write(f"\n===== {time.strftime('%H:%M:%S')} =====\n{prompt}\n")
-    r = subprocess.run(
-        ["ollama", "run", model, "--think=false", "--nowordwrap"],
-        input=prompt, capture_output=True, text=True, encoding="utf-8",
-        errors="replace",
-    )
+        f.write(f"\n===== {time.strftime('%H:%M:%S')} ===== [{via}:{model}]\n"
+                f"{prompt}\n")
+    if via == "omniroute":
+        r = subprocess.run(
+            ["omniroute.cmd", "chat", "-m", model, "--no-history", prompt],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+    else:
+        r = subprocess.run(
+            ["ollama", "run", model, "--think=false", "--nowordwrap"],
+            input=prompt, capture_output=True, text=True, encoding="utf-8",
+            errors="replace",
+        )
     out = clean(r.stdout or "")
     with open(log, "a", encoding="utf-8") as f:
         f.write(f"----- {time.time() - started:.1f}s -----\n{out}\n")
@@ -125,7 +149,9 @@ def ask(model, prompt, log):
 
 def clean(raw):
     """Strip the wrapper a chat model puts around the thing you asked for."""
-    text = re.sub(r"```[a-z]*\n?", "", raw)
+    text = re.sub(r"\x1b\[[0-9;]*m", "", raw)  # ANSI colour codes (omniroute)
+    text = re.sub(r"^.*Loaded env from.*\n?", "", text, flags=re.M)
+    text = re.sub(r"```[a-z]*\n?", "", text)
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)
     lines = [ln for ln in text.strip().split("\n")]
     while lines and re.match(r"^(here|sure|okay|certainly|rewritten|shortened)"
@@ -238,7 +264,7 @@ def trim_file(path, opts, log, results):
         original = com.text
         prose = ask(opts["model"],
                     PROMPT.format(limit=opts["limit"], length=com.length,
-                                  text=original), log)
+                                  text=original), log, via=opts["via"])
         wants_delete, prose = split_delete(prose)
 
         if com.own_line and wants_delete:
@@ -254,7 +280,7 @@ def trim_file(path, opts, log, results):
         while prose and len(prose) > opts["limit"] and tries < opts["retries"]:
             prose = ask(opts["model"],
                         RETRY.format(got=len(prose), limit=opts["limit"],
-                                     text=prose), log)
+                                     text=prose), log, via=opts["via"])
             tries += 1
 
         row = {"path": path, "line": com.line, "before": com.length,
@@ -489,8 +515,8 @@ def write_report(path, results, opts, seconds):
 
 
 def main(argv):
-    opts = {"limit": 300, "ceiling": 500, "model": DEFAULT_MODEL, "retries": 3,
-            "banners": False, "max": 0, "dry_run": False,
+    opts = {"limit": 300, "ceiling": 500, "model": None, "via": "ollama",
+            "retries": 3, "banners": False, "max": 0, "dry_run": False,
             "review_model": DEFAULT_REVIEW_MODEL, "skip_over": 1500}
     report = "scripts/results/comment-trim.md"
     pairs = "scripts/results/comment-trim.json"
@@ -504,6 +530,12 @@ def main(argv):
             opts["ceiling"] = int(next(it))
         elif arg == "--skip-over":
             opts["skip_over"] = int(next(it))
+        elif arg == "--via":
+            opts["via"] = next(it)
+            if opts["via"] not in ("ollama", "omniroute"):
+                print(f"unknown --via: {opts['via']!r} (want ollama or "
+                      f"omniroute)", file=sys.stderr)
+                return 2
         elif arg == "--model":
             opts["model"] = next(it)
         elif arg == "--retries":
@@ -529,6 +561,10 @@ def main(argv):
             return 0
         else:
             paths.append(arg)
+
+    if opts["model"] is None:
+        opts["model"] = DEFAULT_COMBO if opts["via"] == "omniroute" \
+            else DEFAULT_MODEL
 
     if review_only or packet:
         return run_review(pairs, packet, opts, review_only)
