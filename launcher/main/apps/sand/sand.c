@@ -176,7 +176,8 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->sweep_flip = false;
     s->liquid_flip = false;
     s->gas_flip   = false;
-    s->fuse_blasts_this_step = 0;
+    s->fuse_blast_wait = 0;
+    s->fuse_cooldown   = -1;   /* see sand_set_fuse_cooldown() */
     /* The THIRD copy of this list, and the one that made the other two
      * hard to see. Four of the five flags were reset here by hand and
      * may_have_temperature was not, so a sand_t reused across tests
@@ -1427,6 +1428,11 @@ void sand_set_lava_cooloff(sand_t *s, int chance)
     } else {
         s->lava_cooloff = chance > 255 ? 255 : chance;
     }
+}
+
+void sand_set_fuse_cooldown(sand_t *s, int steps)
+{
+    s->fuse_cooldown = (steps < 0) ? -1 : (steps > 255 ? 255 : steps);
 }
 
 void sand_set_lava_burst(sand_t *s, int chance)

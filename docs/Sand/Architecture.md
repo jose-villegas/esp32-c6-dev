@@ -151,10 +151,13 @@ presents at burn-out.
 
 A big pile's blasts still land one at a time across several frames rather
 than all landing on the same step, and the mechanism that actually
-guarantees that is `SAND_GUNPOWDER_BLASTS_PER_STEP` (1, board-wide,
-`sand_reactions.c`): a hard cap checked before `sand_explode()` is ever
-called, reset once per reactions pass, so at most one detonation fires no
-matter how many 2x2s burn out qualifying in the same step. Each blast's
+guarantees that is `SAND_GUNPOWDER_BLAST_COOLDOWN` (1, board-wide,
+`sand_reactions.c`): after a detonation the board waits that many steps
+before another may fire, ticked down once per reactions pass, so at most
+one detonation fires no matter how many 2x2s burn out qualifying in the
+same step. Raising it spaces a pile's blasts further apart in time
+without changing how big any one of them is, and 0 lifts the limit;
+`sand_set_fuse_cooldown()` overrides it at runtime for tests. Each blast's
 core and thrown grains removing the cells around it from every 2x2 they
 were part of helps too - a corner already consumed by an earlier blast
 this same step cannot also qualify a second one - but that is a secondary

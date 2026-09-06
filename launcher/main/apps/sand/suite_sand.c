@@ -16769,12 +16769,12 @@ static void test_a_detonating_two_by_two_leaves_no_lit_gunpowder_behind(void)
         "the blast step anywhere on the board");
 }
 
-/* SAND_GUNPOWDER_BLASTS_PER_STEP (sand_reactions.c) caps detonations at
- * one per step, board-wide - a big pile goes off one blast at a time
+/* SAND_GUNPOWDER_BLAST_COOLDOWN (sand_reactions.c) caps detonations at
+ * one per step at its shipped value of 1, board-wide - a big pile goes off one blast at a time
  * rather than however many of its 2x2s happen to qualify together. Two
  * lit 2x2s, more than SAND_GUNPOWDER_BLAST_RADIUS apart (so neither
  * blast can physically reach the other's room - the only thing linking
- * them is the shared s->fuse_blasts_this_step counter), forced to burn
+ * them is the shared s->fuse_blast_wait cooldown), forced to burn
  * out on the SAME step (decay 255 - a near-certain single-step burn-out
  * for every one of the eight lit cells). Scan order (top-to-bottom,
  * left-to-right - this file's own top comment) reaches the first
@@ -16853,6 +16853,80 @@ static void test_fuse_blasts_are_capped_at_one_per_step(void)
         "exactly ONE of the two rooms' walls must have been breached - "
         "the cap must have let exactly one of the two qualifying 2x2s "
         "through this step, not both and not neither");
+}
+
+/* And the cooldown is a WAIT, not merely a per-step cap: with
+ * sand_set_fuse_cooldown() raised to 3, the second of two independent
+ * lit 2x2s must still be waiting a step later, where at the shipped
+ * value of 1 it would already have gone off. Same two-room scene as
+ * above (24 cells apart, so neither blast can reach the other's room);
+ * the only difference is the wait, which is the whole claim.
+ *
+ * Group B is left UNLIT for the first step and lit afterwards, so its
+ * burn-out cannot race group A's inside the same pass - what is under
+ * test is whether the board is still refusing on a LATER step, not the
+ * within-step ordering test_fuse_blasts_are_capped_at_one_per_step
+ * already pins. */
+static void test_a_longer_fuse_cooldown_delays_the_next_blast(void)
+{
+    wide_cells = malloc((size_t)WIDE_W * WIDE_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(wide_cells,
+        "cooldown grid must fit in what the framebuffer leaves");
+    sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 5u);
+    sand_set_decay(&wide, 255);
+    sand_set_fuse_cooldown(&wide, 3);
+
+    impulse_t *buf = malloc((size_t)(WIDE_W * WIDE_H) * sizeof *buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(buf,
+        "cooldown impulse queue must fit in what the framebuffer leaves");
+    sand_enable_impulses(&wide, buf, WIDE_W * WIDE_H);
+
+    for (int x = 0; x < WIDE_W; x++) {
+        sand_set(&wide, x, 4, STONE);
+    }
+    sand_set(&wide, 1, 2, STONE);
+    sand_set(&wide, 1, 3, STONE);
+    sand_set(&wide, 4, 2, STONE);
+    sand_set(&wide, 4, 3, STONE);
+    sand_set(&wide, 2, 2, GUNPOWDER_LIT_CELL);
+    sand_set(&wide, 3, 2, GUNPOWDER_LIT_CELL);
+    sand_set(&wide, 2, 3, GUNPOWDER_LIT_CELL);
+    sand_set(&wide, 3, 3, GUNPOWDER_LIT_CELL);
+    sand_set(&wide, 25, 2, STONE);
+    sand_set(&wide, 25, 3, STONE);
+    sand_set(&wide, 28, 2, STONE);
+    sand_set(&wide, 28, 3, STONE);
+
+    sand_step(&wide, 0, 1000, 0);   /* group A detonates, wait := 3 */
+
+    const bool a_breached = CELL_MATERIAL(sand_at(&wide, 1, 2)) != MAT_STONE;
+
+    sand_set(&wide, 26, 2, GUNPOWDER_LIT_CELL);
+    sand_set(&wide, 27, 2, GUNPOWDER_LIT_CELL);
+    sand_set(&wide, 26, 3, GUNPOWDER_LIT_CELL);
+    sand_set(&wide, 27, 3, GUNPOWDER_LIT_CELL);
+
+    sand_step(&wide, 0, 1000, 0);   /* wait ticks 3 -> 2: still refused */
+
+    const bool b_gone = !cell_is_gunpowder(sand_at(&wide, 26, 2)) &&
+                        !cell_is_gunpowder(sand_at(&wide, 27, 2)) &&
+                        !cell_is_gunpowder(sand_at(&wide, 26, 3)) &&
+                        !cell_is_gunpowder(sand_at(&wide, 27, 3));
+    const uint8_t b_wall = CELL_MATERIAL(sand_at(&wide, 25, 2));
+
+    free(buf);
+    free(wide_cells);
+
+    TEST_ASSERT_TRUE_MESSAGE(a_breached,
+        "setup: the first 2x2 must detonate on its own step, or there is "
+        "no cooldown running to test");
+    TEST_ASSERT_TRUE_MESSAGE(b_gone,
+        "setup: the second 2x2 must burn out on the step after, so the "
+        "refusal below is the cooldown's doing and not a fuse still lit");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STONE, b_wall,
+        "a burn-out inside the cooldown must fall through to plain fire, "
+        "leaving its room's wall intact - at the shipped cooldown of 1 "
+        "this same 2x2 would have breached it");
 }
 
 /* Replaces the old board-edge claim (an edge cell CAN now be the corner
@@ -31689,6 +31763,7 @@ void run_sand_suite(void)
     RUN_TEST(test_a_lit_two_by_two_of_gunpowder_detonates);
     RUN_TEST(test_a_detonating_two_by_two_leaves_no_lit_gunpowder_behind);
     RUN_TEST(test_fuse_blasts_are_capped_at_one_per_step);
+    RUN_TEST(test_a_longer_fuse_cooldown_delays_the_next_blast);
     RUN_TEST(test_a_one_wide_lit_trail_never_detonates);
     RUN_TEST(test_a_buried_lit_gunpowder_cell_is_not_smothered);
     RUN_TEST(test_water_quenches_lit_gunpowder_to_soaked);
