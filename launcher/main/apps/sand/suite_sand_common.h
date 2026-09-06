@@ -74,6 +74,15 @@ extern uint8_t sleep_blocks[BLOCK_COLS * BLOCK_ROWS];
 extern uint8_t *wide_cells;
 extern sand_t   wide;
 
+/* A deliberately over-long grid, for reach-cap tests that cannot share
+ * `wide`. CONDUCT_REACH_TEST mirrors sand_reactions.c's own
+ * CONDUCT_REACH, which is private to that file; if the two ever drift
+ * apart the tests that use this stop proving anything, so keep them
+ * together. */
+#define CONDUCT_REACH_TEST 32
+#define CAP_W (CONDUCT_REACH_TEST + 16)
+#define CAP_H 8
+
 /* Material shorthand. Variants are chosen deliberately, not just "8" -
  * see each one's own comment in suite_sand_common.c for what a careless
  * value there broke historically (stone/glass temperature, wood's burn
