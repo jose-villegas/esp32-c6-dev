@@ -417,7 +417,7 @@ cell's **lit** state, in place of the plain `MAT_FIRE` a less flammable
 fuel would get. A lit cell is a heat source in its own right, exactly like
 a burning log: it ignites neighbouring dry powder (so a trail burns along,
 cell by cell), it can boil adjacent water, and it counts down its own
-`burn_decay` (8, roughly thirty steps of fuse) every step via the same
+`burn_decay` (16, roughly sixteen steps of fuse) every step via the same
 `tick_decay_at()` wood already uses - generalised by `reaction_t.lit_from`,
 the first variant code a `burn_decay` material treats as "burning" (wood:
 1; gunpowder: 7, since gunpowder's other six codes are already spoken for
@@ -430,7 +430,7 @@ code, or it would simply relight from an adjacent lit neighbour on the
 very next step.
 
 Only when a lit cell **burns out** - its countdown reaching `lit_from` -
-does the blast radius (`reaction_t.explodes`, 16 cells) get read at all:
+does the blast radius (`reaction_t.explodes`, 20 cells) get read at all:
 if it is one corner of a 2x2 whose other three cells (the board edge
 counts as not-lit) are also lit gunpowder, and the impulse buffer is
 live, it detonates (`sand_explode()`); otherwise it simply becomes an
