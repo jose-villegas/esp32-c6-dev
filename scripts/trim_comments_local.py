@@ -185,6 +185,12 @@ def wrap_width(source):
     return min(78, max(widths) if widths else 78)
 
 
+def current_head():
+    r = subprocess.run(["git", "rev-parse", "HEAD"],
+                        capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
 def whole_line_span(comment, source):
     """The comment's own lines, leading indentation and trailing newline
     included, so removing it leaves no blank line behind."""
@@ -256,7 +262,19 @@ def trim_file(path, opts, log, results):
     if code_only(source) != code_only(out):
         results["rejected"].append(path)
         return 0
+
     if not opts["dry_run"]:
+        # Something else checking out a different branch in this same
+        # worktree mid-run has actually happened here once - see esp32c6-90z.
+        # A run this long has to notice before it writes over whatever that
+        # left behind, not after.
+        now = current_head()
+        if opts["expected_head"] is not None and now != opts["expected_head"]:
+            print(f"\nABORTING: HEAD moved from {opts['expected_head']} to "
+                  f"{now} while this run was in progress - something else "
+                  f"checked out a different branch in this worktree. "
+                  f"Refusing to write {path}.", file=sys.stderr)
+            sys.exit(1)
         with open(path, "w", encoding="utf-8", newline="") as f:
             f.write(out)
     return len(edits)
@@ -492,6 +510,8 @@ def main(argv):
     log = "scripts/results/comment-trim.server.log"
     os.makedirs(os.path.dirname(log), exist_ok=True)
     open(log, "w", encoding="utf-8").close()
+
+    opts["expected_head"] = current_head()
 
     results = {"trimmed": [], "unresolved": [], "rejected": [], "attempted": 0}
     started = time.time()
