@@ -1470,15 +1470,14 @@ void sand_host_probe_run_water_over_lava(void)
  * claims to. See GUNPOWDER_BASIN_MEASURED_STEPS's own comment
  * (suite_sand_scenes.c) for the timeline that window came from. */
 
-/* THE ASSERTION BELOW IS NOT A BUDGET - nobody has run this on a
- * device yet. A loose PROVISIONAL ceiling, this file's own convention
- * for a first-run scene - see test_the_water_over_lava_scene_fits_in_
- * the_frame_budget's comment for two invented figures that were wrong. */
+/* MEASURED 31,399 us per step on device, 2026-09-06, first clean run of
+ * this row (capture_ref_gunpowder-basin-benchmark_20260906_213221.md).
+ * Budget is that x 0.9 = 28,259, rounded DOWN to 28,200 so the target is
+ * never looser than the convention. */
 
-/* REPLACE THIS with a real figure the first time it runs on a device:
- * measured * 0.9, rounded - the same reduction-target method every
- * other row in this section uses - and say what was measured, not a
- * number chosen to keep this row passing. */
+/* SO THIS ROW FAILS BY DESIGN, like every other budget in this section:
+ * a reduction target, not a regression guard. Re-peg only from a fresh
+ * capture, never to make it green. */
 static void test_the_gunpowder_basin_scene_fits_in_the_frame_budget(void)
 {
     uint8_t   *big      = malloc((size_t)REAL_W * REAL_H);
@@ -1512,12 +1511,12 @@ static void test_the_gunpowder_basin_scene_fits_in_the_frame_budget(void)
     free(blocks);
     free(impulses);
 
-    TEST_ASSERT_LESS_THAN_MESSAGE(500000, (int)per_step,
-        "PROVISIONAL ceiling, not yet measured on a device - see this "
-        "test's own comment. Once measured this row becomes measured x "
-        "0.9, rounded, the same reduction-target method every other "
-        "row in this section uses - not a number chosen to keep this "
-        "row passing");
+    TEST_ASSERT_LESS_THAN_MESSAGE(28200, (int)per_step,
+        "a chain detonation in a brush-drawn stone vessel, with the "
+        "aftermath reaching fuel outside it, should cost less per step "
+        "than the 31,399us first measured on 2026-09-06 - this is a "
+        "reduction target at measured x 0.9, so failing means the work "
+        "is not done yet, not that something broke");
 }
 
 #ifdef SAND_HOST_PROBE
