@@ -1615,12 +1615,10 @@ static void test_the_right_extended_materials_are_grained(void)
     }
 }
 
-/* Metal's body, its lines and their crossings must all differ - the same
- * requirement glass's own painted-the-way-it-should-be check makes, just
- * asserted here instead since metal is extended rather than a top-level
- * MAT_* the other test's loop reaches (see MAT_COUNT <= MAT_EXTENDED in
- * material.h). Equal ones would paint a flat block and the shine would
- * never be seen. */
+/* Metal's body, lines and crossings must all differ - asserted here since
+ * metal is extended, not a top-level MAT_* the painted-the-way-it-should-be
+ * loop reaches (MAT_COUNT <= MAT_EXTENDED, material.h). Equal ones paint a
+ * flat block and the shine is never seen. */
 static void test_metal_hatched_body_lines_and_shine_differ(void)
 {
     gfx_color_t col[3] = { 0, 0, 0 };
@@ -1632,11 +1630,10 @@ static void test_metal_hatched_body_lines_and_shine_differ(void)
         "vanishes");
 }
 
-/* Metal's lines and shine do NOT vary from cell to cell, same reasoning as
- * test_the_shine_does_not_vary_between_cells for glass: they are light
+/* Metal's lines and shine do NOT vary from cell to cell: they are light
  * landing on the surface, not the surface itself, and a highlight that
- * wobbled per cell would look chewed rather than reflective. Unlike
- * glass's version this has no variant loop to run - metal has none. */
+ * wobbled per cell would look chewed rather than reflective. No variant
+ * loop to run here - metal has none. */
 static void test_metal_shine_does_not_vary_between_cells(void)
 {
     gfx_color_t a[3], b[3];
