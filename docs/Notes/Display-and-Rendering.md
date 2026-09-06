@@ -650,7 +650,7 @@ free of ESP-IDF by design, and `send_one_row()`'s choice is pure logic
 over its state, so the whole decision replays on a host: include the
 real header, reimplement only the twelve-line choice with the two
 `draw_bitmap()` calls replaced by counters, and drive it with
-`suite_sand.c`'s own scenes, its own `sand_step()` and its own
+`suite_sand_scenes.c`'s own scenes, its own `sand_step()` and its own
 `mirror_app_sand_marking()`. It reproduces the device's strip-send
 counters exactly - 76/13, 100/4, 70/0 - which is the only reason to
 trust anything it says about values nobody has flashed.
@@ -734,7 +734,7 @@ bands come to **18,147 us**, not 7 x 3,405 = 23,835: `send_full_row()`
 queues its transfer without waiting and `gfx_present()` drains them all
 at the end, so in a real frame the bands pipeline and an isolated one
 has nothing to overlap with. `suite_gfx.c`'s ratio tests measure the
-un-pipelined price; `suite_sand.c`'s three present-cost tests measure
+un-pipelined price; `suite_sand_perf.c`'s three present-cost tests measure
 the pipelined one. Both are right, and multiplying one by the band
 count does not produce the other.
 

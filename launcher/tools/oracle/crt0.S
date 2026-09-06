@@ -6,8 +6,8 @@
  * OpenSBI, no reset vector to satisfy. So this has exactly three jobs: give
  * the C code a stack, zero .bss (the C standard promises zero-initialised
  * statics and nothing else here will do it), and call main(). Nothing here
- * runs constructors (.init_array) - suite_sand.c's own SUITE_REGISTER
- * constructors would rely on that, but oracle_main.c never calls
+ * runs constructors (.init_array) - each suite_sand_*.c file's own
+ * SUITE_REGISTER constructor would rely on that, but oracle_main.c never calls
  * suites_run_all()/the registry at all, so skipping it is a no-op, not a
  * simplification with a hidden cost. See virt.ld for where _bss_start,
  * _bss_end and _stack_top come from.

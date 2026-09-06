@@ -353,8 +353,9 @@ typedef enum {
 /* How many steps the cullet colour cycle has - see cullet_cycle[] and
  * material_colours()'s own MAT_SAND case, both material.c, for the array
  * this sizes and the arithmetic that walks it. Public (not local to
- * material.c) because host tests need to name it too - see suite_sand.c's
- * own cullet phase tests - rather than re-deriving 16 as a magic number
+ * material.c) because host tests need to name it too - see
+ * suite_sand_tone.c's own cullet phase tests - rather than re-deriving 16
+ * as a magic number
  * that could silently drift from the real constant on a retune.
  *
  * A power of two, so material_colours() wraps the index with a mask rather
@@ -1037,7 +1038,7 @@ typedef struct {
      * CELL_MOISTURE()/CELL_WITH_MOISTURE() caller already assumes, so this
      * table and those macros MUST agree for dirt - see
      * test_dirt_moisture_macros_and_codec_helpers_agree_on_every_byte
-     * (suite_sand.c), which is what proves it.
+     * (suite_sand_roots.c), which is what proves it.
      *
      * A second material with `dries != 0` needs its own pair here rather
      * than reusing dirt's - gunpowder's codec is three dry tones plus four
@@ -1509,7 +1510,7 @@ static inline bool cell_is_extended(cell_t c)
  * and gunpowder is the one extended-range byte that now reads KIND_POWDER
  * and is emitter-eligible with them. See
  * test_the_extended_row_being_static_is_what_emitter_eligibility_leans_on in
- * suite_sand.c, extended to pin the new boundary. */
+ * suite_sand_roots.c, extended to pin the new boundary. */
 static inline bool material_can_emit(cell_t c)
 {
     const uint8_t kind = material_of(c)->kind;
@@ -1591,7 +1592,7 @@ static inline bool cell_is_burning(cell_t c)
  * which makes these byte-identical to CELL_MOISTURE()/CELL_WITH_MOISTURE()
  * for every code a dirt cell can hold - see
  * test_dirt_moisture_macros_and_codec_helpers_agree_on_every_byte
- * (suite_sand.c), which pins that equivalence. The dirt-only macros stay,
+ * (suite_sand_roots.c), which pins that equivalence. The dirt-only macros stay,
  * documented as dirt's own fixed instance of this codec, because 123 tests
  * already spell it that way; the ENGINE (sand_reactions.c, sand_priv.h,
  * sand.c) reads through these instead, so a second material with `dries !=
@@ -1795,7 +1796,7 @@ typedef enum {
  * are for. Nothing else reads them: a diagonal alone, with every cardinal
  * neighbour occupied, must NOT read as an edge, which is exactly the trap
  * MATERIAL_EDGE_CARDINAL exists to avoid (see its own comment, and
- * test_a_diagonal_neighbour_alone_is_not_an_edge in suite_sand.c, which
+ * test_a_diagonal_neighbour_alone_is_not_an_edge in suite_sand_foam.c, which
  * pins it). */
 #define MATERIAL_EDGE_LEFT       (1u << 0)
 #define MATERIAL_EDGE_RIGHT      (1u << 1)

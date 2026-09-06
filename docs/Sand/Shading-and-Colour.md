@@ -384,8 +384,8 @@ and nothing about this file's structure forced that to happen.
 
 **The test mirrors had the same disease, one level up.** The host-side
 mirrors of this mechanism (`mirror_local_depth_column()`/
-`mirror_local_depth_row()`, `suite_sand.c`) still implemented the *dead*
-array's naive semantics - immediate reset on any disagreement, no
+`mirror_local_depth_row()`, `suite_sand_liquid_depth.c`) still implemented
+the *dead* array's naive semantics - immediate reset on any disagreement, no
 hold-then-commit, saturating at a byte's own 255 rather than
 `MATERIAL_LIQUID_DEPTH_BAND` - because they were written against the
 mechanism that existed when the test was first added and were never revisited
@@ -509,7 +509,7 @@ lightness - the entire point of cullet is to read as ground glass catching
 the light, not as four materials taking turns, so a retune that let the
 cycle wander toward anything saturated would defeat the feature even while
 technically shipping it. `test_cullet_stays_pale_at_every_phase`
-(suite_sand.c) exists specifically to catch that kind of drift, floored
+(suite_sand_tone.c) exists specifically to catch that kind of drift, floored
 against the darkest DUNE shade's own luminance rather than a fixed number,
 so it stays meaningful if the dune ramp itself is ever retuned.
 
@@ -1213,8 +1213,8 @@ screen-fixed points at dirty-row staleness and transport.
   column in order - which hides every sparsity bug there is. Give the
   scene a free surface and a trickle, then check the actual number of rows
   repainted on a non-wake frame before trusting a null result.
-- **`panel_luminance()`** (`suite_sand.c`) is the Rec.601 luminance helper
-  already used throughout the suite - reuse it rather than writing a
+- **`panel_luminance()`** (`suite_sand_common.c`) is the Rec.601 luminance
+  helper already used throughout the suite - reuse it rather than writing a
   second one.
 - **`app_sand.c` is not linked into the host suite** (`run_tests.sh`
   deliberately excludes every `app_*.c`) - anything living only in

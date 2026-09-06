@@ -34,7 +34,7 @@ It needs an ELF, an ISA (`rv32imac_zicsr_zifencei`/`ilp32` — the device's
 own, from the device profile), and somewhere to put a stack.
 
 **This spike proves the bring-up. It builds.** `build_oracle.sh <scene>`
-cross-compiles the portable sand sources, `suite_sand.c`'s
+cross-compiles the portable sand sources, the `suite_sand_*.c` files'
 `SAND_HOST_PROBE` scenes, Unity, and a hand-written bare-metal floor
 (`crt0.S` + `virt.ld` + `console.c`) into a freestanding ELF that links
 clean against this toolchain's newlib, with only the ISA/codegen flags the
@@ -113,7 +113,7 @@ would actually matter for this project's own history (attempt 19).
   POSIX `<time.h>` — neither exists freestanding, so it could not be reused
   as-is, per this spike's own instructions. Returning 0 is not a shortcut
   taken lightly: every `esp_timer_get_time()` call site inside
-  `suite_sand.c`'s `DEVICE_BUILD` block is a `FULL_STEP_BUDGET_US`-style
+  `suite_sand_perf.c`'s `DEVICE_BUILD` block is a `FULL_STEP_BUDGET_US`-style
   per-step budget assertion (`TEST_ASSERT_LESS_THAN_MESSAGE(budget,
   per_step, ...)`) — a constant 0 makes every one of them trivially true
   instead of failing on a number that was never meaningful under an

@@ -50,7 +50,7 @@
 #
 # SPEC FILE FORMAT
 #
-#   SUITE: launcher/main/apps/sand/suite_sand.c
+#   SUITE: launcher/main/apps/sand/suite_sand_reaction_encoding.c
 #   NAME: water_evaporates_when_forced
 #
 #   === CONTEXT ===

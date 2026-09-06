@@ -77,8 +77,8 @@ six-pair table, and:
 three caps have now been measured twice, and the second pass did it
 without hardware at all: `gfx_dirty.h` is header-only and free of
 ESP-IDF by design, and `send_one_row()`'s choice is pure logic over its
-state, so the whole decision replays on a host driven by `suite_sand.c`'s
-own scenes - and that replay reproduces the device's strip-send counters
+state, so the whole decision replays on a host driven by
+`suite_sand_scenes.c`'s own scenes - and that replay reproduces the device's strip-send counters
 exactly. `ROW_MAX_RUNS` x `LEAF_REFINE_MAX_RUNS` came back **byte-
 identical across fifteen combinations** (both are structurally incapable
 of mattering to real scenes, for reasons that page gives), and
