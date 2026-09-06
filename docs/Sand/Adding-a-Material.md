@@ -377,6 +377,21 @@ SHADES(lo,hi)"]
    inert to heat, from the same missing row. See "An omission is a
    decision" below.
 
+   **If your stage is gated on the cell's material IDENTITY rather than
+   a `reaction_t` field, it has to be threaded into
+   `reaction_first_stage()` (`sand_priv.h`) by hand, or the dispatcher
+   never reaches it.** `step_one_reacting_row()`'s computed-goto
+   dispatch (`sand_reactions.c`) skips straight to the first stage a row
+   could ever match, decided once per pass from each row's own fields -
+   a stage that instead checks `CELL_MATERIAL(c) == MAT_YOURS` directly,
+   the way today's acid-rain stage checks for `MAT_GAS`/`MAT_STEAM`, is
+   invisible to that field-only scan unless its own boolean is added as
+   a `reaction_first_stage()` parameter and passed in from
+   `sand_step_reactions()`'s table rebuild, mirroring
+   `is_acid_rain_material`. Get this wrong and the failure is silent: no
+   test goes red, the material simply never reacts, because dispatch
+   jumps clean past the stage that would have handled it.
+
    See `material.h`'s own comment on `reaction_t` for why this is a
    second table rather than more fields on `materials[]` - the short
    version is the next section.

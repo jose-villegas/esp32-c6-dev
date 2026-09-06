@@ -4956,6 +4956,10 @@ step_one_acid_rain_cell(sand_t* s, int x, int y, int w, int h) {
  * and today walk all fifteen to find that out; this jumps them straight
  * to the end. */
 
+/* The RSTAGE_* enum and reaction_first_stage() itself live in
+ * sand_priv.h, not here - a host test needs to call
+ * reaction_first_stage() directly to pin it against the walk below. */
+
 /* Two tables, not one: the key is NOT the material nibble - root, leaf,
  * plant, ice and gunpowder share MAT_EXTENDED but carry sixteen
  * different rows apiece. material_first_stage[] keys CELL_MATERIAL(c);
@@ -4966,87 +4970,8 @@ step_one_acid_rain_cell(sand_t* s, int x, int y, int w, int h) {
  * that rebuild's comment for the full reasoning: attempt 12's per-CELL
  * mask went stale against a cell created mid-pass; a per-PASS rebuild
  * from the live tables does not. */
-enum {
-    RSTAGE_BURN_ALWAYS,
-    RSTAGE_BURN_CHECK,
-    RSTAGE_DISSOLVE,
-    RSTAGE_ACID_RAIN,
-    RSTAGE_CONDENSE,
-    RSTAGE_HEAT_RAMP,
-    RSTAGE_CHILL,
-    RSTAGE_WARM,
-    RSTAGE_SOAK_DRY,
-    RSTAGE_FALL,
-    RSTAGE_WITHER,
-    RSTAGE_DRINK,
-    RSTAGE_ROOT,
-    RSTAGE_GROW,
-    RSTAGE_SPROUT,
-    RSTAGE_BUD,
-    RSTAGE_END,
-    RSTAGE_COUNT
-};
-
 static uint8_t material_first_stage[MATERIAL_MAX];
 static uint8_t extended_first_stage[MATERIAL_EXTENDED_CODES];
-
-/* The first stage a row could ever take, in the walk's own fixed order -
- * from the row's fields alone, nothing per-cell. `is_acid_rain_material`
- * gates the one stage keyed by material identity, not a reaction_t field
- * (MAT_GAS/MAT_STEAM below): true only for those two rows, never for an
- * extended one. */
-static uint8_t
-reaction_first_stage(const reaction_t* r, bool is_acid_rain_material) {
-    if (r->burns != 0) {
-        return RSTAGE_BURN_ALWAYS;
-    }
-    if (r->burn_decay != 0) {
-        return RSTAGE_BURN_CHECK;
-    }
-    if (r->dissolves != 0) {
-        return RSTAGE_DISSOLVE;
-    }
-    if (is_acid_rain_material) {
-        return RSTAGE_ACID_RAIN;
-    }
-    if (r->condenses != 0) {
-        return RSTAGE_CONDENSE;
-    }
-    if (r->heat_ramp != 0) {
-        return RSTAGE_HEAT_RAMP;
-    }
-    if (r->chills != 0) {
-        return RSTAGE_CHILL;
-    }
-    if (r->warms != 0) {
-        return RSTAGE_WARM;
-    }
-    if (r->soaks != 0 || r->dries != 0) {
-        return RSTAGE_SOAK_DRY;
-    }
-    if (r->falls != 0) {
-        return RSTAGE_FALL;
-    }
-    if (r->withers != 0) {
-        return RSTAGE_WITHER;
-    }
-    if (r->drinks != 0) {
-        return RSTAGE_DRINK;
-    }
-    if (r->roots != 0) {
-        return RSTAGE_ROOT;
-    }
-    if (r->grows != 0) {
-        return RSTAGE_GROW;
-    }
-    if (r->sprouts != 0) {
-        return RSTAGE_SPROUT;
-    }
-    if (r->buds != 0) {
-        return RSTAGE_BUD;
-    }
-    return RSTAGE_END;
-}
 
 static unsigned
 step_one_reacting_row(sand_t* s, int y, int w, int h) {
@@ -5057,10 +4982,10 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
      * function. Everything from the landed label on is the unmodified
      * stage walk this function has always run. */
     static void* const stage_labels[RSTAGE_COUNT] = {
-        &&stage_burn_always, &&stage_burn_check, &&stage_dissolve, &&stage_acid_rain, &&stage_condense,
-        &&stage_heat_ramp,   &&stage_chill,      &&stage_warm,     &&stage_soak_dry,  &&stage_fall,
-        &&stage_wither,      &&stage_drink,      &&stage_root,     &&stage_grow,      &&stage_sprout,
-        &&stage_bud,         &&stage_end,
+        &&stage_burn_any,  &&stage_burn_always, &&stage_burn_check, &&stage_dissolve, &&stage_acid_rain,
+        &&stage_condense,  &&stage_heat_ramp,   &&stage_chill,      &&stage_warm,     &&stage_soak_dry,
+        &&stage_fall,      &&stage_wither,      &&stage_drink,      &&stage_root,     &&stage_grow,
+        &&stage_sprout,    &&stage_bud,         &&stage_end,
     };
 
     unsigned found = 0;
@@ -5095,6 +5020,17 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
         /* burns == 0 here, or dispatch would have landed above - so
          * cell_is_burning()'s own OR collapses to its second half. */
         if (cell_code(c) >= r->lit_from) {
+            found |= FOUND_BURNING;
+            step_one_burning_cell(s, row, x, y, w, h);
+            continue;
+        }
+
+    stage_burn_any:
+        /* The safe default (RSTAGE_BURN_ANY == 0) lands here rather than
+         * on stage_burn_always/stage_burn_check above - both skip half of
+         * cell_is_burning()'s own test, and a slot that fell back from
+         * one of those would misreport instead of just walking on. */
+        if (cell_is_burning(c)) {
             found |= FOUND_BURNING;
             step_one_burning_cell(s, row, x, y, w, h);
             continue;

@@ -113,6 +113,116 @@ static void test_wood_burning_state_is_byte_identical_under_lit_from(void)
     }
 }
 
+/* --- reaction dispatch: the table must not skip past the ladder ------- */
+
+/* Written independently of reaction_first_stage() (sand_priv.h), on
+ * purpose - if a future edit changes the stage order in one place and
+ * not the other, this copy is what notices. Same field order the
+ * ladder in step_one_reacting_row() (sand_reactions.c) walks. */
+static int
+reaction_ladder_reference_stage(const reaction_t *r, bool is_acid_rain_material)
+{
+    if (r->burns != 0) {
+        return RSTAGE_BURN_ALWAYS;
+    }
+    if (r->burn_decay != 0) {
+        return RSTAGE_BURN_CHECK;
+    }
+    if (r->dissolves != 0) {
+        return RSTAGE_DISSOLVE;
+    }
+    if (is_acid_rain_material) {
+        return RSTAGE_ACID_RAIN;
+    }
+    if (r->condenses != 0) {
+        return RSTAGE_CONDENSE;
+    }
+    if (r->heat_ramp != 0) {
+        return RSTAGE_HEAT_RAMP;
+    }
+    if (r->chills != 0) {
+        return RSTAGE_CHILL;
+    }
+    if (r->warms != 0) {
+        return RSTAGE_WARM;
+    }
+    if (r->soaks != 0 || r->dries != 0) {
+        return RSTAGE_SOAK_DRY;
+    }
+    if (r->falls != 0) {
+        return RSTAGE_FALL;
+    }
+    if (r->withers != 0) {
+        return RSTAGE_WITHER;
+    }
+    if (r->drinks != 0) {
+        return RSTAGE_DRINK;
+    }
+    if (r->roots != 0) {
+        return RSTAGE_ROOT;
+    }
+    if (r->grows != 0) {
+        return RSTAGE_GROW;
+    }
+    if (r->sprouts != 0) {
+        return RSTAGE_SPROUT;
+    }
+    if (r->buds != 0) {
+        return RSTAGE_BUD;
+    }
+    return RSTAGE_END;
+}
+
+/* Dispatching EARLIER than the reference is safe - dead field checks get
+ * walked for nothing. Dispatching LATER silently drops behaviour, which
+ * is what this asserts against, for every row in both tables. */
+static void test_reaction_first_stage_never_dispatches_later_than_the_ladder(void)
+{
+    for (int m = 0; m < MAT_COUNT; m++) {
+        const reaction_t *r = &reactions[m];
+        const bool is_acid_rain = (m == MAT_GAS || m == MAT_STEAM);
+        const int actual = reaction_first_stage(r, is_acid_rain);
+        const int reference = reaction_ladder_reference_stage(r, is_acid_rain);
+        char why[96];
+        snprintf(why, sizeof why, "reactions[%s]",
+            material_by_id((material_id_t)m)->name);
+        TEST_ASSERT_LESS_OR_EQUAL_INT_MESSAGE(reference, actual, why);
+    }
+    for (int k = 0; k < MATERIAL_EXTENDED_CODES; k++) {
+        const reaction_t *r = &extended_reactions[k];
+        const int actual = reaction_first_stage(r, false);
+        const int reference = reaction_ladder_reference_stage(r, false);
+        char why[64];
+        snprintf(why, sizeof why, "extended_reactions[%d]", k);
+        TEST_ASSERT_LESS_OR_EQUAL_INT_MESSAGE(reference, actual, why);
+    }
+}
+
+/* Acid-rain is gated on material IDENTITY, not a field -
+ * reaction_first_stage() only sees it via the hand-threaded
+ * is_acid_rain_material flag. Dropping the flag here stands in for a
+ * future identity gate that forgets to thread it. */
+static void test_dropping_the_acid_rain_identity_flag_dispatches_late(void)
+{
+    TEST_ASSERT_EQUAL_MESSAGE(RSTAGE_ACID_RAIN,
+        reaction_first_stage(&reactions[MAT_GAS], true),
+        "gas, correctly flagged, must land on the acid-rain stage");
+    TEST_ASSERT_EQUAL_MESSAGE(RSTAGE_ACID_RAIN,
+        reaction_first_stage(&reactions[MAT_STEAM], true),
+        "steam, correctly flagged, must land on the acid-rain stage");
+
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(RSTAGE_ACID_RAIN,
+        reaction_first_stage(&reactions[MAT_GAS], false),
+        "gas with no identity flag has no field to fall back on and "
+        "must land LATE - the flag, not a field, is what makes this "
+        "stage reachable at all");
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(RSTAGE_ACID_RAIN,
+        reaction_first_stage(&reactions[MAT_STEAM], false),
+        "steam with no identity flag falls back to its own condenses "
+        "field and still lands LATER than acid-rain - the same silent "
+        "skip a future identity gate must not repeat");
+}
+
 
 /* Ice does what it exists for: it cracks hot glass, and it stays put.
  *
@@ -2548,6 +2658,8 @@ void run_sand_reaction_encoding_suite(void)
 {
     RUN_TEST(test_a_reaction_never_mints_a_static_from_gunpowder_or_the_reverse);
     RUN_TEST(test_wood_burning_state_is_byte_identical_under_lit_from);
+    RUN_TEST(test_reaction_first_stage_never_dispatches_later_than_the_ladder);
+    RUN_TEST(test_dropping_the_acid_rain_identity_flag_dispatches_late);
     RUN_TEST(test_ice_cracks_hot_glass_and_stays_where_it_is_put);
     RUN_TEST(test_snow_floats_on_water);
     RUN_TEST(test_glass_conducts_heat_like_stone);
