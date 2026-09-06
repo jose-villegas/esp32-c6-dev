@@ -2090,6 +2090,12 @@ static const gfx_color_t plant_grain[8] = GRAIN8_ROW(PLANT_DARK, PLANT_LIGHT);
 static const gfx_color_t ice_grain[8] = GRAIN8_ROW(ICE_DARK, ICE_LIGHT);
 static const gfx_color_t leaf_grain[8] = GRAIN8_ROW(LEAF_DARK, LEAF_LIGHT);
 static const gfx_color_t metal_grain[8] = GRAIN8_ROW(METAL_DARK, METAL_LIGHT);
+
+/* Metal's own travelling shine, HATCHED's one surviving effect now that
+ * the woven diagonal line under it is gone (app_sand.c's paint_row_n()) -
+ * lifted off METAL_LIGHT rather than metal_grain's per-cell wobble, so
+ * the highlight reads as one reflective surface, not chewed. */
+static const gfx_color_t metal_shine = GFX_RGB(LERP(METAL_LIGHT, 0xFFFFFF, 11));
 /* One grain row per shade step, fresh first - see ROOT_OLD above. */
 static const gfx_color_t root_grain[ROOT_SHADES][8] = {
     GRAIN8_ROW(ROOT_STEP(0), ROOT_STEP_LIGHT(0)),
@@ -2787,20 +2793,30 @@ material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_col
          * rather than a variant - see MATX(). Anything without a grain of
          * its own falls through to the flat palette entry below. */
 
-            /* Metal used to need its own leading check here, because it
-         * once returned a different PATTERN (HATCHED - a woven line and
-         * a travelling shine). Dropped for reading as a printed grid
-         * rather than metal, the same reason glass's own hatch went. */
+            /* Metal gets its own leading check, ahead of the guard below,
+         * because it still returns a different PATTERN (HATCHED) for its
+         * travelling shine - it cannot live inside the ternary, which
+         * only ever picks a colour for one shared MATERIAL_SPECKLED
+         * return. */
+
+            /* The woven diagonal line HATCHED used to draw alongside that
+         * shine is gone (paint_row_n(), app_sand.c) - read as a printed
+         * grid rather than metal - but the shine stays, so metal still
+         * needs the pattern, just not the line colour. */
+            if (v == MATX_METAL) {
+                out[0] = metal_grain[hash & 7u];
+                out[1] = out[0];
+                out[2] = metal_shine;
+                return MATERIAL_HATCHED;
+            }
 
             /* Guard-plus-ternary, measured at plant/leaf/ice/root: a
          * switch cost 14% through the inlining cliff, an unhinted branch
-         * cost 26% of a benchmark - docs/Sand/Tuning-At-a-Glance.md.
-         * Metal joining is one more cheap test, not a restructure. */
-            if (v == MATX_PLANT || v == MATX_LEAF || v == MATX_ICE || v == MATX_ROOT || v == MATX_METAL) {
+         * cost 26% of a benchmark - see docs/Sand/Tuning-At-a-Glance.md. */
+            if (v == MATX_PLANT || v == MATX_LEAF || v == MATX_ICE || v == MATX_ROOT) {
                 out[0] = (v == MATX_PLANT)  ? plant_grain[hash & 7u]
                          : (v == MATX_LEAF) ? leaf_grain[hash & 7u]
                          : (v == MATX_ICE)  ? ice_grain[hash & 7u]
-                         : (v == MATX_METAL) ? metal_grain[hash & 7u]
                                             : root_grain[root_shade(depth)][hash & 7u];
                 out[1] = out[0];
                 out[2] = out[0];
