@@ -1448,8 +1448,8 @@ _Static_assert(GUNPOWDER_LIT == GUNPOWDER_TONES + GUNPOWDER_MOIST_MAX,
  * blast - wrong for the one material whose whole point is to go off - so
  * it took the lava burst's old 16 and the lava burst dropped to 12. Only
  * the hand-fired detonate mode (app_sand.c, ~25 cells) is larger. With
- * blasts capped at one a step (SAND_GUNPOWDER_BLASTS_PER_STEP) the radius
- * is what carries the punch. The CORE that becomes fire is radius /
+ * blasts spaced out by a board-wide cooldown
+ * (SAND_GUNPOWDER_BLAST_COOLDOWN) the radius is what carries the punch. The CORE that becomes fire is radius /
  * SAND_EXPLODE_CORE_DIVISOR (5, sand.h): three cells here, against one
  * for the gas pocket. */
 #define SAND_GUNPOWDER_BLAST_RADIUS 16

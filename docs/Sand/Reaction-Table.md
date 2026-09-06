@@ -375,9 +375,9 @@ enough on the device to look broken: burn-out rolls are independent per
 cell, so the neighbours lit before a cell are usually fire by the time it
 goes. Three lit neighbours in one quadrant is what a lit pile actually
 presents at burn-out. Blasts stagger across frames rather than landing
-all in one because of `SAND_GUNPOWDER_BLASTS_PER_STEP` (1, board-wide) -
-a hard cap on detonations per reactions pass, checked before
-`sand_explode()` is called - not merely because each blast's core and
+all in one because of `SAND_GUNPOWDER_BLAST_COOLDOWN` (1, board-wide) -
+the number of steps the board waits after one detonation before another
+may fire, checked before `sand_explode()` is called - not merely because each blast's core and
 thrown grains take the lit cells around it out of every 2x2 they were
 part of; that removal helps too, but is a secondary effect of the
 geometry, not what bounds the cost.

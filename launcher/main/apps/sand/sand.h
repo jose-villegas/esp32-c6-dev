@@ -289,12 +289,16 @@ typedef struct {
     /* See sand_set_soak(). 0, the default, means nothing soaks. */
     int      soak;
 
-    /* How many fuse blasts (reaction_t.explodes, read at burn-out) have
-     * fired this step, reset at the top of every reactions pass and
-     * compared against SAND_GUNPOWDER_BLASTS_PER_STEP (sand_reactions.c).
-     * The one piece of per-step state the fuse model needs: it is what
-     * bounds a lit pile's burst cost per frame. */
-    uint8_t  fuse_blasts_this_step;
+    /* Steps still to wait before another fuse blast (reaction_t.explodes,
+     * read at burn-out) may fire: set to the cooldown when one does, ticked
+     * down once at the top of every reactions pass. The one piece of
+     * cross-step state the fuse model needs, and what bounds a lit pile's
+     * burst cost per frame. See SAND_GUNPOWDER_BLAST_COOLDOWN
+     * (sand_reactions.c) for the figure and sand_set_fuse_cooldown() to
+     * override it. */
+    uint8_t  fuse_blast_wait;
+
+    int      fuse_cooldown; /* see sand_set_fuse_cooldown() */
 
     /* Optional, caller-owned, h bytes: which rows changed since it was last
      * cleared. NULL disables tracking entirely. See sand_track_dirty_rows(). */
@@ -2261,6 +2265,16 @@ void sand_set_lava_cooloff(sand_t *s, int chance);
  * cannot wait out a 1-in-256 roll and stay fast. Clamped to [0, 255]
  * exactly like every other chance-in-256 setter in this file. */
 void sand_set_lava_burst(sand_t *s, int chance);
+
+/* Overrides SAND_GUNPOWDER_BLAST_COOLDOWN (sand_reactions.c): how many
+ * steps must pass between one fuse blast and the next, board-wide. 0 lifts
+ * the limit, and a negative value restores the compiled-in figure - the
+ * same sentinel shape every other override in this file uses.
+ *
+ * It exists because the cooldown is otherwise a compile-time constant, so
+ * a test asserting that a longer wait actually DELAYS a pile's second
+ * detonation could not be written at all without rebuilding. */
+void sand_set_fuse_cooldown(sand_t *s, int steps);
 
 /* The sentinel sand_set_lava_burst(s, chance < 0) restores, and what
  * sand_init() itself starts every sand_t at - "use

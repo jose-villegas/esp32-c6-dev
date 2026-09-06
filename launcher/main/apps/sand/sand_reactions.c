@@ -4293,15 +4293,21 @@ spend_lit_two_by_two(sand_t* s, int x, int y, int w, int dx, int dy) {
     }
 }
 
-/* AT MOST THIS MANY FUSE BLASTS PER STEP, board-wide. A burn-out past the
- * cap becomes plain fire, exactly as one that found no lit 2x2 does. This
- * is what bounds a big pile's burst cost per frame outright, instead of
- * leaving the stagger to the luck of independent burn-out rolls - and it
- * IS the cadence now: a lit pile goes off one blast a step, for as many
- * steps as it keeps presenting lit 2x2s. Board-wide rather than per pile
- * because "per pile" would need a region walk, and one blast a frame is
- * already more than the eye separates. */
-#define SAND_GUNPOWDER_BLASTS_PER_STEP 1
+/* STEPS BETWEEN FUSE BLASTS, board-wide: one blast, then this many steps
+ * before another may fire. 1 is one blast a step, 2 one every other step,
+ * and 0 lifts the limit entirely. A burn-out inside the wait becomes plain
+ * fire, exactly as one that found no lit 2x2 does.
+ *
+ * This is what bounds a big pile's burst cost per frame outright, instead
+ * of leaving the stagger to the luck of independent burn-out rolls - and
+ * it IS the cadence: a lit pile goes off at this rate for as long as it
+ * keeps presenting lit 2x2s, so raising it spaces a pile's detonations out
+ * in time without touching how big any one of them is (that is
+ * SAND_GUNPOWDER_BLAST_RADIUS) or how long a fuse burns before it reaches
+ * one (reaction_t.burn_decay). Board-wide rather than per pile because
+ * "per pile" would need a region walk, and one blast a frame is already
+ * more than the eye separates. */
+#define SAND_GUNPOWDER_BLAST_COOLDOWN 1
 
 /* One burning cell's turn, in priority order: burn down first (a cell
  * that vanishes this step gets no turn to react further - it cannot
@@ -4362,11 +4368,12 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
          * out of every 2x2 they were part of, so the next blast has to
          * come from a burn-out somewhere else in the pile. */
         if (rx->explodes != 0) {
-            REACTION_DOC(explodes, "at burn-out, if it is one corner of a 2x2 that is all lit, at most once a step");
+            REACTION_DOC(explodes, "at burn-out, if it is one corner of a 2x2 that is all lit and the board's blast cooldown has run out");
             int dx = 0, dy = 0;
-            if (s->impulse_buf != NULL && s->fuse_blasts_this_step < SAND_GUNPOWDER_BLASTS_PER_STEP &&
+            if (s->impulse_buf != NULL && s->fuse_blast_wait == 0 &&
                 find_lit_two_by_two(s, x, y, w, h, grain, rx, &dx, &dy)) {
-                s->fuse_blasts_this_step++;
+                s->fuse_blast_wait = (uint8_t)((s->fuse_cooldown >= 0) ? s->fuse_cooldown
+                                                                       : SAND_GUNPOWDER_BLAST_COOLDOWN);
                 spend_lit_two_by_two(s, x, y, w, dx, dy);
                 sand_explode(s, x, y, rx->explodes);
             } else {
@@ -5144,7 +5151,12 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
  * which way gravity points. */
 void
 sand_step_reactions(sand_t* s) {
-    s->fuse_blasts_this_step = 0;
+    /* One tick of the fuse-blast cooldown per pass, before any cell gets a
+     * turn - so the step a blast fires on is the step it starts waiting
+     * from, and a cooldown of 1 lets the next step blast again. */
+    if (s->fuse_blast_wait != 0) {
+        s->fuse_blast_wait--;
+    }
     /* Dissolving is not a fire reaction and must not be gated behind one:
      * acid has to work on a board with no flame anywhere. */
     /* Heat is a third independent reason to run, not a rider on fire: glass

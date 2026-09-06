@@ -439,10 +439,12 @@ blast already relies on, so a host test with impulses off still sees
 gunpowder burn down to fire like any other fuel. A thick pile's blasts
 land one at a time, spread across several frames, rather than one single
 blast on ignition or every qualifying 2x2 going off on the same step -
-guaranteed by `SAND_GUNPOWDER_BLASTS_PER_STEP` (1, board-wide,
-`sand_reactions.c`), a hard cap checked before `sand_explode()` is called
-and reset once per reactions pass, so at most one detonation fires
-however many 2x2s burn out qualifying together. A blast also takes the
+guaranteed by `SAND_GUNPOWDER_BLAST_COOLDOWN` (1, board-wide,
+`sand_reactions.c`), the number of steps the board waits after a
+detonation before another may fire, ticked down once per reactions pass,
+so at most one fires however many 2x2s burn out qualifying together.
+Raising it spreads a pile's blasts further apart without making any one
+of them smaller; 0 lifts the limit. A blast also takes the
 lit cells around it out of every 2x2 they belonged to - they are fire or
 flying grains by their own burn-out - which helps the same spreading-out
 along independently, but is a secondary effect of the geometry, not what
