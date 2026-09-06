@@ -22,16 +22,9 @@
 #include "material.h"
 #include "util/rng.h"
 
-/* A cell is one byte - material in the high nibble, variant in the low one.
- * See material.h, which owns the encoding and the properties.
- *
- * The variant travels with the cell rather than being derived from position,
- * which matters more than it sounds: position-derived colour makes a moving
- * pile shimmer, because each grain changes colour as it falls.
- *
- * These names are kept because most of this module's tests are about sand
- * specifically, and "SAND_FIRST_SHADE" reads better in them than a CELL_MAKE
- * incantation. */
+/* A cell is one byte: material in high nibble, variant in low. See material.h
+ * for encoding and properties. Variant travels with cell, not position, to
+ * prevent shimmering in moving piles. Names retained for test readability. */
 #define SAND_EMPTY        CELL_EMPTY
 #define SAND_SHADE_COUNT  MATERIAL_VARIANTS
 #define SAND_FIRST_SHADE  CELL_MAKE(MAT_SAND, 0)
@@ -68,17 +61,10 @@
 #define SAND_BLOCK_W 32
 #define SAND_BLOCK_H 64
 
-/* How many persistent emitters sand_t can carry at once - see
- * sand_add_emitter() below.
- *
- * A fixed cap, not a caller-owned count, is what lets the list be a small
- * inline array rather than something the app has to allocate and pass in -
- * see the comment on the `emitters` field itself for why that matters. 16
- * is far more taps than a 368x448 board has room for at any placement a
- * person would actually choose: spaced so each one's stream is visually
- * distinct, that board does not have 16 sensible places to put a source at
- * once. The cap exists to bound the array, not because 16 is a number
- * anyone is expected to reach. */
+/* How many persistent emitters sand_t can carry - see sand_add_emitter(). A
+ * fixed cap allows the list to be a small inline array. 16 is more taps than
+ * a 368x448 board can accommodate with distinct streams. The cap bounds the
+ * array, not a limit anyone expects to hit. */
 #define SAND_MAX_EMITTERS 16
 
 /* One grain currently in flight from sand_impulse() - see
@@ -162,18 +148,11 @@ typedef struct {
     uint8_t *cells;      /* w * h, row-major, caller-owned */
     int      w, h;
     rng_t    rng;        /* seeded explicitly, so every run repeats exactly */
-    /* Counts steps, and is read by exactly one thing: which part of its
-     * shade band a freshly poured grain takes - see random_cell(). Two
-     * pours a few seconds apart therefore come out as two different
-     * shades, and because the shade lives in the cell it stays put when
-     * the first pile is buried under the second.
-     *
-     * Deliberately not a mechanism. There is no pass, no flag, no
-     * per-cell test and no extra draw: the shade was always chosen by one
-     * random number at spawn, and this only changes what that number is
-     * centred on. A version that instead crusted surfaces in place cost
-     * 4.4 microseconds a step against 1.0 and was reverted; this costs
-     * one increment per step, whatever is on the board. */
+    /* Counts steps for random_cell() grain shade. Two pours yield different
+     * shades as shade stays with cell. No mechanism; no pass, flag, test, or
+     * extra draw. Shade chosen at spawn, changing the center. Alternative
+     * crusting method cost 4.4 microseconds vs 1.0 and was reverted; current
+     * method costs one increment per step. */
     uint32_t pour_phase;
 
     bool     sweep_flip; /* alternates the sweep direction between steps */
@@ -193,14 +172,10 @@ typedef struct {
      * sand_gas.c. */
     bool     may_have_gas;
 
-    /* Same idea again, for anything that burns - see sand_step_reactions()
-     * in sand_reactions.c. Named may_have_fire until wood and ember
-     * arrived; renamed once a second material could set it, since the
-     * flag was never really about MAT_FIRE specifically - see
-     * reaction_t.burns in material.h. Keyed on that field wherever it is
-     * set, NOT on kind == KIND_STATIC - stone shares that kind with ember
-     * and is poured far too often to accidentally re-arm this on every
-     * touch. */
+    /* For anything that burns, see sand_step_reactions() in sand_reactions.c.
+     * Renamed from may_have_fire to accommodate wood and ember. Keyed on
+     * reaction_t.burns in material.h, not kind == KIND_STATIC, as stone
+     * shares that kind with ember and is frequently poured. */
     bool     may_have_burning;
 
     /* Same idea again, for a material that dissolves others
@@ -210,92 +185,44 @@ typedef struct {
      * sand_step_reactions() runs when EITHER flag is set. */
     bool     may_have_dissolver;
 
-    /* And again for cells with a TEMPERATURE - glass holding heat in its
-     * variant, or anything cold enough to `chill`, which is snow.
-     *
-     * Its own flag rather than riding may_have_burning, for the same
-     * reason may_have_dissolver has one: a pane goes on cooling long
-     * after the fire that heated it is out, and cooling is the half of
-     * the ramp that makes it mean duration. Gated behind the fire flag it
-     * would freeze mid-ramp instead - and snow would sit in a pond
-     * forever on a board where nothing happened to be burning.
-     *
-     * Named for temperature rather than heat because cold is half of it.
-     * It was may_have_temperature while glass was the only thing that had one. */
+    /* For cells with TEMPERATURE - glass or snow. Own flag for cooling
+     * duration, unlike may_have_burning. Named for temperature, not heat. */
     bool     may_have_temperature;
 
-    /* And again for anything WET, or anything that could become wet: a
-     * cell holding moisture, or a soaker sitting where there is liquid to
-     * soak. Dirt drying out has to keep happening after the puddle that
-     * wetted it is gone, which is why holding moisture arms it on its own.
-     *
-     * Deliberately NOT armed by "a soaker exists" alone. Sand soaks, and
-     * sand is on almost every board, so that would run the reactions pass
-     * always - see step_one_reacting_row(), which only reports this found
-     * when a cell is actually wet or actually beside a liquid. */
+    /* Moisture-holding cells or soakers near liquid are armed. "A soaker
+     * exists" alone does not arm it. Sand soaks but is common, so
+     * step_one_reacting_row() checks actual wetness or adjacency to liquid. */
     bool     may_have_moisture;
 
-    /* Something on the board falls in the COLD pass rather than in the
-     * sweep - see reaction_t.falls. Its own flag because it is the one
-     * reason the reactions pass may need to run on a board with no fire,
-     * no acid, no heat and no water anywhere on it: a seed dropped onto a
-     * bare screen still has to reach the floor. */
+    /* Reactions pass may run on a board with no fire, acid, heat, or water if
+     * a seed falls from the screen to the floor - see reaction_t.falls. */
     bool     may_have_faller;
 
-    /* Whether anything a hot gas could ACT on exists anywhere on the
-     * grid: something that banks heat and can climb a level (stone,
-     * glass), or something cold that cannot bank it and thaws outright
-     * instead (ice, snow).
-     *
-     * A different question from may_have_temperature above: that one asks
-     * whether something is currently OFF ambient and needs its ramp
-     * ticked; this one asks whether there is anything to warm in the
-     * first place, which is what gates convection in
-     * step_one_reacting_row() - see the comment on that branch, and on
-     * step_one_warming_cell(), for why a board of nothing but smoke and
-     * steam (both `warms`) needs this to stay closed rather than paying a
-     * four-neighbour scan on every gas cell, every step, forever.
-     *
-     * NOT one of the flags sand_step_reactions() checks to decide whether
-     * to run at all - it is a gate on one branch inside the pass, not a
-     * reason for the pass to exist. A board can need the reactions pass
-     * for fire, acid, moisture or a faller with no heat-holder on it
-     * anywhere, and this flag has nothing to say about any of that. */
+    /* Checks if grid has heat-interactive elements (e.g., stone, glass, ice)
+     * to gate convection in step_one_reacting_row(). Not a pass gate but a
+     * branch gate within the pass. Needed to prevent scanning four neighbours
+     * for every gas cell on smoke/steam-only boards. */
     bool     may_have_heat_holder;
 
-    /* And its own flag for withering, rather than riding the one above -
-     * the same reasoning that gave may_have_dissolver and
-     * may_have_temperature theirs. They looked like one flag while the
-     * plant was the only material that both fell and withered. Foliage
-     * does neither-and-both: it never falls, so it arms nothing above, and
-     * it does wither, so the pass has to keep visiting it. A leaf on an
-     * otherwise bare board would simply have been skipped for ever. */
+    /* Own flag for withering, like may_have_dissolver and
+     * may_have_temperature. Plant was the only material that both fell and
+     * withered. Foliage never falls, so it arms nothing above, but it does
+     * wither, requiring the pass to visit it. Leaf on a bare board would be
+     * skipped forever. */
     bool     may_have_withering;
 
-    /* And its own flag again for condensing (reaction_t.condenses - steam
-     * is the only one today), for the same reason may_have_dissolver and
-     * may_have_withering each got theirs: condensing is not a rider on
-     * anything else. `boils` needs no such flag - it only ever gets read
-     * from inside conduct_heat(), which is already reached through
-     * may_have_burning - but condensing has to keep being checked for as
-     * long as any steam exists on the board, whether or not anything is
-     * burning, dissolving, tempered, wet, falling or withering. Without
-     * its own flag, a board holding nothing but a drifting cloud of steam
-     * would have sand_step_reactions() stop running the moment nothing
-     * else gave it a reason to, and the steam would sit there forever,
-     * never getting a chance to condense. */
+    /* Condensing flag for steam; unlike boiling, it's independent and must
+     * persist. Without it, steam would never condense if no other reactions
+     * occur. */
     bool     may_have_condenser;
 
     /* See sand_set_soak(). 0, the default, means nothing soaks. */
     int      soak;
 
-    /* Steps still to wait before another fuse blast (reaction_t.explodes,
-     * read at burn-out) may fire: set to the cooldown when one does, ticked
-     * down once at the top of every reactions pass. The one piece of
-     * cross-step state the fuse model needs, and what bounds a lit pile's
-     * burst cost per frame. See SAND_GUNPOWDER_BLAST_COOLDOWN
-     * (sand_reactions.c) for the figure and sand_set_fuse_cooldown() to
-     * override it. */
+    /* Steps before another fuse blast may fire: set to cooldown on explosion,
+     * ticked down each reactions pass. Cross-step state for fuse model,
+     * bounds burst cost per frame. See SAND_GUNPOWDER_BLAST_COOLDOWN in
+     * sand_reactions.c and sand_set_fuse_cooldown() for details. */
     uint8_t  fuse_blast_wait;
 
     int      fuse_cooldown; /* see sand_set_fuse_cooldown() */
@@ -305,19 +232,16 @@ typedef struct {
     uint8_t *dirty_rows;
 
     /* Optional, caller-owned, block_cols*block_rows bytes: which blocks of
-     * the grid are worth looking at at all. NULL means look at every
-     * block, every step - the main sweep always walks the grid in blocks
-     * of SAND_BLOCK_W x SAND_BLOCK_H (see step_one_row()), whether or not
-     * this is set, so block_cols/block_rows are always real, sand_init()-
-     * derived values, never zero. See sand_enable_sleeping(). */
+     * the grid to consider. NULL means check every block. Always walks grid
+     * in blocks of SAND_BLOCK_W x SAND_BLOCK_H (see step_one_row()).
+     * block_cols/block_rows are sand_init()-derived values, never zero. See
+     * sand_enable_sleeping(). */
     uint8_t *block_state;
     int      block_cols, block_rows;   /* set once, by sand_init() */
 
-    /* Optional, caller-owned, `impulse_max` entries: grains currently in
-     * flight from sand_impulse() - see sand_enable_impulses(). NULL
-     * disables the whole mechanic, the same way dirty_rows/block_state
-     * above disable theirs. impulse_count is how many of impulse_buf's
-     * entries are live right now, always <= impulse_max. */
+    /* Caller-owned `impulse_max` entries: grains in flight from
+     * sand_impulse(). NULL disables the mechanic. `impulse_count` tracks live
+     * entries in `impulse_buf`, always <= `impulse_max`. */
     impulse_t *impulse_buf;
     int        impulse_max;
     int        impulse_count;
@@ -334,38 +258,22 @@ typedef struct {
      * big the ones that do are) rather than one. */
     uint8_t    splash_radius_water;
 
-    /* THE ROLLING-MODULO CLUMP behind reaction_t.flaw_to (material.h) - see
-     * try_heat_transform()'s own comment (sand_reactions.c) for the
-     * mechanism. Shared across every material that ever sets flaw_to
-     * (dirt is the only one today), deliberately: this is what makes
-     * consecutive smelt successes come out as a run of the same
-     * material - a nodule - instead of an independent per-cell coin flip.
-     * heat_flaw_seq counts triggers; heat_flaw_is_flawed is the decision
-     * currently being shared across the run of HEAT_FLAW_CLUMP of them. */
+    /* ROLLING-MODULO CLUMP in reaction_t.flaw_to (material.h) for
+     * try_heat_transform() mechanism. Shared across materials setting flaw_to
+     * (dirt today). heat_flaw_seq counts triggers; heat_flaw_is_flawed
+     * decides run of HEAT_FLAW_CLUMP. */
     uint16_t heat_flaw_seq;
     bool     heat_flaw_is_flawed;
 
-    /* The material-pair classification table (pair_bits[][], sand_
-     * reactions.c) that used to live here as two separate 16-bit masks
-     * (heat_mask, wet_mask) is now a single file-scope static in
-     * sand_reactions.c instead of a sand_t field - see that table's own
-     * top comment for why: at 256 bytes it is affordable exactly once,
-     * not once per sand_t, and every sand_t rebuilds it identically from
-     * the same global reactions[]/materials[] tables every pass anyway, so
-     * per-instance storage bought nothing the two masks were not already
-     * paying for out of habit. */
+    /* Material-pair classification table (pair_bits[][], sand_reactions.c) is
+     * now a single file-scope static, not a sand_t field. At 256 bytes, it is
+     * affordable once, not per sand_t, as each sand_t rebuilds it identically
+     * from global reactions[]/materials[]. */
 
     int      last_load_dx, last_load_dy;
 
-    /* The DITHERED direction of the last step, as opposed to the nearest
-     * one above. A tilt that falls between two of the eight directions
-     * spends some steps on each, in proportion - which is how a pile flows
-     * at its true angle instead of snapping to the nearest eighth.
-     *
-     * Anything that wants to point along gravity over TIME rather than
-     * within one step wants this one. Growth does: a stem built from the
-     * nearest direction is a rigid straight line at one of eight angles,
-     * and the board it is growing on does not work that way. */
+    /* DITHERED direction for smooth tilts. Suitable for gravity-based growth
+     * over time, avoiding rigid angles. */
     int      last_step_dx, last_step_dy;
 
     int      scatter;      /* see sand_set_scatter() */
@@ -381,33 +289,12 @@ typedef struct {
     int      acid_rain;    /* see sand_set_acid_rain() */
     int      acid_dilute_mass_bias; /* see sand_set_acid_dilute_mass_bias() */
 
-    /* Persistent point sources - see sand_add_emitter() below.
-     *
-     * Deliberately NOT cells. The grid is one byte per cell (material in
-     * the high nibble, variant in the low one - see CELL_MAKE above) and
-     * docs/Sand/Sand-Simulation.md says it always will be; the material
-     * nibble has no spare id to spend on a MAT_SOURCE, and the extended
-     * range that would otherwise hide one is already spoken for by real
-     * materials. Giving an emitter a material id would also make it cost
-     * something on every cell it did NOT occupy - material_of() is read
-     * per cell per step by the sweep, and a sixteenth entry in that table
-     * existing only to be recognised and skipped is a tax paid by every
-     * other cell on the board, forever, for a feature most boards will not
-     * even use.
-     *
-     * So an emitter lives here instead: a small side list, stepped once per
-     * sand_step() (see emit_from_emitters() in sand.c), that writes an
-     * ordinary cell through sand_set() when its own point is empty. No
-     * material id consumed, no per-cell cost anywhere else on the grid, and
-     * the byte at an emitter's own point is indistinguishable from one a
-     * person poured there by hand.
-     *
-     * Inline, unlike `cells`/`dirty_rows`/`block_state` above, which are
-     * caller-owned because they are sized by the grid and can run to tens
-     * of kilobytes. SAND_MAX_EMITTERS entries at a few bytes apiece is
-     * small enough to just carry inside sand_t, and doing so means a
-     * caller that never places an emitter need not allocate a second
-     * buffer, pass it in, or even know the feature exists. */
+    /* Persistent point sources via sand_add_emitter(). Not cells. Grid: one
+     * byte per cell (material in high nibble, variant in low - see
+     * CELL_MAKE). Extended range used. Emitters in side list, stepped via
+     * emit_from_emitters() in sand.c. Writes to empty points using
+     * sand_set(). No material id, no per-cell cost, indistinguishable from
+     * manual placement. Inline in sand_t for size. */
     struct {
         int16_t x, y;
         cell_t  cell;
@@ -420,16 +307,11 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed);
 
 void sand_clear(sand_t *s);
 
-/* Record which rows change, into a caller-owned array of `h` bytes.
- *
- * Opt-in, because it only pays for itself if someone acts on it. On this board
- * the caller does: a row that did not change need not be redrawn, and a screen
- * band containing no changed rows need not be sent to the panel at all - which
- * is most of a frame's cost. See gfx_mark_dirty().
- *
- * Rows are set to 1 and never cleared here; clearing is the caller's job, once
- * it has acted on them. Everything that can alter a cell marks it: settling,
- * spawning, sand_set and sand_clear. */
+/* Record rows in caller-owned `h` array. Opt-in; useful if acted upon. Caller
+ * avoids redrawing unchanged rows and sending unchanged bands, saving frame
+ * cost. See gfx_mark_dirty(). Rows set to 1 and never cleared here; clearing
+ * is caller's responsibility. Functions marking changes: settling, spawning,
+ * sand_set, sand_clear. */
 void sand_track_dirty_rows(sand_t *s, uint8_t *rows);
 
 /* Let settled BLOCKS and dry-of-liquid ROWS be skipped entirely.
@@ -466,40 +348,22 @@ void sand_track_dirty_rows(sand_t *s, uint8_t *rows);
  * since either can free a grain that had nothing to do with its neighbours. */
 void sand_enable_sleeping(sand_t *s, uint8_t *blocks);
 
-/* Diagnostic only: whether block (bx, by) - in SAND_BLOCK_W x SAND_BLOCK_H
- * units, not pixels or cells - is currently settled under either dithered
- * direction. The bit layout behind this is private to sand.c/sand_priv.h;
- * this exists only so a caller instrumenting real-device performance (see
- * app_sand.c's count_awake()) can ask the question without reaching into
- * it. Always false if block-sleeping was never enabled. */
+/* Diagnostic: whether block (bx, by) is settled under dithered direction. Bit
+ * layout private to sand.c/sand_priv.h. Used by app_sand.c's count_awake().
+ * False if block-sleeping disabled. */
 bool sand_block_settled(const sand_t *s, int bx, int by);
 
-/* Let sand_impulse() queue a flying grain instead of doing nothing.
- *
- * The same caller-provided-buffer shape as sand_enable_sleeping() and
- * sand_track_dirty_rows() above, and for the same reason: a board that
- * never uses an impulse should not pay for the mechanic, not even the
- * struct space, and a test can size `buf` deliberately small to exercise
- * the cap on purpose (see sand_impulse()'s own comment on what happens
- * once it fills).
- *
- * `max` is how many of `buf`'s entries may be in flight at once - a bounded
- * transient list, the same shape crack_run() already uses for CRACK_MAX
- * (sand_reactions.c), not a per-cell flag: an explosion throws at most a few
- * hundred grains for a few dozen steps each, so this is a few hundred
- * entries of impulse_t, not another byte on every one of the grid's cells.
- *
- * NULL disables the mechanic entirely - sand_impulse() becomes a no-op,
- * and so does anything built on it, sand_explode() included. */
+/* `sand_impulse()` queues a flying grain with a caller-provided shape,
+ * similar to `sand_enable_sleeping()` and `sand_track_dirty_rows()`. Boards
+ * without impulses have no extra cost. Tests can use small buffers. `max`
+ * limits `buf` entries in flight, like `CRACK_MAX` in `crack_run()`, not
+ * per-cell. Explosions generate many grains, so `max` controls hundreds of
+ * `impulse_t` entries. NULL disables impulses, making `sand_impulse()` and
+ * `sand_explode()` no-ops. */
 void sand_enable_impulses(sand_t *s, impulse_t *buf, int max);
 
-/* Out-of-bounds reads return STONE, not empty.
- *
- * That is deliberate: it makes the walls solid for free, so the movement code
- * never needs a bounds check before asking what is in the next cell. Stone
- * specifically, rather than any old occupied value, because the walls must also
- * be too dense to displace - otherwise a heavy material would sink through the
- * floor. */
+/* Out-of-bounds reads return STONE to make walls solid without bounds checks.
+ * Stone is used because walls must be dense and non-displaceable. */
 cell_t sand_at(const sand_t *s, int x, int y);
 
 /* Ignores out-of-bounds writes. */
@@ -512,48 +376,23 @@ int sand_count(const sand_t *s);
  * anything already there. */
 int sand_spawn(sand_t *s, int cx, int cy, int radius, material_id_t material);
 
-/* The same, but taking a whole CELL as the thing to paint.
- *
- * An extended material has no variant to choose - its low nibble is its
- * identity (MATX() in material.h) - so it cannot be named by a
- * material_id_t at all, and this is how it gets onto the board. For an
- * ordinary material pass CELL_MAKE(id, 0); the variant is ignored and
- * chosen the usual way, so sand_spawn() is just this with the id wrapped. */
+/* Paints a whole CELL. Extended materials use MATX() for identity, cannot use
+ * material_id_t. For ordinary materials, use CELL_MAKE(id, 0); variant is
+ * ignored. */
 int sand_spawn_cell(sand_t *s, int cx, int cy, int radius, cell_t spec);
 
-/* Remove every grain in a disc, and every emitter centred in it too - see
- * sand_add_emitter() below. Returns how many CELLS it removed.
- *
- * No longer the exact mirror of sand_spawn that it once was: sand_spawn only
- * ever places grains, and this also switches off any emitter in the same
- * disc, because a running tap that sand_erase() could not turn off would
- * make the whole feature a trap - there would be no way to stop it short of
- * rebuilding the scene.
- *
- * The returned count still means exactly what it always has, though: cells
- * this call actually changed. An emitter removed is not folded into it - see
- * sand_remove_emitters() below if that count is what a caller wants - so
- * neither sand_spawn nor sand_erase can quietly drift the grain total. */
+/* Remove all grains and emitters in a disc. Returns number of CELLS removed.
+ * Not a mirror of sand_spawn, which only places grains. Also switches off any
+ * emitter in the disc to prevent a trap. Emitter removal is not included in
+ * the count. */
 int sand_erase(sand_t *s, int cx, int cy, int radius);
 
-/* EMITTERS
- *
- * A point on the grid that keeps producing one material on its own, so the
- * user can place a water tap or a gas vent and leave it running instead of
- * holding a finger down. See the `emitters` field of sand_t above for why
- * this is a side list rather than a material, and emit_from_emitters() in
- * sand.c for how it is stepped. */
+/* EMITTERS: grid points producing materials continuously. See `emitters`
+ * field in `sand_t` and `emit_from_emitters()` in `sand.c`. */
 
-/* Place (or replace) an emitter. Returns false if the list is already at
- * SAND_MAX_EMITTERS or (x, y) is off the grid - either way nothing changes.
- *
- * An emitter already at (x, y) has its cell replaced rather than a second
- * one being added at the same point, so calling this again at a point the
- * caller is not sure is already a tap is always safe: it either creates one
- * or retunes the one already there, never both. `cell` is written exactly
- * as given, the same as sand_spawn_cell()'s `spec` - so an extended
- * material can be an emitter's cell too, not just an ordinary one built
- * with CELL_MAKE(). */
+/* Place or replace an emitter. Returns false if list is at SAND_MAX_EMITTERS
+ * or (x, y) is off grid. An existing emitter at (x, y) is replaced. `cell` is
+ * written exactly as given, like `sand_spawn_cell()`'s `spec`. */
 bool sand_add_emitter(sand_t *s, int x, int y, cell_t cell);
 
 /* Remove every emitter within `radius` of (cx, cy) - the same disc test
@@ -615,30 +454,11 @@ bool sand_emitter_at(const sand_t *s, int i, int *x, int *y, cell_t *cell);
  * caller keeps. */
 void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
 
-/* A single-cell push that skips the density-scaled toughness roll every
- * other wall-dislodging caller keeps - for a caller that already knows
- * its target is KIND_STATIC and wants it dislodged GUARANTEED, not
- * merely with a chance. See queue_flying_grain()'s own comment in sand.c
- * for the roll this bypasses, and why.
- *
- * Originally reaction_t.vent_chance's own single-cell push (try_vent(),
- * sand_reactions.c - removed by bd esp32c6-0f2 once the covered-lava
- * burst, bd esp32c6-mqt, replaced venting outright). Kept as a general
- * primitive rather than removed alongside it - a deterministic dislodge
- * is a real, reusable capability, not something specific to the
- * mechanism that first needed it - and now exercised directly by
- * test_a_dislodged_wall_keeps_falling_even_if_its_first_push_roll_fails
- * (suite_sand_impulse.c), which uses it to place a KIND_STATIC cell airborne on
- * demand without needing a real explosion or reaction to get one there,
- * so it can pin down step_impulses()'s own gravity-drift behaviour in
- * isolation.
- *
- * `ramp` is the entry's own per-turn speed decay (impulse_t's own field,
- * this file) - pass SAND_IMPULSE_SPEED_RAMP for the same decay every
- * other caller gets, or a different figure for a throw that should
- * travel farther (or less far) than that shared, already-measured
- * constant without retuning it for every other caller of this same
- * mechanism. */
+/* A single-cell push that bypasses the density-scaled toughness roll for
+ * guaranteed dislodgement of KIND_STATIC targets. See queue_flying_grain() in
+ * sand.c for details. `ramp` is the entry's speed decay; use
+ * SAND_IMPULSE_SPEED_RAMP for standard decay or a custom value for different
+ * throw distances. */
 void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
                            int ramp);
 
@@ -993,23 +813,21 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
 
 /* THE TRANSFER FLOOR - below this post-drag speed, a mover does not queue a
  * transfer at all, the same shape SAND_IMPULSE_BOUNCE_MIN_SPEED already
- * floors restitution at (a nearly-spent mover queuing a transfer too faint
- * to ever visibly move is not worth the entry). 64 matches that floor's own
+ * floors restitution at (a nearly-spent mover queuing a transfer too faint to
+ * ever visibly move is not worth the entry). 64 matches that floor's own
  * starting figure for the same reason - not a coincidence to be tuned
- * independently without cause.
- *
- * THE REAL BUDGET REASON THIS EXISTS AT ALL: impulse_buf is a FIXED-SIZE
- * buffer (APP_IMPULSE_MAX, app_sand.c - 2048 entries, 12 KiB) shared with
- * whatever explosion or splash is already using it, and sand_impulse()
- * silently refuses once it is full - graceful, but silent. A chunk plowing
- * through a wide bank, uncapped, would queue one transfer per cell it
- * displaces; TRANSFER's own share of the deferred array's total capacity
- * (SAND_CASCADE_TRANSFER_MAX_PER_STEP, this file - see SAND_CASCADE_MAX_
- * PER_STEP's own comment for why that total is now split rather than one
- * counter shared with the cascade relay) is what actually protects the
- * buffer, but this floor is the first, cheaper gate: a plow through a
- * LOW-density medium (most cells pass the floor easily) still queues
- * plenty, so both gates matter - this one trims the faintest transfers
+ * independently without cause. THE REAL BUDGET REASON THIS EXISTS AT ALL:
+ * impulse_buf is a FIXED-SIZE buffer (APP_IMPULSE_MAX, app_sand.c - 2048
+ * entries, 12 KiB) shared with whatever explosion or splash is already using
+ * it, and sand_impulse() silently refuses once it is full - graceful, but
+ * silent. A chunk plowing through a wide bank, uncapped, would queue one
+ * transfer per cell it displaces; TRANSFER's own share of the deferred
+ * array's total capacity (SAND_CASCADE_TRANSFER_MAX_PER_STEP, this file - see
+ * SAND_CASCADE_MAX_ PER_STEP's own comment for why that total is now split
+ * rather than one counter shared with the cascade relay) is what actually
+ * protects the buffer, but this floor is the first, cheaper gate: a plow
+ * through a LOW-density medium (most cells pass the floor easily) still
+ * queues plenty, so both gates matter - this one trims the faintest transfers
  * before they even compete for the per-step cap. */
 #define SAND_IMPULSE_TRANSFER_MIN_SPEED  64
 
@@ -1047,27 +865,10 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * that either. */
 #define SAND_EXPLODE_INITIAL_SPEED  255
 
-/* How far a single cool_off_chain() (sand_reactions.c) walk reaches
- * before it stops on its own, independent of how many rolls in a row it
- * wins. The same reasoning CRACK_MAX (sand_reactions.c) gives, at a much
- * smaller scale: this only ever has to bound ONE cold pass, not claim
- * anything about how far a chain could really go, and a sustained pour
- * re-triggers this every step anyway - the pour rate is what should set
- * how fast a pool actually dies, not this cap. A generous number here
- * would let a single lucky roll eat a whole pool in one step, which is
- * exactly the "dry bowl paving itself" failure mode the design has to
- * avoid.
- *
- * PUBLIC, unlike CRACK_MAX - docs/Sand/Reaction-Table.md already names
- * this constant as part of the described contract, and test_the_cool_
- * off_chain_is_bounded (suite_sand_reaction_encoding.c) has to assert
- * against its real value rather than a hand-copied literal that silently goes stale the
- * next time this is retuned.
- *
- * Briefly doubled to 16 and put back: reaching FURTHER per event turned
- * out to be the wrong dial for "the pour bites harder". How OFTEN a
- * chain gets going at all is SAND_LAVA_COOLOFF_CHANCE's job, and that
- * is what moved instead. */
+/* Bounds a single cool_off_chain() walk, independent of rolls. Smaller scale
+ * than CRACK_MAX. Prevents a single lucky roll from emptying a pool, avoiding
+ * "dry bowl paving" failure. PUBLIC; named in Reaction-Table.md and used in
+ * tests. Chain frequency controlled by SAND_LAVA_COOLOFF_CHANCE. */
 #define SAND_LAVA_COOLOFF_MAX_CHAIN 8
 
 /* Radius and decaying trigger CHANCE for splash_displace() (sand_liquid.c)
@@ -1221,43 +1022,16 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
 #define SAND_CASCADE_SPEED_DIVISOR 2
 #define SAND_CASCADE_MIN_SPEED     1
 
-/* THE SHARED DEFERRED ARRAY'S TOTAL SIZE (step_impulses(), sand.c) - the
- * physical capacity of `deferred[]`, not a per-mechanism budget any more.
- * That array carries two unrelated kinds of follow-up (that array's own top
- * comment in sand.c has the full account of why one array grew a second
- * caller): a CASCADE relay, fired at most once per water/acid entry per
- * step, and a TRANSFER, fired at most once per HOP of any entry's push -
- * up to SAND_IMPULSE_CELLS_PER_STEP_DIVISOR's own multi-cell reach per
- * entry per step. A single shared counter gating both against this one
- * number let whichever kind queued first this step starve the other: an
- * adversarial review (bd esp32c6-w2h) measured sixteen ploughing chunks
- * filling every one of the 64 slots with transfers alone, in queue order,
- * not by any physical difference between the two mechanisms - a cascade
- * relay queued even one step later that same pass got nothing, regardless
- * of how few cells of water were actually relaying.
- *
- * RELAY GETS A RESERVE OUT OF THIS TOTAL, not half of it - see
- * SAND_CASCADE_RELAY_RESERVE below. An even split was tried first and is
- * the obvious answer, but it fixes starvation by making BOTH mechanisms
- * permanently smaller, including in the ordinary case where only one of
- * them is running at all. A reserve fixes the same bug and costs nothing
- * when a scene has only relays in it, which a settling pool with nothing
- * thrown at it is. Revisit the reserve, not this total, if a future
- * measurement shows relay starving inside it. */
+/* SHARED DEFERRED ARRAY SIZE (step_impulses(), sand.c) - Holds CASCADE (max
+ * once per water/acid entry) and TRANSFER (max once per HOP, up to
+ * SAND_IMPULSE_CELLS_PER_STEP_DIVISOR). Single counter gates both, causing
+ * starvation. Reserve for RELAY avoids this. Revisit reserve if needed. */
 #define SAND_CASCADE_MAX_PER_STEP  64
-/* A RESERVATION, NOT A SPLIT. Transfer fires up to once per hop and
- * relay at most once per liquid entry, so a hard half-and-half made it
- * impossible for transfer to starve relay - at the cost of shrinking
- * whichever mechanism happened to be running ALONE. A scene with only
- * relays in it is ordinary (a settling pool with nothing thrown at it),
- * and that showed up at once as a changed grid fingerprint on a
- * lava-quench scene, in a refactor that was meant to be neutral.
- *
- * So relay gets a FLOOR rather than a ceiling: transfer may fill the
- * array up to everything except SAND_CASCADE_RELAY_RESERVE, and relay
- * takes whatever transfer has not actually used - which is the whole
- * array when nothing is being thrown. A single-mechanism scene is then
- * untouched, and relay still cannot be starved below its reserve. */
+/* RESERVATION, not split. Transfer fires once per hop, relay once per liquid
+ * entry. Half-and-half prevents transfer starvation but shrinks lone
+ * mechanisms. Relay gets floor, not ceiling. Transfer fills to everything
+ * except SAND_CASCADE_RELAY_RESERVE; relay takes remainder. Single-mechanism
+ * scenes untouched, relay cannot starve below reserve. */
 #define SAND_CASCADE_RELAY_RESERVE          16
 #define SAND_CASCADE_TRANSFER_MAX_PER_STEP  (SAND_CASCADE_MAX_PER_STEP - \
                                              SAND_CASCADE_RELAY_RESERVE)
@@ -1409,54 +1183,18 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * tune on device like every other constant here. */
 #define SAND_ACID_DILUTE_MASS_BIAS 24
 
-/* EVAPORATION ON DILUTION - a flat slice of the SAME roll that decides
- * water-wins-vs-acid-wins (see the single-roll ladder in
- * step_one_dissolver_cell(), sand_reactions.c - deliberately one roll,
- * not the two independent ones an earlier version of this used, to keep
- * the interaction from growing another moving part) gives every acid/
- * water bite a small, unconditional chance to boil the ACID cell off
- * into MAT_GAS before the win/lose split even runs, regardless of who
- * would otherwise have won. Distinct from r->evaporates (material.c),
- * which is acid's own ambient boil-off and fires whether or not water is
- * anywhere nearby - this one only fires at the moment of an actual
- * acid/water bite. Distinct too from the mass sink the win/lose split
- * itself now carries on both its own outcomes (see that split's own
- * comment) - this bucket existed before that fix landed and is kept
- * as its own separate, smaller chance rather than folded in, since it is
- * the one outcome that skips the water cell entirely. Chance-in-256 out
- * of the full roll, checked first in the ladder, ahead of
- * SAND_ACID_DILUTE_MASS_BIAS's adjustment - so evaporating is exactly as
- * likely for a lone drop as for a poured-on slab. Starting bias, not a
- * measured one - tune on device like every other constant here. */
+/* EVAPORATION ON DILUTION - a flat roll in step_one_dissolver_cell(),
+ * sand_reactions.c, gives acid/water bites a chance to boil acid into
+ * MAT_GAS. Chance-in-256, checked before SAND_ACID_DILUTE_MASS_BIAS. Distinct
+ * from r->evaporates and the win/lose split's mass sink. */
 #define SAND_ACID_DILUTE_EVAPORATE_CHANCE 20
 
 
 
 
-/* OIL BOILS OFF, IT DOES NOT BREED MORE ACID - reported directly: a
- * whole pool of oil was ending up entirely acid. The old rule always
- * converted a bitten oil cell into a FRESH, full-mass acid cell
- * (place_reacted() gives every new ordinary material a full life - see
- * its own comment, sand_reactions.c) while the acid doing the eating
- * only ever paid pay_quench_cost()'s ordinary one-unit nick, the same
- * price eating sand or wood costs. One unit spent to mint an entire new
- * full acid cell, on nearly every bite that landed - net acid could only
- * grow, never actually shrink, and a burning pool of oil was in effect a
- * (slow) acid factory. Two independent fixes in step_one_dissolver_cell()
- * (sand_reactions.c):
- *
- * - the bitten oil cell mostly turns to MAT_GAS now, not acid -
- *   SAND_ACID_OIL_TO_GAS_CHANCE, chance-in-256 that it does. Acid still
- *   spreading into the oil is the minority outcome that survives, not
- *   the only one, the same "mostly, not always" shape water's own
- *   dilution keeps for its own minority branch.
- * - the acid cell separately rolls SAND_ACID_OIL_DEATH_CHANCE for a MUCH
- *   higher chance to die OUTRIGHT - spend its whole remaining mass in
- *   this one bite, cell cleared the same way pay_quench_cost() already
- *   clears a cell whose last unit just went - instead of the ordinary
- *   one-unit chip every other dissolve pays. Explicitly asked for:
- *   eating oil is supposed to be something that can consume the acid
- *   doing it, not a near-free way to breed more of it. */
+/* OIL BOILS OFF, NOT MORE ACID - bitten oil mostly turns to MAT_GAS
+ * (SAND_ACID_OIL_TO_GAS_CHANCE) or dies (SAND_ACID_OIL_DEATH_CHANCE). Acid
+ * eating oil can consume itself, not breed more. */
 #define SAND_ACID_OIL_TO_GAS_CHANCE 220
 #define SAND_ACID_OIL_DEATH_CHANCE  128
 
@@ -1528,31 +1266,11 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * to hold nothing but gas and steam, two of each. */
 #define SAND_ACID_RAIN_CHANCE 1
 
-/* QUENCHING A FLAME - acid putting out fire is not water's clean,
- * deterministic flash to steam (see step_one_burning_cell(),
- * sand_reactions.c): unconditionally leaving a cell of gas or smoke
- * behind every single time read as too busy on a board where acid keeps
- * meeting fire, the same over-frequent complaint that shaped `evaporates`
- * and `fizz` down to their own current, much rarer figures. Two
- * independent rolls, not one - "does anything visible happen at all"
- * first, and only then "which of the two it is":
- *
- * SAND_ACID_QUENCH_RESIDUE_CHANCE - chance in 256 that quenching a flame
- * with acid leaves ANY residue behind, instead of the flame simply going
- * out with nothing left to see (the same silent-clear fallback fire's own
- * `residue` field already uses when ITS roll misses). A miss here is not
- * a bug - it is acid putting a fire out cleanly, which is allowed to be
- * the common case.
- *
- * SAND_ACID_QUENCH_SMOKE_CHANCE - chance in 256 that, given residue DOES
- * happen, it is smoke rather than gas - biased toward smoke rather than
- * fizz's even coin flip (step_one_dissolver_cell()'s residue pick),
- * because this puff comes from a flame going out, and smoke is what a
- * dying flame is already understood to leave (reaction_t.residue, just
- * above) - gas is still possible, just the less likely of the two here.
- *
- * Both starting points, not measured - tune on device like every other
- * constant here. */
+/* QUENCHING A FLAME - Acid snuffs fire unlike water's crisp steam. Two rolls:
+ * "visible effect?" then "what is it?" SAND_ACID_QUENCH_RESIDUE_CHANCE
+ * (1/256) checks for residue. Miss means clean quench.
+ * SAND_ACID_QUENCH_SMOKE_CHANCE (1/256) checks if residue is smoke, likely.
+ * Tune chances as needed. */
 #define SAND_ACID_QUENCH_RESIDUE_CHANCE 96
 #define SAND_ACID_QUENCH_SMOKE_CHANCE   180
 
@@ -1672,16 +1390,10 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * did, for exactly the same reason. */
 #define SAND_EXPLODE_CORE_DIVISOR  5
 
-/* How many of fire's sixteen shades a blast core sheds between its centre
- * and its rim - see the fill loop in sand_explode() (sand.c) for why a
- * core written at one uniform life had a colour ramp it could never
- * show.
- *
- * 8, so the rim starts at half the centre's life: a clear gradient that
- * still leaves the outer ring alight long enough to be seen and to set
- * fire to what it touches. Raising this past MATERIAL_VARIANTS - 2 buys
- * nothing - the floor of 1 clamps it - and would only make the fringe
- * die sooner. 0 restores the old flat disc exactly. */
+/* How many of fire's sixteen shades a blast core sheds from centre to rim -
+ * see fill loop in sand_explode() (sand.c). 8 ensures clear gradient, keeping
+ * outer ring alight. Raising past MATERIAL_VARIANTS - 2 is redundant; floor
+ * of 1 clamps it. 0 restores flat disc. */
 #define SAND_EXPLODE_CORE_FADE     8
 
 /* ONE CALLER OF sand_impulse(), seeding many radially. Queue an outward-
@@ -1909,22 +1621,8 @@ void sand_displace_material(sand_t *s, int cx, int cy, int radius,
  * always. */
 void sand_explode(sand_t *s, int cx, int cy, int radius);
 
-/* FRICTION
- *
- * A grain is held in place by the weight of whatever is stacked on top of it.
- * Without modelling that, the bottom of a pile slides as freely as the top -
- * a whole floor of sand skating sideways on the faintest tilt, because nothing
- * in the rules knows it is buried.
- *
- * Real granular friction is subtle (the load on a deep grain does not grow
- * without limit - the Janssen effect - and the angle of repose depends on grain
- * shape). None of that is needed here. What is needed is that burial resists
- * sliding, and that shaking overcomes it.
- *
- * So: a grain counts how many grains are stacked directly against gravity above
- * it, and that count halves its chance of making a SLIDE move. Falling is never
- * affected - if the cell gravity-ward is empty, the grain falls whatever is on
- * top of it, which is what "unsupported" means. */
+/* Grain friction modelled by burial count, halving slide chance. Falling not
+ * affected by burial. */
 
 /* Chance in 256 that a grain with exactly one grain above it may still slide.
  * Halves for each additional grain, so a pile locks up quickly with depth. */
@@ -1935,215 +1633,86 @@ void sand_explode(sand_t *s, int cx, int cy, int radius);
  * still visibly creeps. */
 #define SAND_LOAD_CAP 5
 
-/* How far along its own surface a liquid will look for somewhere shallower to
- * send mass.
- *
- * Everything else about a liquid is strictly local, and this deliberately is
- * not. It has to be: a local rule moves information one cell per step, so
- * levelling a pool 184 cells wide by neighbour-to-neighbour diffusion alone
- * takes tens of thousands of steps. Measured, a real-width pool was still six
- * cells proud after five thousand. That is not a flaw in the rule, it is the
- * bound on any rule of that shape.
- *
- * Real water levels quickly because pressure travels through it far faster
- * than water does. This is the cheap stand-in for that, and it is why every
- * falling-sand game has some version of it.
- *
- * Flow stops at anything that is not the same liquid, so it cannot reach
- * through a wall, and a settled pool finds nothing to do and goes to sleep -
- * which is what keeps the search off the bill.
- *
- * KEEP IT SHORT. Mass handed to a cell eight away skips everything in
- * between, so water disappears from one place and reappears in another - and
- * since the direction alternates every step, it slops straight back the next.
- * At thirty-two that read as great waves surging across the screen and pours
- * flinging themselves sideways before collapsing into specks. Measured on a
- * real-width pool, the levelling barely suffers for the reduction:
- *
- *      sight 4  -> 1.6 cells out of level
- *      sight 8  -> 0.8
- *      sight 16 -> 0.5
- *      sight 32 -> 0.2, and looks wrong while it gets there
- */
+/* How far a liquid seeks a shallower spot non-locally. Local rules limit
+ * levelling speed (184-cell pool: 5k steps for 6-cell height), simulating
+ * water pressure in falling-sand games. Flow halts at non-matching liquids.
+ * Search distance (sight): 4 -> 1.6, 8 -> 0.8, 16 -> 0.5, 32 -> 0.2 cells
+ * off-level, looks incorrect temporarily. */
 #define SAND_LIQUID_SIGHT 8
 
-/* sand_step_gas()'s own spread pass (sand_gas.c) used to have a single
- * global sight constant here (SAND_GAS_SIGHT), the same idea as
- * SAND_LIQUID_SIGHT above - how far along the perpendicular a grain
- * will look for an empty cell to hop into. Now per-material
- * (material.h's `sight` field), since fire shares KIND_GAS with gas
- * but needs to disperse tighter, not the same amount - see gas's and
- * fire's own rows in material.c for the tuned figures and their
- * reasoning. */
+/* sand_step_gas() now uses per-material sight (material.h's `sight` field)
+ * instead of a global constant. Fire, sharing KIND_GAS, requires a tighter
+ * dispersal than gas. See tuned figures in material.c for details. */
 
-/* THE WALL-REBOUND SPLASH, REMOVED 2026-08-30 - a bulk-momentum-driven
- * mass kick off a wall on a hard flick (sand_set_flick(), sand_momentum(),
- * SAND_MOMENTUM_DECAY/SAND_REBOUND_THRESHOLD/SAND_REBOUND_GAIN/SAND_
- * REBOUND_MAX, rebound_wall()/rebound_one_cell() in sand_liquid.c). Set
- * SAND_REBOUND_GAIN to 0 first as a reversible on-device test; confirmed
- * imperceptible at this display size and cell resolution, so removed
- * outright rather than left as a permanently-disabled mechanism still
- * paying for momentum tracking every step. Search git history for
- * "SAND_REBOUND_GAIN" if this is ever worth revisiting - a real per-grain
- * splash on a genuine wall hit exists instead, see splash_displace()'s
- * own comment in sand_liquid.c. */
 
-/* How many cells are stacked directly against gravity above the one at (x, y),
- * capped at SAND_LOAD_CAP. (dx, dy) is a unit gravity direction.
- *
- * Exposed because it is the whole of the friction model and is worth pinning
- * down on its own - in particular that off the grid counts as open sky rather
- * than as load, which sand_at's solid-walls convention would get backwards. */
+/* Cells stacked against gravity above (x, y), capped at SAND_LOAD_CAP. (dx,
+ * dy) is gravity direction. Exposed for friction model: off-grid counts as
+ * sky, not solid. */
 int sand_load_above(const sand_t *s, int x, int y, int dx, int dy);
 
-/* How often a grain falling through open air does something other than fall
- * straight down, as a chance in 256. Zero, the default, makes falling exactly
- * deterministic.
- *
- * Without it, a falling stream is a rigid block: every grain in open air takes
- * the same move on the same step, so a poured blob keeps its shape all the way
- * down and lands as a blob. Real sand disperses, because no two grains fall at
- * quite the same rate or in quite the same line.
- *
- * A scattered grain either lags a step - which spreads the stream vertically -
- * or drifts to one side, which spreads it horizontally. Neither invents a move
- * that was not already legal, so nothing here can push a grain through a wall
- * or into another grain.
- *
- * Off by default because most tests want to say "a grain falls one cell per
- * step" and mean it. The randomness is an aesthetic choice, so the caller
- * makes it.
- *
- * Pass SAND_SCATTER_PER_MATERIAL to use each material's own figure from the
- * table instead of one value for everything - which is what the app wants,
- * since water and sand do not disperse alike. Any other value overrides all of
- * them, which is what a test wants. */
+/* Grain fall randomness (1/256) to mimic real sand dispersion. Zero makes it
+ * deterministic. Scattered grains either lag or drift. Uses
+ * SAND_SCATTER_PER_MATERIAL for material-specific values. Any other value
+ * overrides. */
 void sand_set_scatter(sand_t *s, int chance);
 #define SAND_SCATTER_PER_MATERIAL (-1)
 
-/* How often a transient material's life ticks down by one, as a chance in
- * 256 - see material.h's `decay` field. Zero, the default, makes every
- * material immortal regardless of what the table says, for the same reason
- * scatter defaults off: most tests want to place gas and reason about it
- * without a background chance of it quietly vanishing out from under them
- * (test_gas_grain_count_is_conserved is exactly that kind of test).
- *
- * Pass SAND_DECAY_PER_MATERIAL to use each material's own figure from the
- * table instead - what the app wants, since only a transient material
- * should ever fade. Any other value overrides all of them, which is what a
- * test that specifically wants to watch something decay wants instead. */
+/* Material life ticks down by a chance in 256, controlled by `decay` in
+ * material.h. Zero makes materials immortal, defaulting off for test
+ * consistency. Use SAND_DECAY_PER_MATERIAL for material-specific decay or
+ * another value for specific test decay. */
 void sand_set_decay(sand_t *s, int chance);
 #define SAND_DECAY_PER_MATERIAL (-1)
 
-/* How often a cell spontaneously turns into MAT_GAS, as a chance in 256 -
- * see material.h's `evaporates` field. Zero, the default, turns it off
- * entirely regardless of what the table says, for the same reason decay
- * defaults off: nothing here needs a neighbour or a trigger to fire, so
- * without this override every test with a standing pool of acid would
- * quietly lose cells to it whether or not the test had any opinion about
- * evaporation - exactly what happened to the acid mass-accounting, fizz
- * and metal-eating-budget tests the day this field was added, before this
- * override existed to shield them from it.
- *
- * Pass SAND_EVAPORATES_PER_MATERIAL to use each material's own figure
- * instead - what the app wants, since only acid sets it. Any other value
- * overrides all of them, which is what a test that specifically wants to
- * watch a cell evaporate wants instead. */
+/* How often a cell turns into MAT_GAS, as a chance in 256. Zero turns it off.
+ * Pass SAND_EVAPORATES_PER_MATERIAL to use each material's figure, or any
+ * other value to override. */
 void sand_set_evaporates(sand_t *s, int chance);
 #define SAND_EVAPORATES_PER_MATERIAL (-1)
 
-/* How readily anything SOAKS UP a liquid it is touching - sand turning to
- * dirt, dirt taking on moisture.
- *
- * Off by default, like decay, and for the same reason it turned out to
- * need to be: sand soaks, and half the tests in the suite put sand in
- * water to check that sand SINKS. Those are about density and have no
- * opinion about chemistry, and they all broke the moment soaking became a
- * property of sand rather than of the scene. A mechanic that arrives
- * switched on rewrites every scene that already existed.
- *
- * Pass SAND_SOAK_PER_MATERIAL for each material's own figure. */
+/* Soaking: sand absorbs liquid. Off by default like decay. Tests assume sand
+ * sinks based on density, not chemistry. Enable by passing
+ * SAND_SOAK_PER_MATERIAL. */
 void sand_set_soak(sand_t *s, int chance);
 #define SAND_SOAK_PER_MATERIAL (-1)
 
-/* How often a flammable neighbour actually catches, per adjacent burning
- * cell per step, as a chance in 256 - see material.h's reaction_t.
- * flammability field. Defaults to SAND_FLAMMABILITY_PER_MATERIAL (each
- * material's own table figure), unlike scatter/decay which default OFF -
- * ignition already only ever happens next to an actual burning cell, so
- * there is no "background chance of it quietly happening" to guard
- * against the way there is for decay ticking on its own or a falling
- * grain scattering on its own. Without an override, a test that wants
- * to watch something NOT catch (wood beside a single flame, one step)
- * uses the real slow-catching figure; a test that wants to watch it
- * catch forces this to 255 instead, rather than looping hundreds of
- * steps and hoping. */
+/* Flame catch chance per adjacent burning cell per step, 1 in 256.
+ * Flammability in material.h's reaction_t. Defaults to material-specific
+ * value (SAND_FLAMMABILITY_PER_MATERIAL), unlike scatter/decay (default OFF).
+ * Ignition only occurs next to burning cells. Tests can override for specific
+ * catch rates. */
 void sand_set_flammability(sand_t *s, int chance);
 #define SAND_FLAMMABILITY_PER_MATERIAL (-1)
 
-/* How often heat crosses one cell of a conductor, per adjacent burning
- * cell per step, as a chance in 256 - see material.h's reaction_t.
- * conducts field and conduct_heat()'s own comment in sand_reactions.c
- * for the walk this actually drives. Defaults to
- * SAND_CONDUCTION_PER_MATERIAL, same reasoning as
- * sand_set_flammability()'s own default: conduction only ever happens
- * next to an actual burning cell, so there is no background chance to
- * guard tests against. Forcing this to 255 is what turns "wait several
- * dozen steps and hope a thick, hand-drawn stone slab eventually boils
- * something" into a one-step, deterministic assertion. */
+/* Heat conduction chance per cell, per burning cell per step, in 256. See
+ * material.h's reaction_t. Defaults to SAND_CONDUCTION_PER_MATERIAL, same as
+ * sand_set_flammability(): conduction only occurs next to burning cells, no
+ * background chance. Setting to 255 makes conduction deterministic. */
 void sand_set_conduction(sand_t *s, int chance);
 #define SAND_CONDUCTION_PER_MATERIAL (-1)
 
-/* How often conducted heat that has already reached a liquid (see
- * conduct_heat(), sand_reactions.c) actually boils it into steam that
- * same step, as a chance in 256 - see material.h's reaction_t.boils
- * field. A second roll on top of the `conducts` roll that got the heat
- * there in the first place, not a replacement for it. Defaults to
- * SAND_BOILS_PER_MATERIAL (each material's own table figure). Without an
- * override, a test that wants to watch water resist boiling for a while
- * uses the real, deliberately low figure it is tuned to; a test that
- * wants a deterministic one-step boil forces this to 255 instead, the
- * same reasoning sand_set_conduction()'s own override gives. */
+/* Heat reaching liquid boils into steam with 1/256 chance, using material.h's
+ * reaction_t.boils. Not a replacement for conduct_heat() roll. Defaults to
+ * SAND_BOILS_PER_MATERIAL. Tests may override for deterministic boiling. */
 void sand_set_boils(sand_t *s, int chance);
 #define SAND_BOILS_PER_MATERIAL (-1)
 
-/* How often a 2x2 square of one material collapses into a single cell of
- * another, per step, as a chance in 256 - see material.h's reaction_t.
- * condenses field and step_one_condensing_cell() (sand_reactions.c).
- * Defaults to SAND_CONDENSES_PER_MATERIAL (each material's own table
- * figure - steam's own deliberately rare one, today). A test that wants
- * a deterministic one-step condensation forces this to 255 instead of
- * looping a number of steps scaled to however rare the real figure ends
- * up being tuned.
- *
- * NOT THE ONLY COLLAPSE ON THE BOARD - acid rain (SAND_ACID_RAIN_CHANCE,
- * below) is a second one, the same 2x2/4-cells-into-1 shape but a mixed
- * gas/steam pocket collapsing into Acid or Water (50/50 coin flip)
- * rather than a uniform square collapsing into one fixed material, and
- * it is gated on raw material identity in step_one_reacting_row() rather
- * than on r->condenses or this override. A test relying on
- * sand_set_condenses(s, 0) to mean "no mechanic here destroys cells" -
- * several already do, to keep a strict grain-count assertion honest -
- * also needs sand_set_acid_rain(s, 0) if its board can ever hold both
- * MAT_GAS and MAT_STEAM together in a 2x2 pocket. */
+/* 2x2 material collapses to one cell every 256 steps (material.h's
+ * reaction_t), condensing in step_one_condensing_cell() (sand_reactions.c),
+ * defaulting to SAND_CONDENSES_PER_MATERIAL. For deterministic one-step
+ * condensation, set chance to 255. Acid rain (SAND_ACID_RAIN_CHANCE)
+ * transforms 2x2 gas/steam to 50% Acid/50% Water in step_one_reacting_row().
+ * Tests needing "no mechanic destroys cells" should disable acid rain if
+ * board supports MAT_GAS and MAT_STEAM. */
 void sand_set_condenses(sand_t *s, int chance);
 #define SAND_CONDENSES_PER_MATERIAL (-1)
 
-/* How much faster a heat-ramping cell's own `cools` drain runs while a
- * QUENCHING liquid (PAIR_QUENCHES, sand_reactions.c's own top comment -
- * water and acid, never lava or oil) is touching it - see
- * step_one_tempered_cell()'s own comment for the neighbour test this
- * multiplies and why it only ever applies in the ABOVE-ambient branch,
- * which is what stops water from chilling anything past room temperature
- * the way snow does. Not a new per-material field: `cools` already means
- * "how fast this material sheds heat", and a wet surface is the same
- * drain, just faster - there is no reason a stone pane's own cooling rate
- * and its cooling rate WHILE WET would ever want to be two independently
- * tuned numbers. One figure, because water is the only coolant anyone
- * actually pours - acid also satisfies PAIR_QUENCHES, and gets the same
- * speed-up as a side effect, but nobody has asked for acid to cool a wall
- * differently from water, and inventing a second multiplier before that
- * is a real request would be tuning a knob nobody turns. */
+/* A QUENCHING liquid (PAIR_QUENCHES) speeds up a heat-ramping cell's cooling
+ * in the ABOVE-ambient branch, per step_one_tempered_cell(). This prevents
+ * water from dropping below room temperature. The `cools` field already
+ * indicates heat-shedding rate, and wet surfaces cool faster. No distinction
+ * is made for stone pane cooling rates. Use one figure for water and acid,
+ * the relevant coolants. */
 #define SAND_WET_COOLING_FACTOR 8
 
 /* How often a burning LIQUID (lava, today) that has just done the WORK of
@@ -2177,56 +1746,23 @@ void sand_set_condenses(sand_t *s, int chance);
 void sand_set_lava_cooloff(sand_t *s, int chance);
 #define SAND_LAVA_COOLOFF_CHANCE 32
 
-/* The sentinel sand_set_lava_cooloff(s, chance < 0) restores, and what
- * sand_init() itself starts every sand_t at - "use SAND_LAVA_COOLOFF_
- * CHANCE", not "use each material's own row", since (unlike
- * flammability/conduction/boils/condenses) this has no per-material
- * figure to fall back to; SAND_LAVA_COOLOFF_CHANCE IS the only figure.
- * Named _DEFAULT rather than _PER_MATERIAL for exactly that reason - the
- * other five sentinels above answer "whose rate", this one only ever
- * answers "which constant". */
+/* The sentinel sand_set_lava_cooloff(s, chance < 0) uses
+ * SAND_LAVA_COOLOFF_CHANCE, not per-material values, because no per-material
+ * figure exists. Named _DEFAULT to indicate a single constant, unlike other
+ * sentinels that answer "whose rate". */
 #define SAND_LAVA_COOLOFF_DEFAULT (-1)
 
-/* Chance in 256 a sufficiently-covered lava cell converts to MAT_STONE
- * and bursts, PER COVERED CELL, PER STEP - not per pool, not per event.
- * This is the exact multiplier mistake the vent mechanism this feature
- * replaced (reaction_t.vent_chance, removed by bd esp32c6-0f2) made
- * TWICE: a figure that reads as "extremely low" in isolation is anything
- * but, once a large sealed pool has dozens of covered cells each
- * independently rolling this every single step they stay covered.
- * vent_chance's own combined rate briefly hit 255 with a maxed-out
- * second roll on top of it, and a covered cell got thrown away the very
- * next step, before any more crust could build on top of it - "material
- * pops the instant water touches lava", not "a sealed slab breaks free".
- * 1 is deliberately the rarest a single byte-wide roll (rng_next(&s->rng)
- * & 0xFF, this file's usual shape) can express - start at the floor, not
- * at whatever "feels right" in isolation, and tune upward on device with
- * the aggregate in mind, not the single-cell figure. If device play says
- * this is still too frequent even at 1, the documented next move is a
- * SECOND, independent gate in step_one_dissolver_cell()'s own
- * 1-in-60-on-`.evaporates` style (this file), not a new field alongside
- * this one - vent_chance already tried "add a knob" once, in the form of
- * its own second roll, and that is not a pattern to repeat casually. */
+/* 1-in-256 chance PER COVERED CELL, PER STEP to convert lava to MAT_STONE and
+ * burst, unlike vent_chance. vent_chance hit 255, causing instant material
+ * pop. 1 is rarest single byte roll; tune aggregate, not single cell. If
+ * still too frequent, add second gate in step_one_dissolver_cell(), not new
+ * field. */
 #define SAND_LAVA_BURST_CHANCE   1
 
-/* A SECOND, INDEPENDENT GATE stacked on the chance above, and the only
- * way to express a rate below it: 1 in 256 is already the rarest a single
- * byte-wide roll can say, so getting rarer needs another roll rather than
- * a smaller number. The same route step_one_dissolver_cell() takes for
- * `evaporates` (sand_reactions.c), for the same reason.
- *
- * 4, so the effective rate is 1 in 1024 per covered cell per step - a 75%
- * cut, asked for on device as 'at least 50%' after the first flash of the
- * burst read as firing too often. Remember what makes a per-cell figure
- * misleading: a sealed pool has MANY covered cells all rolling every step,
- * so the rate a POOL bursts at is this multiplied by however many cells
- * are covered, which is why the honest number here looks absurdly small.
- * Raise this constant to make bursts rarer still; it is the dial to turn
- * before touching SAND_LAVA_BURST_CHANCE, which has no room left to fall.
- *
- * APPLIED ONLY TO THE NATURAL RATE. sand_set_lava_burst() bypasses it
- * entirely, so a test that pins the chance gets exactly what it asked
- * for. */
+/* A SECOND GATE above chance < 1/256 triggers another roll. Follow
+ * step_one_dissolver_cell() in sand_reactions.c for `evaporates`. 4 for
+ * 1/1024 rate, 75% reduction. Only applies to natural rate;
+ * sand_set_lava_burst() bypasses. */
 #define SAND_LAVA_BURST_GATE     4
 
 /* SAND_GAS_IGNITE_BLAST_RADIUS's own figure (sand_reactions.c) - the only
@@ -2261,92 +1797,57 @@ void sand_set_lava_cooloff(sand_t *s, int chance);
  * blast is allowed to do. Starting point, tune on device. */
 #define SAND_LAVA_BURST_RADIUS   12
 
-/* Overrides SAND_LAVA_BURST_CHANCE for every lava cell alike - the same
- * shape as sand_set_lava_cooloff() just above, for the same reason: a
- * test that wants a burst to fire (or never fire) deterministically
- * cannot wait out a 1-in-256 roll and stay fast. Clamped to [0, 255]
- * exactly like every other chance-in-256 setter in this file. */
+/* Overrides SAND_LAVA_BURST_CHANCE for lava cells, similar to
+ * sand_set_lava_cooloff(). Ensures deterministic bursts for testing. Clamped
+ * to [0, 255]. */
 void sand_set_lava_burst(sand_t *s, int chance);
 
-/* Overrides SAND_GUNPOWDER_BLAST_COOLDOWN (sand_reactions.c): how many
- * steps must pass between one fuse blast and the next, board-wide. 0 lifts
- * the limit, and a negative value restores the compiled-in figure - the
- * same sentinel shape every other override in this file uses.
- *
- * It exists because the cooldown is otherwise a compile-time constant, so
- * a test asserting that a longer wait actually DELAYS a pile's second
- * detonation could not be written at all without rebuilding. */
+/* Overrides SAND_GUNPOWDER_BLAST_COOLDOWN: steps between fuse blasts,
+ * board-wide. 0 lifts limit, negative restores default. Exists because
+ * cooldown is compile-time constant, preventing test without rebuild. */
 void sand_set_fuse_cooldown(sand_t *s, int steps);
 
-/* The sentinel sand_set_lava_burst(s, chance < 0) restores, and what
- * sand_init() itself starts every sand_t at - "use
- * SAND_LAVA_BURST_CHANCE", named _DEFAULT rather than _PER_MATERIAL for
- * the same reason SAND_LAVA_COOLOFF_DEFAULT is: this has no per-material
- * table figure to fall back to, only the one constant. */
+/* The sentinel sand_set_lava_burst(s, chance < 0) restores. sand_init() sets
+ * every sand_t to use SAND_LAVA_BURST_CHANCE, named _DEFAULT rather than
+ * _PER_MATERIAL because there's no per-material table figure, only a
+ * constant. */
 #define SAND_LAVA_BURST_DEFAULT (-1)
 
-/* Overrides SAND_ACID_RAIN_CHANCE (below), the same shape as
- * sand_set_lava_cooloff()/sand_set_lava_burst() just above and for the
- * same reason: a test that wants a qualifying gas/steam pocket to
- * collapse (or never collapse) deterministically cannot wait out a
- * natural roll and stay fast the way test_a_2x2_block_of_steam_
- * condenses_into_one_water_cell (suite_sand_metal.c) already does for the
- * sibling mechanic this one extends. Clamped to [0, 255] exactly like
- * every other chance-in-256 setter in this file. */
+/* Overrides SAND_ACID_RAIN_CHANCE. Matches
+ * sand_set_lava_cooloff()/sand_set_lava_burst(). Necessary for deterministic
+ * gas/steam pocket collapse in tests, similar to
+ * test_a_2x2_block_of_steam_condenses_into_one_water_cell in
+ * suite_sand_metal.c. Clamped to [0, 255]. */
 void sand_set_acid_rain(sand_t *s, int chance);
 
-/* The sentinel sand_set_acid_rain(s, chance < 0) restores, and what
- * sand_init() itself starts every sand_t at - "use
- * SAND_ACID_RAIN_CHANCE", named _DEFAULT rather than _PER_MATERIAL for
- * the same reason SAND_LAVA_COOLOFF_DEFAULT is: acid rain is not read
- * from any one material's own row, only the one constant. */
+/* The sentinel sand_set_acid_rain(s, chance < 0) restores, and sand_init()
+ * starts every sand_t at - "use SAND_ACID_RAIN_CHANCE", named _DEFAULT like
+ * SAND_LAVA_COOLOFF_DEFAULT: acid rain is not read from any material's row,
+ * only the constant. */
 #define SAND_ACID_RAIN_DEFAULT (-1)
 
-/* Overrides SAND_ACID_DILUTE_MASS_BIAS (above), the same override shape
- * as every other tunable in this file - added specifically so a test
- * can isolate the mass-bias mechanism's own effect: forced to 0, a
- * water/acid contest is a pure, unbiased coin flip regardless of local
- * backing, letting a test compare "with bias" against "without" instead
- * of only ever measuring the two together. Unlike the chance-in-256
- * setters above this is not clamped to [0, 255] - the constant it
- * overrides is a per-neighbour multiplier, not a roll threshold, and
- * has no such ceiling of its own. */
+/* Overrides SAND_ACID_DILUTE_MASS_BIAS for testing mass-bias effect
+ * isolation. Forced to 0, it simulates an unbiased contest. Not clamped to
+ * [0, 255] as it's a per-neighbour multiplier, not a roll threshold. */
 void sand_set_acid_dilute_mass_bias(sand_t *s, int bias);
 
-/* The sentinel sand_set_acid_dilute_mass_bias(s, bias < 0) restores, and
- * what sand_init() itself starts every sand_t at - "use
- * SAND_ACID_DILUTE_MASS_BIAS", the same _DEFAULT naming SAND_LAVA_
- * COOLOFF_DEFAULT and SAND_ACID_RAIN_DEFAULT use for a constant with no
- * per-material table figure to fall back to. */
+/* The sentinel sand_set_acid_dilute_mass_bias(s, bias < 0) restores and
+ * sand_init() starts every sand_t at - "use SAND_ACID_DILUTE_MASS_BIAS",
+ * similar to _DEFAULT naming used for SAND_LAVA_COOLOFF_DEFAULT and
+ * SAND_ACID_RAIN_DEFAULT. */
 #define SAND_ACID_DILUTE_MASS_BIAS_DEFAULT (-1)
 
 
-/* How often a gas grain attempts its spontaneous rise/slide at all, as a
- * chance in 256 - see material.h's `mobility` field. 255, the default,
- * makes gas rise exactly one cell per step it can, the same deterministic
- * guarantee sand's own fall makes - most tests that place a gas grain and
- * step once want to reason about exactly where it lands, the same reason
- * scatter defaults off (test_gas_rises_straight_up_under_ordinary_gravity
- * is exactly that kind of test, which is why this is NOT off by default
- * the way scatter and decay are - "off" for a rise-gate means "never
- * rises", the opposite of a safe default here).
- *
- * Pass SAND_MOBILITY_PER_MATERIAL to use each material's own figure from
- * the table instead - what the app wants, for gas's actual lazy drift.
- * Any other value overrides all of them, which is what a test that
- * specifically wants to watch that drift wants instead. */
+/* Gas grain rise attempt frequency as a chance in 256, default 255 ensures
+ * deterministic rise per step. Use SAND_MOBILITY_PER_MATERIAL for
+ * material-specific figures or another value to override for specific drift
+ * tests. */
 void sand_set_mobility(sand_t *s, int chance);
 #define SAND_MOBILITY_PER_MATERIAL (-1)
 
-/* Advance one frame.
- *
- * (gx, gy) is a gravity vector in any units - only its direction matters. A
- * zero vector means free fall, where nothing settles and so nothing moves.
- *
- * `jostle` is 0-255, how hard the device is being shaken. It does two things,
- * both of which real shaking does: it makes grains prefer sliding sideways over
- * falling straight down, and it overrides friction, fluidising a pile that
- * would otherwise be locked solid. */
+/* Advance one frame. (gx, gy) is a gravity vector, direction matters. Zero
+ * vector means free fall. `jostle` (0-255) makes grains slide sideways and
+ * overrides friction. */
 void sand_step(sand_t *s, int gx, int gy, int jostle);
 
 /* The eight-way quantisation: the NEAREST of the eight directions.
@@ -2355,21 +1856,11 @@ void sand_step(sand_t *s, int gx, int gy, int jostle);
  * Deterministic, and not what sand_step uses - see below. */
 void sand_gravity_direction(int gx, int gy, int *dx, int *dy);
 
-/* What sand_step actually uses: the two directions bracketing the true angle,
- * chosen between at random, weighted so the LONG-RUN AVERAGE is the true angle.
- *
- * Grains can only move to one of eight neighbours - that is what a grid is -
- * so a single step can never express "17 degrees off vertical". Snapping to
- * the nearest of eight instead makes a slow tilt arrive in 45-degree jerks,
- * which is most of what makes tilt-controlled sand feel rigid.
- *
- * Dithering moves the quantisation into TIME, where there is room for it. At
- * 17 degrees the pile spends about 62% of its frames falling straight down and
- * 38% falling down-right, and at 70 fps the eye integrates that into a smooth
- * 17-degree flow. The same trick as dithering a colour ramp, applied to a
- * direction.
- *
- * Exactly-aligned input is never dithered, so gravity of (0, 1) is always
- * straight down and tests stay deterministic. */
+/* sand_step uses random bracketing, averaging true angles. Grains move to
+ * neighbors, making slow tilts rigid. Dithering varies direction over time,
+ * smoothing this. At 17 degrees, 62% of frames fall straight down, 38% fall
+ * down-right, integrating to a smooth 70 fps flow. Exactly-aligned input is
+ * never dithered, ensuring gravity (0, 1) is always straight down and tests
+ * are deterministic. */
 void sand_gravity_direction_dithered(sand_t *s, int gx, int gy,
                                      int *dx, int *dy);
