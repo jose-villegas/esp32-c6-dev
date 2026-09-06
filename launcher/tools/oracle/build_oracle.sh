@@ -1,7 +1,7 @@
 #!/bin/sh
 #
 # Cross-compile one bare-metal oracle image: the portable sand simulation
-# plus suite_sand.c's SAND_HOST_PROBE scenes, for QEMU's generic riscv32
+# plus suite_sand_perf.c's SAND_HOST_PROBE scenes, for QEMU's generic riscv32
 # "virt" machine (bd oracle spike - see this directory's README.md for why
 # this route exists and what it still needs to actually run).
 #
@@ -15,7 +15,7 @@
 # Scene names are oracle_main.c's SCENES table - run `grep '"' oracle_main.c`
 # for the current list, or read launcher/main/apps/sand/tools/perf_probe/
 # probe_main.c's own copy (kept in sync by hand, same as that file already
-# does relative to suite_sand.c's SAND_HOST_PROBE wrappers).
+# does relative to suite_sand_perf.c's SAND_HOST_PROBE wrappers).
 #
 # CODEGEN FIDELITY, same reasoning as perf_probe/build_probe.sh: every flag
 # that changes what GCC emits for portable C comes from the ONE device
@@ -102,7 +102,6 @@ $APP_SAND/tools/perf_probe/gfx_probe_stub.c
 $HERE/esp_timer_oracle_stub.c
 $TEST_DIR/suites.c
 $TEST_DIR/timing.c
-$APP_SAND/suite_sand.c
 $APP_SAND/sand.c
 $APP_SAND/sand_liquid.c
 $APP_SAND/sand_gas.c
@@ -113,6 +112,19 @@ $APP_SAND/row_runs.c
 $APP_SAND/sand_ui.c
 $APP_SAND/tilt.c
 "
+
+# suite_sand.c grew past 32,000 lines and was split by topic into
+# suite_sand_common.c/suite_sand_scenes.c/suite_sand_motion.c/... (bd esp32c6
+# test-suite-refactor) - this oracle needs all of them, the same as
+# perf_probe/build_probe.sh does, since the scene builders and the
+# sand_host_probe_run_*() wrappers this oracle calls now live in different
+# pieces of what used to be one file. suite_sand_ui.c is excluded - it was
+# never part of suite_sand.c and this oracle never needed it before either.
+for f in "$APP_SAND"/suite_sand_*.c; do
+    [ "$(basename "$f")" = "suite_sand_ui.c" ] && continue
+    DEVICE_BUILD_SOURCES="$DEVICE_BUILD_SOURCES
+$f"
+done
 
 mkdir -p "$(dirname "$OUT")"
 OBJ_DIR="$(dirname "$OUT")/obj_$SCENE"

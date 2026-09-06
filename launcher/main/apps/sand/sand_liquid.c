@@ -91,8 +91,8 @@
  * immediately around the point of impact clears out together, which is
  * what makes this actually look like a crater opening rather than one
  * cell politely stepping aside. See test_a_water_splash_actually_opens_a_
- * gap in suite_sand.c, added specifically because "something got queued"
- * was never proof anything became visible. */
+ * gap in suite_sand_materials.c, added specifically because "something got
+ * queued" was never proof anything became visible. */
 static inline void splash_displace(sand_t *s, int x, int y, uint8_t mat_id)
 {
     if (mat_id != MAT_WATER) {

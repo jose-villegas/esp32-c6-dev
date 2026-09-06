@@ -38,7 +38,7 @@ Consequences of staying in the extended range:
 - the last full-physics slot stays banked (see `Architecture.md`, "the
   budget") for something that actually has to move or carry a variant;
 - every `MAT_COUNT`-derived test is untouched, in particular the all-pairs
-  mixed scene in `suite_sand.c`;
+  mixed scene in `suite_sand_scenes.c`;
 - metal gets its own colour and its own reaction row, because
   `reaction_of()` decodes the extended range and the palette is indexed by
   the whole cell byte;
@@ -61,7 +61,7 @@ a run already AT the cap (its depth counter only needs to reach
 `CONDUCT_REACH - 1`, which satisfies `depth < CONDUCT_REACH`), so one more
 cell gets placed before the next attempt finally fails to fit - see
 `test_the_rod_terminates_at_conduct_reach_not_the_far_wall` in
-`suite_sand.c` for the measurement. It is self-limiting, it falls out of
+`suite_sand_metal.c` for the measurement. It is self-limiting, it falls out of
 tables that are already written, and it makes `CONDUCT_REACH` legible to
 the player for the first time, to within one cell. It is also the thing
 most likely to surprise someone, so the bound gets a test.

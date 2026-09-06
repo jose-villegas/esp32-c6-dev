@@ -13,14 +13,15 @@
  * inline the way a call within the same file is. A header of small inline
  * functions gives each .c file its own inlinable copy, which is what lets the
  * file split without also risking a performance regression for it - see the
- * frame-budget tests in suite_sand.c, which is exactly what would catch it if
+ * frame-budget tests in suite_sand_perf.c, which is exactly what would catch it if
  * this ever stopped being true.
  *
  * THE REAL CRITERION FOR WHAT ELSE LIVES HERE, STATED HONESTLY: not every
  * `static` helper in sand.c that could sit here (this header is app-internal
  * and portable either way, so there is no layering reason it could not) does.
  * blocker_normal(), reflect_off_normal() and impulse_drag_of() are here
- * because a test needed to call them directly - suite_sand.c cannot reach a
+ * because a test needed to call them directly - the sand test suite (split
+ * across suite_sand_*.c) cannot reach a
  * function `static` inside sand.c at all, only ones declared where it can
  * include them, and this header is that place. can_impulse_enter(),
  * can_impulse_enter_gravity_ward() and impulse_gravity_candidates() stay
@@ -500,7 +501,7 @@ static inline int ring_of(int dx, int dy)
  * normal has no other axis to weigh against), while diagonal `dir` can now
  * genuinely glance when the arc is asymmetric. See
  * test_blocker_normal_and_reflect_off_normal_match_the_exhaustive_arc_table
- * (suite_sand.c) for the full 8-direction x 4-configuration ground truth
+ * (suite_sand_impulse.c) for the full 8-direction x 4-configuration ground truth
  * this was checked against - do not touch the dominance rule below without
  * updating that table alongside it.
  *
@@ -641,7 +642,8 @@ neighbor_smothers(const sand_t *s, int nx, int ny, int w, int h, uint8_t density
  * A pocket with an open SIDE still qualifies as long as its lid is
  * complete; a lid with a gap in it is not a lid. See
  * test_lava_in_a_wall_notch_never_bursts and
- * test_cover_primitive_matches_the_exhaustive_shape_table (suite_sand.c).
+ * test_cover_primitive_matches_the_exhaustive_shape_table
+ * (suite_sand_lava_burial.c).
  *
  * `mask` is 3 bits: bit i set means ring_dir(anti - 1 + i) covers this
  * cell - bit 1 is anti-gravity itself, bits 0 and 2 the diagonals.
@@ -658,7 +660,7 @@ neighbor_smothers(const sand_t *s, int nx, int ny, int w, int h, uint8_t density
  * primitive, anchored(), growth's own "which way is up" - and this one
  * is pinned by a test that drives it under sideways gravity specifically
  * to stop it ever regressing to a fixed screen direction
- * (test_a_wide_pool_under_a_sideways_crust_bursts, suite_sand.c).
+ * (test_a_wide_pool_under_a_sideways_crust_bursts, suite_sand_lava_burial.c).
  *
  * NOT s->last_step_dx/dy, which is the DITHERED direction of one step: a
  * tilt falling between two eighths spends some steps on each, in
