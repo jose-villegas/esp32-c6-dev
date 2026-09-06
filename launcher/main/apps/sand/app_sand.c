@@ -1088,11 +1088,11 @@ static uint32_t foam_elapsed_ms;
  * see advance_cullet() for why this one needs the sibling shape instead). */
 static uint32_t cullet_elapsed_ms;
 
-/* One glass phase step per this much of gravity_bearing_q16()'s range -
- * not a rate to accumulate, see advance_glass_phase() for why. 32768 is
- * a sixteenth-turn, so a full rotation crosses eight steps: a guess,
- * first to move if it reads too fast or slow. */
-#define GLASS_PHASE_SCALE 32768
+/* Bits of gravity_bearing_q16()'s range glass_phase drops - not a rate,
+ * see advance_glass_phase(). Keeps an earlier, coarser version's pacing
+ * (one sweep per sixteenth-turn) but resolves it into 256 shades instead
+ * of jumping between 8, so a small tilt moves the shade a small amount. */
+#define GLASS_PHASE_SHIFT 7
 
 /* The last phase glass_phase actually painted at, so advance_glass_phase()
  * can tell whether this frame's snapshot differs enough to be worth
@@ -2484,7 +2484,7 @@ static int gravity_bearing_q16(int gx, int gy)
  * with it; change the tilt and the phase follows by exactly as much. */
 static bool advance_glass_phase(int gx, int gy)
 {
-    const int phase = gravity_bearing_q16(gx, gy) / GLASS_PHASE_SCALE;
+    const int phase = gravity_bearing_q16(gx, gy) >> GLASS_PHASE_SHIFT;
     const bool changed = phase != glass_last_phase;
     glass_last_phase = phase;
     material_set_glass_phase(phase);
