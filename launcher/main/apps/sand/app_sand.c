@@ -1082,6 +1082,18 @@ static uint32_t foam_elapsed_ms;
  * see advance_cullet() for why this one needs the sibling shape instead). */
 static uint32_t cullet_elapsed_ms;
 
+/* How much accumulated gravity*time slides glass's phase by one band step -
+ * tuned by eye against a resting tilt_y around 3300-4200 (suite_sand_
+ * liquid_depth.c's own sidecars): about a step a second there, a slow
+ * shimmer, not a flicker. First to move if it reads too fast or slow. */
+#define GLASS_PHASE_SCALE 2000000
+
+/* Gravity accumulated toward the next glass phase step, carried across
+ * frames the same way cullet_elapsed_ms is - except signed and never
+ * reset to a remainder, since the phase itself has to be able to run
+ * backwards when gravity flips sign, not just restart a forward count. */
+static int64_t glass_phase_accum;
+
 /*=============================================================================
  * A LIQUID INTERIOR'S LOCAL DEPTH - replaces a screen-position gradient with
  * one that follows each puddle's own shape.
@@ -1963,32 +1975,15 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
          * consumer of its hash: material_colours()'s foam dither (see that
          * function's own comment on its water branch, in material.c). Every
          * other material still gets material_grain_hash(cx, cy) - the FINE,
-         * per-cell hash - completely unchanged: stone's and wood's speckle
-         * depend on adjacent cells disagreeing, and coarsening their hash
-         * the way water's is coarsened here would flatten them into the
-         * same striping bug material_grain_hash()'s own comment already
-         * tells the story of. */
-
-        /* GLASS and METAL share this slot's third case, for neither of the
-         * other two's reasons: material_gravity_band() is not a hash, but
-         * position along CURRENT GRAVITY (shine_ux_q8/shine_uy_q8, read
-         * again below for the shine itself) - laminae that turn with a
-         * tilt, not sit fixed to the screen. */
-
-        /* Glass jitters its own step by a hash so the band edge reads as
-         * hand-blown rather than machined; metal passes zero jitter and
-         * keeps the sharp edge, which is the one that reads as brushed. */
-        const material_id_t cell_mat = CELL_MATERIAL(row[cx]);
-        const bool cell_is_metal =
-            cell_mat == MAT_EXTENDED && CELL_VARIANT(row[cx]) == MATX_METAL;
-        const unsigned hash = (cell_mat == MAT_WATER)
+         * per-cell hash - completely unchanged: stone's, wood's and glass's
+         * grain all depend on adjacent cells disagreeing, and coarsening
+         * their hash the way water's is coarsened here would flatten them
+         * into the same striping bug material_grain_hash()'s own comment
+         * already tells the story of. */
+        const bool cell_is_water = CELL_MATERIAL(row[cx]) == MAT_WATER;
+        const unsigned hash = cell_is_water
             ? material_grain_hash(cx >> FOAM_BLOB_SHIFT, cy >> FOAM_BLOB_SHIFT)
-            : (cell_mat == MAT_GLASS)
-                ? material_gravity_band(cx, cy, shine_ux_q8, shine_uy_q8, 4,
-                                        (int)(material_grain_hash(cx, cy) & 1u))
-                : cell_is_metal
-                    ? material_gravity_band(cx, cy, shine_ux_q8, shine_uy_q8, 8, 0)
-                    : material_grain_hash(cx, cy);
+            : material_grain_hash(cx, cy);
 
         /* THE PER-CELL COST OF LOCAL DEPTH, in full, now that only ONE
          * regime's walk runs per cell instead of two: one array read for
@@ -3814,6 +3809,13 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
      * buys and why a frame count would not. */
     foam_elapsed_ms += dt_ms;
     material_set_foam_phase(foam_elapsed_ms / FOAM_PHASE_MS);
+
+    /* Glass's own phase, driven by GRAVITY not a clock - see
+     * GLASS_PHASE_SCALE above. gy already carries both magnitude and
+     * sign, so a harder tilt runs this faster and the opposite tilt runs
+     * it backwards for free. */
+    glass_phase_accum += (int64_t)gy * (int64_t)dt_ms;
+    material_set_glass_phase((int)(glass_phase_accum / GLASS_PHASE_SCALE));
 
 #if CONFIG_LAUNCHER_DEVELOPMENT
     const int64_t t1 = esp_timer_get_time();
