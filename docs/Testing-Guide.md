@@ -222,7 +222,7 @@ knowing about: ESP-IDF's own `CONFIG_LOG_MAXIMUM_LEVEL` compiles
 `ESP_LOGI`/`ESP_LOGW`/etc. calls out of the binary entirely above a given
 severity, project-wide, with no per-call-site `#if` needed — this project
 just doesn't split that ceiling per build variant yet. See
-[Log-Level-Plan.md](Log-Level-Plan.md).
+[Log-Level-Plan.md](plans/Log-Level-Plan.md).
 
 ### The Kconfig trap in REQUIRES
 
@@ -500,15 +500,15 @@ against.
 
 - `docs/Launcher-Architecture.md` — how an app plugs into the shell, and the
   folder layout the app-suite convention above assumes.
-- `docs/Sand/Sand-Simulation.md` — the sand suite (`suite_sand_*.c`) is the
+- `docs/sand/Sand-Simulation.md` — the sand suite (`suite_sand_*.c`) is the
   largest test suite in this codebase; this is what it is actually testing.
-- `docs/Notes/` — the hardware constraints behind the device-only
-  performance tests. Start at `docs/Notes/README.md`.
-- `docs/Settings-App-Plan.md` — the Diagnostics app itself now follows the
+- `docs/notes/` — the hardware constraints behind the device-only
+  performance tests. Start at `docs/notes/README.md`.
+- `docs/plans/Settings-App-Plan.md` — the Diagnostics app itself now follows the
   DEVELOPMENT/SELFTEST split this guide documents (whole app on
   DEVELOPMENT, the self-test runner alone on SELFTEST); what remains open
   is extracting its surviving DEVELOPMENT-only rows into their own Settings
   app, and the SELFTEST/"diagnostics" naming mismatch this guide describes.
-- `docs/Log-Level-Plan.md` — planned compile-time log-severity ceiling per
+- `docs/plans/Log-Level-Plan.md` — planned compile-time log-severity ceiling per
   build variant, complementing the DEVELOPMENT/SELFTEST split above rather
   than replacing it.

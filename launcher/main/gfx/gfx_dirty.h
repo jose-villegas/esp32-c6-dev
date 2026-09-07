@@ -6,7 +6,7 @@
  * by convenience: mark_band() sits on gfx_fill_rect()/gfx_pixel()'s hot
  * path - gfx_text_scaled() alone calls it once per set font pixel - and
  * routing that through a real cross-translation-unit call once cost about
- * 5% of the launcher's framerate (see docs/Notes/Display-and-Rendering.md's
+ * 5% of the launcher's framerate (see docs/notes/Display-and-Rendering.md's
  * "Partial updates"). A traditional .c/.h split would put mark_band() back
  * behind exactly that kind of call for every file that includes this one,
  * silently reintroducing a regression this project already measured and
@@ -23,7 +23,7 @@
  * names in this file with a public-API counterpart to avoid colliding
  * with; everything else keeps the name it always had inside gfx.c.
  *
- * See docs/Notes/Display-and-Rendering.md's "Partial updates" and "Still
+ * See docs/notes/Display-and-Rendering.md's "Partial updates" and "Still
  * untapped" for the full reasoning behind the grid, the leaf layer
  * underneath it, and the two real bugs (MALLOC_CAP_DMA, the semaphore's
  * lack of per-transfer identity) this design surfaced.

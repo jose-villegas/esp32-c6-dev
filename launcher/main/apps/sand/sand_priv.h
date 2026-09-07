@@ -721,7 +721,7 @@ void step_impulses(sand_t *s, int dx, int dy);
  * inlining, or duplicates flash). Shipped: _impl versions stay static
  * inline here; sand_gas.c calls thin non-inline wrappers in sand.c,
  * keeping the hot path inlined, at most two flash copies. See
- * docs/Sand/Simulation-Lessons.md. */
+ * docs/sand/Simulation-Lessons.md. */
 
 /* Static materials never yield regardless of density, so a wall stays a
  * wall - the general "yields to denser" rule below has this one

@@ -44,7 +44,7 @@
  * moisture it grows on, there is a small chance the soil cell it drank
  * through welds into a ROOT instead of staying a grain of dirt -
  * KIND_STATIC, holds still, and cannot be carried away the way loose
- * dirt can. See reaction_t.roots and the top of docs/Sand/Sand-
+ * dirt can. See reaction_t.roots and the top of docs/sand/Sand-
  * Simulation.md's tree-feeding section. */
 
 /* A watered plant growing on a dirt bed eventually puts a root into the
@@ -1316,7 +1316,7 @@ static void test_conduction_never_pushes_water_up_or_into_anything_but_soil(void
  * harness with a 19-row dry bed watered at the collar: mean deepest root
  * 4.6 rows with conduction off, 15.0 with it on, over ten seeds (see
  * ROOT_CONDUCT_CHANCE's own comment in sand_reactions.c, and the Roots
- * section of docs/Sand/Sand-Simulation.md). What the suite pins is the
+ * section of docs/sand/Sand-Simulation.md). What the suite pins is the
  * mechanism itself - the two tests above. */
 
 static void test_a_thickly_rooted_cell_stops_growing(void)
@@ -1380,7 +1380,7 @@ static void test_roots_grow_toward_the_wet_side_only(void)
 }
 
 /* THE RUNAWAY SCENE, scaled for the host suite - see the Roots section
- * of docs/Sand/Sand-Simulation.md for the full six-seed, 20,000-step
+ * of docs/sand/Sand-Simulation.md for the full six-seed, 20,000-step
  * version this is a fast stand-in for. A root pre-planted (so the rare
  * one-time collar seed cannot confound the reading - see
  * spend_soil_moisture()'s own comment), its collar rewatered to

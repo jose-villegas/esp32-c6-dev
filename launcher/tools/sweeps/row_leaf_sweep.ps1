@@ -8,7 +8,7 @@
     before falling back to a coarser send. Same build+flash+measure+
     restore pattern as main/apps/sand/tools/block_size_sweep.ps1 - see that
     script's own comment for the shared reasoning, and
-    docs/Notes/Display-and-Rendering.md's "The cap sweeps" section for
+    docs/notes/Display-and-Rendering.md's "The cap sweeps" section for
     what this one found (raising the cap regressed the case it exists to
     help - both stay at 2 as shipped).
 

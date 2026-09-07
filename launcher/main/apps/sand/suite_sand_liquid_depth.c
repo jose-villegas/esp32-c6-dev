@@ -2777,7 +2777,7 @@ static void test_a_sparse_repaint_does_not_band_a_tall_liquid_column(void)
  *
  * WHAT THE FIRST THREE SUSPECTS TURNED OUT NOT TO BE, measured before this
  * test was written, because ruling them out is what made the real mechanism
- * findable - see docs/Sand/Shading-and-Colour.md for the full account:
+ * findable - see docs/sand/Shading-and-Colour.md for the full account:
  *
  *   - NOT the near-45-degree regime transient already documented in update_
  *     local_depth_gravity(). The device's own capture sidecars for this

@@ -622,7 +622,7 @@ breaks no behaviour and nothing else would notice.
   cell's stored byte sits perfectly still, with a rare grain flashing pure
   white for one step as a glint. It repaints on its own clock the same way the shine does
   (`row_has_cullet[]`, `CULLET_PHASE_MS`, `app_sand.c`) - see
-  docs/Sand/Shading-and-Colour.md's own section on it for the full
+  docs/sand/Shading-and-Colour.md's own section on it for the full
   mechanism.
 - **Speckled** (stone) picks its shade from the cell's POSITION rather than
   its variant. Stone used to carry a random shade and a wall looked like

@@ -60,7 +60,7 @@ Recorded where the relevant constant lives, not just here - see
 `sand.h`'s own comment above `SAND_BLOCK_W`/`SAND_BLOCK_H` for the full
 six-pair table, and:
 
-- `docs/Sand/Simulation-Lessons.md`, "The sixth attempt" - the block-
+- `docs/sand/Simulation-Lessons.md`, "The sixth attempt" - the block-
   size sweep's full story, including two real bugs it surfaced (a
   device-only stack overflow, two test fixtures that broke under this
   same tuning) and the sweep-tooling bugs worth remembering if you're
@@ -69,7 +69,7 @@ six-pair table, and:
   Windows PowerShell 5.1's `-Encoding utf8` writing a BOM - all three
   are already worked around in every script here, but worth knowing why
   if something in this pattern ever needs changing).
-- `docs/Notes/Display-and-Rendering.md`, "The cap sweeps" - the
+- `docs/notes/Display-and-Rendering.md`, "The cap sweeps" - the
   `ROW_MAX_RUNS`/`LEAF_REFINE_MAX_RUNS`/`GATHER_MAX_PIXELS` results,
   and "The re-sweep, 2026-08-28" for the second pass over all three.
 

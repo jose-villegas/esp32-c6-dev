@@ -4,7 +4,7 @@
 # self-test run, write a markdown table of just the frame-budget tests
 # (scenario, budget, measured, headroom, pass/fail) - generated fresh from
 # a real capture and the current source, so it can never go stale the way
-# a hand-transcribed copy (like the table in docs/Sand/Architecture.md) can.
+# a hand-transcribed copy (like the table in docs/sand/Architecture.md) can.
 #
 # Usage:
 #   main/apps/sand/tools/report_performance.sh [--no-restore] \
@@ -160,7 +160,7 @@ extract_measured() {
     ' "$report" 2>/dev/null || true
 }
 
-# The four-command ritual from docs/Sand/Perf-Round-Guide.md's "Reading a
+# The four-command ritual from docs/sand/Perf-Round-Guide.md's "Reading a
 # capture" section, run here instead of left to the operator - it was
 # already being typed by hand five times in two days. Free heap first
 # (a short heap means every frame-budget fixture failed to allocate and
@@ -186,7 +186,7 @@ print_summary() {
         if [ -n "$heap" ] && [ "$heap" -lt 50000 ]; then
             echo "WARNING: free heap ($heap bytes) is below ~50,000 - frame-budget"
             echo "fixtures likely failed to allocate their grids and measured"
-            echo "nothing this run. See docs/Sand/Perf-Round-Guide.md's free-heap table."
+            echo "nothing this run. See docs/sand/Perf-Round-Guide.md's free-heap table."
         fi
     fi
     local ctrl v

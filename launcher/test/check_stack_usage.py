@@ -10,7 +10,7 @@ protection fault" loops, both caused by a test fixture declaring a huge local
 array - a 4 KB comparison buffer, and later an impulse_t[4096] (24 KB). Both
 passed green on the host, whose stack is megabytes; the ESP32-C6's main task
 stack (CONFIG_ESP_MAIN_TASK_STACK_SIZE) is 3,584 bytes, shared with Unity,
-printf, and the call chain above the fixture. See docs/Sand/
+printf, and the call chain above the fixture. See docs/sand/
 Performance-Tuning-Attempts.md, "Recurring failure modes". The host build
 cannot reproduce a stack panic - it can only predict one, statically, from
 the frame sizes GCC/Clang already compute for their own prologues. This gate
@@ -272,7 +272,7 @@ def main(argv):
               "bytes (CONFIG_ESP_MAIN_TASK_STACK_SIZE), shared with Unity "
               "and printf - a fixture this large panic-loops the board "
               "instead of failing a test. See this file's header and "
-              "docs/Sand/Performance-Tuning-Attempts.md." % stack_bytes)
+              "docs/sand/Performance-Tuning-Attempts.md." % stack_bytes)
         return 1
 
     largest = records[0]

@@ -635,7 +635,7 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_CODES] = {
             .roots_to = MATX(MATX_ROOT),
         },
 
-    /* METAL. See Sand/Metal-Smelting-Plan.md. Low nibble is identity, no
+    /* METAL. See docs/plans/Metal-Smelting-Plan.md. Low nibble is identity, no
      * glow, heat, or melt. Focuses on heat movement. */
     [MATX_METAL] =
         {
@@ -650,7 +650,7 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_CODES] = {
         },
 
     /* See reaction_t.roots and PART 1 of the roots feature
-     * (docs/Sand/Sand-Simulation.md). */
+     * (docs/sand/Sand-Simulation.md). */
     [MATX_ROOT] =
         {
             /* Handles anchoring, stem walk, distance to water. Trunk on root

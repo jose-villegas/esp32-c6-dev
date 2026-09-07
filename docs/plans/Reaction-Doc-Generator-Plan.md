@@ -299,7 +299,7 @@ out of scope here.
 
 **Phase 1 — get a table on screen.** `dump_reactions.c`: field spec with
 group/kind, the static assert, the rate ladder, the pairwise join, and a
-generated `docs/Sand/Reaction-Table.md`. Plus `report_reactions.sh` in the
+generated `docs/sand/Reaction-Table.md`. Plus `report_reactions.sh` in the
 same folder, and a `--check` mode wired into
 `.github/workflows/host-tests.yml` (no new CI dependency: gcc and a diff).
 
