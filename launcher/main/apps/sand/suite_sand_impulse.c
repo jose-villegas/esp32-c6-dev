@@ -1489,7 +1489,7 @@ static void test_a_chunk_stacked_on_an_in_flight_chunk_waits_instead_of_settling
  * a solid does not ------------------------------------------------------- */
 
 /* AN ORDINARY, NEVER-THROWN KIND_STATIC CELL gets none of the above - no
- * sand_impulse()/sand_impulse_dislodge() call here at all, so this cell is
+ * sand_impulse()/sand_impulse_dislodge() call on it here at all, so it is
  * never added to s->impulse_buf and step_impulses() never looks at it. The
  * main sweep (sand_step(), sand.c) skips KIND_STATIC outright by design -
  * that is what makes stone or glass hold its shape - so a static cell
@@ -1500,10 +1500,15 @@ static void test_a_chunk_stacked_on_an_in_flight_chunk_waits_instead_of_settling
  * into ordinary movement instead - see the drift block's own comment
  * (step_impulses(), sand.c) for why that generalisation is explicitly not
  * what this feature is. */
-static void test_an_ordinary_static_solid_still_does_not_sink_into_liquid_or_powder(void)
+/* BOTH SWEEP PARITIES, because one proves nothing. sand_step_liquids()
+ * flips s->liquid_flip every step and cross-flow takes its row order from
+ * it, so a scene reaches both orders on a real board; a fixture starting at
+ * the default only ever exercises one. Run with `flip` both ways. */
+static void ordinary_static_solid_scene(bool flip)
 {
     fixture();
     sand_enable_impulses(&s, impulse_buf, W * H);
+    s.liquid_flip = flip;
 
     sand_set(&s, 2, 0, STONE);
     for (int y = 1; y < H; y++) {
@@ -1517,6 +1522,21 @@ static void test_an_ordinary_static_solid_still_does_not_sink_into_liquid_or_pow
 
     for (int i = 0; i < H; i++) {
         sand_step(&s, 0, 1000, 0);
+
+        /* CHECKED EVERY STEP, AND BY KIND, not once at the end against a
+         * count of zero. The water column here spreads, falls and lands on
+         * itself, and water landing on water is exactly what
+         * splash_displace() (sand_liquid.c) queues an impulse for - so the
+         * buffer is legitimately non-empty mid-run whichever way the sweep
+         * runs. What must never appear in it is a KIND_STATIC entry. */
+        for (int q = 0; q < s.impulse_count; q++) {
+            TEST_ASSERT_NOT_EQUAL_MESSAGE(KIND_STATIC,
+                material_of(s.impulse_buf[q].cell)->kind,
+                "nothing static here was ever thrown, so no KIND_STATIC "
+                "cell should ever have been queued into impulse tracking "
+                "- it is IMPULSE that earns the sinking this feature "
+                "adds, not merely being a solid");
+        }
     }
 
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(MAT_STONE,
@@ -1528,9 +1548,12 @@ static void test_an_ordinary_static_solid_still_does_not_sink_into_liquid_or_pow
         CELL_MATERIAL(sand_at(&s, 5, 0)),
         "same for a powder - an ordinary KIND_STATIC cell must still just "
         "sit exactly where it was placed");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(0, s.impulse_count,
-        "nothing here was ever thrown, so nothing should ever have been "
-        "queued into impulse tracking in the first place");
+}
+
+static void test_an_ordinary_static_solid_still_does_not_sink_into_liquid_or_powder(void)
+{
+    ordinary_static_solid_scene(false);
+    ordinary_static_solid_scene(true);
 }
 
 /* --- Rung 1: medium drag on a thrown KIND_STATIC chunk --------------------
