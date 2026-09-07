@@ -12,6 +12,14 @@
 # it going. Read scripts/results/comment-trim.md afterwards - the rewrites need
 # a human, since a local model will occasionally drop a WHY.
 #
+# --via hybrid tries a free OmniRoute model first, in parallel across the
+#   whole file (no local GPU to contend for, and reasoning this machine
+#   cannot run locally) - but only after an automated check on the answer
+#   (dropped facts, a fabricated number, wholesale unrelated content), never
+#   blind. Anything that fails falls back to this same local model, one
+#   comment at a time as usual - ollama is still required even for a hybrid
+#   run.
+#
 # Reviewing a finished run (deterministic fact checks, then a reviewer model
 #   of your choice - or a packet for one this script cannot call):
 #   trim-comments-local.sh --review
