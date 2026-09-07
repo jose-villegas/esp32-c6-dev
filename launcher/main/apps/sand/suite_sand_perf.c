@@ -697,41 +697,14 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
     free(big);
     free(blocks);
 
-    /* 54000 us: a REDUCTION TARGET, not headroom. Set 10% below a measured
-     * 60091 us so this fails today and stops failing only when the code
-     * gets faster. That is the same thing the mixed-scene budget above
-     * does, and the reason that one went from 26.2% over to 7.0% under
-     * without the number ever moving.
-     *
-     * THE 60091 IS STALE, AND KNOWINGLY SO. It was taken on 2026-08-25
-     * against a scene of TWELVE materials covering 66 pairs. There are
-     * fourteen now - glass and snow - so the same derived scene covers 91
-     * pairs, and the reactions pass has gained a per-cell branch and a
-     * second kind of participant (cells with a temperature) since. The
-     * scene this number describes no longer exists.
-     *
-     * The number is deliberately NOT adjusted for that. A reduction target
-     * moved to accommodate the code is no longer a target, and this file
-     * has already been burned twice by figures that were reasoned about
-     * rather than measured - 100000 picked with no hardware, then 300000
-     * extrapolated from another scene's ratio, which came out four times
-     * too pessimistic. The right correction is a fresh device capture, not
-     * an estimate.
-     *
-     * On the extrapolation that produced 300000: fire measures ~318x host
-     * and this scene ~63x, so it predicted 226-244 ms against an actual
-     * 60 ms. Worth remembering before anyone extrapolates again - on this
-     * chip the ratio is dominated by cache behaviour the host does not
-     * model, and it is scene-specific.
-     *
-     * The staleness warning the paragraphs above carried is RESOLVED:
-     * the fresh capture the 2026-08-26 re-base ran on (see
-     * FULL_STEP_BUDGET_US's comment) measured the fourteen-material
-     * scene at 74911 us, and the target followed the same uniform rule
-     * as every other budget: measured * 0.9, rounded -> 67500.
-     * Numerically up from the stale 54000, still a tenth below what the
-     * current scene actually costs. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(67500, (int)per_step,
+    /* A REDUCTION TARGET, not headroom: 10% under what the scene measured,
+     * so it fails until the code gets faster. Same rule as every budget
+     * here - see FULL_STEP_BUDGET_US's comment. */
+
+    /* Raised deliberately, from a fresh capture. That is the one exception
+     * to the rule against raising a budget, and the accretion evidence
+     * behind it is on bd esp32c6-8zx. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(87800, (int)per_step,
         "the mixed-material flip is held to 10% below what it measured, "
         "as a reduction target - this failing means the work has not been "
         "done yet, not that something broke");
