@@ -72,17 +72,13 @@ void touch_start(void)
         panel = NULL;
     }
 
-    /* Above the render loop's priority so a long blit cannot delay sampling,
-     * which is the entire point of running it separately.
-     *
-     * The result is CHECKED, because this call can genuinely fail and used
-     * to fail silently: a 3 KB stack is a small ask, but touch_start() runs
-     * after everything else at boot, and on the autorun diagnostics image
-     * that means after the whole test suite has allocated and freed the
-     * heap into a state with no 3 KB run left in it. The symptom was a
-     * board that booted, drew, and then ignored every tap - with nothing on
-     * the console to say why, because a failed xTaskCreate() here simply
-     * returned and left the panel handle looking perfectly healthy. */
+    /* Above the render loop's priority so a long blit cannot delay sampling -
+     * the entire point of running it separately. The result is CHECKED: this
+     * call can fail and used to fail silently. On the autorun diagnostics
+     * image, touch_start() runs after the test suite has allocated and freed
+     * the heap into a state with no 3 KB run left, so xTaskCreate() failed
+     * silently and left the panel handle looking healthy - the board booted,
+     * drew, and ignored every tap with nothing on the console to say why. */
     if (xTaskCreate(touch_task, "touch", 3072, NULL, 6, NULL) != pdPASS) {
         ESP_LOGE(TAG, "Could not start the touch task (largest free block "
                       "is %u bytes); input will not work",
