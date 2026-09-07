@@ -83,6 +83,13 @@ Options:
                   concurrency on this hardware (measured: 4 parallel
                   requests took longer than sequential) and is never run in
                   parallel by this script for that reason.
+  --omniroute-retries N   attempts via OmniRoute before falling back to the
+                  local model (default 2) - resends the same fresh prompt,
+                  not the shorten-focused RETRY template below: a bad
+                  OmniRoute answer is usually a flaky response, not one
+                  that just needs to try harder to be shorter, and a
+                  different attempt often lands on a different underlying
+                  model entirely (the combo routes per-request).
   --retries N     attempts per comment before giving up (default 3)
   --banners       also rewrite file/section header banners (off: their `====`
                   rules do not survive re-wrapping)
@@ -168,6 +175,11 @@ Hard rules, regardless of length:
   your version must not say it is done because of B.
 - If the text describes a LIMITATION or a problem, your version must still
   read as a limitation, not as a benefit.
+- If the text names a copyright holder, a licence (Apache-2.0, MIT, ...),
+  or says code was copied/adapted from somewhere else, that attribution
+  is not "change history" and must survive verbatim in your version,
+  regardless of length - reply DELETE instead of dropping it if nothing
+  else in the comment is worth keeping.
 - British spelling as in the original (colour, behaviour). Plain prose, no
   bullet lists, no headings, no markdown, no code fences, no preamble.
 
@@ -323,6 +335,24 @@ def shares_vocabulary(old, new):
     return bool(old_words & {w.lower() for w in WORD.findall(new)})
 
 
+ATTRIBUTION = re.compile(
+    r"\bcopyright\b|\(c\)\s*\d{4}|\bapache-?2\.?0\b|\bmit licen[cs]e\b|"
+    r"\bbsd licen[cs]e\b|\bgpl\b|\bcopied from\b|\badapted from\b", re.I)
+
+
+def drops_attribution(old, new):
+    """A copyright holder, licence name, or "copied/adapted from" note in
+    the original that is gone from the rewrite - confirmed happening for
+    real (a Waveshare BSP attribution silently dropped by this exact
+    pipeline, caught only by a human content review, not by anything
+    automated). Not "change history": an attribution notice does not go
+    stale and git log does not substitute for it - the rule in PROMPT
+    above says to keep it verbatim, but a model has not reliably done
+    that, so this is the deterministic backstop.
+    """
+    return bool(ATTRIBUTION.search(old)) and not ATTRIBUTION.search(new)
+
+
 def response_problems(original, prose, ceiling):
     """Automated defects in a candidate rewrite, regardless of which
     backend produced it - the concrete failure shapes OmniRoute corruption
@@ -339,6 +369,8 @@ def response_problems(original, prose, ceiling):
         problems.append("meta-reply")
     if fabricates_number(original, prose):
         problems.append("fabricated number")
+    if drops_attribution(original, prose):
+        problems.append("dropped attribution/licence notice")
     if not shares_vocabulary(original, prose):
         problems.append("no shared vocabulary")
     return problems
@@ -364,18 +396,27 @@ def try_omniroute_batch(targets, opts, log):
     remote call with no local GPU to contend for - unlike local Ollama,
     which this script never parallelizes (measured on this hardware: 4
     concurrent local requests took LONGER than sequential, single-GPU
-    serialization). A slow, failed, or empty individual request just comes
-    back as one untrustworthy result; nothing here retries or blocks on
-    it, since the sequential fallback loop after this handles that comment
-    properly on the local model regardless.
+    serialization).
+
+    Each target gets up to `--omniroute-retries` attempts, resending the
+    SAME fresh prompt rather than the shorten-focused RETRY template a bad
+    answer here is not usually "too long", it is a flaky free-tier
+    response, and a different attempt often lands on a different
+    underlying model entirely (the combo routes per-request). Retrying is
+    still cheap and still parallel; only a target that keeps failing every
+    attempt falls through to the sequential local model afterward.
     """
     results = {}
 
     def attempt(i, com):
-        raw = ask(opts["omniroute_model"],
-                  PROMPT.format(limit=opts["limit"], length=com.length,
-                                text=com.text), log, via="omniroute")
-        wants_delete, prose = split_delete(raw)
+        wants_delete, prose = False, ""
+        for _ in range(opts["omniroute_retries"]):
+            raw = ask(opts["omniroute_model"],
+                      PROMPT.format(limit=opts["limit"], length=com.length,
+                                    text=com.text), log, via="omniroute")
+            wants_delete, prose = split_delete(raw)
+            if trustworthy(com.text, wants_delete, prose, opts["ceiling"]):
+                break
         return i, wants_delete, prose
 
     with ThreadPoolExecutor(max_workers=opts["workers"]) as ex:
@@ -617,6 +658,9 @@ def facts_lost(old, new):
     if NEGATION.search(old) and not NEGATION.search(new):
         lost.append("every negation dropped (a limitation may now read as a "
                     "benefit)")
+    if drops_attribution(old, new):
+        lost.append("copyright/licence attribution dropped - restore "
+                    "verbatim, this is not change history")
     return lost
 
 
@@ -764,6 +808,7 @@ def write_report(path, results, opts, seconds):
 def main(argv):
     opts = {"limit": 300, "ceiling": 500, "model": None, "via": "ollama",
             "omniroute_model": DEFAULT_COMBO, "workers": 6,
+            "omniroute_retries": 2,
             "retries": 3, "banners": False, "max": 0, "dry_run": False,
             "review_model": DEFAULT_REVIEW_MODEL, "skip_over": 1500}
     report = "scripts/results/comment-trim.md"
@@ -792,6 +837,8 @@ def main(argv):
             opts["omniroute_model"] = next(it)
         elif arg == "--workers":
             opts["workers"] = int(next(it))
+        elif arg == "--omniroute-retries":
+            opts["omniroute_retries"] = int(next(it))
         elif arg == "--retries":
             opts["retries"] = int(next(it))
         elif arg == "--max":
