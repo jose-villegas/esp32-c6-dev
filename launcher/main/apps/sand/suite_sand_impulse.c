@@ -33,7 +33,7 @@
  *
  * sand_explode() throws grains outward one cell per step, in a bounded
  * transient list rather than a per-cell velocity field - see
- * docs/Sand/Explosion-Plan.md, which this whole section implements.
+ * docs/sand/Impulse-Mechanics.md, which this whole section implements.
  */
 
 /* One entry per cell of the 8x8 fixture grid - big enough that no test below
@@ -3150,7 +3150,7 @@ static void test_without_a_buffer_explode_does_nothing(void)
  * tracked stone entries total (unchanged - the blast's own dislodge count
  * has nothing to do with how far anything travels afterward), 160 (56.3%)
  * changed direction at least once, 45 (15.8%) at least twice, 3 (1.1%)
- * three times - see docs/Sand/Sand-Simulation.md for the before/after
+ * three times - see docs/sand/Sand-Simulation.md for the before/after
  * table this rung is judged against; a real shift in the >= 1 bucket (150
  * before, 160 now) from entries that used to run out of ramp mid-gap and
  * now cross with speed to spare.
@@ -3205,7 +3205,7 @@ static void ricochet_measure_seed(uint8_t *cells, impulse_t *buf,
     sand_explode(&g, RICOCHET_CX, RICOCHET_CY, RICOCHET_RADIUS);
 
     /* static, not a stack array - see check_stack_usage.py's own gate
-     * (docs/Sand/Performance-Tuning-Attempts.md): this helper runs on the
+     * (docs/sand/Performance-Tuning-Attempts.md): this helper runs on the
      * device's 3584-byte main task stack too (the on-device selftest
      * links every suite), and RICOCHET_MAX_TRACK copies of every array
      * below pushed a stack-local version of this function well past the

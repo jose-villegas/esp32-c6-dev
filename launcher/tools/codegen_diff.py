@@ -12,7 +12,7 @@ full build.
 WHY THIS EXISTS
 
 Step 1 of a perf round ("attribute before optimising",
-docs/Sand/Perf-Round-Guide.md) asks whether a change altered the generated
+docs/sand/Perf-Round-Guide.md) asks whether a change altered the generated
 code at all before spending a device cycle on it. Answering that by eye
 means reading two `idf.py build` logs, or worse, trusting that a source
 edit did what it looks like it should. This does it directly: pull the

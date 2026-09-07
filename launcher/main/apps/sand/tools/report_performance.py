@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Turns a raw device self-test capture into a markdown table of just the
 DEVICE_BUILD frame-budget tests: scenario, budget, measured number, headroom,
-pass/fail - the same shape as the table in docs/Sand/Architecture.md, except
+pass/fail - the same shape as the table in docs/sand/Architecture.md, except
 generated fresh from a real capture instead of hand-transcribed (and so it
 cannot go stale the way a hand-written copy can).
 

@@ -357,7 +357,7 @@ static const gfx_color_t palette[256] = {
     [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_METAL] = GFX_RGB(0x7C8794),    /* Visual
                                                                              * separation.
                                                                              * See
-                                                                             * docs/Sand/Metal-Smelting-Plan.md. */
+                                                                             * docs/plans/Metal-Smelting-Plan.md. */
     [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_ROOT] = GFX_RGB(0xBFA58A),     /* root
                                                                              * -
                                                                              * matches

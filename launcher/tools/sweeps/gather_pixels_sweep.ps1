@@ -15,7 +15,7 @@
     this at compile time, so a value at or past that ceiling fails the
     host build outright rather than silently testing nothing.
 
-    See docs/Notes/Display-and-Rendering.md's "The cap sweeps" section for
+    See docs/notes/Display-and-Rendering.md's "The cap sweeps" section for
     what this found (8192, the shipped default, already sits on the right
     side of the reject/accept line for the case measured).
 

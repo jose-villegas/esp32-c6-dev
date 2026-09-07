@@ -62,7 +62,7 @@ void suite_run_test_timed(void (*func)(void), const char *name, int line)
 #ifdef HOST_HEAP_ARENA
     /* A rise in outstanding blocks means the test freed fewer than it
      * allocated - the assert-before-free failure mode in
-     * docs/Sand/Performance-Tuning-Attempts.md's "recurring failure
+     * docs/sand/Performance-Tuning-Attempts.md's "recurring failure
      * modes" (b), which otherwise skips every earlier free() in a fixture
      * and starves every test that runs after it. Own greppable line, no
      * consumer parses it today, so its shape is free to be whatever reads

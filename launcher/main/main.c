@@ -8,7 +8,7 @@
  *
  * Note this task must never return. Once firmware goes idle on this board the
  * chip stops responding to reset signalling and can only be recovered with the
- * BOOT button - see docs/Notes/Flashing-and-Toolchain.md.
+ * BOOT button - see docs/notes/Flashing-and-Toolchain.md.
  *===========================================================================*/
 
 #include <stdint.h>

@@ -31,7 +31,7 @@
 
 /* ===================================================================
  * Metal: dirt smelted by sustained heat - see
- * docs/Sand/Metal-Smelting-Plan.md, which every test below follows.
+ * docs/plans/Metal-Smelting-Plan.md, which every test below follows.
  * =================================================================== */
 
 /* Mirrors sand_reactions.c's own HEAT_FLAW_CLUMP, which is private to

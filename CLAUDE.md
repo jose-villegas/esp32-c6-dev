@@ -16,7 +16,7 @@ each living entirely in its own `launcher/main/apps/<name>/` folder:
 
 - **sand** — a cellular-automaton falling-sand sandbox: materials, a
   mass-diffusion liquid model, gyroscope momentum, chemistry/reactions. The
-  most substantial code in the repo. See `docs/Sand/Sand-Simulation.md`.
+  most substantial code in the repo. See `docs/sand/Sand-Simulation.md`.
 - **cube** — a Gouraud-shaded software rasterizer (small3dlib), no GPU.
 - **diagnostics** — bench tool: hardware self-test (POST) report plus a
   developer-toggles page (gfx debug overlays, interlace, show-orientation);
@@ -257,15 +257,19 @@ don't read all of them per session:
 | | |
 |---|---|
 | [`docs/Launcher-Architecture.md`](docs/Launcher-Architecture.md) | Shell/app contract, frame loop, adding an app, microui integration, why not LVGL |
-| [`docs/Sand/Sand-Simulation.md`](docs/Sand/Sand-Simulation.md) | The sand app: materials, liquid model, momentum, performance budget |
-| [`docs/Sand/Adding-a-Material.md`](docs/Sand/Adding-a-Material.md) | Checklist for adding a new sand material |
-| [`docs/Sand/Reaction-Table.md`](docs/Sand/Reaction-Table.md) | Current material-interaction/reaction rules |
-| [`docs/Sand/Tuning-At-a-Glance.md`](docs/Sand/Tuning-At-a-Glance.md) | Sand constants and their current values |
-| [`docs/Notes/README.md`](docs/Notes/README.md) | Index into board-specific hardware notes (memory budget, panel/touch gotchas, flashing/recovery, optimization playbook) |
+| [`docs/sand/README.md`](docs/sand/README.md) | Index into the sand app's own doc set |
+| [`docs/sand/Sand-Simulation.md`](docs/sand/Sand-Simulation.md) | The sand app: materials, liquid model, momentum, performance budget |
+| [`docs/sand/Architecture.md`](docs/sand/Architecture.md) | Single-page map of `main/apps/sand/`'s shape - the grid byte, material table, file split |
+| [`docs/sand/Impulse-Mechanics.md`](docs/sand/Impulse-Mechanics.md) | Explosions, thrown chunks, liquid splash - one mechanism, three call sites |
+| [`docs/sand/Adding-a-Material.md`](docs/sand/Adding-a-Material.md) | Checklist for adding a new sand material |
+| [`docs/sand/Reaction-Table.md`](docs/sand/Reaction-Table.md) | Current material-interaction/reaction rules |
+| [`docs/sand/Tuning-At-a-Glance.md`](docs/sand/Tuning-At-a-Glance.md) | Sand constants and their current values |
+| [`docs/sand/Perf-Round-Guide.md`](docs/sand/Perf-Round-Guide.md) | Entry point for a fresh session told to run a sand performance round |
+| [`docs/notes/README.md`](docs/notes/README.md) | Index into board-specific hardware notes (memory budget, panel/touch gotchas, flashing/recovery, optimization playbook) |
 | [`docs/Testing-Guide.md`](docs/Testing-Guide.md) | Host/device test suites, why release builds carry no test code |
-| [`docs/Settings-App-Plan.md`](docs/Settings-App-Plan.md) | Planned: split Diagnostics' dev-toggle page into its own Settings app |
-| [`docs/Log-Level-Plan.md`](docs/Log-Level-Plan.md) | Planned: per-build-variant log-severity ceiling |
 | [`docs/Autana-Rendering-Roadmap.md`](docs/Autana-Rendering-Roadmap.md) | Proposal: the rendering/engine roadmap (band-mode framebuffer, span rasterizer, raycaster, the three target games, S3 port) |
+| [`docs/plans/`](docs/plans) | Not-yet-built plans: `Settings-App-Plan.md`, `Log-Level-Plan.md`, `Metal-Smelting-Plan.md`, `Reaction-Doc-Generator-Plan.md` |
+| [`docs/workflows/Model-Delegation-Workflow.md`](docs/workflows/Model-Delegation-Workflow.md) | Delegating a feature's implementation to a local/free-tier model, review kept on the driving session |
 
 `scripts/` also has OmniRoute/Ollama-backed doc/code audit automation --
 `audit-docs.sh` and `update-docs.sh` at the core, plus `fix-audited-code.sh`
@@ -283,7 +287,7 @@ delegates writing one Unity test *body* the same way, from a spec you write
 (exact scene + exact assertions) -- the model only renders it into house
 style, and `--regression-commit <SHA>` can prove the test actually fails on
 the pre-fix code, automating this repo's own "watch it fail before it
-passes" rule. See `docs/Model-Delegation-Workflow.md`'s "Related, narrower
+passes" rule. See `docs/workflows/Model-Delegation-Workflow.md`'s "Related, narrower
 tooling" section for both. `scripts/trim-comments-local.sh` shortens
 over-long comments the same local-Ollama way, but hands the model one
 comment's PROSE and never a line of code — the rewrite goes back into that

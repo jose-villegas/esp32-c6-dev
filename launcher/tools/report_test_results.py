@@ -93,7 +93,7 @@ def main() -> int:
 
     print(f"{len(results)} tests, {len(passed)} passed, {len(failed)} failed -> {args.out_path}")
     # Deliberately not gated on a specific "expected" failure count here -
-    # whether N failures is a known baseline (see docs/Sand/Architecture.md)
+    # whether N failures is a known baseline (see docs/sand/Architecture.md)
     # or a real regression is a judgement call for whoever reads the
     # report, not something this general-purpose parser should assume.
     return 1 if failed else 0

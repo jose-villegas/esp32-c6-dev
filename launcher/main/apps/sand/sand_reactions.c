@@ -66,7 +66,7 @@
  * and adding three more. */
 
 /* HONESTY: All but PAIR_DENSER use `theirs`. See top comment and
- * docs/Sand/Reaction-Table.md. */
+ * docs/sand/Reaction-Table.md. */
 
 /* Consistent lookup shape for every consumer. PAIR_DENSER is genuinely
  * pairwise. */

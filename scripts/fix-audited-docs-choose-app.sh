@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # Interactive single-click launcher: lists every app that actually has its
-# own docs/<Name>/ folder (discovered fresh each run by checking
-# docs/<Capitalized app> for each entry under launcher/main/apps/ -- so an
-# app only appears here once someone gives it a dedicated doc folder; today
-# that's just Sand -- cube and diagnostics have no docs/Cube or
-# docs/Diagnostics yet) plus a whole-project option (every tracked doc),
-# asks which one to scope the free-tier docs-audit-fix pass to, then runs
-# it.
+# own docs/<name>/ folder (discovered fresh each run by checking docs/<app>
+# for each entry under launcher/main/apps/ -- so an app only appears here
+# once someone gives it a dedicated doc folder; today that's just sand --
+# cube and diagnostics have no docs/cube or docs/diagnostics yet) plus a
+# whole-project option (every tracked doc), asks which one to scope the
+# free-tier docs-audit-fix pass to, then runs it.
 #
 # Enter either the number or the app's name (case-insensitive) at the
 # prompt.
@@ -26,8 +25,7 @@ cd "$SCRIPT_DIR/.."
 APPS=()
 for appdir in launcher/main/apps/*/; do
   app="$(basename "$appdir")"
-  app_cap="$(printf '%s' "$app" | cut -c1 | tr '[:lower:]' '[:upper:]')$(printf '%s' "$app" | cut -c2-)"
-  [ -d "docs/$app_cap" ] && APPS+=("$app")
+  [ -d "docs/$app" ] && APPS+=("$app")
 done
 
 echo "Which scope should the free-tier docs audit run against?"
@@ -71,11 +69,10 @@ DOC_FILE_ARGS=()
 if [ "$IS_PROJECT" = "1" ]; then
   SCOPE_LABEL="whole project (all tracked docs)"
 else
-  APP_CAP="$(printf '%s' "$APP" | cut -c1 | tr '[:lower:]' '[:upper:]')$(printf '%s' "$APP" | cut -c2-)"
   shopt -s nullglob
-  DOC_FILE_ARGS=("docs/$APP_CAP"/*.md)
+  DOC_FILE_ARGS=("docs/$APP"/*.md)
   shopt -u nullglob
-  SCOPE_LABEL="docs/$APP_CAP/"
+  SCOPE_LABEL="docs/$APP/"
 fi
 
 echo ""

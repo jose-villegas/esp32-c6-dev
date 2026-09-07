@@ -5,7 +5,7 @@
 # conflicts-local.sh (--think=false, stderr to a log not merged into
 # stdout, a reviewer from a different model family as a second opinion).
 #
-# DIVISION OF LABOR (see docs/Model-Delegation-Workflow.md)
+# DIVISION OF LABOR (see docs/workflows/Model-Delegation-Workflow.md)
 #
 # This script does NOT decide what to test. You write the spec: the exact
 # scene-setup C statements (which fixture/helper calls, in what order) and
@@ -99,7 +99,7 @@
 # options like qwen3-coder:30b or gemma4:26b (~18GB each) remain available
 # via the env vars above for anyone with real VRAM headroom. If local
 # Ollama runs are freezing the machine regardless of model choice, see
-# docs/Model-Delegation-Workflow.md's "A global Ollama setting can make
+# docs/workflows/Model-Delegation-Workflow.md's "A global Ollama setting can make
 # picking a 'small enough' model pointless" -- a stuck 262144 Context
 # Length setting in the Ollama app itself overrides every model's context
 # and is the far more likely culprit; one test spec plus a suite file never
