@@ -687,9 +687,6 @@ bool step_one_budding_cell(sand_t* s, int x, int y, int w, int h, const reaction
 bool step_one_withering_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r);
 bool step_one_growing_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r);
 
-bool move_liquid_grain(sand_t* s, uint8_t* row, uint8_t* prow, int x, int y, int dx, int dy, const int* slide_a,
-                       const int* slide_b, cell_t grain, uint8_t mat_id);
-
 /* A pool's true perpendicular to gravity rarely lines up with a ring
  * direction - bracketed between an axis ray (ax) and the diagonal
  * beside it (dg). q_q8 picks which ray a column takes, as a fixed SPACE
