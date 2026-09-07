@@ -34,7 +34,7 @@
  * byte across the grid is 41 KB it does not have. One material can afford it
  * because one material was not using its nibble.
  *
- * That overlap is deliberate.
+ * That overlap is deliberate. Transient materials are exactly the ones that
  * need per-cell state, and per-cell state is the one thing there is no room
  * for. Reusing the nibble costs nothing, and it makes fire fade as it burns
  * out, which looks better than a random shade would.
