@@ -614,8 +614,8 @@ tick_decay(sand_t* s, uint8_t* row, int x, int y, cell_t* grain, const material_
 /* OPT-IN, for the reason sand_work_counters.h spells out: development
  * alone puts these in build.diag, the capture build, and an instrument
  * that shifts every measurement is worse than none. CONFIG_LAUNCHER_
- * SAND_PASS_GATES already `select`s LAUNCHER_DEVELOPMENT, so the guard
- * checks only this option. Kept separate from the work counters: the
+ * SAND_PASS_GATES cannot be set without LAUNCHER_DEVELOPMENT, so the
+ * guard checks only this option. Kept separate from the work counters: the
  * gates measure TIME, the counters measurably perturb codegen, so one
  * option covering both would perturb exactly what the gates measure. */
 #if CONFIG_LAUNCHER_SAND_PASS_GATES
@@ -673,6 +673,11 @@ void sand_step_reactions(sand_t* s);
  * stage of step_one_reacting_row()'s (sand_reactions.c) per-cell dispatch,
  * called across the file boundary the same way sand_step_reactions() above
  * is called from sand.c. */
+/* Exact lattice-cell count for a disc of radius r (sand_impulse.c). Declared
+ * here rather than left static so the suite can check the shipped table
+ * against a direct count, which is the only way that table is verified. */
+int sand_disc_count(int radius);
+
 bool step_one_falling_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r);
 bool step_one_conducting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r);
 bool step_one_rooting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r);

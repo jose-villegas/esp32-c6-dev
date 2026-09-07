@@ -4,9 +4,9 @@
 # it never overwrites the normal build. Not for shipping - the suites draw to
 # the panel and add test code to the image.
 #
-# CONFIG_LAUNCHER_DEVELOPMENT is implied by SELFTEST (see Kconfig.projbuild)
-# and is set here too only so this file is honest about what it builds at a
-# glance, without having to know that relationship.
+# CONFIG_LAUNCHER_SELFTEST depends on CONFIG_LAUNCHER_DEVELOPMENT (see
+# Kconfig.projbuild), so this file must set both - Kconfig will not turn the
+# second one on for you, and silently drops SELFTEST if it is missing.
 CONFIG_LAUNCHER_SELFTEST=y
 CONFIG_LAUNCHER_DEVELOPMENT=y
 

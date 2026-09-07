@@ -182,8 +182,9 @@ one frame (~24 ms) of tap latency, applies to every control. See
 ### Build variants (one Kconfig `choice`, exactly one true)
 
 `CONFIG_LAUNCHER_RELEASE` / `CONFIG_LAUNCHER_DEVELOPMENT` /
-`CONFIG_LAUNCHER_SELFTEST` in `main/Kconfig.projbuild`. `SELFTEST` implies
-`DEVELOPMENT` but not vice versa. Guard anything whose only reader is a
+`CONFIG_LAUNCHER_SELFTEST` in `main/Kconfig.projbuild`. `SELFTEST` *depends
+on* `DEVELOPMENT` - a config that asks for SELFTEST without it gets neither,
+so every defaults file sets both. Guard anything whose only reader is a
 developer (log lines, rolling averages, debug overlays, the Diagnostics app
 itself) with `CONFIG_LAUNCHER_DEVELOPMENT`; guard the test suites — and the
 self-test *runner* inside Diagnostics (button, result line,
