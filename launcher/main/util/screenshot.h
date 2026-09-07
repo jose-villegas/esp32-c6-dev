@@ -54,23 +54,14 @@ static inline int32_t screenshot_bmp_row_stride(int32_t width)
     return ((width * 3 + 3) / 4) * 4;
 }
 
-/* Fills `out[SCREENSHOT_BMP_HEADER_SIZE]` with a BITMAPFILEHEADER followed by
- * a BITMAPINFOHEADER describing an uncompressed, bottom-up (positive
- * biHeight), 24-bit-per-pixel BMP of `width` x `height` pixels - the pixel
- * data itself, screenshot_bmp_row_stride(width) * height bytes of it, is
- * expected to follow immediately after in the stream.
- *
- * Written byte-by-byte in explicit little-endian order rather than through a
- * packed struct: a compiler is free to pad a struct's members for alignment,
- * and BMP's own layout has no padding at all between fields - the two would
- * only agree by accident on any particular compiler/ABI. See
- * BITMAPFILEHEADER / BITMAPINFOHEADER in any BMP format reference for the
- * field order this follows.
- *
- * `width`/`height` are taken as given, not clipped or validated: the one
- * caller (screenshot_dump() in screenshot.c) always passes
- * GFX_WIDTH/GFX_HEIGHT, both small positive constants, so there is nothing
- * here worth guarding against. */
+/* Fills `out[SCREENSHOT_BMP_HEADER_SIZE]` with a BITMAPFILEHEADER +
+ * BITMAPINFOHEADER for an uncompressed, bottom-up, 24bpp BMP of `width`
+ * x `height` pixels - pixel data follows. Written byte-by-byte in
+ * explicit little-endian order, not a packed struct: a compiler may pad
+ * struct members for alignment, and BMP's layout has no padding between
+ * fields - the two agree only by accident on a particular compiler/ABI.
+ * `width`/`height` are taken as given: the one caller always passes
+ * GFX_WIDTH/GFX_HEIGHT. */
 static inline void screenshot_bmp_header(uint8_t out[SCREENSHOT_BMP_HEADER_SIZE],
                                          int32_t width, int32_t height)
 {
@@ -134,19 +125,13 @@ static inline int32_t screenshot_base64_encoded_len(int32_t len)
 }
 
 /* Encodes `len` bytes at `in` into `out`, which must hold at least
- * screenshot_base64_encoded_len(len) bytes. Does not NUL-terminate.
- *
- * Pure - no I/O, no chunking state carried between calls - which is what
- * lets screenshot.c call it once per BMP row independently rather than
- * threading a leftover-bytes accumulator through the whole frame: every row
- * screenshot_dump() builds is a multiple of 3 bytes (GFX_WIDTH * 3, and
- * SCREENSHOT_BMP_HEADER_SIZE for the header before it), so each call here
- * ends on a clean group boundary and produces output identical to encoding
- * the whole stream at once - the '=' padding a partial trailing group would
- * need never actually occurs in practice for this caller. Tested for a
- * width where it DOES occur regardless (suite_screenshot.c), since a pure
- * function's contract should not depend on how its one real caller happens
- * to use it. */
+ * screenshot_base64_encoded_len(len) bytes. Does not NUL-terminate. Pure
+ * - no chunking state between calls - which lets screenshot.c call it
+ * once per BMP row: every row is a multiple of 3 bytes, so each call
+ * ends on a clean group boundary, and the '=' padding a partial group
+ * needs never occurs for this caller. Tested for a width where it DOES
+ * occur (suite_screenshot.c), since a pure function's contract
+ * shouldn't depend on its caller. */
 static inline void screenshot_base64_encode(const uint8_t *in, int32_t len, char *out)
 {
     static const char table[] =
@@ -188,54 +173,32 @@ static inline void screenshot_base64_encode(const uint8_t *in, int32_t len, char
  * below instead. */
 void screenshot_start(void);
 
-/* Reads and clears whether the listener task has seen a request since the
- * last call - the same "read and consume once per frame" contract
+/* Reads and clears whether the listener task has seen a request since
+ * the last call - the same "read and consume once per frame" contract
  * buttons_read() already uses (see input/buttons.h), and for the same
- * reason: main.c's loop is the only place that should act on a request, and
- * only once per request, however many frames it takes main.c to get back
- * around to checking. */
+ * reason: main.c's loop is the only place that should act on a request,
+ * and only once per request, however many frames it takes main.c to get
+ * back around to checking. */
 bool screenshot_take_request(void);
 
 #if CONFIG_LAUNCHER_SELFTEST
-/* Same "read and consume once per frame" contract as screenshot_take_request()
- * above, for a RUNSUITE line instead of SCREENSHOT - see screenshot.c's own
- * "WHY THE RESULT COMES BACK THROUGH A FLAG" section for why a suite run
- * needs this even more than a single screenshot does: suites_run_one() draws,
- * clears, and presents repeatedly for however long the suite runs, and must
- * never interleave with the shell's own frame loop doing the same on a
- * different task.
- *
- * Copies the pending suite name into `name_out` (a caller-owned buffer of
- * `name_out_size` bytes, always NUL-terminated) and returns true if a RUNSUITE
- * line arrived since the last call; returns false (leaving `name_out`
- * untouched) otherwise. */
+/* Same "read and consume once per frame" contract as
+ * screenshot_take_request() above, for a RUNSUITE line - see
+ * screenshot.c's "WHY THE RESULT COMES BACK THROUGH A FLAG" for why a
+ * suite run needs this even more: suites_run_one() draws, clears, and
+ * presents repeatedly, and must never interleave with the shell's own
+ * frame loop on a different task. Copies the pending suite name into
+ * `name_out` (caller-owned, NUL-terminated) and returns true if a
+ * RUNSUITE line arrived; false otherwise. */
 bool screenshot_take_runsuite_request(char *name_out, size_t name_out_size);
 #endif
 
-/* Streams the current framebuffer to stdout as base64 BMP data, followed by
- * one SCREENSHOT_STATE: line of plain-text JSON - device state at the same
- * frame the image was captured from (uptime, heap, CPU clock, die
- * temperature, orientation, the IMU, and this frame's touch/button state) -
- * framed between SCREENSHOT_BEGIN/SCREENSHOT_END marker lines a host script
- * greps for; see tools/screenshot.py, and screenshot.c's own comment on the
- * state dump for why each field is there and where it comes from.
- *
- * `input` is this frame's input_t, the same one main.c's loop already has -
- * passed in rather than read fresh, so the touch/button fields in the dump
- * describe the exact frame the image does, not whatever the console
- * listener task happened to see arrive a frame or more later.
- *
- * `current_app` is whichever app_t is running this frame (NULL if the
- * launcher is showing, same as main.c's own `current`) - passed through
- * purely so its OPTIONAL diagnostic_json callback (see app_t's own comment
- * in app.h) can be spliced into the dump as an "app" key, if it set one.
- * Nothing here needs to know what that app is or what its diagnostic state
- * means; a NULL app or a NULL diagnostic_json just leaves the "app" key out
- * entirely.
- *
- * Meant to be called from main.c's frame loop right after a frame is drawn
- * and before it is presented, so what is captured is exactly what is about
- * to appear on screen (see gfx.h's own dirty-tracking comment: gfx_present()
- * only sends what changed, but the full framebuffer this reads from is
- * always complete regardless). */
+/* Streams the framebuffer to stdout as base64 BMP, then one
+ * SCREENSHOT_STATE: line of JSON device state from the same frame -
+ * framed between SCREENSHOT_BEGIN/END lines a host script greps for.
+ * `input` is passed in rather than read fresh, so touch/button fields
+ * describe the exact frame the image does, not what the listener saw
+ * later. `current_app` lets its OPTIONAL diagnostic_json splice in an
+ * "app" key. Call after a frame is drawn, before presenting, so capture
+ * matches what's about to appear. */
 void screenshot_dump(const input_t *input, const app_t *current_app);
