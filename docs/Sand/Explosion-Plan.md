@@ -532,6 +532,14 @@ other special-casing: same speed, same direction, same everything as
 any other entry - the toughness lives entirely in whether it gets
 thrown at all.
 
+**Superseded for glass.** A pane no longer flies as a pane:
+`queue_flying_grain()` turns a `MAT_GLASS` source into a cullet grain as it
+queues it, writing that byte to the grid and the entry alike, and the entry
+keeps the direction and speed it was given. The toughness roll above is
+untouched and still decides whether the pane is thrown at all - a pane the
+roll refuses is not a broken pane, and `sand_impulse()`'s own hard refusal
+still leaves a static pane alone entirely. Stone and wood are unchanged.
+
 The vessel-containment guarantee this project tested absolutely before
 is deliberately no longer absolute, and the test coverage was SPLIT
 rather than loosened: `test_a_blast_inside_a_sealed_vessel_stays_

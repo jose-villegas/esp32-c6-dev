@@ -228,6 +228,93 @@ static void test_a_dislodged_wall_keeps_falling_even_if_its_first_push_roll_fail
         "still airborne, exactly the bug this test exists to catch");
 }
 
+/* Glass that is actually thrown arrives as cullet, still carrying the push.
+ *
+ * The conversion happens as the entry is queued, so grid and entry have to
+ * agree on the exact byte - flight matches `cell` against what is really
+ * there, and drops a shard it no longer recognises. */
+static void test_a_pane_knocked_loose_is_queued_as_cullet(void)
+{
+    fixture();
+    sand_enable_impulses(&s, impulse_buf, W * H);
+
+    sand_set(&s, 1, 1, GLASS);
+    sand_impulse_dislodge(&s, 1, 1, ring_of(1, 0), SAND_EXPLODE_INITIAL_SPEED,
+                          SAND_IMPULSE_SPEED_RAMP);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, s.impulse_count,
+        "the dislodge has to have queued the pane in the first place");
+
+    const cell_t c = sand_at(&s, 1, 1);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_SAND, CELL_MATERIAL(c),
+        "a pane the impulse actually took hold of must have broken");
+    TEST_ASSERT_TRUE_MESSAGE(CELL_VARIANT(c) >= SAND_CULLET_BASE,
+        "and must land in the cullet band, the same as a cracked pane - "
+        "broken glass reads as broken glass, not as beach");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(c, s.impulse_buf[0].cell,
+        "the entry has to carry the byte now on the grid, or the flight "
+        "pass drops it as stale on its very first step");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SAND_EXPLODE_INITIAL_SPEED,
+        s.impulse_buf[0].speed, "and must keep the speed it was given");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(ring_of(1, 0), s.impulse_buf[0].dir,
+        "and the direction - breaking must not cost the shard its push");
+}
+
+/* And that push is still spent flying, not merely recorded.
+ *
+ * The queue-time asserts above would all pass on a shard that dropped
+ * straight down - gravity-drift alone still moves a tracked cell. Sideways
+ * travel only happens if the entry survived re-acquisition. */
+static void test_a_shattered_pane_flies_the_way_it_was_pushed(void)
+{
+    fixture();
+    sand_enable_impulses(&s, impulse_buf, W * H);
+
+    sand_set(&s, 1, 1, GLASS);
+    sand_impulse_dislodge(&s, 1, 1, ring_of(1, 0), SAND_EXPLODE_INITIAL_SPEED,
+                          SAND_IMPULSE_SPEED_RAMP);
+
+    for (int i = 0; i < H; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    int landed = -1;
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_SAND) {
+                landed = x;
+            }
+        }
+    }
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, count_cells_of(MAT_GLASS),
+        "no pane may survive the throw");
+    TEST_ASSERT_TRUE_MESSAGE(landed > 1,
+        "the shard has to have travelled east, the way it was pushed - "
+        "landing back under where the pane stood means the entry was "
+        "dropped and only gravity ever moved it");
+}
+
+/* A pane no impulse reaches is not a broken pane.
+ *
+ * Glass is KIND_STATIC, so an ordinary sand_impulse() refuses it outright -
+ * and a refusal is not a push. Without this, shattering could just as well
+ * have been wired to "something tried", which would break every pane a
+ * blast merely happened near. */
+static void test_a_pane_that_refuses_the_push_stays_a_pane(void)
+{
+    fixture();
+    sand_enable_impulses(&s, impulse_buf, W * H);
+
+    sand_set(&s, 1, 1, GLASS);
+    sand_impulse(&s, 1, 1, ring_of(1, 0), SAND_EXPLODE_INITIAL_SPEED);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, s.impulse_count,
+        "sand_impulse() has to have refused the KIND_STATIC pane");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_GLASS,
+        CELL_MATERIAL(sand_at(&s, 1, 1)),
+        "and a pane that was never thrown must still be a pane");
+}
+
 /* THE OTHER HALF OF sand_explode()'s OWN SPLIT (see sand_displace()'s own
  * comment in sand.h for the two reasons a caller might want the push
  * without the fire - correctness, for a future pure-pressure event like
@@ -4112,6 +4199,9 @@ void run_sand_impulse_suite(void)
     RUN_TEST(test_a_blast_inside_a_sealed_vessel_stays_inside_it);
     RUN_TEST(test_a_strong_close_blast_can_breach_a_wall);
     RUN_TEST(test_a_dislodged_wall_keeps_falling_even_if_its_first_push_roll_fails);
+    RUN_TEST(test_a_pane_knocked_loose_is_queued_as_cullet);
+    RUN_TEST(test_a_shattered_pane_flies_the_way_it_was_pushed);
+    RUN_TEST(test_a_pane_that_refuses_the_push_stays_a_pane);
     RUN_TEST(test_sand_displace_alone_never_creates_fire_or_smoke);
     RUN_TEST(test_a_blast_conserves_grains);
     RUN_TEST(test_a_blast_at_the_edge_stays_in_bounds);
