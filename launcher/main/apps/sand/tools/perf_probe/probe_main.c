@@ -28,20 +28,21 @@
  * string instead.
  *
  * Usage:
- *   probe                    run every scene, in table order
- *   probe --list             print scene names, one per line, and exit
- *   probe SCENE [SCENE...]   run exactly the named scenes, in the order
- *                            given (repeats allowed) - what
- *                            launcher/main/apps/sand/tools/perf_probe/
- *                            run_probe.py drives, one child process per
- *                            (scene, round) pair, for interleaved best-of-N
- *                            timing.
+ *   probe                       run every scene, in table order
+ *   probe --list                print scene names, one per line, and exit
+ *   probe SCENE [SCENE...]      run exactly the named scenes, in the order
+ *                               given (repeats allowed) - what
+ *                               launcher/main/apps/sand/tools/perf_probe/
+ *                               run_probe.py drives, one child process per
+ *                               (scene, round) pair, for interleaved best-of-N
+ *                               timing.
  *
  * Each scene reports its own per-step microsecond figure via the same
  * ESP_LOGI() line the device build prints (see suite_sand.c) - this driver
  * does not re-time anything itself. run_probe.py parses that line back out
  * of captured stdout.
  *===========================================================================*/
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 

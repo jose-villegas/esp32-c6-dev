@@ -20,15 +20,13 @@
 #
 # Examples:
 #   ./build_probe.sh out/probe
-#   ./build_probe.sh out/probe_counters -DSAND_PERF_COUNTERS
 #
-# -DSAND_PERF_COUNTERS is accepted here as plumbing only - nothing in this
-# tree defines sand_perf_counters.h or reads the macro from suite_sand.c
-# right now, so passing it is currently a no-op. It exists so a round that
-# needs host-only call counters (like the cross-flow round did) can add
-# that instrumentation - inert, #ifdef-guarded, additive to the test bodies
-# it measures - without also having to reinvent this build script's flag
-# plumbing.
+# A round needing host-only call counters reaches for
+# tools/perf_probe/compare_counters.py (bd esp32c6-8zx) instead of this probe
+# - it injects SAND_WORK_COUNT() calls into a scratch copy of sand_liquid.c
+# at verified text anchors, rather than this binary carrying counters of its
+# own. See sand_work_counters.h (this directory) and compare_counters.py's
+# own header for why.
 #
 # For an interleaved best-of-N run across several scenes, see run_probe.py
 # in this same directory rather than looping this script by hand.
