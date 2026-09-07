@@ -647,13 +647,19 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
      * for why bands were not enough, and
      * test_the_mixed_scene_puts_every_material_pair_in_contact, which
      * checks the coverage on the host rather than leaving it a claim in
-     * a comment.
+     * a comment. */
+
+    /* Also covers the extended statics and gunpowder now, via the shared
+     * all_pairs_spawn_cell() table (suite_sand_scenes.c) - not just the
+     * fourteen ordinary materials, so gunpowder and the extended
+     * reactions finally get a chance to fire in the scene whose whole
+     * purpose is "every material at once".
      *
      * A share of the board is left empty (EMPTY_SHARE_PERCENT) so the
      * flip has somewhere to launch into - the same reasoning as the
      * other flip tests. */
-    const int first = MAT_EMPTY + 1;
-    const int n_mats = MAT_COUNT - first;
+    const int first = 0;
+    const int n_mats = ALL_PAIRS_SPAWN_COUNT;
     const int top = (REAL_H * EMPTY_SHARE_PERCENT) / 100;
 
     TEST_ASSERT_GREATER_THAN_INT_MESSAGE(1, n_mats,
@@ -661,12 +667,16 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
 
     for (int y = top; y < REAL_H; y++) {
         for (int x = 0; x < REAL_W; x++) {
-            const int m = all_pairs_material_at(x, y, first, n_mats);
-            /* sand_spawn() with radius 0 rather than sand_set(): it goes
-             * through random_cell(), so a liquid arrives full, a transient
-             * arrives at full life and a powder gets a shade - the same
-             * cells a real pour produces. */
-            sand_spawn(&real, x, y, 0, (material_id_t)m);
+            const int idx = all_pairs_material_at(x, y, first, n_mats);
+            /* sand_spawn_cell() with radius 0 rather than sand_set():
+             * for an ordinary material's CELL_MAKE(m, 0) spec it takes
+             * the exact path sand_spawn() itself does (try_spawn_one(),
+             * sand.c), so a liquid still arrives full, a transient at
+             * full life and a powder gets a shade - the same cells a
+             * real pour produces. An extended static or gunpowder spec,
+             * which plain sand_spawn() cannot express, is written
+             * through as-is (gunpowder re-toned by random_gunpowder()). */
+            sand_spawn_cell(&real, x, y, 0, all_pairs_spawn_cell(idx));
         }
     }
 
@@ -697,17 +707,20 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
     free(big);
     free(blocks);
 
-    /* A REDUCTION TARGET, not headroom: 10% under what the scene measured,
-     * so it fails until the code gets faster. Same rule as every budget
-     * here - see FULL_STEP_BUDGET_US's comment. */
+    /* THE 87800 BUDGET IS INVALIDATED, NOT CARRIED FORWARD: it was
+     * measured against the fourteen-material scene, and this scene is
+     * now bigger. */
 
-    /* Raised deliberately, from a fresh capture. That is the one exception
-     * to the rule against raising a budget, and the accretion evidence
-     * behind it is on bd esp32c6-8zx. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(87800, (int)per_step,
-        "the mixed-material flip is held to 10% below what it measured, "
-        "as a reduction target - this failing means the work has not been "
-        "done yet, not that something broke");
+    /* 200000 is a loose SANITY CEILING, not a budget - the same
+     * placeholder shape this row used before its first measurement.
+     * Re-peg from the first clean capture of THIS scene: measured x 0.9,
+     * rounded, this section's usual reduction-target rule. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(200000, (int)per_step,
+        "INVALIDATED, NOT A REAL BUDGET - this scene now covers the "
+        "extended statics and gunpowder too, so the 87800 figure it used "
+        "to carry no longer describes what it measures; re-peg from the "
+        "first clean device capture of this scene at measured x 0.9 and "
+        "replace this placeholder ceiling");
 }
 
 #ifdef SAND_HOST_PROBE

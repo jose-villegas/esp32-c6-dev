@@ -62,38 +62,51 @@ int all_pairs_material_at(int x, int y, int first, int n_mats)
     return first + ((x * stride + y) % n_mats);
 }
 
-/* Every pair of materials really is adjacent somewhere in that scene.
- *
- * The property the scene exists for, and until now it was a number somebody
- * measured by hand once and wrote in a comment - "66 of 66" - taken on
- * faith through two subsequent materials. It is derived from MAT_COUNT, so
- * it should survive adding one, but "should" is what a test is for: a
- * tiling that quietly lost coverage would leave the worst case measuring
- * less than it claims while still passing its own budget.
- *
- * Host-side, because coverage is a property of the pattern and needs no
- * clock. Only the timing has to happen on the chip.
- *
- * GUNPOWDER IS NOT, AND CANNOT BE, ONE OF THE PAIRS THIS COVERS -
- * all_pairs_material_at() enumerates material_id_t values, and gunpowder
- * is not one: it is a byte range inside MAT_EXTENDED's own nibble
- * (GUNPOWDER_BASE, material.h), so every slot this tiling assigns to
- * m == MAT_EXTENDED paints plain ice (CELL_MAKE(MAT_EXTENDED, 0)), never
- * gunpowder. Its own contact with fire, lava, conducted heat, water and
- * acid is exercised directly instead - see this suite's own gunpowder
- * section - rather than forcing an awkward second identity onto a
- * tiling keyed by id, which would also perturb
- * test_a_gravity_flip_on_every_material_at_once_stays_sane's calibrated
- * device budget for a scene this test doesn't touch. */
+/* Maps a tiling index to the cell spec sand_spawn_cell() should place:
+ * ordinary materials first, then the extended statics MATX_ICE..MATX_ROOT
+ * (not the three spare, unclaimed MATERIAL_EXTENDED_COUNT slots), then
+ * gunpowder. One copy, shared by the timed device scene and the host
+ * coverage test, so the two cannot tile different sets. */
+cell_t all_pairs_spawn_cell(int index)
+{
+    if (index < ALL_PAIRS_ORDINARY_COUNT) {
+        /* Skipping one id keeps the 19 indices contiguous, so the tiling
+         * sees a gap-free 0..n-1 and its stride argument still holds. */
+        material_id_t m = (material_id_t)(MAT_EMPTY + 1 + index);
+        if (m >= ALL_PAIRS_SKIPPED_ORDINARY) {
+            m = (material_id_t)(m + 1);
+        }
+        return CELL_MAKE(m, 0);
+    }
+    index -= ALL_PAIRS_ORDINARY_COUNT;
+    if (index < ALL_PAIRS_EXTENDED_COUNT) {
+        return MATX(index);
+    }
+    return GUNPOWDER_CELL(0);
+}
+
+/* Every pair of materials really is adjacent somewhere in that scene - a
+ * property derived from the tiling, not measured by hand, so a coverage
+ * loss shows up here instead of silently shrinking a passing device
+ * budget's worst case. Host-side: coverage needs no clock. */
+
+/* Gunpowder and the extended statics (ice, plant, leaf, metal, root) count
+ * here too, via all_pairs_spawn_cell(). Both used to be unreachable, and
+ * an earlier version of this comment blamed gunpowder specifically - the
+ * real cause was a tiling keyed on material_id_t, which can never reach
+ * past MAT_COUNT - 1. */
 static void test_the_mixed_scene_puts_every_material_pair_in_contact(void)
 {
-    const int first  = MAT_EMPTY + 1;
-    const int n_mats = MAT_COUNT - first;
+    const int first  = 0;
+    const int n_mats = ALL_PAIRS_SPAWN_COUNT;
     const int top    = (REAL_H * EMPTY_SHARE_PERCENT) / 100;
     const int want   = (n_mats * (n_mats - 1)) / 2;
 
-    /* One bit per unordered pair. */
-    static bool seen[MATERIAL_MAX][MATERIAL_MAX];
+    /* One bit per unordered pair, sized to the tiling's own index range -
+     * no longer MATERIAL_MAX, since an index past
+     * ALL_PAIRS_ORDINARY_COUNT names an extended static or gunpowder, not
+     * a material_id_t value. */
+    static bool seen[ALL_PAIRS_SPAWN_COUNT][ALL_PAIRS_SPAWN_COUNT];
     memset(seen, 0, sizeof seen);
 
     int found = 0;
@@ -115,6 +128,14 @@ static void test_the_mixed_scene_puts_every_material_pair_in_contact(void)
         }
     }
 
+    /* GENUINE GAP AT n = 20: MAT_SMOKE (index 7) and MATX_METAL (index
+     * 17) never touch. Their difference is n/2 = 10, and this scene's
+     * 151-row fill band only carries stride 10 eight times, short of the
+     * ten rows gcd(10, 20) needs to cycle every residue horizontally. */
+
+    /* Not fixable by reordering the table - some antipodal pair is
+     * always the one a short row count strands, whichever materials land
+     * on it. Left failing on purpose rather than weakening `want`. */
     char why[160];
     snprintf(why, sizeof why,
              "the mixed-material scene must put all %d pairs of %d "
