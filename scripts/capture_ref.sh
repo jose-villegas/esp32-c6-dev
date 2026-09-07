@@ -5,7 +5,11 @@
 #   scripts/capture_ref.sh <git-ref> [--baseline REPORT.md] [--no-restore] \
 #       [--build-only] [COM_PORT]
 #
-#   <git-ref>       any ref git can resolve: branch, tag, or SHA.
+#   <git-ref>       branch, tag, or SHA. NOT HEAD or anything relative to it
+#                   (@, HEAD~1, @{-1}): refs are resolved in the capture
+#                   worktree, where HEAD means the ref last built there, so
+#                   those are refused rather than silently measuring the
+#                   wrong tree - see the check below.
 #   --baseline      forwarded to report_performance.sh's own --baseline -
 #                   prints its verdict line against an earlier report.
 #   --no-restore    forwarded to report_performance.sh's own --no-restore -
@@ -118,6 +122,25 @@ if [ -z "$REF" ]; then
     echo "ERROR: a git ref is required." >&2
     usage 2
 fi
+
+# HEAD-RELATIVE REFS ARE REFUSED, not resolved. The ref is checked out in the
+# CAPTURE WORKTREE (capture_worktree_checkout), which sits detached at whatever
+# it last built - so "HEAD" there means that previous ref and the checkout is a
+# no-op. Passing HEAD after committing a candidate silently rebuilds and
+# remeasures the PREVIOUS one, and the report is named after the string typed
+# rather than the tree measured. Refused rather than resolved against the
+# invoking checkout: that would quietly give HEAD a second meaning here, and a
+# capture is the worst place to reinterpret an argument silently.
+case "$REF" in
+    HEAD|@|HEAD~*|HEAD^*|@~*|@^*|*@\{*)
+        echo "ERROR: '$REF' is relative to whichever checkout resolves it, and" >&2
+        echo "this script resolves refs inside the capture worktree - where it" >&2
+        echo "means the ref last built there, not the one you have checked out." >&2
+        echo "Pass an explicit SHA or a branch name instead." >&2
+        exit 2
+        ;;
+esac
+
 COM_PORT="${COM_PORT:-COM3}"
 
 if [ -n "$BASELINE" ] && [ "$BUILD_ONLY" -eq 1 ]; then
@@ -183,7 +206,15 @@ fi
 # summarize+verdict. Nothing below duplicates any of that - it only builds
 # the argument list report_performance.sh already understands and picks a
 # report path this script can name back to the caller afterward.
+# NAMED AFTER THE SHA ACTUALLY BUILT, not only the string typed. The report's
+# own body records paths and a timestamp but no ref, so this filename is the
+# only place a capture says which tree it measured - and "check the artifact
+# exists for the SPECIFIC ref" (docs/Sand/Perf-Round-Guide.md) is the house rule
+# that depends on it. A branch name alone cannot say which commit it was at.
 REF_SLUG=$(printf '%s' "$REF" | tr -c 'A-Za-z0-9._-' '-')
+if [ "$REF_SLUG" != "$CAPTURE_SHA" ]; then
+    REF_SLUG="${REF_SLUG}-${CAPTURE_SHA}"
+fi
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 RESULTS_DIR="$LAUNCHER_DIR/main/apps/sand/tools/results"
 OUT_MD="$RESULTS_DIR/capture_ref_${REF_SLUG}_${TIMESTAMP}.md"
