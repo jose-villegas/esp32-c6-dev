@@ -525,9 +525,17 @@ static inline bool tick_decay(sand_t *s, uint8_t *row, int x, int y,
  * so behaviour is untouched. One binary, five configurations, one boot - a
  * device pass decomposition with no layout difference between
  * configurations, unlike four separate images each drawing their own
- * flash-layout ticket. Defined in sand.c; same CONFIG_LAUNCHER_DEVELOPMENT
- * guard as sand_work_counters.h. See Perf-Round-Guide.md's pass-map note. */
-#if CONFIG_LAUNCHER_DEVELOPMENT
+ * flash-layout ticket. Defined in sand.c. */
+
+/* OPT-IN, for the reason sand_work_counters.h spells out: gating on
+ * CONFIG_LAUNCHER_DEVELOPMENT alone puts these in build.diag, the build
+ * every frame-budget capture is taken on, and an instrument that shifts
+ * every future measurement is worse than no instrument. */
+#ifndef SAND_PASS_GATES
+#define SAND_PASS_GATES 0
+#endif
+
+#if SAND_PASS_GATES && CONFIG_LAUNCHER_DEVELOPMENT
 extern volatile bool sand_step_gate_main_sweep;
 extern volatile bool sand_step_gate_cross_flow;
 extern volatile bool sand_step_gate_gas;

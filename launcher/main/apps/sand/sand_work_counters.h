@@ -13,20 +13,29 @@
  * not a per-step average: reset once before a scene and dump once after: the
  * caller divides by its own step count for a rate.
  *
- * Guarded like every other profiling instrument in this codebase -
- * CONFIG_LAUNCHER_DEVELOPMENT, which Kconfig.projbuild's own help text names
- * explicitly ("No test suites, no profiling counters... for a release
- * build") - so an ordinary or release build never compiles a single
- * increment. launcher/tools/codegen_diff.py is what proves that for
- * sand.c/sand_liquid.c; a host build reaches this the same way the existing
- * attribution probe already does (CONFIG_LAUNCHER_DEVELOPMENT=1 on the
- * command line - see tools/perf_probe/build_probe.sh).
+ * OPT-IN, AND NOT MERELY DEVELOPMENT-ONLY. Guarding these on
+ * CONFIG_LAUNCHER_DEVELOPMENT alone would compile them into build.diag -
+ * which is the build every frame-budget capture is taken on. Measured with
+ * codegen_diff.py: the counters cost sand_step_liquids +39 instructions and
+ * +120 bytes when compiled in. This campaign chases 2-3% effects, so an
+ * instrument that silently shifts every future capture is worse than no
+ * instrument. SAND_WORK_COUNTERS must therefore be asked for explicitly
+ * (-DSAND_WORK_COUNTERS=1), and a plain diag build is byte-identical to one
+ * without this header.
+ *
+ * CONFIG_LAUNCHER_DEVELOPMENT is still required on top, so a release build
+ * cannot enable them even by accident. codegen_diff.py proves the off case:
+ * release and diag both come out at 1,184 instructions, 0 differing lines.
  *===========================================================================*/
 #pragma once
 
 #include <stdint.h>
 
-#if CONFIG_LAUNCHER_DEVELOPMENT
+#ifndef SAND_WORK_COUNTERS
+#define SAND_WORK_COUNTERS 0
+#endif
+
+#if SAND_WORK_COUNTERS && CONFIG_LAUNCHER_DEVELOPMENT
 
 typedef struct {
     uint32_t xflow_calls;             /* sand_step_liquids() actually ran the pass */
