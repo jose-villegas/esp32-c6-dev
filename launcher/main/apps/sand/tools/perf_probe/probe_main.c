@@ -58,6 +58,7 @@ extern void sand_host_probe_run_full_step_control(void);
 extern void sand_host_probe_run_settled_flip_control(void);
 extern void sand_host_probe_run_water(void);
 extern void sand_host_probe_run_mixed_flip(void);
+extern void sand_host_probe_run_settled_pool_to_landscape(void);
 extern void sand_host_probe_run_lava_stress(void);
 extern void sand_host_probe_run_four_liquids(void);
 extern void sand_host_probe_run_wet_earth(void);
@@ -79,6 +80,7 @@ static const probe_scene_t SCENES[] = {
     {"settled_flip_control", sand_host_probe_run_settled_flip_control},
     {"water", sand_host_probe_run_water},
     {"mixed_flip", sand_host_probe_run_mixed_flip},
+    {"settled_pool_to_landscape", sand_host_probe_run_settled_pool_to_landscape},
     {"lava_stress", sand_host_probe_run_lava_stress},
     {"four_liquids", sand_host_probe_run_four_liquids},
     {"wet_earth", sand_host_probe_run_wet_earth},
