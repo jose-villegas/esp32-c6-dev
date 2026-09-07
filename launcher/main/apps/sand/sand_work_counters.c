@@ -1,6 +1,6 @@
 #include "sand_work_counters.h"
 
-#if SAND_WORK_COUNTERS && CONFIG_LAUNCHER_DEVELOPMENT
+#if CONFIG_LAUNCHER_SAND_WORK_COUNTERS
 
 sand_work_counters_t sand_work_counters;
 
@@ -24,4 +24,4 @@ void sand_work_counters_dump(void (*emit)(const char *name, uint32_t value))
     emit("move_liquid_grain_calls", sand_work_counters.move_liquid_grain_calls);
 }
 
-#endif /* CONFIG_LAUNCHER_DEVELOPMENT */
+#endif /* CONFIG_LAUNCHER_SAND_WORK_COUNTERS */

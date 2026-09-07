@@ -13,29 +13,29 @@
  * not a per-step average: reset once before a scene and dump once after: the
  * caller divides by its own step count for a rate.
  *
- * OPT-IN, AND NOT MERELY DEVELOPMENT-ONLY. Guarding these on
- * CONFIG_LAUNCHER_DEVELOPMENT alone would compile them into build.diag -
- * which is the build every frame-budget capture is taken on. Measured with
- * codegen_diff.py: the counters cost sand_step_liquids +39 instructions and
- * +120 bytes when compiled in. This campaign chases 2-3% effects, so an
+ * OPT-IN, AND NOT MERELY DEVELOPMENT-ONLY: CONFIG_LAUNCHER_SAND_WORK_COUNTERS
+ * (Kconfig.projbuild), not CONFIG_LAUNCHER_DEVELOPMENT alone. Development
+ * alone would compile these into build.diag - the build every frame-budget
+ * capture is taken on. Measured with codegen_diff.py against the real
+ * RISC-V toolchain: the counters cost sand_step_liquids +39 instructions
+ * and +120 bytes when compiled in. This campaign chases 2-3% effects, so an
  * instrument that silently shifts every future capture is worse than no
- * instrument. SAND_WORK_COUNTERS must therefore be asked for explicitly
- * (-DSAND_WORK_COUNTERS=1), and a plain diag build is byte-identical to one
- * without this header.
+ * instrument. A plain diag build is byte-identical to one built without
+ * this option.
  *
- * CONFIG_LAUNCHER_DEVELOPMENT is still required on top, so a release build
- * cannot enable them even by accident. codegen_diff.py proves the off case:
- * release and diag both come out at 1,184 instructions, 0 differing lines.
+ * The Kconfig option `select`s LAUNCHER_DEVELOPMENT, so turning this on
+ * always brings development along and a release build cannot enable it
+ * even by accident - the guard below checks only this option, not
+ * development too, since that would just be two conditions to keep in
+ * step with one relationship Kconfig already enforces. codegen_diff.py
+ * proves the off case: release and diag both come out at 1,184
+ * instructions, 0 differing lines.
  *===========================================================================*/
 #pragma once
 
 #include <stdint.h>
 
-#ifndef SAND_WORK_COUNTERS
-#define SAND_WORK_COUNTERS 0
-#endif
-
-#if SAND_WORK_COUNTERS && CONFIG_LAUNCHER_DEVELOPMENT
+#if CONFIG_LAUNCHER_SAND_WORK_COUNTERS
 
 typedef struct {
     uint32_t xflow_calls;             /* sand_step_liquids() actually ran the pass */
@@ -70,4 +70,4 @@ void sand_work_counters_dump(void (*emit)(const char *name, uint32_t value));
 
 #define SAND_WORK_COUNT(field) ((void)0)
 
-#endif /* CONFIG_LAUNCHER_DEVELOPMENT */
+#endif /* CONFIG_LAUNCHER_SAND_WORK_COUNTERS */
