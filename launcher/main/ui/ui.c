@@ -43,12 +43,13 @@ static uint64_t canvas_hash[MU_CONTAINERPOOL_SIZE];
 static mu_Context ctx;
 static bool       invalidated = true;
 
-/* The style in force for the rest of this frame, and microui's own frame
- * painter, kept so UI_BUTTON_FLAT and every non-button frame stay exactly what
- * upstream draws. Captured from the context rather than reimplemented here:
- * microui's draw_frame() is static to microui.c, and a hand-copied twin of it
- * would be one more thing to keep in step across a version bump. */
 static ui_button_style_t  button_style;
+/* The style in force for the rest of this frame, and microui's own frame
+ * painter, kept so UI_BUTTON_FLAT and every non-button frame stay exactly
+ * what upstream draws. Captured from the context rather than
+ * reimplemented here: microui's draw_frame() is static to microui.c, and
+ * a hand-copied twin of it would be one more thing to keep in step
+ * across a version bump. */
 static void             (*base_draw_frame)(mu_Context *, mu_Rect, int);
 
 /* The style MU_COMMAND_TEXT is drawn in - see ui_set_text_style() below for
@@ -69,11 +70,10 @@ static uint32_t layout_generation;
 
 /* microui asks us for text metrics rather than measuring anything itself.
  * `font` is whatever ctx.style->font held when the widget that wants
- * metrics ran - see ui_set_font() in ui.h for how it gets there. It is
- * NULL only before ui_init() has run (mu_init() leaves it that way, and
- * ui_init() is what first sets it); fall back to gfx_font_ui() (the UI/
- * body-text role - gfx/gfx_font_roles.h) rather than deref a NULL, so a
- * widget measured before ui_init() gets a sane answer instead of a crash. */
+ * metrics ran - see ui_set_font() in ui.h. It is NULL only before
+ * ui_init() has run; fall back to gfx_font_ui() (the UI/body-text role)
+ * rather than deref a NULL, so a widget measured before ui_init() gets a
+ * sane answer instead of a crash. */
 static int measure_text_width(mu_Font font, const char *str, int len)
 {
     const gfx_font_t *f = font ? (const gfx_font_t *)font : gfx_font_ui();
@@ -133,31 +133,14 @@ void ui_set_button_style(ui_button_style_t style)
     button_style = style;
 }
 
-/* WHY THIS ONE HAS TO CALL ui_invalidate() AND ui_set_button_style() DOES NOT
- *
- * ui_set_button_style() gets away with just storing a value because a bezel
- * is drawn as real mu_draw_rect() commands (see styled_draw_frame() above):
- * changing the style changes the bytes ui_end() hashes, so a style change
- * IS a content change as far as the repaint skip is concerned, and it just
- * works.
- *
- * Text has no such hook to piggyback on. mu_Context offers a draw_frame
- * function pointer to intercept, but no draw_text equivalent, so there is
- * nowhere to emit extra commands from - a text style can only be applied
- * here, at render time, inside draw_command(), reading whatever text_style
- * currently holds. That means the command list is byte-identical whether
- * text_style is UI_TEXT_PLAIN or UI_TEXT_OUTLINED; hash_canvas() cannot see
- * the difference, so mark_changed_canvases() would find no change and skip
- * the repaint, leaving the OLD style's pixels on screen under the new
- * style's (unpainted) intent.
- *
- * So the invalidation this style needs has to be done by hand, right here,
- * exactly when the value actually changes. This line looks redundant next
- * to ui_set_button_style() above it and will look like it too, to whoever
- * next reads these two functions side by side - it is not: the two styles
- * are not symmetric, because only one of them produces bytes the hash can
- * see. Deleting this call "for consistency" reintroduces the very bug it
- * exists to prevent. */
+/* WHY THIS NEEDS ui_invalidate() AND ui_set_button_style() DOES NOT: a
+ * bezel is real mu_draw_rect() commands, so a style change is a content
+ * change ui_end()'s hash sees. Text style applies at RENDER time inside
+ * draw_command() - the command list is byte-identical either way, so
+ * hash_canvas() can't see it and the repaint is skipped, leaving OLD
+ * pixels under the new intent. Do NOT delete this call "for consistency"
+ * - the two are not symmetric, and deleting it reintroduces the bug it
+ * prevents. */
 void ui_set_text_style(ui_text_style_t style)
 {
     if (style != text_style) {
@@ -166,24 +149,14 @@ void ui_set_text_style(ui_text_style_t style)
     }
 }
 
-/* WHY THIS ONE DOES NOT NEED ui_invalidate(), UNLIKE ui_set_text_style() ABOVE
- *
- * This is the third time this question has come up in this file, and the
- * first time the answer is no. The other two - ui_set_text_style() and
- * ui_set_transform() below - apply their effect at RENDER time, inside
- * draw_command(), so the command list ui_end() hashes is byte-identical
- * whether or not the setting changed; without a manual ui_invalidate() the
- * repaint would be skipped and the old look would stay on screen.
- *
- * A font change is different because mu_Font is not read only at render
- * time - it is baked into the command list itself. ctx.style->font rides
- * along inside every mu_TextCommand (see mu_draw_text() in microui.c), and
- * both metric callbacks above take it too, so a font change moves layout:
- * different metrics mean different positions and sizes for every control
- * that measured text this frame, not just different pixels for the same
- * geometry. Those are different bytes, so hash_canvas() sees the change on
- * its own and mark_changed_canvases() repaints without being told to. See
- * ui_set_text_style()'s comment above for the full argument this mirrors. */
+/* WHY THIS ONE DOES NOT NEED ui_invalidate(), UNLIKE ui_set_text_style()
+ * ABOVE: mu_Font is not read only at render time, it's baked into the
+ * command list itself - ctx.style->font rides along inside every
+ * mu_TextCommand, so a font change moves layout (different metrics mean
+ * different positions/sizes for every control that measured text this
+ * frame), not just different pixels for the same geometry. Those are
+ * different bytes, so hash_canvas() sees the change on its own without
+ * being told to. */
 void ui_set_font(const gfx_font_t *font)
 {
     ctx.style->font = (mu_Font)(font ? font : gfx_font_ui());
@@ -195,20 +168,10 @@ static bool transforms_equal(ui_transform_t a, ui_transform_t b)
            a.d == b.d && a.tx == b.tx && a.ty == b.ty;
 }
 
-/* See ui.h's comment above this declaration for why a transform change has to
- * call ui_invalidate() by hand, the same as ui_set_text_style() above it.
- *
- * WHY AN INVALID TRANSFORM IS REMEMBERED RATHER THAN REJECTED
- *
- * ui_transform_t can express more than this renderer can draw - see
- * ui_transform.h's contract comment. Rather than have this setter reject a
- * non-axis-preserving transform outright, it accepts it, logs once, right
- * here, and leaves `transform_valid` false so every render this frame and
- * every frame after - until a valid transform is set - draws with identity
- * instead (see effective_transform() below). Logging at set time rather than
- * at render time is what keeps this to ONE log line rather than one per
- * frame: draw_command() runs per command, many times a frame, and a log at
- * that rate would itself blow the frame budget it is trying to protect. */
+/* See ui.h for why a transform change must call ui_invalidate(). WHY AN
+ * INVALID TRANSFORM IS REMEMBERED RATHER THAN REJECTED. ui_transform_t can
+ * express more than this renderer can draw - see ui_transform.h. Logging at
+ * set time, not render time, keeps this to one log line, not one per frame. */
 void ui_set_transform(ui_transform_t t)
 {
     if (transforms_equal(t, transform)) {
@@ -369,12 +332,12 @@ static void feed_input(const input_t *input)
         to_logical(input->x, input->y, &lx, &ly);
         mu_input_mousemove(&ctx, lx, ly);
     } else {
-        /* Park the pointer off-screen so nothing sits in a hover state while
-         * no finger is touching. Mapped like every other point here rather
-         * than passed straight through: under a translating transform, the
-         * logical origin's "off-screen" neighbourhood is not necessarily
-         * (-1, -1) any more, and mapping keeps this parked outside whatever
-         * the logical canvas currently is. */
+        /* Park the pointer off-screen so nothing sits in a hover state
+         * while no finger is touching. Mapped like every other point here
+         * rather than passed straight through: under a translating
+         * transform, the logical origin's "off-screen" neighbourhood is
+         * not necessarily (-1, -1) any more, and mapping keeps this
+         * parked outside whatever the logical canvas currently is. */
         to_logical(-1, -1, &lx, &ly);
         mu_input_mousemove(&ctx, lx, ly);
     }
@@ -416,16 +379,14 @@ int ui_height(void)
     return logical_viewport().h;
 }
 
-/* See ui.h for the full argument. Short version: mu_begin_window_ex() only
- * seeds cnt->rect the FIRST time a given window title is ever opened, and
- * remembers it forever after - correct for a desktop window manager, wrong
- * here, where a window's rect must track ui_width()/ui_height() every frame.
- * So this always passes the current logical canvas as the rect, and then -
- * unlike mu_begin_window_ex() - checks whether that is actually what the
- * container ended up with. If a stale rect from an earlier, differently
- * sized orientation is still in force, it is force-corrected here and
- * ui_invalidate() is called so THIS frame repaints using the corrected rect,
- * rather than leaving the fix to take effect only next frame. */
+/* See ui.h for the full argument. Short version: mu_begin_window_ex()
+ * only seeds cnt->rect the FIRST time a title is opened, remembering it
+ * forever after - correct for a desktop window manager, wrong here,
+ * where a rect must track ui_width()/ui_height() every frame. So this
+ * always passes the current logical canvas, then checks what the
+ * container got. A stale rect from an earlier orientation is
+ * force-corrected here, and ui_invalidate() runs so THIS frame repaints
+ * with it, not next frame. */
 int ui_begin_screen(mu_Context *ctx, const char *title, int opt)
 {
     const mu_Rect r = mu_rect(0, 0, ui_width(), ui_height());
@@ -479,50 +440,29 @@ static void draw_command(const mu_Command *cmd)
             (const gfx_font_t *)cmd->text.font : gfx_font_ui();
         const int quarter = ui_transform_quarter(t);
 
-        /* WHY THE WHOLE STRING'S BOX IS MAPPED, NOT JUST ITS ORIGIN
-         *
-         * Every other command here (MU_COMMAND_RECT/ICON/CLIP) maps its
-         * whole rect through ui_transform_rect() - the one function proven
-         * exact under any quarter turn. This used to map only cmd->text.pos
-         * and then walk gfx_text_font()'s per-glyph step table from there,
-         * which reconstructs the string's physical footprint from a single
-         * mapped point plus an assumed direction instead of transforming
-         * the string's own bounding box the way everything else does. That
-         * mismatch is exact and reproducible: mapping a point does not
-         * commute with "walk N glyphs and take the far edge" the way
-         * mapping a box's far corner does, so at quarter 1 and 3 the drawn
-         * string landed a full glyph cell off from where the box says it
-         * should be, and at quarter 2 it was off on both axes - reported on
-         * hardware as rotated button/label text drifting off-centre.
-         *
-         * So this measures the string's LOGICAL box - the same
-         * gfx_font_text_width()/gfx_font_height() measurement
-         * measure_text_width()/measure_text_height() above already use to
-         * size it, so the two can never disagree about the string's extent
-         * - and maps that whole box through ui_transform_rect(), exactly
-         * like the other three commands. */
+        /* WHY THE WHOLE STRING'S BOX IS MAPPED, NOT ITS ORIGIN: every
+         * other command maps its rect through ui_transform_rect(), proven
+         * exact under any quarter turn. This used to map only the origin
+         * and walk per-glyph steps from there - a point doesn't commute
+         * with "walk N glyphs, take the far edge", so at quarter 1/3 the
+         * string landed a glyph cell off, at quarter 2 off both axes
+         * (rotated text drifting off-centre). Now measures the LOGICAL
+         * box - same one used to size it - and maps that, like the
+         * others. */
         const int tw = gfx_font_text_width(font, cmd->text.str, -1,
                                            GFX_GLYPH_SCALE);
         const int th = gfx_font_height(font, GFX_GLYPH_SCALE);
         const mu_Rect box = ui_transform_rect(
             t, (mu_Rect){ cmd->text.pos.x, cmd->text.pos.y, tw, th });
 
-        /* gfx_text_font()'s (x, y) is the FIRST GLYPH's cell, not a corner
-         * of the box - see ui_text_glyph0_origin()'s own comment
-         * (ui_transform.h) for the full derivation, including why it needs
-         * font->cell_w (never cell_h, never a per-glyph advance) at both
-         * quarter 2 and quarter 3. Extracted there, rather than kept
-         * inline, specifically so it is testable against a synthetic
-         * proportional font on a host - this is app_sand/palette.c's
-         * palette_label_origin() port of the same underlying problem (see
-         * its own comment and suite_palette.c's tests for the four corner/
-         * direction pairs), ported rather than called directly because ui/
-         * sits below apps/, so ui.c pulling in apps/sand/ would be a
-         * backwards layering dependency. palette_label_origin() itself is
-         * untouched and stays the reference implementation for ITS still-
-         * monospace font, even though nothing calls it for the palette any
-         * more now that the palette rotates as one whole microui-drawn
-         * unit. */
+        /* gfx_text_font()'s (x, y) is the FIRST GLYPH's cell, not a
+         * corner of the box - see ui_text_glyph0_origin()'s own comment
+         * (ui_transform.h) for the full derivation. Extracted there, not
+         * kept inline, so it's testable against a synthetic proportional
+         * font on a host - a port of app_sand/palette.c's
+         * palette_label_origin() solving the same problem, ported rather
+         * than called directly because ui/ sits below apps/, so pulling
+         * in apps/sand/ would be a backwards layering dependency. */
         int mx, my;
         ui_text_glyph0_origin(font, box, quarter, GFX_GLYPH_SCALE, &mx, &my);
 
@@ -534,19 +474,14 @@ static void draw_command(const mu_Command *cmd)
                                               ((uint32_t)c.g << 8)  | c.b);
 
             /* THE HALO OFFSET IS ADDED AFTER THE MAPPING, NOT BEFORE.
-             *
              * passes[i].dx/dy is a SCREEN-SPACE offset - see ui_style.h's
-             * UI_TEXT_OUTLINED/SHADOWED passes, which exist to sit a halo a
-             * fixed number of pixels from the glyph on the panel, regardless
-             * of where that glyph came from. (mx, my) already IS a screen
-             * position, so adding the offset here is adding it in the space
-             * it was designed for. Transforming (dx, dy) itself - e.g.
-             * mapping cmd->text.pos + dx/dy as one point - would instead
-             * rotate the halo along with the glyph's position and put it on
-             * the wrong side of a turned glyph: a shadow that is meant to
-             * always fall down-and-right on screen would instead fall
-             * down-and-right in LOGICAL space, which is some other physical
-             * direction entirely once turn is nonzero. */
+             * OUTLINED/SHADOWED passes, which sit a halo a fixed pixel
+             * count from the glyph on the panel. (mx, my) already IS a
+             * screen position. Transforming (dx, dy) itself would instead
+             * rotate the halo with the glyph: a shadow meant to fall
+             * down-and-right on screen would fall down-and-right in
+             * LOGICAL space instead - a different physical direction once
+             * turn is nonzero. */
             gfx_text_font(mx + passes[i].dx, my + passes[i].dy, cmd->text.str,
                           color, GFX_GLYPH_SCALE, quarter, font);
         }
@@ -555,13 +490,12 @@ static void draw_command(const mu_Command *cmd)
 
     case MU_COMMAND_ICON: {
         /* microui's icons are close/check/collapsed/expanded. MU_ICON_CHECK
-         * is real artwork (icons.h's icon_check()) because two callers now
-         * need it: the diagnostics app's two mu_checkbox() toggles, and
-         * app_sand.c's palette spawn badge, which draws the same shape
-         * directly rather than through a command. The other three stay a
-         * small centred-square placeholder - a deliberate gap, not an
-         * oversight, because nothing in this shell closes a window or
-         * collapses a tree yet to ask for them. */
+         * is real artwork (icons.h's icon_check()) because two callers need
+         * it: the diagnostics app's mu_checkbox() toggles, and
+         * app_sand.c's palette spawn badge. The other three stay a small
+         * centred-square placeholder - a deliberate gap, not an oversight,
+         * because nothing in this shell closes a window or collapses a
+         * tree yet to ask for them. */
         const mu_Color c = cmd->icon.color;
         const mu_Rect r = ui_transform_rect(t, cmd->icon.rect);
         const gfx_color_t color = gfx_rgb(((uint32_t)c.r << 16) |
@@ -629,22 +563,14 @@ static bool rects_overlap(mu_Rect a, mu_Rect b)
            a.y < b.y + b.h && b.y < a.y + a.h;
 }
 
-/* cnt->rect is LOGICAL - ui_begin_screen() always seeds it from
- * ui_width()/ui_height() (see that function's own comment) - but every use
- * below (the dirty-band check, the overlap check, and the background clear)
- * needs the PHYSICAL footprint on the actual framebuffer, the same as every
- * command draw_command() paints already gets by going through
- * ui_transform_rect() before it ever reaches gfx. Under an odd quarter
- * (Landscape or Landscape upside down, where GFX_WIDTH != GFX_HEIGHT means
- * logical and physical dimensions differ) the two rects are not even the
- * same shape: an unrotated (0, 0, 448, 368) clipped straight onto a
- * 368x448 physical framebuffer covers only its first 368 of 448 rows,
- * silently leaving the bottom 80 physical rows out of the background clear
- * below - whatever was there before stays on screen. Reported on hardware as
- * pieces of the previous frame stuck in place after rotating from Portrait
- * to Landscape - it is not particular to the rotation itself, only to
- * anything that repaints a canvas while an odd quarter is in force, rotation
- * being the most common way to land there. */
+/* cnt->rect is LOGICAL - ui_begin_screen() seeds it from
+ * ui_width()/ui_height() - but every use below needs the PHYSICAL
+ * footprint, same as draw_command() gets via ui_transform_rect(). Under
+ * an odd quarter (GFX_WIDTH != GFX_HEIGHT) the rects differ in shape: an
+ * unrotated (0,0,448,368) clipped onto a 368x448 framebuffer covers only
+ * 368 of 448 rows, leaving 80 rows out of the background clear. Reported
+ * on hardware as previous-frame pieces stuck after rotating Portrait to
+ * Landscape. */
 static mu_Rect canvas_physical_rect(const mu_Container *cnt)
 {
     return ui_transform_rect(effective_transform(), cnt->rect);

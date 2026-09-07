@@ -89,13 +89,12 @@
  * and unbounded dt would overflow the fixed-point arithmetic. */
 #define TILT_MAX_DT_MS 100
 
-/* Magnitude bounds, as percentages of one g.
- *
- * Between LO and HI a sample is close enough to rest to be treated as gravity.
- * Outside, something is pushing the device and the reading is mostly that.
- * Below FREE_FALL nothing is supporting it at all. Wide on purpose: the cost of
- * rejecting a good sample is a few milliseconds of staleness, and the cost of
- * accepting a bad one is sand thrown across the screen. */
+/* Magnitude bounds, as percentages of one g. Between LO and HI a sample
+ * is close enough to rest to be treated as gravity. Outside, something
+ * is pushing the device and the reading is mostly that. Below
+ * FREE_FALL nothing is supporting it at all. Wide on purpose: the cost
+ * of rejecting a good sample is a few milliseconds of staleness, and
+ * the cost of accepting a bad one is sand thrown across the screen. */
 #define TILT_TRUST_LO_PCT     70
 #define TILT_TRUST_HI_PCT    130
 #define TILT_FREE_FALL_PCT    30
@@ -127,17 +126,12 @@ typedef struct {
  * "is this reading actually gravity?" answerable. */
 void tilt_reset(tilt_t *t, int counts_per_g);
 
-/* Feed one sample.
- *
- * (gx, gy) is gravity in SCREEN axes and `gz` is the component through the
- * screen - needed only for the magnitude, but needed: without it a flat device
- * looks identical to free fall.
- *
- * `rotation` is 0-255 from the GYROSCOPE - how fast the board is turning. It
- * only sets how quickly the filter tracks; it is deliberately not what shaking
- * is read from. `dt_ms` is the time since the previous call.
- *
- * The first sample after a reset is adopted exactly, so the sand does not
+/* Feed one sample. (gx, gy) is gravity in SCREEN axes and `gz` is the
+ * component through the screen - needed only for the magnitude, but
+ * needed: without it a flat device looks identical to free fall.
+ * `rotation` is 0-255 from the GYROSCOPE, setting only how quickly the
+ * filter tracks; deliberately not what shaking is read from. The first
+ * sample after a reset is adopted exactly, so the sand does not
  * visibly swing into place when the app opens. */
 void tilt_update(tilt_t *t, int gx, int gy, int gz, int rotation,
                  uint32_t dt_ms);
@@ -146,12 +140,12 @@ void tilt_update(tilt_t *t, int gx, int gy, int gz, int rotation,
 int tilt_x(const tilt_t *t);
 int tilt_y(const tilt_t *t);
 
-/* How much of a g lies in the screen plane, as 0-256 - which is sin of the
- * tilt away from flat, and therefore how hard the sand is being driven.
- *
- * The caller should scale its simulation rate by this. Full upright, sand runs
- * at full speed; laid flat it coasts to a stop instead of freezing mid-frame.
- * Zero in free fall, where nothing is driving anything. */
+/* How much of a g lies in the screen plane, as 0-256 - which is sin of
+ * the tilt away from flat, and therefore how hard the sand is being
+ * driven. The caller should scale its simulation rate by this. Full
+ * upright, sand runs at full speed; laid flat it coasts to a stop
+ * instead of freezing mid-frame. Zero in free fall, where nothing is
+ * driving anything. */
 int tilt_strength(const tilt_t *t);
 
 /* How hard the device is being shaken, 0-255, from linear acceleration rather
