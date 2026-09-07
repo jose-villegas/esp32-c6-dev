@@ -53,7 +53,13 @@ const material_t materials[MATERIAL_ROWS] = {
         {
             .name = "Stone",
             .kind = KIND_STATIC,
-            .density = 200, /* nothing displaces it */
+            .density = 181, /* Nothing displaces it via ordinary movement -
+                              * this only feeds the dislodge-toughness roll
+                              * (queue_flying_grain(), sand_impulse.c). Rank
+                              * 2 of 8 on `density = 221 - 20*rank`, the
+                              * fragility curve every solid sits on - see
+                              * MATX_METAL's own comment for the full
+                              * ranking and the curve's own derivation. */
             .slip = 0,
             .repose = 0,
             .scatter = 0,
@@ -116,15 +122,14 @@ const material_t materials[MATERIAL_ROWS] = {
                                      * - it sits where it is drawn until
                                      * fire chars it into an ember (see
                                      * sand_reactions.c) */
-            .density = 150,      /* above sand (60) and water (30), so
+            .density = 141,      /* above sand (60) and water (30), so
                                      * neither can displace a log - it
                                      * holds its shape under a pour, the
                                      * way a real log does not wash away.
-                                     * Below stone (200), which stays the
-                                     * one thing nothing else touches.
-                                     * Starting point, not final - tune on
-                                     * device like every other constant
-                                     * here. */
+                                     * Rank 4 of 8 on the fragility curve
+                                     * (see MATX_METAL's own comment) -
+                                     * tougher than glass, which shatters,
+                                     * but more brittle than a root. */
         }),
 
     TWIN_ROW(MAT_STEAM,
@@ -250,7 +255,11 @@ const material_t materials[MATERIAL_ROWS] = {
         {
             .name = "Glass",
             .kind = KIND_STATIC,
-            .density = 200, /* Glass differs from stone in ACID resistance. */
+            .density = 121, /* Brittle - rank 5 of 8 on the fragility curve
+                              * (see MATX_METAL's own comment), more easily
+                              * dislodged than wood or a root but tougher
+                              * than ice/plant/leaf. Differs from stone in
+                              * ACID resistance too. */
             .slip = 0,
             .repose = 0,
             .scatter = 0,
@@ -298,9 +307,10 @@ const material_t materials[MATERIAL_ROWS] = {
      * repose, or scatter. */
     [MATERIAL_ROW(MAT_EXTENDED)] =
         {
-            .name = "Extended", .kind = KIND_STATIC, .density = 200, /* stone's figure: undisplaceable, and it
+            .name = "Extended", .kind = KIND_STATIC, .density = 181, /* stone's figure: undisplaceable, and it
                               * smothers a buried flame the way stone
-                              * does */
+                              * does. A named extended static overrides
+                              * this via its own dislodge_density. */
         },
 
     [MATERIAL_ROW(MAT_EXTENDED) + 1] =
@@ -575,6 +585,12 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_CODES] = {
             .heats_to = MAT_WATER,
             .heat_chance = 90,
             .thaws = 2,
+
+            .dislodge_density = 101, /* brittle - rank 6 of 8 on the
+                                       * fragility curve (MATX_METAL's own
+                                       * comment); shatters/dislodges more
+                                       * easily than any solid but plant
+                                       * and leaf */
         },
 
     [MATX_PLANT] =
@@ -613,6 +629,11 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_CODES] = {
             .dissolvable = 220, /* softer than wood's 160 - acid goes
                                 * through leaves faster than through a
                                 * plank */
+
+            .dislodge_density = 81, /* soft - rank 7 of 8 on the fragility
+                                      * curve (MATX_METAL's own comment);
+                                      * easier to dislodge than any solid
+                                      * but leaf */
         },
 
     [MATX_LEAF] =
@@ -633,6 +654,12 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_CODES] = {
             .dissolvable = 240, /* the softest thing on the board */
 
             .roots_to = MATX(MATX_ROOT),
+
+            .dislodge_density = 61, /* rank 8 of 8, the bottom of the
+                                      * fragility curve (MATX_METAL's own
+                                      * comment) - the most easily
+                                      * dislodged solid on the board, same
+                                      * story as dissolvable above */
         },
 
     /* METAL. See docs/plans/Metal-Smelting-Plan.md. Low nibble is identity, no
@@ -647,6 +674,13 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_CODES] = {
              * adjustments possible. */
             .dissolvable = 1,
 
+            /* THE FRAGILITY CURVE every solid's toughness sits on:
+             * density = 221 - 20*rank, rank 1 (toughest) to 8 (softest).
+             * Metal(1)=201, Stone(2)=181, Root(3)=161, Wood(4)=141,
+             * Glass(5)=121, Ice(6)=101, Plant(7)=81, Leaf(8)=61 - see each
+             * material's own density/dislodge_density for its rank. One
+             * knob (rank) instead of eight independently-tuned numbers. */
+            .dislodge_density = 201,
         },
 
     /* See reaction_t.roots and PART 1 of the roots feature
@@ -658,6 +692,11 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_CODES] = {
             .clings_to = MAT_WOOD,
 
             .dissolvable = 180,
+
+            .dislodge_density = 161, /* rank 3 of 8 on the fragility curve
+                                       * (MATX_METAL's own comment) -
+                                       * embedded in soil, tougher than
+                                       * even wood, but not a trunk */
 
             /* NO. Zero. Fire risks burning anchor, leaving tree vulnerable. */
             .flammability = 0,
