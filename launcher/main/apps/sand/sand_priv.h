@@ -632,6 +632,12 @@ extern volatile bool sand_step_gate_reactions;
  * how a previous code-skip probe in this campaign measured nothing. */
 extern volatile bool sand_step_gate_xflow_body;
 
+/* Splits the main sweep the way sand_step_gate_xflow_body splits cross-flow:
+ * keeps step_one_block()'s per-cell walk, suppresses only the
+ * step_one_grain() move. Volatile for the same reason - an `#if` would let
+ * the compiler prove the walk unreachable and delete it too. */
+extern volatile bool sand_step_gate_sweep_body;
+
 /* Wraps a pass's call site in `if (sand_step_gate_<name>)` when compiled in,
  * and in nothing at all otherwise - a release build's sand_step() has no
  * extra branch to fold away, because there was never a branch there to

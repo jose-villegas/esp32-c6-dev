@@ -896,10 +896,12 @@ static void step_one_block(const sweep_ctx_t *ctx, int bx)
          * instead of O(moves). Docs/Sand/Performance-Tuning-Attempts.md ninth
          * attempt advises questioning skip structures before implementation. */
         saw_liquid |= (unsigned)(ctx->is_liquid >> CELL_MATERIAL(c)) & 1u;
-        if (step_one_grain(ctx->s, ctx->row, ctx->prow, ctx->arow, ctx->brow,
-                           x, ctx->y, ctx->w, ctx->dx, ctx->dy, ctx->slide_a,
-                           ctx->slide_b, ctx->load_dx, ctx->load_dy,
-                           ctx->jostle, ctx->driven)) {
+        if (SAND_STEP_GATED(sweep_body,
+                           step_one_grain(ctx->s, ctx->row, ctx->prow,
+                               ctx->arow, ctx->brow, x, ctx->y, ctx->w,
+                               ctx->dx, ctx->dy, ctx->slide_a, ctx->slide_b,
+                               ctx->load_dx, ctx->load_dy, ctx->jostle,
+                               ctx->driven))) {
             moved_here = true;
         }
     }
@@ -1036,6 +1038,7 @@ volatile bool sand_step_gate_cross_flow = true;
 volatile bool sand_step_gate_gas        = true;
 volatile bool sand_step_gate_reactions  = true;
 volatile bool sand_step_gate_xflow_body = true;
+volatile bool sand_step_gate_sweep_body = true;
 #endif
 
 /* Pinned to a cache-line boundary so this function's placement is not a
