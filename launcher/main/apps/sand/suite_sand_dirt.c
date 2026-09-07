@@ -755,6 +755,71 @@ static void test_a_shattered_pane_comes_back_as_cullet(void)
         "is a slab of colour, which is what this replaced");
 }
 
+/* Cullet does not drink, and so never binds into soil: the shards are
+ * glass, with none of the pore space that binds wet dune grains. The water
+ * assert catches a fix made at the conversion alone - a shard that refuses
+ * to become soil but still spends the water it stood in drains a lake for
+ * nothing. */
+static void test_cullet_neither_drinks_water_nor_turns_into_soil(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_MAKE(MAT_SAND, SAND_CULLET_BASE));
+        sand_set(&s, x, H - 3, CELL_MAKE(MAT_WATER, MASS_MAX));
+    }
+    const int water_before = liquid_mass_of(MAT_WATER);
+
+    for (int i = 0; i < 600; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, count_cells_of(MAT_DIRT),
+        "cullet left sitting under water must stay cullet - glass has no "
+        "pore space to bind a grain with");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(W, count_cells_of(MAT_SAND),
+        "and none of it may go missing along the way");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(water_before, liquid_mass_of(MAT_WATER),
+        "nor may the water be spent on it - refusing to become soil while "
+        "still drinking would drain a lake for nothing");
+}
+
+/* Soaking converts a grain three ways - standing in water, a wet neighbour
+ * handing over moisture, percolation from above - so a fix covering only
+ * the first still turns a cullet bed under a watered bank into dirt, which
+ * is what a player gets after breaking a window over soil. */
+static void test_wet_soil_does_not_bind_cullet_from_above(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_MAKE(MAT_SAND, SAND_CULLET_BASE));
+        sand_set(&s, x, H - 3, CELL_MAKE(MAT_DIRT, 0));
+        sand_set(&s, x, H - 4, CELL_MAKE(MAT_WATER, MASS_MAX));
+    }
+
+    for (int i = 0; i < 600; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(W, count_cells_of(MAT_DIRT),
+        "the watered bank must not have grown down into the cullet bed");
+    for (int x = 0; x < W; x++) {
+        const cell_t c = sand_at(&s, x, H - 2);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_SAND, CELL_MATERIAL(c),
+            "every shard under the bank has to still be sand");
+        TEST_ASSERT_TRUE_MESSAGE(CELL_VARIANT(c) >= SAND_CULLET_BASE,
+            "and still in the cullet band - soaking must not have quietly "
+            "restyled it as a dune shade either");
+    }
+}
+
 /* And painted sand must never land in that band.
  *
  * A reserved band only means anything if it is reserved. Without this the
@@ -929,6 +994,8 @@ void run_sand_dirt_suite(void)
     RUN_TEST(test_a_shattered_pane_comes_back_as_cullet);
     RUN_TEST(test_painted_sand_stays_out_of_the_cullet_band);
     RUN_TEST(test_cullet_does_not_look_like_sand);
+    RUN_TEST(test_cullet_neither_drinks_water_nor_turns_into_soil);
+    RUN_TEST(test_wet_soil_does_not_bind_cullet_from_above);
     RUN_TEST(test_water_percolates_to_the_bottom_of_a_submerged_pile);
     RUN_TEST(test_water_percolates_diagonally_as_well_as_straight_down);
 }

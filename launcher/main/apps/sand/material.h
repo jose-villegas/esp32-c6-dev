@@ -522,6 +522,13 @@ static inline bool cell_is_extended(cell_t c)
     return (c & 0xF8) == (uint8_t)(MAT_EXTENDED << 4);
 }
 
+/* Cullet shares MAT_SAND's reaction row, so anything true of cullet alone
+ * has to be asked per cell rather than read out of reactions[]. */
+static inline bool cell_is_cullet(cell_t c)
+{
+    return CELL_MATERIAL(c) == MAT_SAND && CELL_VARIANT(c) >= SAND_CULLET_BASE;
+}
+
 /* KIND_STATIC/NONE excluded: a static source buries itself on its first
  * emitted cell and jams forever. See
  * test_the_extended_row_being_static_is_what_emitter_eligibility_leans_on

@@ -20,7 +20,7 @@ Typography carries the other three roles colour does not: *italic* is the verb d
 ### Sand
 
 - Next to $\textcolor{#B19100}{\text{fire}}$ or $\textcolor{#BF1B00}{\text{lava}}$, it **slowly** *melts* into $\textcolor{#296984}{\text{glass}}$.
-- It *soaks up* any $\textcolor{#1863A3}{\text{water}}$ it touches, and turns into $\textcolor{#846542}{\text{dirt}}$ once it has soaked up enough.
+- It *soaks up* any $\textcolor{#1863A3}{\text{water}}$ it touches, and turns into $\textcolor{#846542}{\text{dirt}}$ once it has soaked up enough - ***unless the grain is cullet, which is glass and holds no water***.
 - It *gives in to* $\textcolor{#2B6F08}{\text{acid}}$ **a lot**.
 
 ### Water
@@ -296,9 +296,9 @@ $\textcolor{#E6EFF7}{\text{Snow}}$: *Melts in any liquid it touches* **slowly**,
 
 **Wet - GRP_WET: soaks, soaks_to, wetting_liquids (emit_wet)**
 
-Sand: Soaks up any water it touches, becoming dirt once it takes a unit in.
+Sand: Soaks up any water it touches, becoming dirt once it takes a unit in - unless the grain is cullet, which is glass and holds no water.
 
-$\textcolor{#D6A663}{\text{Sand}}$: *Soaks up* any $\textcolor{#10416B}{\text{water}}$ it touches, becoming $\textcolor{#846542}{\text{dirt}}$ once it takes a unit in.
+$\textcolor{#D6A663}{\text{Sand}}$: *Soaks up* any $\textcolor{#10416B}{\text{water}}$ it touches, becoming $\textcolor{#846542}{\text{dirt}}$ once it takes a unit in - ***unless the grain is cullet, which is glass and holds no water***.
 
 
 **Acid - GRP_ACID: dissolves, fizz (emit_acid)**
