@@ -83,6 +83,13 @@ Options:
                   concurrency on this hardware (measured: 4 parallel
                   requests took longer than sequential) and is never run in
                   parallel by this script for that reason.
+  --omniroute-retries N   attempts via OmniRoute before falling back to the
+                  local model (default 2) - resends the same fresh prompt,
+                  not the shorten-focused RETRY template below: a bad
+                  OmniRoute answer is usually a flaky response, not one
+                  that just needs to try harder to be shorter, and a
+                  different attempt often lands on a different underlying
+                  model entirely (the combo routes per-request).
   --retries N     attempts per comment before giving up (default 3)
   --banners       also rewrite file/section header banners (off: their `====`
                   rules do not survive re-wrapping)
@@ -364,18 +371,27 @@ def try_omniroute_batch(targets, opts, log):
     remote call with no local GPU to contend for - unlike local Ollama,
     which this script never parallelizes (measured on this hardware: 4
     concurrent local requests took LONGER than sequential, single-GPU
-    serialization). A slow, failed, or empty individual request just comes
-    back as one untrustworthy result; nothing here retries or blocks on
-    it, since the sequential fallback loop after this handles that comment
-    properly on the local model regardless.
+    serialization).
+
+    Each target gets up to `--omniroute-retries` attempts, resending the
+    SAME fresh prompt rather than the shorten-focused RETRY template a bad
+    answer here is not usually "too long", it is a flaky free-tier
+    response, and a different attempt often lands on a different
+    underlying model entirely (the combo routes per-request). Retrying is
+    still cheap and still parallel; only a target that keeps failing every
+    attempt falls through to the sequential local model afterward.
     """
     results = {}
 
     def attempt(i, com):
-        raw = ask(opts["omniroute_model"],
-                  PROMPT.format(limit=opts["limit"], length=com.length,
-                                text=com.text), log, via="omniroute")
-        wants_delete, prose = split_delete(raw)
+        wants_delete, prose = False, ""
+        for _ in range(opts["omniroute_retries"]):
+            raw = ask(opts["omniroute_model"],
+                      PROMPT.format(limit=opts["limit"], length=com.length,
+                                    text=com.text), log, via="omniroute")
+            wants_delete, prose = split_delete(raw)
+            if trustworthy(com.text, wants_delete, prose, opts["ceiling"]):
+                break
         return i, wants_delete, prose
 
     with ThreadPoolExecutor(max_workers=opts["workers"]) as ex:
@@ -764,6 +780,7 @@ def write_report(path, results, opts, seconds):
 def main(argv):
     opts = {"limit": 300, "ceiling": 500, "model": None, "via": "ollama",
             "omniroute_model": DEFAULT_COMBO, "workers": 6,
+            "omniroute_retries": 2,
             "retries": 3, "banners": False, "max": 0, "dry_run": False,
             "review_model": DEFAULT_REVIEW_MODEL, "skip_over": 1500}
     report = "scripts/results/comment-trim.md"
@@ -792,6 +809,8 @@ def main(argv):
             opts["omniroute_model"] = next(it)
         elif arg == "--workers":
             opts["workers"] = int(next(it))
+        elif arg == "--omniroute-retries":
+            opts["omniroute_retries"] = int(next(it))
         elif arg == "--retries":
             opts["retries"] = int(next(it))
         elif arg == "--max":
