@@ -70,29 +70,14 @@ static inline void mark_rows(sand_t *s, int y0, int y1)
     }
 }
 
-/* A liquid cell at row `y` just turned from EMPTY into occupied - see
- * pour_into()'s `was_empty` return, its only caller - which is the only
- * event that can move where a puddle's surface is, and therefore the only
- * event that can make app_sand.c's LOCAL DEPTH render stale below it (see
- * that mechanism's own long comment in app_sand.c, "STALE READINGS UNDER
- * THE DIRTY-ROW OPTIMISATION ARE ACCEPTED"). Ordinary mass moving between
- * two ALREADY-liquid cells - the common case, every step a pool is settling
- * or sloshing - never calls this: it cannot change the depth topology, only
- * redistribute mass within it, so marking dirty for it would repaint a
- * settled reservoir on every step something merely levels out, exactly the
- * "updating all water just because of a pour" cost this exists to avoid.
- *
- * Marks a band of rows, not two points the way mark_rows() does - a settled
- * column's stored local depth for anything within MATERIAL_LIQUID_DEPTH_BAND
- * cells of the new surface can now read differently once repainted, and
- * anything further than that already saturates to the same flat body colour
- * whether the true depth is one cell more or a hundred, so there is nothing
- * further out worth invalidating. Direction-agnostic (both above and below
- * `y`) rather than reasoning about which way is "toward depth" this frame -
- * that answer lives in app_sand.c's own gravity-derived bookkeeping
- * (local_depth_v_reverse/local_depth_h_reverse), and coupling the
- * simulation to it here would be a layering mistake for a mark that is
- * already cheap enough to just cover both directions. */
+/* Only pour_into()'s was_empty triggers this: the only event that moves
+ * a puddle's surface, so the only one that can make LOCAL DEPTH stale.
+ * Mass between already-liquid cells never calls it - dirtying for that
+ * would repaint a settled reservoir every step something levels out.
+ * Marks a BAND, not two points: anything within
+ * MATERIAL_LIQUID_DEPTH_BAND of the surface can read differently,
+ * further out already saturates. Direction-agnostic, avoiding coupling
+ * to app_sand.c's gravity bookkeeping. */
 static inline void mark_depth_band(sand_t *s, int y)
 {
     if (s->dirty_rows == NULL) {
@@ -113,40 +98,14 @@ static inline void mark_depth_band(sand_t *s, int y)
 #define BLOCK_SETTLED_OTHER   0x2
 #define BLOCK_ACTIVE          0x4
 
-/* Whether the main sweep saw a liquid cell in this block, and whether this
- * block or any of its 8 neighbours did - the pair that lets the cross-flow
- * pass skip whole block-wide spans instead of testing every cell of the grid.
- * Two bits, not one, because the expansion cannot be done at write time: the
- * sweep sets HAS_LIQUID per block as it goes, and a single pass over the
- * blocks turns that into NEAR before equalise_liquids() reads it. Writing the
- * expansion directly would need a "did I already expand from here" guard that
- * a neighbour's expansion would spoil.
- *
- * HAS_LIQUID is cleared each step (compute_settled_bit()) for every block the
- * sweep is about to examine, and left alone for a SETTLED block, which the
- * sweep skips and therefore cannot re-establish it for. That is safe because a
- * settled block's contents did not move.
- *
- * THE INVARIANT, which is what the skip actually rests on: every liquid cell
- * is in a block whose NEAR bit is set. Two cases. Either the sweep saw it, and
- * that block's own HAS_LIQUID is set; or it arrived in that block after the
- * sweep had already walked it, in which case it came from a source cell that
- * the sweep DID see, one cell away - or up to SAND_LIQUID_SIGHT (8) away for a
- * cross-flow transfer, still well under SAND_BLOCK_W - so the source block is
- * this block or an immediate neighbour, and the expansion covers it. Liquid
- * entering the grid from outside (sand_set(), try_spawn_one()) goes through
- * mark_move(), which clears the settled bits on a 3x3 of blocks, so the next
- * sweep is guaranteed to walk the block and see it. Nothing else in the
- * simulation creates a liquid cell without going through that same
- * latch: sand_reactions.c does now make one - snow melts into water -
- * but every placement it makes goes through place_cell(), which calls
- * latch_content_flags() exactly as sand_set() does. sand_gas.c only
- * moves gas. The claim that used to stand here, that sand_reactions.c
- * "only ever writes MAT_FIRE", stopped being true when snow arrived.
- *
- * The contrapositive is what equalise_liquids() uses: a block with NEAR clear
- * provably holds no liquid at all, so skipping its cells changes nothing -
- * including the found_any/may_have_liquid conclusion drawn from that pass. */
+/* THE INVARIANT the skip rests on: every liquid cell sits in a block
+ * whose NEAR bit is set. Either the sweep saw it, or it arrived from
+ * within SAND_LIQUID_SIGHT (under SAND_BLOCK_W), so its source block is
+ * this one or a neighbour, already covered by NEAR. New liquid must go
+ * through mark_move() (clears settled bits on a 3x3) via place_cell()'s
+ * latch_content_flags() for this to hold. Contrapositive:
+ * equalise_liquids() sees NEAR clear as provably no liquid, so skipping
+ * those cells changes nothing. */
 #define BLOCK_HAS_LIQUID      0x8
 #define BLOCK_LIQUID_NEAR     0x10
 
@@ -240,33 +199,14 @@ static inline bool block_or_neighbour_has_liquid(const sand_t *s, int bx,
     return false;
 }
 
-/* Marks block (bx,by) - the one containing (x,y) - and its up to 8
- * neighbours unsettled, unconditionally. Used only by touches that
- * happen OUTSIDE the gravity sweep (sand_set(), sand_erase(),
- * try_spawn_one(), and liquid's cross-flow pass in sand_liquid.c), where
- * there is no `moved_here`-style bookkeeping for
- * the pull-based any_neighbor_active() check above to observe on its
- * own next step.
- *
- * Sweep-internal moves need no equivalent: step_one_block() already
- * sets BLOCK_ACTIVE on its own (source) block directly from
- * `moved_here`, independent of any wake call, and a grain only ever
- * moves one cell - so a destination block, if different from the
- * source, is always that source block's immediate neighbour, which
- * any_neighbor_active() will find active on its own the moment the
- * finalisation pass runs. An external touch has no such source block
- * whose own activity a neighbour could observe, which is why it needs
- * to expand to neighbours itself, right here, instead.
- *
- * Unconditional 3x3 expansion, not edge-aware the way point_reach() had
- * to be: these calls are user-interaction/cross-flow rate, not once per
- * grain move, so the precision that mechanism needed to stay cheap on
- * the sweep's hot path is not needed here - see
- * test_undermining_a_sleeping_pile_collapses_it, which is what would
- * catch this being narrowed later: erasing a grain must wake whatever
- * was resting on it in a NEIGHBOURING block, not just the block the
- * erased cell itself was in, and there is no sweep-internal activity of
- * its own to fall back on for a block that never gets examined at all. */
+/* Used only for touches OUTSIDE the gravity sweep: no moved_here-style
+ * bookkeeping exists for any_neighbor_active() to observe next step,
+ * unlike a sweep-internal move where the destination is always the
+ * source's own neighbour. Unconditional 3x3, not edge-aware like
+ * point_reach(): this runs at interaction rate, not per-grain-move, so
+ * precision is not needed - see
+ * test_undermining_a_sleeping_pile_collapses_it: erasing must wake a
+ * NEIGHBOURING block's resting pile, with no sweep-internal fallback. */
 static inline void wake_block_and_neighbors(sand_t *s, int x, int y)
 {
     if (s->block_state == NULL) {
@@ -294,38 +234,13 @@ static inline void wake_block_and_neighbors(sand_t *s, int x, int y)
     s->block_state[by * s->block_cols + bx] |= BLOCK_ACTIVE;
 }
 
-/* Latch the may_have_* flags that a newly written cell implies.
- *
- * ONE copy of this list, because there were two and they drifted. sand_set()
- * and try_spawn_one() each carried their own identical run of ifs, and when
- * a fifth flag arrived only one of them learned about it: snow drawn with
- * the BRUSH never woke the reactions pass, so it sat in water forever and
- * never chilled anything, while snow placed by sand_set() melted correctly.
- * Every test used sand_set(), so every test passed. The duplication was
- * flagged in both copies' comments and duplicated anyway.
- *
- * Independent ifs, not an else-if chain: fire is BOTH kind == KIND_GAS
- * (rises through sand_step_gas()) AND reactions[].burns (reacts through
- * sand_step_reactions()) and needs both flags set. An else-if would let the
- * gas branch shadow the burns branch for every fire cell and strand
- * may_have_burning false forever.
- *
- * Takes a CELL rather than a material id because temperature depends on the
- * variant: cold glass has nothing to cool and needs no flag, and gets one
- * from try_heat_transform() the moment a flame reaches it. Snow is cold
- * whatever its variant, so it always sets the flag. */
-/* The eight directions, in ring order, so that the two neighbours of any
- * direction are simply the entries either side of it. That is what lets
- * the movement rule work at any gravity angle without eight special cases.
- *
- * Shared rather than private to sand.c because growth needs it too, and
- * for a reason worth writing down: "the two cells either side of up" is
- * NOT up plus a perpendicular. That shortcut is right only while up is
- * axis-aligned. Let the board tilt until up is (-1,-1) and adding the
- * perpendicular (1,-1) gives (0,-2) - two cells away, skipping the one in
- * between - so a tree on a tilted board grew limbs with a gap under them
- * and branches that leapt. Stepping round the ring is the same idea done
- * correctly, and it is what the sweep has always done. */
+/* ONE copy: sand_set()/try_spawn_one() once each carried their own,
+ * drifted. Independent ifs, not else-if: fire is BOTH KIND_GAS (rises)
+ * AND reactions[].burns (reacts), needing both flags. Takes a CELL:
+ * cold glass needs no flag yet, snow always does regardless of variant.
+ * Ring order below: neighbours of any direction are the entries either
+ * side, working at any gravity angle. Shared with sand.c: "either side
+ * of up" is NOT up plus a perpendicular except when axis-aligned. */
 static inline const int *ring_dir(int i)
 {
     static const int ring8[8][2] = {
@@ -352,57 +267,13 @@ static inline int ring_of(int dx, int dy)
     return 0;   /* unreachable for a unit direction */
 }
 
-/* THE BLOCKING SURFACE'S APPROXIMATE NORMAL - the geometry half of the
- * KIND_STATIC wall-bounce in step_impulses()'s blocked branch (sand.c). Looks
- * at the three ring cells centred on the MOVER'S OWN direction of travel -
- * `dir - 1`, `dir`, `dir + 1`, from (x, y) - the same three-cell arc shape
- * cover_mask() (sand_priv.h) settled on, and for the same reason its own
- * comment records: a hand-drawn stone wall bulges one cell past the one
- * below it at every brush step, so a WIDER arc reads that bulge as a
- * corner instead of the flat wall it actually is. Three, not five, here
- * too - do not widen it without the same kind of evidence that comment
- * documents.
- *
- * For every covering cell in the arc (KIND_STATIC only - sand_at()'s
- * out-of-bounds-is-STONE convention folds the grid edge into this for
- * free, which is deliberate, not an oversight: a chunk thrown at the edge
- * of the board bounces off it exactly as it would off a real wall there),
- * the surface is treated as pushing back along THAT cell's own negated
- * unit vector - directly ahead pushes straight back, a diagonal neighbour
- * pushes back-and-across.
- *
- * QUANTISED BY DOMINANCE, NOT BY SIGN - a first version of this took the
- * sign of each summed component independently, and that degenerates for
- * every DIAGONAL `dir`: the arc's centre cell (always covered, or this
- * would never have been called - see the blocked branch's own precondition)
- * contributes -1 to BOTH axes on a diagonal throw, and the two flanks
- * (axis-aligned) can only ever add 0 or -1 to one axis each - never enough
- * to flip a sign back across zero. So a sign-quantised sum for a diagonal
- * `dir` is always exactly the mover's own reverse, whatever the two flanks
- * look like - a diagonal-direction bounce could never glance, only ever
- * reverse, which is wrong: a chunk skimming down-right across a flat floor
- * (down AND down-right covered, right open) should glance up-right off it,
- * not bounce straight back up-left as if it had hit a corner. Comparing the
- * summed components' MAGNITUDES instead - the larger axis wins outright,
- * both axes count only when they are close (within a factor of 2) - fixes
- * this without abandoning integer arithmetic: for the flat-floor case above
- * the vertical push (from two covering cells) dominates the horizontal
- * push (from one), so the normal reads as pure "up" and the mover glances,
- * exactly as it should.
- *
- * This is still a documented APPROXIMATION, not an exact nearest-of-8
- * average, but it is the RIGHT approximation for a flat wall hit
- * square-on: axis-aligned `dir` still always reverses (a flat wall's own
- * normal has no other axis to weigh against), while diagonal `dir` can now
- * genuinely glance when the arc is asymmetric. See
- * test_blocker_normal_and_reflect_off_normal_match_the_exhaustive_arc_table
- * (suite_sand_impulse.c) for the full 8-direction x 4-configuration ground truth
- * this was checked against - do not touch the dominance rule below without
- * updating that table alongside it.
- *
- * Returns -1 - "no normal, the caller falls through to the plain wait" -
- * only when nothing in the arc is KIND_STATIC, or the summed push exactly
- * cancels (kept as a guard; not observed to happen off a 3-cell arc). */
+/* KIND_STATIC wall-bounce geometry for step_impulses() (sand.c). Same
+ * 3-cell arc as cover_mask(), same reason. sand_at()'s out-of-bounds-is-
+ * STONE makes board edges bounce too. Quantised by MAGNITUDE, not sign:
+ * sign-per-axis makes every diagonal dir degenerate to a plain reverse
+ * (centre cell contributes -1 both axes), so diagonal throws could never
+ * glance. Comparing magnitudes - larger axis wins, both count within 2x -
+ * lets diagonal hits glance while a flat wall still reverses exactly. */
 static inline int blocker_normal(const sand_t *s, int x, int y, int dir)
 {
     int sx = 0;
@@ -476,71 +347,20 @@ neighbor_smothers(const sand_t *s, int nx, int ny, int w, int h, uint8_t density
     return nm->kind != KIND_LIQUID && nm->density > density;
 }
 
-/* THE SHARED "IS THERE A LID OVER ME" PRIMITIVE - bd esp32c6-a2j,
- * replacing cover_count() (sand_reactions.c, shipped in b5e4a61 for
- * esp32c6-mqt), which counted the four SCREEN-fixed cardinals regardless
- * of which way is down and, being built on neighbor_smothers() (which
- * never counts a liquid neighbour, on purpose), could never fire for an
- * interior cell of a pool wider than one cell: at most the cell directly
- * above it ever counted, so a wide pool sealed by a crust never reached
- * the threshold no matter how complete the seal was.
- *
- * THE LID IS THE THREE CELLS CENTRED ON ANTI-GRAVITY - the cell directly
- * opposite gravity and the two diagonals either side of it - and ALL
- * THREE must be covering. Nothing else is ever looked at. What is below
- * a cell (gravity-relative) supports it, and what is beside it walls it
- * in; neither covers it, which is why this rotates with gravity instead
- * of being fixed screen directions, and why the two PERPENDICULARS are
- * left out. They were in, once: the first gravity-relative version
- * (2026-09-02) used a five-cell semi-disc - these three plus the two
- * perpendiculars - needing three covered in a contiguous run. A
- * hand-drawn stone wall is never flat: each brush disc bulges one cell
- * past the one below it, so its inner face has a notch every brush step,
- * and lava settling into a notch saw wall to its side, wall on the
- * diagonal above that side and wall directly above - three, contiguous,
- * "sealed" - while the pool's surface sat wide open one cell over. Every
- * hand-drawn basin blew its own sides out as the lava settled (bursts
- * within 16 steps on the host, wall breached by step 62 at natural odds;
- * a clean one-cell wall never produced a single eligible cell, which is
- * why no test saw it). Dropping the perpendiculars removed every
- * eligible cell in that scene at brush radii 2 to 4 and left the
- * wide-pool-under-a-crust case - the one this exists for - untouched.
- * A pocket with an open SIDE still qualifies as long as its lid is
- * complete; a lid with a gap in it is not a lid. See
- * test_lava_in_a_wall_notch_never_bursts and
- * test_cover_primitive_matches_the_exhaustive_shape_table
- * (suite_sand_lava_burial.c).
- *
- * `mask` is 3 bits: bit i set means ring_dir(anti - 1 + i) covers this
- * cell - bit 1 is anti-gravity itself, bits 0 and 2 the diagonals.
- * COVER_LID is all three. "Covering" is neighbor_smothers()'s test: in
- * bounds, not a liquid, strictly denser than the cell asking. Out of
- * bounds never counts - the board edge is not a container a player
- * built, the same rule gas_ignite_confined() states for its own scan.
- *
- * SETTLED GRAVITY, NOT THE RAW TILT AND NOT THE DITHERED STEP -
- * s->last_load_dx/dy (sand.h) is already an int pair and already one of
- * the eight ring directions, and it is the SETTLED one: the nearest
- * eighth, stable while the board is held still. Every other structural
- * question in the sweep reads it for exactly that reason - this
- * primitive, anchored(), growth's own "which way is up" - and this one
- * is pinned by a test that drives it under sideways gravity specifically
- * to stop it ever regressing to a fixed screen direction
- * (test_a_wide_pool_under_a_sideways_crust_bursts, suite_sand_lava_burial.c).
- *
- * NOT s->last_step_dx/dy, which is the DITHERED direction of one step: a
- * tilt falling between two eighths spends some steps on each, in
- * proportion. That is right for a thing that accumulates over time (a
- * growing stem at its true angle) and wrong here, because a seal is a
- * fact about the geometry rather than a sample of it - dithering would
- * swing the lid between two adjacent orientations every step, so a cell
- * genuinely sealed in one of them would read unsealed in the other and
- * the whole rule would turn into orientation noise. Working off the
- * already-quantised ring direction both matches what the rest of the
- * sweep does and cannot flicker: the eight ring directions are the only
- * inputs this ever sees. */
+/* Replaces cover_count() (sand_reactions.c), which counted screen-fixed
+ * cardinals and could never fire for a wide pool sealed by a crust (only
+ * the cell directly above ever counted). The lid is the three cells
+ * centred on anti-gravity - opposite gravity plus its two diagonals -
+ * ALL THREE must cover. The two perpendiculars were tried first
+ * (five-cell semi-disc) but a hand-drawn wall notches then read as a
+ * seal at brush radii 2-4, bursting basins that should hold. */
 #define COVER_LID 0x7u
 
+/* Covering is neighbor_smothers(): in bounds, not liquid, denser than
+ * the asking cell; out of bounds never counts. Uses SETTLED gravity
+ * (s->last_load_dx/dy), not the dithered per-step direction - dithering
+ * would swing the lid between two orientations every step, flickering a
+ * cell that is genuinely sealed. */
 static inline unsigned
 cover_mask(const sand_t *s, int x, int y, int w, int h, uint8_t density)
 {
@@ -641,42 +461,14 @@ static inline void mark_move(sand_t *s, int x0, int y0, int x1, int y1)
     wake_block_and_neighbors(s, x1, y1);
 }
 
-/* Ticks a transient material's life down by one, per material.h's `decay`
- * field, or clears the cell outright if it was already down to its last
- * tick. Returns whether the cell is still occupied - the caller must not
- * go on to treat a grain that just vanished as still there. Writing the
- * ticked-down value back into `row[x]` before the caller does anything
- * else with `*grain` matters wherever `*grain` gets handed to something
- * like move_to(), which trusts its argument as the thing to place rather
- * than re-reading row[x] itself - a stale life value there would carry
- * an already-dead grain one more step before the next roll caught it.
- *
- * Shared between sand_gas.c (gas's own burn-down) and sand_reactions.c
- * (fire's burn-out) rather than duplicated - the body is entirely
- * generic, nothing here is gas- or fire-specific. Originally lived in
- * sand_gas.c as tick_gas_decay() with a single call site; extracting it
- * to a second call site is exactly the kind of change that regressed
- * try_fall_or_scatter()/try_slide() when done carelessly (see this
- * header's own comment above try_fall_or_scatter_impl() for the full
- * three-attempt story) - measured before and after this extraction on
- * device rather than assumed safe, since it is small enough that a
- * regression was thought unlikely but not impossible. */
-/* The counting-down half of tick_decay(), at a rate the caller chooses.
- *
- * Split out for materials whose variant is life but whose movement row
- * says decay 0 - wood, which is not a transient and must not be treated as
- * one by anything else, but does count down while it is burning.
- *
- * Reads/writes through cell_code()/cell_with_code() (material.h), not
- * CELL_VARIANT()/CELL_MAKE(), and burns out at `r->lit_from` rather than a
- * hardcoded 1 - the general form gunpowder needs now that "lit" is not
- * always the whole nibble counting down to zero. Byte-identical for wood
- * (lit_from 1, and cell_code()/cell_with_code() agree with CELL_VARIANT()/
- * CELL_MAKE() for every non-gunpowder byte): `life <= 1` is exactly what
- * `life <= r->lit_from` reads as there. Takes the reaction row itself
- * rather than a bare material id, so the burn-out threshold is read once
- * from the same row the caller already loaded instead of re-deriving it
- * here. */
+/* tick_decay(): returns whether the cell is occupied - caller must not
+ * treat a vanished grain as still there. Writes the value back before
+ * the caller uses *grain again, since move_to() trusts its argument
+ * over re-reading row[x]. Shared between sand_gas.c/sand_reactions.c:
+ * generic, not duplicated. tick_decay_at(): split for materials whose
+ * variant is life but decay 0 (wood, burning). Burns at r->lit_from,
+ * not hardcoded 1 - gunpowder needs this since lit is not always the
+ * whole nibble. */
 static inline bool tick_decay_at(sand_t *s, uint8_t *row, int x, int y,
                                  cell_t *grain, const reaction_t *r, int decay)
 {
@@ -736,43 +528,14 @@ bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
                        const int *slide_a, const int *slide_b,
                        cell_t grain, uint8_t mat_id);
 
-/* How a liquid levels: the direction of the true surface, and what climbing
- * one step of it costs.
- *
- * A pool's true perpendicular to gravity almost never lines up with one of
- * the eight ring directions - it lies somewhere between an axis direction
- * and the diagonal beside it. `ax` is that axis ray, perpendicular to
- * whichever of gx/gy dominates; `dg` is the diagonal ray next to it, on the
- * side the tilt leans. Between the two of them, every tilt from dead flat to
- * exactly 45 degrees is bracketed.
- *
- * `q_q8` decides which ray a given column (or row, when gravity is mostly
- * sideways) takes, as a fixed pattern in SPACE, 0-256 for 0-100%. This is
- * the whole trick. Commit 30335ae pinned cross-flow to the nearest axis to
- * kill a flicker where dithering the axis in TIME let a settled pool see a
- * different axis - and so a different verdict on which way is down - on
- * almost every step, swinging half its mass back and forth. Dithering the
- * same choice in SPACE instead of in time gives a settled pool the identical
- * answer on every step, because each column always takes the same ray, so
- * nothing flickers - but the mix of rays across the pool still reads as the
- * true angle instead of snapping to one of eight.
- *
- * `bias_ax_q8`/`bias_dg_q8` are what one step of the matching ray costs in
- * gravitational potential: the mass a level surface gains per step of that
- * ray, in 1/256 units. A cell reached by a ray that is not exactly
- * perpendicular to gravity sits a little higher or lower along the true
- * "down" than the cell it started from, and so a level surface should hold
- * a little more or less mass there even though nothing moved; the bias is
- * that difference, and find_shallowest() (sand_liquid.c) carries the
- * running total so a multi-step walk compares LEVEL rather than raw mass.
- *
- * Both halves reduce, bit for bit, to the single-ray raw-mass rule that came
- * before, at the two gravities that rule already handled correctly: at
- * exactly axis-aligned gravity q_q8 is 0 and bias_ax_q8 is 0, so only the
- * axis ray is ever taken and it costs nothing extra; at exactly 45 degrees
- * q_q8 is 256 and bias_dg_q8 is 0, so only the diagonal ray is ever taken
- * and it too costs nothing extra. That is why every existing test at those
- * two gravities was unaffected by this change. */
+/* A pool's true perpendicular to gravity rarely lines up with a ring
+ * direction - bracketed between an axis ray (ax) and the diagonal
+ * beside it (dg). q_q8 picks which ray a column takes, as a fixed SPACE
+ * pattern, not dithered in TIME: time-dithering let a settled pool see
+ * a different axis - and verdict on down - almost every step, swinging
+ * mass back and forth. Space-dithering gives every column the same
+ * answer every step, while the MIX across the pool still reads as the
+ * true angle. */
 typedef struct {
     int ax[2];        /* the axis ray - perpendicular to the dominant axis */
     int dg[2];        /* the diagonal ray beside it, the way the tilt leans */
@@ -790,44 +553,14 @@ void sand_step_gas(sand_t *s, int gx, int gy, int dx, int dy,
                    const int *perp_a, const int *perp_b,
                    int load_dx, int load_dy, int x_step, int jostle);
 
-/* The whole grain-movement primitive stack - try_fall_or_scatter() and
- * try_slide(), and everything they call - moved here from sand.c, still
- * `static inline`, for the same reason dest_row()/mark_rows() above are:
- * both sit on the hottest path there is, called once per grain per step
- * for every powder cell.
- *
- * Getting this right took three attempts, each one measured on device,
- * not assumed - see docs/Sand/Simulation-Lessons.md for the full numbers:
- *
- * 1. Just remove `static` from try_fall_or_scatter()/try_slide() so
- *    sand_gas.c could call them, leaving everything else static in
- *    sand.c. Regressed the flip/water frame-budget tests by ~26%,
- *    exactly reproducible, even though neither test ever places a gas
- *    cell: turning a `static` function called once per grain into an
- *    ordinary extern one is enough, on its own, to stop the compiler
- *    inlining it into step_one_grain()'s dispatch, which that call site
- *    had been relying on.
- * 2. Move the WHOLE chain here as `static inline`, so both sand.c and
- *    sand_gas.c get their own independently inlinable copy - exactly the
- *    pattern this header already uses for dest_row()/mark_rows(). Fixed
- *    flip/water back to baseline, but grew sand_step_gas() to ~3.9 KB
- *    (bigger than sand_step() itself, from carrying a full second copy
- *    of this chain) and THAT regressed the worst-case, sleeping-off
- *    test_a_full_size_step_fits_in_the_frame_budget from ~7000us to over
- *    15000us - exactly reproducible too, and again without that test
- *    ever placing a gas cell. Flash footprint, not runtime gas activity,
- *    was the cost both times.
- * 3. What actually shipped: try_fall_or_scatter_impl()/try_slide_impl()
- *    stay `static inline` here, but only step_one_grain() in sand.c
- *    calls them directly - keeping the main sweep's hot path fully
- *    inlined, exactly as it always was. sand_gas.c instead calls the
- *    ordinary, non-inline try_fall_or_scatter()/try_slide() defined once
- *    in sand.c (declared below) - genuine functions that each wrap one
- *    of the _impl versions exactly once, so the shared logic exists in
- *    flash as at most two copies (the inlined one in sand_step(), and
- *    the one real out-of-line copy sand_gas.c calls into) rather than a
- *    third, duplicated one growing inside sand_step_gas() itself. Fixed
- *    both regressions at once. */
+/* try_fall_or_scatter()/try_slide() moved here, static inline, same
+ * reason as dest_row()/mark_rows(): hottest-path, called once per grain
+ * per step. Un-static-ing for sand_gas.c, or inlining the whole chain
+ * into both files, each regressed a frame-budget test badly (loses
+ * inlining, or duplicates flash). Shipped: _impl versions stay static
+ * inline here; sand_gas.c calls thin non-inline wrappers in sand.c,
+ * keeping the hot path inlined, at most two flash copies. See
+ * docs/Sand/Simulation-Lessons.md. */
 
 /* Static materials never yield regardless of density, so a wall stays a
  * wall - the general "yields to denser" rule below has this one
