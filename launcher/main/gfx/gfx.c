@@ -6,12 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* See gfx.h's own comment on ESP_PLATFORM: everything hardware-only in this
- * file - panel bring-up and presentation, not the drawing primitives - is
- * gated on it, so a host build (a plain `gcc` invocation, same as
- * test/run_tests.sh already uses) never sees these includes at all. The
- * device branch of everything gated this way is moved verbatim, never
- * edited, so real firmware behavior cannot change. */
 #ifdef ESP_PLATFORM
 #include "driver/spi_master.h"
 #include "esp_lcd_panel_ops.h"
@@ -25,10 +19,8 @@
 #include "freertos/semphr.h"
 #endif
 
-/* gfx_dirty.h cannot include gfx.h (it must stay ESP-IDF-free to compile on
- * a host), so it carries its own GFX_DIRTY_WIDTH/HEIGHT literals instead of
- * gfx.h's BSP-derived GFX_WIDTH/HEIGHT. This is what keeps the two from
- * silently drifting apart if the board's resolution ever changes. */
+/* Carries GFX_DIRTY_WIDTH/HEIGHT for ESP-IDF independence and aligns with
+ * gfx.h's BSP values. */
 _Static_assert(GFX_WIDTH == GFX_DIRTY_WIDTH && GFX_HEIGHT == GFX_DIRTY_HEIGHT,
               "gfx_dirty.h's screen dimensions must match gfx.h's");
 
@@ -44,17 +36,13 @@ static esp_lcd_panel_io_handle_t panel_io;
 static bool spi_bus_up;
 static SemaphoreHandle_t strip_sent;
 
-/* Copied from the Waveshare BSP (Apache-2.0, (c) 2026 Waveshare Team), where
- * it is a private static.
- *
- * We need it because gfx brings the panel up itself rather than calling
- * bsp_display_new(). The BSP offers no way to release the display, and
- * releasing it is the only way to reach the SD card - the two share SPI2 on
- * different pins, so only one can hold the bus. Owning the sequence here is
- * what makes gfx_suspend()/gfx_resume() possible.
- *
- * Note command 0x11 (sleep out) carries a 120 ms settle, which dominates the
- * cost of a full re-initialisation. */
+/* Copied from the Waveshare BSP (Apache-2.0, (c) 2026 Waveshare Team),
+ * where it is a private static - needed here because gfx brings the
+ * panel up itself rather than calling bsp_display_new(): the BSP offers
+ * no way to release the display, and releasing it is the only way to
+ * reach the SD card (shared SPI2, only one bus owner at a time), which
+ * is what makes gfx_suspend()/gfx_resume() possible. Command 0x11 (sleep
+ * out) carries a 120 ms settle, dominating a full re-init's cost. */
 static const sh8601_lcd_init_cmd_t lcd_init_cmds[] = {
     {0x11, (uint8_t[]){0x00}, 0, 120},
     {0x44, (uint8_t[]){0x01, 0xD1}, 2, 0},
@@ -72,16 +60,8 @@ static const sh8601_lcd_init_cmd_t lcd_init_cmds[] = {
 static struct { int x0, y0, x1, y1; } clip;
 
 #ifdef ESP_PLATFORM
-/* Scratch space for packing one gathered run's box edge-to-edge before
- * sending it as one draw_bitmap() call - see gather_and_send(). Bounded by
- * GATHER_MAX_PIXELS (gfx_dirty.h) - a run bigger than that is not worth
- * gathering at all, at which point the row is sent whole instead.
- *
- * Allocated with MALLOC_CAP_DMA, same as `fb` below - a plain static array
- * is only guaranteed the alignment its element type needs (2 bytes for
- * uint16_t), not whatever the GDMA engine actually requires. A source buffer
- * the DMA can't read cleanly does not fail loudly; it reads back subtly
- * wrong, which is a much worse failure to chase. */
+/* Scratch space for gather_and_send(), bounded by GATHER_MAX_PIXELS,
+ * allocated with MALLOC_CAP_DMA. Misalignment causes DMA errors. */
 static gfx_color_t *gather_buf;
 #endif
 
@@ -101,12 +81,8 @@ static bool IRAM_ATTR on_strip_sent(esp_lcd_panel_io_handle_t io,
     return woken == pdTRUE;
 }
 
-/* Brings the panel up on SPI2.
- *
- * `send_init` chooses between a full initialisation and only re-attaching:
- * the SH8601 keeps its registers while powered, so after a suspend the panel
- * is still configured and only the ESP32 side needs rebuilding. Skipping the
- * command sequence avoids its 120 ms settle. */
+/* SPI2 panel. `send_init` chooses full init or re-attach, skipping command
+ * sequence to avoid 120 ms wait. */
 static esp_err_t panel_bring_up(bool send_init)
 {
     const spi_bus_config_t bus = SH8601_PANEL_BUS_QSPI_CONFIG(
@@ -123,10 +99,7 @@ static esp_err_t panel_bring_up(bool send_init)
     esp_lcd_panel_io_spi_config_t io_config =
         SH8601_PANEL_IO_QSPI_CONFIG(BSP_LCD_CS, on_strip_sent, NULL);
 
-    /* The macro defaults to 40 MHz, which is what the vendor driver validates.
-     * gfx_present() measured 17.6 ms at that rate against a theoretical 16.5,
-     * so the frame is 94% bus-bound - the clock is the whole cost, and doubling
-     * it is the only change that halves it. See GFX_QSPI_HZ in gfx.h. */
+    /* Defaults to 40 MHz, 17.6 ms frame, 94% bus-bound. See GFX_QSPI_HZ. */
     io_config.pclk_hz = GFX_QSPI_HZ;
     err = esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)BSP_LCD_SPI_NUM,
                                    &io_config, &panel_io);
@@ -158,8 +131,7 @@ static esp_err_t panel_bring_up(bool send_init)
     return ESP_OK;
 }
 
-/* Releases SPI2 so something else can use it. The framebuffer is kept: it is
- * ordinary RAM and has nothing to do with the bus. */
+/* Releases SPI2 for other use. Framebuffer is ordinary RAM, not bus-related. */
 static void panel_tear_down(void)
 {
     if (panel != NULL) {
@@ -188,9 +160,8 @@ bool gfx_suspend(void)
 bool gfx_resume(bool full_init)
 {
 #ifdef ESP_PLATFORM
-    /* A full re-initialisation reloads the panel's registers and can leave its
-     * GRAM in an unknown state, so nothing may be assumed to still be on
-     * screen. Cheap insurance: one full frame after a resume. */
+    /* GRAM unknown after re-init; assume screen cleared. One frame after
+     * resume. */
     if (full_init) {
         gfx_mark_all_dirty();
     }
@@ -204,15 +175,8 @@ bool gfx_resume(bool full_init)
 bool gfx_init(void)
 {
 #ifdef ESP_PLATFORM
-    /* Counting, not binary: a whole frame's rows are queued before any is
-     * awaited, so several finish first. A binary semaphore would saturate at
-     * one, discard the rest, and deadlock on the next wait.
-     *
-     * Sized for STRIP_COUNT * GRID_COLS, not STRIP_COUNT: a row can send up
-     * to one independent gather per column - see send_one_row(). Undersizing
-     * this does not corrupt anything - xSemaphoreGiveFromISR above the max
-     * simply fails - but gfx_present()'s wait loop would then block forever
-     * on gives that never happened. */
+    /* Sized for STRIP_COUNT * GRID_COLS: see send_one_row(). Undersizing
+     * blocks gfx_present() forever. */
     strip_sent = xSemaphoreCreateCounting(
         STRIP_COUNT * GRID_COLS + 2, 0);
     if (strip_sent == NULL) {
@@ -220,9 +184,7 @@ bool gfx_init(void)
         return false;
     }
 
-    /* Detect the board first: it initialises I2C and pulses the display and
-     * touch reset lines through the IO expander, which the panel needs before
-     * it will accept anything. */
+    /* Detect board: initialises I2C, pulses display and touch reset lines. */
     if (bsp_board_detect() == BSP_BOARD_VARIANT_UNKNOWN) {
         ESP_LOGE(TAG, "Could not identify the board");
         return false;
@@ -234,11 +196,8 @@ bool gfx_init(void)
     }
 
 #if CONFIG_LAUNCHER_DEVELOPMENT
-    /* The state the framebuffer is about to be placed into: everything the
-     * SD probe and the panel bring-up left behind, before the one
-     * allocation that has to be contiguous takes its share. Paired with
-     * main.c's own HEAPMARK lines either side of gfx_init() - see
-     * heap_mark()'s comment there, and bd esp32c6-8h2. */
+    /* Framebuffer state post SD probe & panel bring-up; paired with HEAPMARK
+     * in main.c. See heap_mark() comment and bd esp32c6-8h2. */
     ESP_LOGI(TAG, "HEAPMARK %-18s free %6u largest %6u", "before framebuffer",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
@@ -265,12 +224,6 @@ bool gfx_init(void)
     gfx_clear_clip();
     gfx_mark_all_dirty();
 
-    /* Both numbers, not just free heap: what decides whether the sand app's
-     * grid can still be allocated after this is the LARGEST CONTIGUOUS
-     * block, and the two have differed by about 20 KiB with nothing in the
-     * log saying so (bd esp32c6-8h2). The framebuffer's own address comes
-     * along because a block map is unreadable without knowing which block
-     * is this one. */
     ESP_LOGI(TAG, "%dx%d framebuffer at %p, %u bytes; heap free %u, "
                   "largest DMA block %u",
              GFX_WIDTH, GFX_HEIGHT, (void *)fb, (unsigned)bytes,
@@ -278,10 +231,6 @@ bool gfx_init(void)
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
     return true;
 #else
-    /* No panel, no DMA, no heap capabilities to ask for - a host renderer
-     * reads gfx_framebuffer() directly once the drawing calls are done, it
-     * never presents. Plain malloc is all the framebuffer itself ever
-     * needed anyway (see gfx.h's own top comment: it is ordinary RAM). */
     const size_t bytes = (size_t)GFX_WIDTH * GFX_HEIGHT * sizeof(gfx_color_t);
     fb = malloc(bytes);
     if (fb == NULL) {
@@ -295,10 +244,8 @@ bool gfx_init(void)
 
 gfx_color_t *gfx_framebuffer(void)
 {
-    /* Deliberately does NOT mark anything dirty. gfx cannot know what a caller
-     * intends to write, and guessing "everything" would silently discard the
-     * saving for the two apps that draw this way. Raw writers call
-     * gfx_mark_dirty() themselves; see the warning on it. */
+    /* gfx can't guess intent. "Everything" wastes resources. Raw writers use
+     * gfx_mark_dirty(). Be cautious. */
     return fb;
 }
 
@@ -306,16 +253,6 @@ gfx_color_t *gfx_framebuffer(void)
  * Dirty tracking
  *-------------------------------------------------------------------------*/
 
-/* Partial clear tracking: when enabled, gfx_clear() wipes only the bounding
- * box of what was dirtied on the previous frame instead of wiping the entire
- * 322 KiB framebuffer, and automatically marks that erased region dirty in
- * gfx_dirty.
- *
- * prev_bbox_* stores the bounding box of what was drawn/dirtied during the
- * previous frame.
- *
- * drawn_bbox_* accumulates the union of all dirty regions marked by
- * gfx_mark_dirty() during this frame after gfx_clear(). */
 static bool partial_clear_on;
 static bool interlace_on;
 static int frame_parity;
@@ -352,11 +289,8 @@ void gfx_invalidate(void)
     prev_bbox_valid = false;
 }
 
-/* The actual tracking - state, geometry and the grid/leaf logic - lives in
- * gfx_dirty.h as a header-only module (see its own file comment for why:
- * mark_band() must stay inlinable into this translation unit). These three
- * are thin wrappers so gfx.h's public API keeps its existing names and
- * every other file in the project stays unaware the split exists. */
+/* gfx_dirty.h header-only for inlining mark_band(); thin wrappers for gfx.h
+ * API. */
 void gfx_mark_all_dirty(void)
 {
     dirty_mark_all();
@@ -404,10 +338,8 @@ bool gfx_region_dirty(int x, int y, int w, int h)
  * Colour
  *-------------------------------------------------------------------------*/
 
-/* Pack 0xRRGGBB into the panel's format: RGB565, byte-swapped. The swap is
- * required because this QSPI controller expects the high and low bytes in the
- * opposite order to the chip's native layout - LVGL's port layer normally does
- * it for you, but we drive the panel directly. */
+/* Pack 0xRRGGBB to RGB565, byte-swapped. QSPI needs high and low bytes
+ * swapped, but LVGL's port doesn't handle it. */
 gfx_color_t gfx_rgb(uint32_t rgb)
 {
     return GFX_RGB(rgb);
@@ -440,12 +372,7 @@ void gfx_clear_clip(void)
  * Primitives
  *-------------------------------------------------------------------------*/
 
-/* Ignores the clip rect by design - this is the whole-screen wipe that starts
- * a frame, and it writes two pixels per 32-bit store.
- *
- * When partial clear is enabled and a previous frame's bounding box is valid,
- * it clears only that bounding box rather than the whole 322 KiB framebuffer,
- * and marks the erased box dirty for presentation. */
+/* Ignores clip rect; clears whole-screen or bounding box; marks box dirty. */
 void gfx_clear(gfx_color_t color)
 {
     if (partial_clear_on && prev_bbox_valid) {
@@ -470,9 +397,6 @@ void gfx_clear(gfx_color_t color)
         words[i] = pair;
     }
 
-    /* Marking the whole screen here is what keeps every existing app working
-     * unchanged: the cube, the launcher and the POST report all clear before
-     * drawing, so they mark everything without knowing dirty tracking exists. */
     gfx_mark_all_dirty();
 }
 
@@ -498,32 +422,13 @@ static int outcode(int x, int y)
     return code;
 }
 
-/* Shorten a line to the part inside the clip rect, or reject it outright.
- * Returns false if none of it is on screen.
- *
- * WHY THIS IS NOT JUST THE PER-PIXEL TEST
- *
- * The walk below already skips pixels outside the clip rect, which is correct
- * but costs a step per pixel of the line's length whether or not any of them
- * land. That was fine while the only caller was a plotted curve whose points
- * were all on screen. It stopped being fine with a floor grid that runs until
- * it leaves the panel: those lines are mostly off it, and some are entirely
- * off it.
- *
- * Clipping moves where the error term starts, so a clipped line can differ by
- * a pixel from the same line drawn unclipped. That is why the caller takes a
- * fast path when both ends are already inside: the common case stays exactly
- * as it was, and nothing that fits on screen is touched by any of this.
- */
+/* Clipping affects error term, differs by pixel. Caller takes fast path if
+ * both ends inside. */
 static bool clip_line(int *x0, int *y0, int *x1, int *y1)
 {
     int c0 = outcode(*x0, *y0);
     int c1 = outcode(*x1, *y1);
 
-    /* Bounded rather than while(1): every pass either accepts, rejects, or
-     * moves one endpoint onto an edge, so four is already more than it can
-     * need. A loop that cannot terminate is not a risk worth taking on a
-     * device with a watchdog and no console. */
     for (int pass = 0; pass < 8; pass++) {
         if ((c0 | c1) == 0) {
             return true;              /* both ends inside */
@@ -535,8 +440,7 @@ static bool clip_line(int *x0, int *y0, int *x1, int *y1)
         const int out = c0 ? c0 : c1;
         int x, y;
 
-        /* The far edges are exclusive, so this clips to the last pixel
-         * inside rather than to the boundary itself. */
+        /* Clips to last pixel inside, not boundary. */
         if (out & OUT_BOTTOM) {
             y = clip.y1 - 1;
             x = *x0 + (int)(((int64_t)(*x1 - *x0) * (y - *y0)) / (*y1 - *y0));
@@ -571,8 +475,7 @@ static void plot(int x, int y, gfx_color_t color, unsigned flags)
     *dst = (flags & GFX_LINE_ADD) ? gfx_color_add(*dst, color) : color;
 }
 
-/* Bresenham, in the form that treats both axes alike so no case analysis is
- * needed for steep versus shallow lines. */
+/* Bresenham, treats both axes alike, no case analysis. */
 static void walk(int x0, int y0, int x1, int y1, gfx_color_t color,
                  unsigned flags)
 {
@@ -592,20 +495,14 @@ static void walk(int x0, int y0, int x1, int y1, gfx_color_t color,
         if (x0 == x1 && y0 == y1) {
             break;
         }
-        /* One error term, two independent tests: whichever axis the line is
-         * long on steps every time, the other steps when the error says so,
-         * and a 45-degree line steps both. */
         const int e2 = 2 * err;
         if (e2 >= dy) { err += dy; x0 += sx; }
         if (e2 <= dx) { err += dx; y0 += sy; }
     }
 }
 
-/* The dirty box is worked out up front, from the line's own bounding box
- * intersected with the clip rect, and marked ONCE - rather than per pixel the
- * way gfx_pixel() would. A diagonal line's bounding box is mostly empty, so
- * this claims more than it writes; that only ever costs bus time, whereas
- * claiming too little leaves stale pixels on the panel. */
+/* Box intersects clip, marked once. Overestimating costs bus time;
+ * underestimating leaves stale. */
 static void draw_line(int x0, int y0, int x1, int y1, gfx_color_t color,
                       unsigned flags)
 {
@@ -676,21 +573,8 @@ void gfx_fill_rect(int x, int y, int w, int h, gfx_color_t color)
  * this chip's own class of hardware could afford anything better.
  *---------------------------------------------------------------------------*/
 
-/* gfx_fill_rect(), but at `alpha`'s own apparent coverage instead of solid -
- * 0 draws nothing, 255 draws every pixel, everything between is one of 16
- * graduated levels (gfx_dither4x4's own size, gfx_color.h), not a smooth
- * per-pixel blend. Coarse on purpose: a genuine alpha blend needs a
- * framebuffer READ this panel's other primitives do not pay for, and 16
- * levels is already finer than this chip's own class of hardware could
- * dither convincingly on anything smaller than a few dozen pixels across.
- *
- * The per-pixel decision itself - gfx_dither_covers() - lives in
- * gfx_color.h, not here: boot_anim.c's own crossfade has its own pixel
- * loop (a whole framebuffer, not a filled rect) and needs the identical
- * table and rounding rule, not a second copy that could drift out of
- * phase with this one. 0 returns before touching the framebuffer or
- * marking anything dirty, the same "truly nothing happened" contract
- * boot_anim.c's draw_image() already uses for its own 0-alpha case. */
+/* gfx_fill_rect() uses `alpha` (0-255) for coverage, avoiding framebuffer
+ * reads. gfx_dither_covers() in gfx_color.h. Returns if 0. */
 void gfx_fill_rect_dither(int x, int y, int w, int h, gfx_color_t color,
                           uint8_t alpha)
 {
@@ -717,29 +601,8 @@ void gfx_fill_rect_dither(int x, int y, int w, int h, gfx_color_t color,
     mark_band(y0, y1);
 }
 
-/* gfx_fill_rect()'s true-blend sibling: gfx_fill_rect_dither() fakes
- * transparency by choosing WHICH pixels to draw (see that function's own
- * comment), this one draws every pixel but MIXES it with whatever is
- * already there via gfx_color_mix() (gfx_color.h) - a real per-pixel blend,
- * not a coverage trick. It is the only fill in this file that READS the
- * framebuffer before writing it, which every other primitive here goes out
- * of its way to avoid (see gfx_blit_dither()'s own comment on why a
- * framebuffer read is the thing dithering exists to dodge). That read is
- * affordable for a handful of glyph-sized rects - the 8bpp coverage-atlas
- * font this exists for (see draw_rotated_font_pixel_blend() below) draws at
- * most a `scale`x`scale` square per covered pixel - but would NOT be for a
- * full-frame blend: boot_anim.c's draw_image() composites an entire 322 KiB
- * framebuffer every frame specifically BECAUSE gfx_blit_dither() avoids
- * this read, and swapping that call for a loop of this function would bring
- * back the exact per-pixel gfx_color_mix() cost that comment already
- * measured and rejected (near_end's Image phase, ~55ms vs ~25ms - see
- * draw_image()'s own comment).
- *
- * alpha 0 is an exact no-op (returns before touching the framebuffer or
- * marking anything dirty, same contract as gfx_fill_rect_dither()'s own 0
- * case) and alpha 255 is exact solid (gfx_color_mix()'s own t=255 case
- * rounds to exactly `b`, so this never merely APPROACHES gfx_fill_rect()'s
- * output at full alpha, it MATCHES it, pixel for pixel). */
+/* Per-pixel blend, reads framebuffer. Efficient for glyphs, not full-frame.
+ * Alpha 0 no-op, 255 matches gfx_fill_rect(). */
 void gfx_fill_rect_blend(int x, int y, int w, int h, gfx_color_t color,
                          uint8_t alpha)
 {
@@ -764,22 +627,6 @@ void gfx_fill_rect_blend(int x, int y, int w, int h, gfx_color_t color,
     mark_band(y0, y1);
 }
 
-/* See gfx.h for the contract. The shape of the loop is the whole point:
- * alpha is constant for the call and gfx_dither_covers(col, row, alpha)
- * depends on col only through col & 3 and on row only through row & 3, so
- * within one row the entire per-pixel decision is FOUR booleans, computed
- * once - not a table read and compare 368 times. gfx_dither_level() is the
- * same scaling gfx_dither_covers() itself uses (suite_gfx_color.c pins
- * them agreeing at every alpha), so this produces bit-identical output to
- * the per-pixel loop it replaces; the device suite additionally checks the
- * primitive against a literal per-pixel gfx_dither_covers() reference,
- * unaligned start included.
- *
- * The two degenerate rows come out free, which matters more than the
- * unroll: a row with no covered column is skipped whole, and a row with
- * all four covered - which at alpha 255 is EVERY row, making that case a
- * plain row-by-row copy with no special-casing - is a memcpy. So a fade's
- * cost tapers toward its own cheap ends instead of staying flat. */
 void gfx_blit_dither(int x, int y, int w, int h, const gfx_color_t *src,
                      int src_stride, uint8_t alpha)
 {
@@ -817,12 +664,6 @@ void gfx_blit_dither(int x, int y, int w, int h, const gfx_color_t *src,
             continue;
         }
 
-        /* Walk up to a 4-aligned column, then unrolled groups, then the
-         * tail - the Bayer pattern is indexed by ABSOLUTE column (phase-
-         * locked to the panel, like every dithered draw here), so the
-         * group body's p[0]..p[3] are only right once col & 3 == 0. A
-         * full-frame blit (x0 == 0, width a multiple of 4) never enters
-         * either fringe loop. */
         int col = x0;
         gfx_color_t *dp = dst + col;
         const gfx_color_t *sp = s;
@@ -894,17 +735,8 @@ void gfx_text_scaled(int x, int y, const char *text, gfx_color_t color,
     gfx_text_turned(x, y, text, color, scale, 0);
 }
 
-/* Where one font pixel at (row, col) within its own cell lands once rotated
- * by `turn` quarter-turns. The cell keeps its origin at (x, y) whichever way
- * it is turned - only the string's advance direction differs between
- * rotations, not this. Drawn as a scale x scale square.
- *
- * Generalised from the old fixed-8x8 version to font->cell_w/cell_h. This
- * particular copy (the 1bpp path) is still only ever exercised at
- * cell_w == cell_h == 8 - gfx_font_8x8 is the only 1bpp font - but the
- * identical switch below is also draw_rotated_font_pixel_blend()'s (the
- * 8bpp path just below), which a genuinely non-square font (e.g.
- * font_lmroman_40.h, cell_w != cell_h) does exercise. */
+/* Generalised to variable cell size. 1bpp path only for 8x8. Used by 8bpp
+ * path too. */
 static void draw_rotated_font_pixel(const gfx_font_t *font, int x, int y,
                                     int row, int col, int scale, int turn,
                                     gfx_color_t color)
@@ -919,15 +751,8 @@ static void draw_rotated_font_pixel(const gfx_font_t *font, int x, int y,
     gfx_fill_rect(x + px * scale, y + py * scale, scale, scale, color);
 }
 
-/* draw_rotated_font_pixel()'s sibling for an 8bpp COVERAGE atlas: same
- * rotation math (see that function's own comment - the switch is copied
- * verbatim, not shared, for the same "small enough to duplicate, too easy
- * to get subtly wrong across an indirection" reasoning gfx_font_lmroman_
- * 40 and every generator in tools/ apply to their own tables), but the
- * atlas byte at (row, col) is a coverage LEVEL - 0 background, 255 full
- * ink, gen_font.py's own FreeType-antialiased output kept verbatim - not a
- * 1-bit mask, so this blends through gfx_fill_rect_blend() instead of
- * drawing solid. */
+/* 8bpp atlas; 0-255 coverage; blends via gfx_fill_rect_blend() instead of
+ * solid. */
 static void draw_rotated_font_pixel_blend(const gfx_font_t *font, int x,
                                           int y, int row, int col, int scale,
                                           int turn, gfx_color_t color,
@@ -944,29 +769,8 @@ static void draw_rotated_font_pixel_blend(const gfx_font_t *font, int x,
                         coverage);
 }
 
-/* Draws one glyph of `font`, or nothing at all when there is nothing safe to
- * draw:
- *
- *   - `ch` outside [font->first, font->first + font->count) - the same gate
- *     gfx_text_turned() always had (it skipped anything >= 128, and this
- *     font's first/count is exactly [0, 128)), generalised to whatever range
- *     `font` actually covers.
- *
- *   - font->bpp is neither 1 nor 8. Nothing else has a defined atlas layout
- *     to read (see gfx_font_t's own comment in gfx_font.h), so there is
- *     nothing safe to draw; an unrendered glyph is a far smaller problem
- *     than a garbled one.
- *
- * The two supported layouts are genuinely different loops, not one loop
- * with a per-pixel branch: a 1bpp row is a bitmask tested per column, an
- * 8bpp row is a coverage byte per column read straight from the atlas, and
- * folding them into one shape would mean paying an extra branch on every
- * pixel of the (hot, still-monospace-8x8) 1bpp path for a distinction that
- * is known once per ROW, not once per pixel. Skipping a zero-coverage byte
- * outright (`coverage == 0`, the common case - most of a proportional
- * glyph's cell is background, unlike a monospace 1bpp cell where a whole
- * BYTE is checked for zero first) is this path's equivalent of the 1bpp
- * loop's own `bits == 0` row skip just below. */
+/* Draws `font` glyph or nothing if `ch` is out of range or `font->bpp`
+ * unsupported. Use separate loops for layouts. */
 static void draw_glyph_font(const gfx_font_t *font, int x, int y,
                             unsigned char ch, gfx_color_t color, int scale,
                             int turn)
@@ -1022,11 +826,6 @@ void gfx_text_font(int x, int y, const char *text, gfx_color_t color,
 
     const int turn = ((quarter_turns % 4) + 4) % 4;
 
-    /* Which way the string advances from one glyph to the next. Applied to
-     * whatever gfx_font_advance() says this glyph's step is - for today's
-     * monospace font that is always cell_w * scale, matching the old fixed
-     * `cell` exactly, including that it advanced even past a codepoint it
-     * declined to draw. */
     static const int step[4][2] = {
         {  1,  0 },   /* upright:        left to right */
         {  0,  1 },   /* quarter turn:   top to bottom */
@@ -1080,18 +879,6 @@ static void draw_rotated_font_pixel_dither(const gfx_font_t *font, int x,
                          color, alpha);
 }
 
-/* bpp==1/bpp==8 split mirrors draw_glyph_font() above (see its own comment
- * for why this is two loops, not one branchy one) - the only new idea here
- * is FOLDING the glyph's own coverage with the caller's `alpha` for the
- * 8bpp path: a pixel should read as covered only once BOTH clear their own
- * dither test, and since dither coverage is monotonic non-decreasing in
- * alpha at a fixed cell, covers(a) && covers(b) == covers(min(a, b))
- * exactly - not approximately, suite_gfx_color.c pins the property - the
- * same identity boot_anim.c's draw_image() already leans on for its own
- * two-alpha crossfade (see that function's own comment). So the coverage
- * byte and `alpha` are reduced to their minimum ONCE per pixel and handed
- * to the ordinary draw_rotated_font_pixel_dither() below - no new dither
- * path, just a smaller effective alpha into the one that already exists. */
 static void draw_glyph_font_dither(const gfx_font_t *font, int x, int y,
                                    unsigned char ch, gfx_color_t color,
                                    int scale, int turn, uint8_t alpha)
@@ -1140,13 +927,8 @@ static void draw_glyph_font_dither(const gfx_font_t *font, int x, int y,
     }
 }
 
-/* gfx_text_font(), but every glyph pixel goes through gfx_fill_rect_dither()
- * at `alpha` instead of a solid gfx_fill_rect() - see that function's own
- * comment for what `alpha` actually controls. Exists for boot_anim.c's
- * title shadow (a dithered shadow reads as translucent - the background
- * shows through it in a fine stipple - rather than a hard, opaque
- * silhouette), but nothing here is boot-animation-specific: any caller
- * wanting text that fades rather than cuts is the intended use. */
+/* gfx_text_font() with dithered glyphs for translucent effect. Used in
+ * boot_anim.c for title shadow. */
 void gfx_text_font_dither(int x, int y, const char *text, gfx_color_t color,
                           int scale, int quarter_turns,
                           const gfx_font_t *font, uint8_t alpha)
@@ -1157,8 +939,6 @@ void gfx_text_font_dither(int x, int y, const char *text, gfx_color_t color,
 
     const int turn = ((quarter_turns % 4) + 4) % 4;
 
-    /* Same table as gfx_text_font()'s own, deliberately - see that
-     * function's own comment on what each entry means. */
     static const int step[4][2] = {
         {  1,  0 },
         {  0,  1 },
@@ -1180,45 +960,18 @@ void gfx_text_font_dither(int x, int y, const char *text, gfx_color_t color,
  *-------------------------------------------------------------------------*/
 
 #if CONFIG_LAUNCHER_DEVELOPMENT
-/* Runtime state for the overlay below. Declared only in this block, same as
- * the getter/setter that touch it - see the "why not always compiled"
- * comment on their declaration in gfx.h.
- *
- * gfx_set_debug_overlay() itself is defined further down, after BORDER_
- * PIXELS (see that #define's own comment) - it is a plain flag setter, its
- * save/restore scratch is borrowed from gather_buf rather than owned. */
+/* See gfx.h for "why not always compiled". Used by gfx_set_debug_overlay()
+ * below. */
 static bool debug_overlay_on;
 bool gfx_debug_overlay(void) { return debug_overlay_on; }
 
-/* Same story as debug_overlay_on above - see gfx_set_leaf_overlay()'s own
- * comment in gfx.h for what this actually draws. Its setter is defined
- * further down, alongside gfx_set_debug_overlay() - unlike that one, it
- * still owns a small malloc (leaf_rect_scratch) that cannot be borrowed
- * from gather_buf; see that buffer's own comment for why. */
 static bool leaf_overlay_on;
 bool gfx_debug_leaf_overlay(void) { return leaf_overlay_on; }
 
-/* The structural question everywhere below: does the send path need the
- * blocking save/restore route at all? Content decisions (which borders
- * actually get drawn) still branch on debug_overlay_on/leaf_overlay_on
- * individually - this is only for "must decline the fast path" gates like
- * send_partial_band()'s refusal and send_full_row()'s branch, where either
- * layer being on has the same structural consequence. */
 static inline bool overlay_any_on(void) { return debug_overlay_on || leaf_overlay_on; }
 
-/* Per-strip counts of which send path gfx_present() actually took: how
- * many of STRIP_COUNT strips went out as one whole-band send_full_row()
- * versus how many gathered at least one run instead versus how many went
- * out full-width but at LESS than the whole band's height - counted where
- * send_one_row() below makes that choice, once per strip either way. See
- * send_partial_band() for what that third path is and why it exists.
- *
- * Exists for a device test that wants to know not just how long
- * gfx_present() took but WHY, against a real sand scene's dirty pattern
- * rather than the synthetic marks the rest of this file's tests use - see
- * suite_sand_perf.c. Not reset by gfx_present() itself, so a caller can
- * accumulate across exactly the frames it is measuring by calling
- * gfx_reset_strip_send_counts() right before its own timed window. */
+/* See send_partial_band() for third path. Exists for device test. Not reset
+ * by gfx_present(). */
 static int dev_strips_sent_full;
 static int dev_strips_sent_gathered;
 static int dev_strips_sent_partial;
@@ -1238,16 +991,6 @@ void gfx_get_strip_send_counts(int *full_bands, int *gathered,
     if (partial_bands)  { *partial_bands  = dev_strips_sent_partial; }
 }
 
-/* Outlines whichever rectangle is about to be sent, one row and one column
- * of pixels deep - shows exactly which segments of the strip/gather split
- * are triggering an update on a real interaction, and which path each one
- * took, rather than only in a synthetic test. Dev builds only: this writes
- * directly into what gets sent, which is the point, but has no business in
- * a shipped image.
- *
- * `stride` is the buffer's own row length, not the rectangle's width - for
- * gather_buf the two are the same (tightly packed to `w`), for `fb` they
- * are not (always GFX_WIDTH, regardless of how much of that row changed). */
 static void mark_rect_border(gfx_color_t *buf, int stride, int w, int h,
                              gfx_color_t colour)
 {
@@ -1261,22 +1004,10 @@ static void mark_rect_border(gfx_color_t *buf, int stride, int w, int h,
     }
 }
 
-/* Copies out, or back in, exactly the pixels mark_rect_border() touches for
- * a w x h rectangle - into/from a buffer sized 2*(w+h) (BORDER_PIXELS for a
- * whole cell, LEAF_BORDER_PIXELS for a leaf rect - see both below). Used to
- * make a border on a full-width send temporary: unlike the gathered paths,
- * which draw their border into the disposable gather_buf, a full-width send
- * has no scratch copy - it sends fb directly, so drawing the border there
- * would permanently corrupt fb for whoever reads it next: a later gather
- * over this exact cell, or this row simply never being redrawn again. Same
- * pixel order both ways, so save/restore are exact inverses of each other -
- * true regardless of w/h, which is what lets send_full_row() reuse these
- * for both the fixed-size cell border and a leaf rect's variable one. */
+/* Used for full-width send border. No scratch copy - direct to fb. Inverse
+ * save/restore. */
 #define BORDER_PIXELS (2 * (COL_WIDTH + STRIP_HEIGHT))
 
-/* A leaf rect is clipped to the caller's box (see dirty_leaf_rects()), so
- * its perimeter varies - but it can never exceed an unclipped leaf's own
- * LEAF_W x LEAF_H extent, which bounds the save slot each one needs. */
 #define LEAF_BORDER_PIXELS (2 * (LEAF_W + LEAF_H))
 
 static void save_border(const gfx_color_t *buf, int stride, int w, int h,
@@ -1307,54 +1038,20 @@ static void restore_border(gfx_color_t *buf, int stride, int w, int h,
     }
 }
 
-/* send_full_row()'s save/restore scratch for the panel-grid layer
- * (GRID_COLS * BORDER_PIXELS gfx_color_t, 1248 px) and the leaf layer
- * (LEAF_RECTS_PER_ROW_MAX * LEAF_BORDER_PIXELS gfx_color_t, 4992 px) -
- * 6240 px together.
- *
- * This used to be two buffers malloc'd on enable and freed on disable
- * (~12.5 KB combined). That was the bug: sand needs one ~41 KB contiguous
- * grid allocation plus ~14.5 KB of smaller arrays out of ~72 KB free after
- * the framebuffer, which leaves under 3 KB of headroom before
- * fragmentation - confirmed on real hardware, whichever of sand or these
- * two mallocs happened second lost the race and sand could not start. The
- * two exist purely to show what gfx_present() is doing; they must never be
- * the reason sand cannot start.
- *
- * The fix is to not allocate anything: borrow the front of gather_buf
- * (GATHER_MAX_PIXELS gfx_color_t, already allocated at boot) instead.
- * gather_buf is provably idle at every point send_full_row() runs it: the
- * only code that ever hands gather_buf to the DMA is gather_and_send(),
- * and it always xSemaphoreTake()s that transfer's own completion (see its
- * own comment) before returning - so by the time control reaches any
- * row's send_full_row(), the last thing gather_and_send() wrote has
- * already fully drained off the bus. The frame loop itself is
- * single-threaded (app_main()'s own while (1) in main.c calls
- * gfx_present() directly), so there is no concurrent access to reason
- * about beyond that ordering. Reusing gather_buf's memory for a second,
- * mutually-exclusive-in-time job costs nothing extra.
- *
- * The _Static_assert ties this to GATHER_MAX_PIXELS so a future change to
- * it, or to GRID_COLS/COL_WIDTH/STRIP_HEIGHT/LEAF_SUB (which all feed
- * BORDER_PIXELS/LEAF_BORDER_PIXELS/LEAF_RECTS_PER_ROW_MAX), that breaks
- * the fit is a compile error, not a silent overflow into DMA-mapped
- * memory - the same failure mode plan_run()'s own comment already warns
- * about for gather_buf's other use. */
+/* 6240 px combined, borrowed from gather_buf's front rather than
+ * malloc'd separately: two separate buffers once cost sand its needed
+ * contiguous allocation, and this debug overlay must never be why sand
+ * cannot start. gather_buf is provably idle here: gather_and_send()
+ * always waits for its own transfer to finish before returning, and the
+ * frame loop is single-threaded. The _Static_assert ties this to
+ * GATHER_MAX_PIXELS so a size change that breaks the fit is a compile
+ * error, not a silent DMA overflow. */
 #define OVERLAY_CELL_SAVE_PIXELS (GRID_COLS * BORDER_PIXELS)
 #define OVERLAY_LEAF_SAVE_PIXELS (LEAF_RECTS_PER_ROW_MAX * LEAF_BORDER_PIXELS)
 _Static_assert(OVERLAY_CELL_SAVE_PIXELS + OVERLAY_LEAF_SAVE_PIXELS <=
               GATHER_MAX_PIXELS,
               "overlay save/restore scratch must fit inside gather_buf");
 
-/* Typed views into gather_buf's front OVERLAY_CELL_SAVE_PIXELS +
- * OVERLAY_LEAF_SAVE_PIXELS pixels, cell-save first and leaf-save right
- * after it - matching the _Static_assert above. Both can be live at once
- * within a single send_full_row() call (both overlay layers can be on
- * together), which is why they are two disjoint ranges rather than one
- * reused twice. Small inline functions rather than static pointers set up
- * once: gather_buf's address never changes after gfx_init(), so there is
- * nothing to cache, and computing them fresh keeps it obvious neither view
- * survives past the call that uses it. */
 static inline gfx_color_t (*overlay_cell_save(void))[BORDER_PIXELS]
 {
     return (gfx_color_t (*)[BORDER_PIXELS])gather_buf;
@@ -1366,38 +1063,16 @@ static inline gfx_color_t (*overlay_leaf_save(void))[LEAF_BORDER_PIXELS]
         (gather_buf + OVERLAY_CELL_SAVE_PIXELS);
 }
 
-/* dirty_leaf_rects() output, shared by send_full_row() and gather_and_send()
- * rather than one LEAF_RECTS_PER_ROW_MAX array per call site - the two can
- * never be live at once: send_one_row() takes exactly one of send_full_row()
- * or send_run() (which calls gather_and_send(), possibly more than once,
- * but always returns before send_one_row() does) per row, and the frame
- * loop that calls all of this is single-threaded - app_main()'s own
- * while (1) in main.c, not a separate task, calls gfx_present() directly.
- *
- * Unlike the cell/leaf save scratch above, this one genuinely cannot be
- * borrowed from gather_buf: in gather_and_send(), gather_buf itself is the
- * packed-pixel destination the leaf borders get drawn into, using rects
- * this list supplies - the list has to survive alongside gather_buf's own
- * content on that path, not overlap it.
- *
- * So this is still malloc'd on enable and freed on disable, exactly as
- * before this fix - but on its own now, at LEAF_RECTS_PER_ROW_MAX *
- * sizeof(dirty_leaf_rect_t) = 1024 bytes, a small fraction of what the
- * three buffers together used to cost, and comfortably inside the ~16 KB
- * of heap headroom this fix leaves beside sand's own allocations (see the
- * comment above). Not a static: CONFIG_ESP_MAIN_TASK_STACK_SIZE is 3584
- * bytes (launcher/sdkconfig), so a 1024-byte array would also be far too
- * big as a local on app_main()'s own stack (see gfx_present()'s call
- * graph) - but a permanent .bss reservation is no better, given this
- * repo's own history of static-growth OOMs in exactly this
- * CONFIG_LAUNCHER_DEVELOPMENT-gated territory (see the selftest and
- * dev-build grid incidents). Malloc-on-enable keeps the cost real only
- * while the leaf layer is actually switched on. */
+/* Shared by send_full_row() and gather_and_send(), never live at once:
+ * the frame loop is single-threaded. Unlike the cell/leaf scratch above,
+ * this cannot borrow gather_buf - which IS the destination leaf borders
+ * draw into using this list's rects, so it must survive alongside
+ * gather_buf, not overlap it. Malloc'd on enable/disable (1024 bytes)
+ * rather than static: too big for app_main()'s stack, and a permanent
+ * .bss reservation fares no better given this repo's history of
+ * static-growth OOMs. */
 static dirty_leaf_rect_t *leaf_rect_scratch;
 
-/* The panel-grid layer needs no buffer of its own any more (see
- * overlay_cell_save() above), so its setter is a plain flag - nothing to
- * fail. */
 void gfx_set_debug_overlay(bool on)
 {
     debug_overlay_on = on;
@@ -1426,30 +1101,17 @@ void gfx_set_leaf_overlay(bool on)
 }
 #endif
 
-/* Everything from here through gfx_present() itself is device-only - it is
- * how a gathered/full-row/partial-band send actually reaches the panel over
- * QSPI. A host build's gfx_present() (below, in the #else) is a no-op: a
- * host renderer reads gfx_framebuffer() straight after drawing, it never
- * presents to anything. */
+/* Device-only path for QSPI panel send. Host build is no-op. */
 #ifdef ESP_PLATFORM
 
-/* Packs [x0,x1) x [y0,y1) into gather_buf and sends it as one draw_bitmap()
- * call.
- *
- * gather_buf is shared and about to be overwritten, so every transfer
- * queued so far - not just the most recent one - must actually have
- * finished reading out of it first. strip_sent is a plain counter with no
- * identity attached to which transfer signalled it, so taking it once here
- * is not the same as waiting for THIS gather specifically: whichever
- * transfer happens to finish first satisfies whichever Take() runs first,
- * and an earlier still-batched full-width send finishing first would let
- * this proceed while a previous gather's own transfer was still in flight.
- * Draining exactly `*queued` of them first empties the queue, so the one
- * Take() after this gather's own draw_bitmap() is unambiguously waiting
- * for it - SPI transactions on one device complete in the order they were
- * queued, so nothing else can be outstanding at that point. Safe to call
- * more than once per row for the same reason: each call leaves the queue
- * empty again before returning. */
+/* gather_buf is shared and about to be overwritten, so every queued
+ * transfer, not just the most recent, must drain first. strip_sent is a
+ * plain counter with no transfer identity: taking it once is not the
+ * same as waiting for THIS gather, since whichever transfer finishes
+ * first satisfies whichever Take() runs. Draining exactly *queued first
+ * empties the queue, so the one Take() after this draw_bitmap()
+ * unambiguously waits for it - SPI transactions on one device complete
+ * in queued order. */
 static void gather_and_send(int x0, int y0, int x1, int y1, int row,
                             int run_start, int run_end, bool refined,
                             int *queued, gfx_color_t border)
@@ -1469,19 +1131,9 @@ static void gather_and_send(int x0, int y0, int x1, int y1, int row,
     }
 #if CONFIG_LAUNCHER_DEVELOPMENT
     if (debug_overlay_on && refined) {
-        /* A leaf-refined split is already the tight unit sent - unlike a
-         * cell-run gather, it does not necessarily span whole cells, so
-         * bordering per cell below would draw outside what was actually
-         * sent. One border around the whole packed box instead. */
+        /* One border around the whole packed box. */
         mark_rect_border(gather_buf, w, w, h, border);
     } else if (debug_overlay_on) {
-        /* One border per cell in the run, at that cell's own tight bounds -
-         * never around the merged box as a whole. cell_x0/x1/y0/y1 are
-         * already clipped to their own cell's column and row (see
-         * union_cell_x/union_cell_y), so a border built from them can never
-         * land on the fixed line shared with a neighbouring cell the way a
-         * single border around the merged box could - it only ever draws
-         * inside the cell it belongs to. */
         for (int col = run_start; col < run_end; col++) {
             const int idx = row * GRID_COLS + col;
             gfx_color_t *at = gather_buf +
@@ -1492,16 +1144,6 @@ static void gather_and_send(int x0, int y0, int x1, int y1, int row,
         }
     }
     if (leaf_overlay_on) {
-        /* Independent of debug_overlay_on now - this layer draws whether or
-         * not the panel-grid one is also on. gather_buf is disposable
-         * scratch either way, so no save/restore is needed here regardless
-         * of which layer(s) drew into it.
-         *
-         * leaf_rect_scratch, not a local array: leaf_overlay_on true means
-         * gfx_set_leaf_overlay()'s own malloc already succeeded, so this is
-         * never NULL here - see leaf_rect_scratch's own comment for why it
-         * is shared with send_full_row() rather than each having its
-         * own. */
         const int n = dirty_leaf_rects(row, x0, y0, x1, y1, leaf_rect_scratch,
                                        LEAF_RECTS_PER_ROW_MAX);
         for (int i = 0; i < n; i++) {
@@ -1519,58 +1161,22 @@ static void gather_and_send(int x0, int y0, int x1, int y1, int row,
     xSemaphoreTake(strip_sent, portMAX_DELAY);
 }
 
-/* Sends row's whole band, full width - too many cells dirty to be worth
- * gathering them independently. Queues without waiting, batched with
- * whichever other rows do the same; gfx_present() drains them all together
- * at the end.
- *
- * That queue-without-waiting is what makes a band's cost depend on what
- * else is in flight with it. Measured alone - one band presented with
- * nothing else queued, as every ratio test in suite_gfx.c does - it
- * costs 3,405 us. Measured inside a real frame, where later bands' DMA
- * overlaps earlier bands' CPU-side setup here, seven bands come to
- * 18,147 us, not 7 x 3,405 = 23,835 - the price
- * run_present_against_scene() in suite_sand_perf.c measures with its three
- * present-cost tests. Both numbers are correct; they answer different
- * questions, and multiplying the isolated price by the band count does
- * not recover the pipelined one. */
 static void send_full_row(int row, int *queued)
 {
     const int y = row * STRIP_HEIGHT;
 
 #if CONFIG_LAUNCHER_DEVELOPMENT
-    /* Leaf rects for this row are found up front, overlay or not, so the
-     * "nothing to actually draw" case below can be detected before
-     * committing to the blocking path. leaf_rect_scratch (see its own
-     * comment) is never NULL here: leaf_overlay_on can only be true once
-     * gfx_set_leaf_overlay()'s own malloc has already allocated it. */
+    /* leaf_rect_scratch never NULL: gfx_set_leaf_overlay() allocates */
     int leaf_n = 0;
     if (leaf_overlay_on) {
         leaf_n = dirty_leaf_rects(row, 0, y, GFX_WIDTH, y + STRIP_HEIGHT,
                                   leaf_rect_scratch, LEAF_RECTS_PER_ROW_MAX);
     }
 
-    /* Cyan cell borders, green leaf rects, or both - whichever layer(s) are
-     * on. Skipped entirely when leaf_overlay_on is the only one on and this
-     * row has no dirty leaves to show (mark_band() never marks leaves, so
-     * this is the common case for a row only ever touched that way) -
-     * there is nothing to draw, so paying for the blocking save/restore
-     * transfer below would buy nothing.
-     *
-     * Has to wait for its own transfer immediately, rather than batching
-     * like the plain path below, so the saved pixels can be put back
-     * before anything else - a later gather, a later frame - reads fb
-     * again. Acceptable cost while actively debugging, not otherwise. */
+    /* Cyan borders, green leaves, or both. Skip if leaf_overlay_on and no
+     * dirty leaves. Transfer immediately for debugging. */
     if (debug_overlay_on || leaf_n > 0) {
-        /* Save phase: every pixel either layer is about to touch, saved
-         * BEFORE either one draws anything. A cell border and a leaf rect
-         * can share a pixel (leaf column 0's left edge is cell column 0's
-         * own left edge, and leaf-row boundaries can land on a cell's own
-         * edges too), so interleaving save-draw per layer could have one
-         * layer save a pixel the other already overwrote. Saving
-         * everything first means both copies of a shared pixel are the
-         * same true original, so which one restore uses - or the order it
-         * runs in - cannot matter. */
+        /* Save phase: prevent overwriting shared pixels. */
         if (debug_overlay_on) {
             for (int col = 0; col < GRID_COLS; col++) {
                 gfx_color_t *cell =
@@ -1586,9 +1192,6 @@ static void send_full_row(int row, int *queued)
                        overlay_leaf_save()[i]);
         }
 
-        /* Draw phase - order does not matter now that everything is
-         * already saved; a pixel both layers touch just ends up whichever
-         * colour draws last. */
         if (debug_overlay_on) {
             for (int col = 0; col < GRID_COLS; col++) {
                 gfx_color_t *cell =
@@ -1632,35 +1235,14 @@ static void send_full_row(int row, int *queued)
     (*queued)++;
 }
 
-/* Sends a full-width box at its OWN height, straight out of the
- * framebuffer, with no gather and no copy.
- *
- * The third send path, and the cheapest: a box spanning the full panel
- * width is already contiguous in `fb` - row-major, GFX_WIDTH stride - so
- * the rows from y0 to y1 are exactly the bytes the panel wants, in
- * order, with nothing to pack. That makes it send_full_row() without the
- * rounding up: same one transaction, same queue-without-waiting, fewer
- * pixels on the bus.
- *
- * It is possible at all because the box carries a real sub-strip Y
- * extent. That does not come from the strip grid, which is 64 rows
- * coarse - it comes from the per-cell cell_y0/cell_y1 boxes in
- * gfx_dirty.h, which dirty_mark() narrows through union_cell_y() and
- * run_box() unions across the run. A reader who assumes the tracking is
- * strip-granular will not believe this change is possible; it is the
- * cell layer that makes it so.
- *
- * Measured on a host replay of this decision that reproduces the
- * device's own strip-send counters exactly: 10.1% fewer pixels per frame
- * on the falling-sand scene, 10.3% on the lava stress scene, and 0.0% on
- * the thermal shock lattice, whose strips really are dirty full height.
- *
- * Returns false when it declines, so the caller falls back to the whole
- * band. It declines whenever either overlay layer is on: the panel-grid
- * layer's borders are sized for a whole cell, and both layers' save/
- * restore machinery is written for send_full_row()'s full STRIP_HEIGHT box
- * - drawing either round a short box would need its own save/restore for
- * no benefit while debugging. */
+/* Third, cheapest send path: a full-width box is already contiguous in
+ * `fb`, so it sends exactly the panel's bytes with no packing. Possible
+ * only because the box carries a real sub-strip Y extent, from
+ * cell_y0/cell_y1 tracking (gfx_dirty.h), not the coarse strip grid.
+ * Measured ~10% fewer pixels per frame on falling-sand/lava scenes, 0%
+ * where strips are genuinely full-height. Declines whenever either
+ * overlay layer is on: their save/restore machinery assumes
+ * send_full_row()'s full STRIP_HEIGHT box. */
 static bool send_partial_band(int y0, int y1, int *queued)
 {
 #if CONFIG_LAUNCHER_DEVELOPMENT
@@ -1674,17 +1256,9 @@ static bool send_partial_band(int y0, int y1, int *queued)
     return true;
 }
 
-/* collect_runs_from_mask(), collect_dirty_runs(), run_is_leaf_eligible(),
- * leaf_mask_for_run(), refine_run(), plan_run() and run_box() all now live
- * in gfx_dirty.h, alongside the state they operate on - see its file
- * comment for why the split is header-only rather than a separate .c. */
+/* See gfx_dirty.h file comment */
 
-/* Sends one dirty run - either as up to LEAF_REFINE_MAX_RUNS leaf-refined
- * pieces, tighter than the run's own coarse box, or as that coarse box
- * whole when refinement found nothing safe or worth splitting on. Yellow
- * either way - both are still "this got gathered and sent", just at
- * different granularity; see gather_and_send()'s overlay comment for how
- * the border itself differs. */
+/* Yellow; see gather_and_send()'s comment */
 static void send_run(int row, int run_start, int run_end, int box_x0,
                      int box_x1, int box_y0, int box_y1, int split_n,
                      const int *split_x0, const int *split_x1, int *queued)
@@ -1701,15 +1275,8 @@ static void send_run(int row, int run_start, int run_end, int box_x0,
     }
 }
 
-/* Sends row's dirty cells as one gather per contiguous run of dirty
- * columns - adjacent cells merge into a single transaction, since the
- * per-transaction cost dwarfs what a merged box carries extra, but a
- * genuine gap of clean columns between two separate features keeps them
- * as independent sends rather than one box spanning the untouched middle.
- * Falls back to the row whole if any run (or any leaf-refined split of
- * one) turns out too big to be worth gathering, rather than mixing a
- * partial gather with a full-width send - which would resend that part
- * twice. */
+/* Cells merge into transactions; gaps remain. Falls back to full row for
+ * large parts. */
 static void send_one_row(int row, int *queued)
 {
     int run_start[GRID_COLS], run_end[GRID_COLS];
@@ -1730,11 +1297,8 @@ static void send_one_row(int row, int *queued)
             const size_t area = (size_t)(box_x1[r] - box_x0[r]) *
                                 (size_t)(box_y1[r] - box_y0[r]);
             if (area > GATHER_MAX_PIXELS) {
-                /* Too big to gather - but if it is full width it needs no
-                 * gathering at all. See send_partial_band(). A box at the
-                 * full panel width means the run covers every column, so
-                 * this is the row's only run - returning here rather than
-                 * continuing the loop is safe. */
+                /* See send_partial_band(). Full-width box means row's only
+                 * run - safe to return. */
                 if (box_x0[r] == 0 && box_x1[r] == GFX_WIDTH &&
                     box_y1[r] - box_y0[r] < STRIP_HEIGHT &&
                     send_partial_band(box_y0[r], box_y1[r], queued)) {
@@ -1779,11 +1343,6 @@ void gfx_present(void)
         }
 
         if (interlace_on && (row % 2) != frame_parity) {
-            /* Carry over exactly the bits already set for this row, not
-             * every column in it - forcing the whole row dirty would widen
-             * every gathered send on this row to full width once its turn
-             * comes back around, throwing away the per-cell gather this
-             * grid exists for. */
             remaining_cell_dirty |= cell_dirty &
                 (((1u << GRID_COLS) - 1u) << (row * GRID_COLS));
             continue;
@@ -1809,11 +1368,7 @@ void gfx_present(void)
     }
     drawn_bbox_valid = false;
 
-    /* draw_bitmap only QUEUES a DMA transfer that reads out of the
-     * framebuffer. Returning before they drain would let the next frame start
-     * overwriting memory still being shifted out to the panel. Wait for
-     * exactly as many full-width sends were queued - a gathered send was
-     * already waited on above, so it must not be counted again here. */
+    /* Wait for queued full-width sends to drain. */
     for (int i = 0; i < queued; i++) {
         xSemaphoreTake(strip_sent, portMAX_DELAY);
     }
@@ -1829,22 +1384,8 @@ void gfx_present(void)
 #endif   /* ESP_PLATFORM - the presentation pipeline */
 
 #if CONFIG_LAUNCHER_DEVELOPMENT
-/* Test-only: sends the ENTIRE framebuffer as one esp_lcd_panel_draw_bitmap()
- * call, bypassing every decision gfx_present() makes above it - no strip
- * loop, no dirty_row_is_dirty() check, no collect_dirty_runs(), no leaf
- * refinement, no gather-vs-full-band choice. What is left over is as close
- * to raw QSPI bus time as this driver can be made to give up.
- *
- * The SPI driver still has to split a transfer this big into chunks no
- * bigger than spi_trans_max_bytes (one STRIP_HEIGHT band's worth - see
- * panel_bring_up()'s bus config, GFX_WIDTH * STRIP_HEIGHT *
- * sizeof(gfx_color_t)), but esp_lcd_panel_io_spi.c arms the completion
- * callback only on the LAST chunk of a draw_bitmap() call ("mark
- * en_trans_done_cb only at the last round to avoid premature completion
- * callback" - its own comment), so exactly one strip_sent give still means
- * the whole frame, every chunk, has actually left the bus - not just the
- * first chunk. One wait is correct here for the same reason gfx_present()
- * above waits once per QUEUED call rather than once per byte. */
+/* Bypasses gfx_present() for raw QSPI. SPI driver splits into chunks, one
+ * strip_sent means full frame. */
 void gfx_present_raw_full_frame_for_test(void)
 {
     esp_lcd_panel_draw_bitmap(panel, 0, 0, GFX_WIDTH, GFX_HEIGHT, fb);
