@@ -25,8 +25,8 @@
  * between the device build and a host one: a plain `gcc` invocation (the
  * same one test/run_tests.sh already uses) simply never defines it. The
  * host figures are literals rather than pulled from anywhere, the same
- * reason gfx_dirty.h and test/suites/suite_boot_anim.c already hardcode
- * them - a BSP header is exactly what a host build cannot include. */
+ * reason gfx_dirty.h already hardcodes them - a BSP header is exactly
+ * what a host build cannot include. */
 #ifdef ESP_PLATFORM
 #define GFX_WIDTH   BSP_LCD_H_RES   /* 368 */
 #define GFX_HEIGHT  BSP_LCD_V_RES   /* 448 */
@@ -35,43 +35,14 @@
 #define GFX_HEIGHT  448
 #endif
 
-/* QSPI clock for the panel.
- *
- * Sending one frame is 322 KiB over four lanes, and gfx_present() measures at
- * 94% of the theoretical rate - so this number, and only this number, sets how
- * long a frame takes to reach the screen:
- *
- *     40 MHz -> 16.5 ms theoretical, 17.6 ms measured
- *     80 MHz ->  8.2 ms theoretical
- *
- * The vendor driver defaults to 40 MHz and that is the figure Waveshare and
- * Espressif validate. 80 MHz is within what the ESP32-C6's general-purpose SPI
- * can produce, but it is beyond what anyone documents for this panel, so it is
- * an overclock: if the display shows tearing, wrong colours or noise, this is
- * the first thing to put back.
- *
- * Re-measured at 80 MHz again after the move to the per-cell grid and
- * gathered runs, on the theory that a settled render path might not hit
- * the same margin the old prototype did. It still does: the same small,
- * corner-shaped pixel artifacts came back, so this is not a transfer-
- * pattern-specific problem - it is this panel's real ceiling on this bus.
- * A synthetic timing test also regressed at 80 MHz for an unrelated
- * reason (test_two_far_corners_cost_less_than_a_full_band): a full band
- * gets proportionally cheaper at a faster clock while the fixed per-
- * transaction cost does not, so the gather-vs-fallback thresholds below
- * are tuned for 40 MHz specifically and would need re-measuring, not just
- * reused, if this ever moves again.
- *
- * An in-between clock is not on the table, so do not spend time on that
- * idea if 80 MHz is ever revisited. GPSPI2's clock is derived from an
- * 80 MHz source with an integer pre/n divider (spi_ll_master_cal_clock() in
- * the IDF's spi_ll.h): a request over 60 MHz uses the source directly at
- * 80, and a request at or under 60 MHz is bound by the divider search's
- * n >= 2 floor to at most 80/2 = 40. 60 MHz specifically was tried and
- * measured byte-identical to plain 40 - it silently landed on the 40 MHz
- * divider, not a real intermediate rate, because 60 is on the low side of
- * that 60 MHz boundary. Every value in this range resolves to one of
- * exactly two clocks. */
+/* QSPI clock for the panel - the sole thing setting frame transfer time.
+ * Vendor/Espressif validate only 40MHz; 80MHz is an undocumented overclock
+ * that still produces corner artifacts (re-measured after the
+ * per-cell/gathered-run rewrite) - a real panel ceiling, not a
+ * stale-prototype issue. Thresholds below are tuned for 40MHz and need
+ * re-measuring if this changes. No in-between clock exists: the 80MHz
+ * source's integer divider (n>=2 floor) resolves everything here to
+ * exactly 40 or 80. */
 #define GFX_QSPI_HZ (40 * 1000 * 1000)
 
 /* Glyphs are 8x8 in the font data, drawn at 2x so they are legible on a
@@ -116,71 +87,47 @@ void gfx_invalidate(void);
 
 void gfx_fill_rect(int x, int y, int w, int h, gfx_color_t color);
 
-/* gfx_fill_rect(), but at `alpha`'s own apparent coverage (0 nothing, 255
- * solid, 16 graduated steps between) rather than solid - an ordered
+/* Like gfx_fill_rect(), but at `alpha`'s own apparent coverage (0 nothing,
+ * 255 solid, 16 graduated steps between) rather than solid - an ordered
  * (Bayer) dither, the cheapest fake transparency this panel can do since
  * it has no blending anywhere. See gfx.c's own comment above the
- * definition for the dither table itself and why 255 is guaranteed to be
+ * definition for the dither table and why 255 is guaranteed to be
  * exactly as solid as gfx_fill_rect(). */
 void gfx_fill_rect_dither(int x, int y, int w, int h, gfx_color_t color,
                           uint8_t alpha);
 
-/* gfx_fill_rect(), but MIXED with the destination via gfx_color_mix()
- * (gfx_color.h) at `alpha` (0 leaves the framebuffer untouched, 255 is
- * pixel-identical to gfx_fill_rect(), everything between is a real per-
- * channel blend) instead of gfx_fill_rect_dither()'s coverage trick. Unlike
- * every other fill in this file, this one READS the destination pixel
- * before writing it - affordable for text-sized areas (the 8bpp coverage-
- * atlas font this exists for draws at most a `scale`x`scale` square per
- * pixel), NOT for full-frame work - see gfx.c's own comment above the
- * definition, and gfx_blit_dither()'s comment just above for why a full
- * framebuffer composite dithers instead of blending. */
+/* Like gfx_fill_rect(), but MIXED with the destination via
+ * gfx_color_mix() (gfx_color.h) at `alpha` (0 leaves the framebuffer
+ * untouched, 255 is pixel-identical to gfx_fill_rect(), everything
+ * between is a real per-channel blend). Unlike every other fill here,
+ * this one READS the destination pixel first - affordable for
+ * text-sized areas (this exists for an 8bpp coverage-atlas font), NOT
+ * for full-frame work - see gfx_blit_dither() for why a full-frame
+ * composite dithers instead. */
 void gfx_fill_rect_blend(int x, int y, int w, int h, gfx_color_t color,
                          uint8_t alpha);
 
-/* Composite a source IMAGE over the framebuffer at `alpha`'s own dithered
- * coverage - gfx_fill_rect_dither()'s sibling for pixels that come from a
- * bitmap instead of one flat colour: a covered destination pixel becomes
- * the corresponding source pixel outright, an uncovered one is left
- * exactly as it was, and nothing is ever blended - the same "coverage,
- * not arithmetic" transparency everything dithered here does.
- *
- * `src` is the source pixel for the rect's own top-left corner (x, y),
- * already in panel format (gfx_color_t), with `src_stride` pixels per
- * source row - so a full-screen image is gfx_blit_dither(0, 0, GFX_WIDTH,
- * GFX_HEIGHT, image, GFX_WIDTH, alpha), and a window into a larger image
- * just offsets `src` and passes the image's own width as the stride.
- *
- * This is the cheapest full-frame crossfade this panel can do, and it is
- * cheap by construction, not by luck: alpha is one value for the whole
- * call, and the Bayer pattern repeats every 4 pixels, so the per-pixel
- * decision collapses to four booleans per row - a fully-covered row is a
- * plain memcpy, an untouched row costs nothing at all, and the awkward
- * middle walks unrolled groups of four. Same table, same rounding, same
- * result as testing gfx_dither_covers() at every pixel (the device suite
- * pins this); the pattern is phase-locked to absolute panel coordinates
- * like every other dithered draw here, so overlapping dithered shapes
- * stay in register with each other.
- *
- * First user: the boot animation's photograph crossfade (boot_anim.c's
- * draw_image()). Meant for any app compositing an image over live
- * content - a transition, a viewer, a watermark. Clips to the current
- * clip rect like everything else in this file. */
+/* Composite a source IMAGE over the framebuffer at alpha's own dithered
+ * coverage - gfx_fill_rect_dither()'s sibling for a bitmap instead of a
+ * flat colour: a covered pixel becomes the source pixel outright, an
+ * uncovered one is left as-is, nothing is ever blended. `src_stride` is
+ * pixels per source row, so a window into a larger image just offsets
+ * `src` and uses the image's own width as stride. See gfx.c's own
+ * comment above the definition for why this is cheap even as a
+ * full-frame crossfade. */
 void gfx_blit_dither(int x, int y, int w, int h, const gfx_color_t *src,
                      int src_stride, uint8_t alpha);
 
 /* Both clip to the framebuffer, so callers need not bounds-check. */
 void gfx_pixel(int x, int y, gfx_color_t color);
 
-/* A line from (x0, y0) to (x1, y1), both endpoints included.
- *
- * Coordinates may be anywhere, on screen or not: a line is shortened to its
- * visible part before anything is drawn, so one running far off the panel
- * costs almost nothing and one entirely off it costs a handful of compares.
- *
- * Exists because the startup animation plots a curve, and a curve is a few
- * hundred short segments - see boot_anim.c. Nothing before it needed a line
- * at all, which is why this is the newest primitive in the file. */
+/* A line from (x0, y0) to (x1, y1), both endpoints included. Coordinates
+ * may be anywhere, on screen or not: a line is shortened to its visible
+ * part before anything is drawn, so one running far off the panel costs
+ * almost nothing. Exists because the startup animation plots a curve, and
+ * a curve is a few hundred short segments - see boot_anim.c. Nothing
+ * before it needed a line at all, which is why this is the newest
+ * primitive in the file. */
 void gfx_line(int x0, int y0, int x1, int y1, gfx_color_t color);
 
 /*---------------------------------------------------------------------------
@@ -210,16 +157,12 @@ void gfx_line(int x0, int y0, int x1, int y1, gfx_color_t color);
  * whichever was drawn second. Costs a read as well as a write per pixel. */
 #define GFX_LINE_ADD    (1u << 0)
 
-/* Leave the STARTING pixel undrawn.
- *
- * For chaining segments into a polyline. Two segments that meet share a
- * pixel, and under GFX_LINE_ADD a shared pixel is added twice - so a curve
- * drawn as a few hundred short segments comes out beaded, with a brighter dot
- * at every joint. Drawing each segment half-open puts exactly one
- * contribution on every pixel of the chain.
- *
- * Only useful from the second segment onward: the first has nothing before it
- * to have drawn its start. */
+/* Leave the STARTING pixel undrawn. For chaining segments into a
+ * polyline: two segments that meet share a pixel, and under GFX_LINE_ADD
+ * a shared pixel is added twice - so a curve drawn as a few hundred short
+ * segments comes out beaded, with a brighter dot at every joint. Drawing
+ * each segment half-open puts exactly one contribution on every pixel of
+ * the chain. Only useful from the second segment onward. */
 #define GFX_LINE_OPEN   (1u << 1)
 
 void gfx_line_ex(int x0, int y0, int x1, int y1, gfx_color_t color,
@@ -234,15 +177,11 @@ void gfx_text(int x, int y, const char *text, gfx_color_t color);
 void gfx_text_scaled(int x, int y, const char *text, gfx_color_t color,
                      int scale);
 
-/* Same, turned in 90-degree steps: 0 is upright, 1 reads top-to-bottom, 2 is
- * upside down, 3 reads bottom-to-top.
- *
- * (x, y) is where the first glyph's cell begins, and the string runs away from
- * it in whichever direction the rotation implies.
- *
- * Exists because "the top of the screen" stops meaning the top edge once the
- * device is turned - a label placed against the up-edge of a sideways board
- * reads sideways unless it is turned with it. */
+/* Same, turned in 90-degree steps: 0 is upright, 1 reads top-to-bottom, 2
+ * is upside down, 3 reads bottom-to-top. (x, y) is where the first
+ * glyph's cell begins, and the string runs away from it in whichever
+ * direction the rotation implies. Exists because "the top of the screen"
+ * stops meaning the top edge once the device is turned. */
 void gfx_text_turned(int x, int y, const char *text, gfx_color_t color,
                      int scale, int quarter_turns);
 
@@ -252,18 +191,14 @@ int gfx_text_height(void);
 
 /* The font every gfx_text*() call above draws with is gfx_font_ui()
  * (gfx/gfx_font_roles.h) - the UI/body-text role, not something this file
- * names itself any more (it used to, as gfx_default_font(); see that role's
- * own comment for why the two questions turned out to be one). A caller
- * that wants a specific font rather than "whatever gfx draws with" - or
- * that wants to name a role directly instead of reaching through this
- * file - asks gfx_font_roles.h for it. */
+ * names itself any more (it used to, as gfx_default_font()). A caller
+ * that wants a specific font, or that wants to name a role directly, asks
+ * gfx_font_roles.h for it. */
 
 /* The single font-aware drawing path gfx_text(), gfx_text_scaled() and
  * gfx_text_turned() all delegate to, passing gfx_font_ui(). Same
- * (x, y)-is-the-first-glyph's-cell and turn convention as gfx_text_turned().
- *
- * Draws bpp==1 (1-bit mask, e.g. gfx_font_8x8) and bpp==8 (8-bit coverage
- * atlas, e.g. a font tools/gen_font.py generated) glyphs; anything else is
+ * (x, y)-is-the-first-glyph's-cell and turn convention. Draws bpp==1
+ * (1-bit mask) and bpp==8 (8-bit coverage atlas) glyphs; anything else is
  * silently skipped rather than drawn wrong - see draw_glyph_font()'s own
  * comment in gfx.c for why those are the only two layouts with a defined
  * meaning. */
@@ -292,20 +227,19 @@ int gfx_font_width(const gfx_font_t *font, const char *text, int len,
 void gfx_set_clip(int x, int y, int w, int h);
 void gfx_clear_clip(void);
 
-/* Release SPI2 so something else can use it - in practice, the SD card, which
- * is wired to different pins on the same controller and so cannot share it.
- * The framebuffer survives: it is ordinary RAM, unrelated to the bus.
- *
- * Nothing may be presented between suspend and resume. The panel keeps showing
- * whatever was last sent to it, because it refreshes from its own GRAM. */
+/* Release SPI2 so something else can use it - in practice, the SD card,
+ * which is wired to different pins on the same controller and so cannot
+ * share it. The framebuffer survives: it is ordinary RAM, unrelated to
+ * the bus. Nothing may be presented between suspend and resume. The
+ * panel keeps showing whatever was last sent to it, because it refreshes
+ * from its own GRAM. */
 bool gfx_suspend(void);
 
-/* Bring the panel back.
- *
- * `full_init` re-sends the initialisation sequence. It is not normally needed:
- * the SH8601 keeps its registers while powered, so only the ESP32 side has to
- * be rebuilt - and the sequence carries a 120 ms settle that dominates the
- * cost of a round trip. Pass true only if the panel has actually lost power. */
+/* Bring the panel back. `full_init` re-sends the initialisation sequence.
+ * It is not normally needed: the SH8601 keeps its registers while
+ * powered, so only the ESP32 side has to be rebuilt - and the sequence
+ * carries a 120 ms settle that dominates the cost of a round trip. Pass
+ * true only if the panel has actually lost power. */
 bool gfx_resume(bool full_init);
 
 /*---------------------------------------------------------------------------
@@ -331,12 +265,11 @@ void gfx_mark_dirty(int x, int y, int w, int h);
 
 void gfx_mark_all_dirty(void);
 
-/* Whether any band overlapping this rectangle is already going to be sent.
- *
- * For overlay content that is identical every frame - the shell's home hint -
- * this answers "does it need redrawing?". If nothing below it changed, the
- * pixels are still in the framebuffer and still on the panel, and both the
- * draw and the transfer can be skipped. */
+/* Whether any band overlapping this rectangle is already going to be
+ * sent. For overlay content that is identical every frame - the shell's
+ * home hint - this answers "does it need redrawing?". If nothing below
+ * it changed, the pixels are still in the framebuffer and still on the
+ * panel, and both the draw and the transfer can be skipped. */
 bool gfx_region_dirty(int x, int y, int w, int h);
 
 /* Send the changed bands to the panel and wait for the transfers to land.
@@ -345,45 +278,31 @@ void gfx_present(void);
 
 /* Runtime toggle for the panel-grid overlay layer: outlines whichever grid
  * cells are actually sent each frame, cyan for a full-row send and yellow
- * for a gathered run - see gfx_present()'s mark_rect_border(). Off by
- * default even in a development build: it draws directly over real
- * content, so it should be opted into, not always on. Fully independent of
- * the leaf layer below - either can be on with the other off, in any
- * combination.
- *
- * Declared only under CONFIG_LAUNCHER_DEVELOPMENT on purpose: a debug knob
- * a release build can still call, quietly doing nothing, is a debug knob
- * a caller can forget to guard. Calling this from a file that is not
- * itself development-only should fail to compile, not silently no-op -
- * the Diagnostics app that owns the checkbox for this is already excluded
- * from a non-development build entirely (see main/CMakeLists.txt), so it
- * sees these declarations exactly when it is allowed to. */
+ * for a gathered run. Off by default even in a development build: it
+ * draws over real content, so it should be opted into, not always on.
+ * Independent of the leaf layer below. Declared only under
+ * CONFIG_LAUNCHER_DEVELOPMENT so calling it from a non-development file
+ * fails to compile rather than silently no-opping. */
 #if CONFIG_LAUNCHER_DEVELOPMENT
 void gfx_set_debug_overlay(bool on);
 bool gfx_debug_overlay(void);
 
 /* A second, fully independent overlay layer, not a refinement of the one
  * above: outlines the leaves gfx_dirty.h's dirty_mark() actually marked
- * dirty this frame, one rectangle per dirty leaf, in green - the leaves
- * that were really touched, not the static leaf lattice. Works on its own
- * with the panel-grid layer off. Leaf bits are only ever set by a caller
- * that hands dirty_mark() a real box (see gfx_dirty.h's mark_leaves()) -
- * mark_band() never marks leaves, so a region only ever touched that way
- * legitimately shows nothing here; that is a consequence of the design,
- * not a bug. Same undefined-outside-development reasoning as the toggle
- * above. */
+ * dirty this frame, in green - the leaves that were really touched, not
+ * the static leaf lattice. Leaf bits are only ever set by a caller that
+ * hands dirty_mark() a real box (see mark_leaves()) - mark_band() never
+ * marks leaves, so a region only touched that way legitimately shows
+ * nothing here; that is a consequence of the design, not a bug. */
 void gfx_set_leaf_overlay(bool on);
 bool gfx_debug_leaf_overlay(void);
 
 /* Per-strip counts of which send path the last stretch of gfx_present()
- * calls actually took - full-band send_full_row() versus a gathered send
- * of at least one run versus a full-width send at less than the whole
- * band's height (send_partial_band(), for a box that carries a real
- * sub-strip Y extent) - for a device test to log alongside its own timing
- * rather than guessing the split from the number alone. Reset explicitly,
- * not by gfx_present() itself, so a caller can accumulate across exactly
- * the frames it is measuring. See gfx.c's send_one_row() for where these
- * are counted. */
+ * calls actually took - full-band, a gathered send of runs, or a
+ * full-width send at less than the whole band's height - for a device
+ * test to log alongside its own timing rather than guessing the split
+ * from the number alone. Reset explicitly, not by gfx_present() itself,
+ * so a caller can accumulate across exactly the frames it is measuring. */
 void gfx_reset_strip_send_counts(void);
 void gfx_get_strip_send_counts(int *full_bands, int *gathered,
                                int *partial_bands);
