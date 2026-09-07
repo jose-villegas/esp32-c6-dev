@@ -56,18 +56,15 @@ void device_state_read(device_state_t *out);
  * shape being budgeted against. */
 #define DEVICE_STATE_JSON_MAX 512
 
-/* Formats `state` (already read by device_state_read()) plus `input` (a
- * frame's touch/button state) as one line of JSON into
- * `out[DEVICE_STATE_JSON_MAX]`. Always NUL-terminated within that bound;
- * snprintf() truncates rather than overflowing if the (fixed, budgeted-for)
- * shape below somehow did not fit.
+/* Formats `state` (already read by device_state_read()) plus a frame's
+ * `input` as one line of JSON into `out[DEVICE_STATE_JSON_MAX]`. Always
+ * NUL-terminated; snprintf() truncates rather than overflows if the
+ * budgeted shape does not fit.
  *
- * `input` is passed in rather than read here on purpose: this function has
- * no notion of "the current frame" on its own, only whatever `state`
- * already carries and whatever `input` the caller hands it - see
- * screenshot_dump()'s own comment in screenshot.h for why ITS caller
- * passes the exact input_t the frame being captured was drawn with, not a
- * fresh read. */
+ * `input` is passed in, not read here: this function has no notion of "the
+ * current frame" on its own - see screenshot_dump()'s comment in
+ * screenshot.h for why its caller passes the exact input_t the frame being
+ * captured was drawn with. */
 static inline void device_state_format_json(const device_state_t *state,
                                              const input_t *input,
                                              char out[DEVICE_STATE_JSON_MAX])
