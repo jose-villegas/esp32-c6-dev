@@ -452,7 +452,11 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
 
     bool beside_liquid = false;
 
-    const int soaks = (s->soak >= 0) ? s->soak : r->soaks;
+    /* Cullet is glass milled back to grains, with none of a dune's pore
+     * space left, so it neither drinks nor binds into soil. Forced to zero
+     * rather than skipped at the conversion itself so a shard standing in
+     * water does not spend the water for nothing. */
+    const int soaks = cell_is_cullet(c) ? 0 : ((s->soak >= 0) ? s->soak : r->soaks);
 
     if (soaks != 0 && r->soaks != 0 && s->may_have_liquid) {
         for (int d = 0; d < 4; d++) {
@@ -476,6 +480,7 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
             /* The liquid pays for what was taken out of it. */
             pay_quench_cost(s, nx, ny, w);
 
+            REACTION_DOC(soaks_to, "unless the grain is cullet, which is glass and holds no water");
             if (r->soaks_to != 0) {
                 s->cells[(size_t)y * (size_t)w + (size_t)x] =
                     soil_cell(CELL_MAKE(r->soaks_to, 0), 0, 1,
@@ -510,7 +515,7 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
                 continue;
             }
             const reaction_t* nr = reaction_of(n);
-            if (nr->soaks == 0) {
+            if (nr->soaks == 0 || cell_is_cullet(n)) {
                 continue; /* not something that drinks */
             }
 
@@ -575,7 +580,7 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
                 continue;
             }
             const reaction_t* br = reaction_of(below);
-            if (br->soaks == 0) {
+            if (br->soaks == 0 || cell_is_cullet(below)) {
                 continue;
             }
             /* Lit fuse carve-out: prevent dousing */
