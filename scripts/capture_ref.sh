@@ -14,7 +14,11 @@
 #                   prints its verdict line against an earlier report.
 #   --no-restore    forwarded to report_performance.sh's own --no-restore -
 #                   leaves the device on build.diag instead of paying a
-#                   second build+flash to restore build.release.
+#                   second build+flash to restore build.release. WITHOUT it,
+#                   the restore leaves the board on a release build of the ref
+#                   just captured - the capture worktree is what gets rebuilt,
+#                   and it is detached there - so the device ends up running
+#                   the CANDIDATE, not main. The run says so when it finishes.
 #   --build-only    build build.diag in the capture worktree and stop -
 #                   never flashes, never touches a serial port. Useful on
 #                   its own to pre-check that a candidate even LINKS
@@ -68,7 +72,9 @@
 set -eu
 
 usage() {
-    sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'
+    # Stops at the prose section rather than a hard-coded last line: editing
+    # the options above used to truncate --help silently.
+    awk 'NR>=2 && /^# This is glue/{exit} NR>=2' "$0" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 
@@ -227,6 +233,21 @@ set -- "$@" "$COM_PORT" "$OUT_MD"
 echo "=== Handing off to report_performance.sh for $CAPTURE_SHA ==="
 STATUS=0
 sh "$LAUNCHER_DIR/main/apps/sand/tools/report_performance.sh" "$@" || STATUS=$?
+
+# WHAT THE BOARD IS LEFT RUNNING, said out loud. The restore rebuilds
+# build.release inside the CAPTURE WORKTREE, which is detached at the ref just
+# captured - so the device ends up on a release build of the CANDIDATE, not of
+# main, and nothing said so. --no-restore has always warned about the state it
+# leaves; this is the same courtesy for the path that does restore.
+if [ "$NO_RESTORE" -eq 0 ]; then
+    echo
+    echo "=== Device left on a RELEASE build of $CAPTURE_SHA ==="
+    echo "  $(git -C "$WORKTREE" log -1 --format=%s)"
+    echo "That is the ref this run captured, not necessarily main, and a release"
+    echo "image carries no test suites and no dev instrumentation - screenshot.sh"
+    echo "cannot talk to it. Reflash from the checkout you actually want before"
+    echo "treating the board as normal again."
+fi
 
 echo
 echo "Report: $OUT_MD"
