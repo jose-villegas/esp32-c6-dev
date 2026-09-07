@@ -38,10 +38,10 @@ is_kin(cell_t a, cell_t self, const reaction_t* r) {
 
 static bool
 anchored(sand_t* s, int x, int y, int w, int h, cell_t self, const reaction_t* r) {
-    uint16_t body[SUPPORT_MAX];
+    sand_grid_index_t body[SUPPORT_MAX];
     int n = 0, head = 0;
 
-    body[n++] = (uint16_t)((size_t)y * (size_t)w + (size_t)x);
+    body[n++] = (sand_grid_index_t)((size_t)y * (size_t)w + (size_t)x);
 
     const int down = ring_of(s->last_load_dx, s->last_load_dy);
 
@@ -72,10 +72,10 @@ anchored(sand_t* s, int x, int y, int w, int h, cell_t self, const reaction_t* r
             }
             bool known = false;
             for (int i = 0; i < n && !known; i++) {
-                known = (body[i] == (uint16_t)nat);
+                known = (body[i] == (sand_grid_index_t)nat);
             }
             if (!known) {
-                body[n++] = (uint16_t)nat;
+                body[n++] = (sand_grid_index_t)nat;
             }
         }
     }

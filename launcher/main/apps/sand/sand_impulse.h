@@ -19,6 +19,17 @@
 
 typedef struct sand_s sand_t;
 
+/* y*w+x must fit here. uint16_t matches every real device grid (ULTRA
+ * quality's 184x224 is the largest, ~41k cells); SAND_WIDE_GRID_INDEX
+ * widens it for a host that pushes past 65536 cells, like the web demo's
+ * 1:1 quality - never defined by the device build, so firmware is
+ * unaffected. */
+#if defined(SAND_WIDE_GRID_INDEX)
+typedef uint32_t sand_grid_index_t;
+#else
+typedef uint16_t sand_grid_index_t;
+#endif
+
 /* One grain in flight from sand_impulse() - not explosion-specific despite
  * sand_explode() being the one caller today. `cell` is the exact byte
  * thrown, checked before moving so a stale entry drops rather than flying
@@ -26,7 +37,7 @@ typedef struct sand_s sand_t;
  * moving and how much flight is left (see SAND_IMPULSE_SPEED_RAMP); `ramp`
  * is a per-entry override of its decay rate, ignored for water/acid. */
 typedef struct {
-    uint16_t index;   /* y*w+x */
+    sand_grid_index_t index;   /* y*w+x */
     cell_t   cell;
     uint8_t  dir;     /* ring_dir() index, sand_priv.h */
     uint8_t  speed;

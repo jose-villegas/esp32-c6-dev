@@ -268,15 +268,15 @@ place_cracked(sand_t* s, int x, int y, size_t at, material_id_t into) {
 
 static void
 crack_run(sand_t* s, int x, int y, int w, int h, material_id_t from, material_id_t into) {
-    uint16_t frontier[CRACK_MAX];
+    sand_grid_index_t frontier[CRACK_MAX];
     int top = 0, done = 0;
 
     const size_t first = (size_t)y * (size_t)w + (size_t)x;
     place_cracked(s, x, y, first, into);
-    frontier[top++] = (uint16_t)first;
+    frontier[top++] = (sand_grid_index_t)first;
 
     while (top > 0 && done < CRACK_MAX) {
-        const uint16_t at = frontier[--top];
+        const sand_grid_index_t at = frontier[--top];
         const int cx = (int)(at % (unsigned)w);
         const int cy = (int)(at / (unsigned)w);
         done++;
@@ -293,7 +293,7 @@ crack_run(sand_t* s, int x, int y, int w, int h, material_id_t from, material_id
             }
             place_cracked(s, nx, ny, nat, into);
             if (top < CRACK_MAX) {
-                frontier[top++] = (uint16_t)nat;
+                frontier[top++] = (sand_grid_index_t)nat;
             }
         }
     }

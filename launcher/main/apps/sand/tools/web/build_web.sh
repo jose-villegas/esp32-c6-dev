@@ -64,9 +64,13 @@ mkdir -p "$BUILD_DIR" "$DIST_DIR"
 # optimization time is not on anyone's critical path the way run_tests.sh's
 # is. EXPORTED_RUNTIME_METHODS gives app.js ccall()/cwrap() (calling the
 # exported web_* functions by name) and HEAPU8 (reading web_render()'s pixel
-# buffer directly out of wasm memory without a copy).
+# buffer directly out of wasm memory without a copy). SAND_WIDE_GRID_INDEX
+# widens sand_impulse.h's per-cell index past the device's uint16_t (which
+# every real device grid fits, but this build's "1:1" quality and larger
+# render sizes do not) - see that header's own comment. Never defined for
+# the device build, so firmware is untouched.
 # shellcheck disable=SC2086
-emcc -O3 -std=c11 -DNDEBUG -Wall -Wextra \
+emcc -O3 -std=c11 -DNDEBUG -DSAND_WIDE_GRID_INDEX -Wall -Wextra \
     -I "$MAIN_DIR" -I "$SAND_DIR" \
     $SOURCES \
     -o "$DIST_DIR/sand.js" \

@@ -167,7 +167,7 @@ static void queue_flying_grain(sand_t *s, int x, int y, int dir, int speed,
      * before step_impulses()'s own re-acquisition runs, so a stored index
      * can be stale here. */
     for (int existing = 0; existing < s->impulse_count; existing++) {
-        if (s->impulse_buf[existing].index == (uint16_t)at &&
+        if (s->impulse_buf[existing].index == (sand_grid_index_t)at &&
             s->impulse_buf[existing].cell == cell) {
             return;
         }
@@ -187,7 +187,7 @@ static void queue_flying_grain(sand_t *s, int x, int y, int dir, int speed,
     }
 
     impulse_t *entry = &s->impulse_buf[s->impulse_count++];
-    entry->index = (uint16_t)at;
+    entry->index = (sand_grid_index_t)at;
     entry->cell  = flying;
     entry->dir   = (uint8_t)dir;
     entry->speed = (uint8_t)speed;
@@ -387,7 +387,7 @@ static void impulse_gravity_candidates(int x, int y, int dx, int dy,
  * (APP_IMPULSE_MAX). Skipped range [kept, self_i) is scratch from emptied
  * entries. */
 static bool impulse_index_still_tracked(const sand_t *s, int kept, int self_i,
-                                        uint16_t index)
+                                        sand_grid_index_t index)
 {
     for (int j = 0; j < kept; j++) {
         if (s->impulse_buf[j].index == index) {
@@ -481,7 +481,7 @@ static void impulse_charge_displacement(sand_t *s, impulse_t *entry,
             }
             if (chosen >= 0) {
                 impulse_t *t = &deferred[(*deferred_transfer_count)++];
-                t->index = (uint16_t)old_index;
+                t->index = (sand_grid_index_t)old_index;
                 t->cell  = displaced;
                 t->dir   = (uint8_t)chosen;
                 t->speed = (uint8_t)(((unsigned)impact_speed *
@@ -507,7 +507,7 @@ static void impulse_charge_displacement(sand_t *s, impulse_t *entry,
              (int)((unsigned)old_index / (unsigned)w),
              (int)((unsigned)new_index % (unsigned)w),
              (int)((unsigned)new_index / (unsigned)w));
-    entry->index = (uint16_t)new_index;
+    entry->index = (sand_grid_index_t)new_index;
 }
 
 /* The flight pass: every entry in s->impulse_buf either moves one cell
@@ -627,7 +627,7 @@ void step_impulses(sand_t *s, int dx, int dy)
                 }
                 const size_t cat = (size_t)cy * (size_t)w + (size_t)cx;
                 if (s->cells[cat] == entry.cell) {
-                    entry.index = (uint16_t)cat;
+                    entry.index = (sand_grid_index_t)cat;
                     reacquired = true;
                 }
             }
@@ -658,7 +658,7 @@ void step_impulses(sand_t *s, int dx, int dy)
                         const cell_t found = s->cells[cat];
                         if (!CELL_IS_EMPTY(found) &&
                             CELL_MATERIAL(found) == lost_mat) {
-                            entry.index = (uint16_t)cat;
+                            entry.index = (sand_grid_index_t)cat;
                             entry.cell  = found;
                             reacquired = true;
                         }
@@ -786,8 +786,8 @@ void step_impulses(sand_t *s, int dx, int dy)
                         s->cells[(size_t)by * (size_t)w + (size_t)bx];
                     if (!CELL_IS_EMPTY(blocker) &&
                         material_of(blocker)->kind == KIND_STATIC) {
-                        const uint16_t block_index =
-                            (uint16_t)((size_t)by * (size_t)w + (size_t)bx);
+                        const sand_grid_index_t block_index =
+                            (sand_grid_index_t)((size_t)by * (size_t)w + (size_t)bx);
                         if (impulse_index_still_tracked(s, kept, i,
                                                         block_index)) {
                             s->impulse_buf[kept++] = entry;
@@ -937,7 +937,7 @@ void step_impulses(sand_t *s, int dx, int dy)
                                            deferred_cascade_count;
                     deferred_cascade_count++;
                     impulse_t *c = &deferred[relay_slot];
-                    c->index = (uint16_t)((size_t)ry * (size_t)w + (size_t)rx);
+                    c->index = (sand_grid_index_t)((size_t)ry * (size_t)w + (size_t)rx);
                     c->cell  = relay_target;
                     c->dir   = entry.dir;
                     c->speed = (uint8_t)(entry.speed / SAND_CASCADE_SPEED_DIVISOR);
