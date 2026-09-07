@@ -19,11 +19,12 @@
 
 /* See liquid_mask() in sand_priv.h */
 
-/* WATER ONLY - see acid_bubble() (sand_reactions.c) for what replaced this
- * trigger there. MASKED TO `mat_id`, not a plain sand_displace(): an
- * unmasked throw scatters whatever else is nearby too, not just water
- * splashing itself. WATER DECAYS TWO WAYS, INDEPENDENTLY - see
- * SAND_SPLASH_RADIUS_WATER's own comment in sand.h for the full account. */
+/* WATER ONLY - see acid_bubble() (sand_reactions.c) for what replaced
+ * this trigger there. MASKED TO `mat_id`, not a plain sand_displace():
+ * an unmasked throw scatters whatever else is nearby too, not just
+ * water splashing itself. WATER DECAYS TWO WAYS, INDEPENDENTLY - see
+ * SAND_SPLASH_RADIUS_WATER's own comment in sand.h for the full
+ * account. */
 static inline void splash_displace(sand_t *s, int x, int y, uint8_t mat_id)
 {
     if (mat_id != MAT_WATER) {
@@ -33,14 +34,14 @@ static inline void splash_displace(sand_t *s, int x, int y, uint8_t mat_id)
         return;   /* this echo lost the roll - let the bounce die here */
     }
     sand_displace_material(s, x, y, s->splash_radius_water, mat_id);
-    /* Directed toward EMPTY neighbours: a radial spray mostly throws water
-     * at other water, invisible on screen. CHECKED, not a fixed
-     * away-from-gravity guess: during a sustained pour that direction is
-     * usually more incoming water, so a guess kept swapping identical
-     * cells with no visible gap. Each push sources from the NEIGHBOUR
-     * outward, not the contact point - firing from the contact point
-     * makes every push compete for one grain, so only one resolves. See
-     * test_a_water_splash_actually_opens_a_gap. */
+    /* Directed toward EMPTY neighbours: a radial spray mostly throws
+     * water at other water, invisible on screen. CHECKED, not a fixed
+     * away-from-gravity guess: during a sustained pour that direction
+     * is usually more incoming water, so a guess kept swapping
+     * identical cells with no visible gap. Each push sources from the
+     * NEIGHBOUR outward, not the contact point - firing from the
+     * contact point makes every push compete for one grain, so only
+     * one resolves. See test_a_water_splash_actually_opens_a_gap. */
     for (int dir = 0; dir < 8; dir++) {
         const int *d = ring_dir(dir);
         const int nx = x + d[0], ny = y + d[1];
@@ -125,8 +126,8 @@ static inline int give_mass(sand_t *s, uint8_t *to_row, int tx, int w,
  * freezing into a staircase. Fill below, then share what is left beside
  * it, from sand_step()'s own sweep: only its order guarantees a
  * destination has not been visited. `mobility` (material.h), inverted
- * viscosity, gates whether a liquid cell acts: water (255) always moves,
- * oil (90) crawls, defaulting to 255 so code that never asks for
+ * viscosity, gates whether a liquid cell acts: water (255) always
+ * moves, oil (90) crawls, defaulting to 255 so code that never asks for
  * viscosity keeps old behaviour. No jostle bypass: shaking a viscous
  * liquid does not thin it. */
 static inline bool liquid_may_move(sand_t *s, uint8_t id)
@@ -183,14 +184,14 @@ static inline bool drag_allows_swap(sand_t *s, int x, int y, uint8_t id)
     return (rng_next(&s->rng) & mask) == 0u;
 }
 
-/* Whole cells swap by density (denser sinks) - not mass transfer, since a
- * cell cannot be part oil and part water. Denser moves DOWN, not lighter
- * rising, so it inherits the sweep's no-double-move guarantee for free (a
- * rise needs its own reversed pass, like try_bubble() in sand_gas.c). NOT
- * paced by viscosity: gating on `mobility` looks obvious but PREVENTS
- * separation rather than slowing it - throttling swap and levelling
- * together settles a tilted pair into a permanent shear instead of
- * converging. */
+/* Whole cells swap by density (denser sinks) - not mass transfer, since
+ * a cell cannot be part oil and part water. Denser moves DOWN, not
+ * lighter rising, so it inherits the sweep's no-double-move guarantee
+ * for free (a rise needs its own reversed pass, like try_bubble() in
+ * sand_gas.c). NOT paced by viscosity: gating on `mobility` looks
+ * obvious but PREVENTS separation rather than slowing it - throttling
+ * swap and levelling together settles a tilted pair into a permanent
+ * shear instead of converging. */
 static inline bool sink_through_lighter_liquid(sand_t *s, uint8_t *row,
                                                uint8_t *prow, int x, int y,
                                                int tx, int ty, int w,
@@ -239,12 +240,12 @@ bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
 
     /* Viscosity checked ONCE for this grain's whole move (fall + both
      * slides), not per attempt, to avoid a sluggish liquid jittering
-     * between options. Deliberately before the density swap below, which
-     * is exempt - see sink_through_lighter_liquid(). Marked unlikely:
-     * verified on device that the hint moves cold too-viscous-to-move
-     * code out of the hot path, worth ~26% on a water benchmark. Wrong
-     * for oil (refuses ~2 in 3 steps), but water is what a screen of
-     * liquid usually is. */
+     * between options. Deliberately before the density swap below,
+     * which is exempt - see sink_through_lighter_liquid(). Marked
+     * unlikely: verified on device that the hint moves cold
+     * too-viscous-to-move code out of the hot path, worth ~26% on a
+     * water benchmark. Wrong for oil (refuses ~2 in 3 steps), but water
+     * is what a screen of liquid usually is. */
     if (__builtin_expect(!liquid_may_move(s, mat_id), 0)) {
         return false;
     }
@@ -290,19 +291,14 @@ bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
  * Everything that is NOT gravity-ward, and so cannot live in that sweep.
  *-------------------------------------------------------------------------*/
 
-/* WHY A SEPARATE PASS: the main sweep only guarantees no double-move
- * sweeping gravity-ward; tilted gravity pins both axes, so only ONE
- * cross-flow direction is ever safe there. Without this, water crosses a
- * slope one way and never back - a tilted pool walks into the low corner
- * and stays. A separate pass alternates its own direction each step and
- * only moves liquid ACROSS flow, so it cannot disturb what the main sweep
- * concluded. */
-/* Falling water does not spread: if this cell has somewhere to fall THIS
- * step, that fall will happen in the main sweep and cross-flow has nothing
- * to decide. One comparison, and it is what makes an avalanche affordable -
- * while a body of water is collapsing almost every cell has room beneath
- * it, so almost every cell leaves right here instead of searching along a
- * surface it does not yet have. */
+/* WHY A SEPARATE PASS: the main sweep guarantees no double-move sweeping
+ * gravity-ward; tilted gravity pins both axes, so only ONE cross-flow
+ * direction is safe. Without this, water crosses a slope one way and
+ * never back - a tilted pool walks into the low corner and stays. A
+ * separate pass alternates direction each step, only moving liquid
+ * ACROSS flow, so it cannot disturb the main sweep. Falling water does
+ * not spread: a cell able to fall THIS step leaves cross-flow nothing
+ * to decide. */
 static inline bool has_room_below(const sand_t *s, int x, int y, int dx,
                                   int dy, uint8_t id)
 {

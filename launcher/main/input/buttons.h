@@ -33,37 +33,27 @@
 
 #include <stdbool.h>
 
-/* One button's state for the current frame.
- *
- * `pressed` and `released` are edges, true only on the frame the transition
- * happened; `down` is the level. Edges are what UI code almost always wants -
- * using the level to toggle something would flip it every frame it was held.
- *
- * For PWR, `down` and `released` are always false: the PMU's rising- and
- * falling-edge interrupts (REG 0x41/0x49 bits 0 and 1) are not enabled, so
- * there is no level to report - only the short-press and long-press
- * interrupts are (see buttons.c), which drive `pressed` and `held` below.
- * It is a firmware choice not to enable the other two, not a hardware
- * limit. */
+/* One button's state for the current frame. `pressed`/`released` are
+ * edges, true only on the frame the transition happened; `down` is the
+ * level. Edges are what UI code almost always wants - the level would
+ * flip every frame it was held. For PWR, `down`/`released` are always
+ * false: the PMU's rising/falling-edge interrupts are not enabled, so
+ * there is no level to report - only short-press and long-press
+ * interrupts are, driving `pressed`/`held` below. A firmware choice,
+ * not a hardware limit. */
 typedef struct {
     bool down;
     bool pressed;
     bool released;
 
-    /* BOOT: fires exactly once when the button has been held past
-     * BUTTON_HOLD_US - see button_fsm.h for the full contract, including
-     * that a hold consumes the release edge above so the two never fire for
-     * the same press.
-     *
-     * PWR: fires exactly once when the PMU's own long-press interrupt
-     * latches - see buttons.h's top comment for the threshold (1-2.5 s,
-     * board-dependent, not configured by this firmware) and buttons.c for
-     * how it is read and cleared. Unlike BOOT's, this edge does not consume
-     * `released` - PWR never reports one at all (see above) - and a `pressed`
-     * for the same physical hold may still arrive separately, on whatever
-     * edge the PMU's own short-press logic uses; a caller that binds both to
-     * different actions should expect either or both to fire for one hold,
-     * not treat them as mutually exclusive. */
+    /* BOOT: fires exactly once when held past BUTTON_HOLD_US - see
+     * button_fsm.h, including that a hold consumes the release edge
+     * above so the two never fire for the same press. PWR: fires once
+     * when the PMU's own long-press interrupt latches (1-2.5 s,
+     * board-dependent, not configured by this firmware). Unlike BOOT's,
+     * this does not consume `released` - PWR never reports one - and
+     * `pressed` for the same hold may still arrive separately; a caller
+     * should expect either or both to fire for one hold. */
     bool held;
 } button_t;
 

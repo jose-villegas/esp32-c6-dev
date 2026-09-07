@@ -73,25 +73,24 @@ typedef struct {
 #define UI_BEZEL_THICKNESS 3
 
 /* How far each edge is mixed toward white and toward black, out of 255.
- *
- * These are not symmetric, and deliberately so. This palette is nearly black
- * by design (see ui_init()'s note on OLED pixels), so a shadow mixed toward
- * black lands within a shade or two of the window background and effectively
- * disappears - there is no room below the face colour to carve into. The lit
- * pair therefore carries the whole effect, and WHICH TWO EDGES ARE LIT is the
- * cue that reads as raised or sunken. The shadow is kept anyway because it
- * still separates one button from the next where two rows meet. */
+ * Not symmetric, deliberately: this palette is nearly black by design,
+ * so a shadow mixed toward black lands within a shade or two of the
+ * window background and disappears - no room below the face colour to
+ * carve into. The lit pair carries the whole effect, and WHICH TWO
+ * EDGES ARE LIT is the cue that reads as raised or sunken. The shadow
+ * is kept anyway because it still separates one button from the next
+ * where two rows meet. */
 #define UI_BEZEL_HIGHLIGHT 96
 #define UI_BEZEL_SHADOW    120
 
 /* Mix a colour toward white (t > 0) or black (t < 0), |t| out of 255.
- *
- * Plain 8-bit channels, unlike gfx_color_mix() in gfx_color.h, which has to
- * unpack the panel's byte-swapped RGB565 first. A style works in microui's
- * colour space and never sees a panel pixel; the conversion happens once, in
- * ui.c's draw_command(). Same rounded (a*(255-t) + b*t + 127)/255 mix, so the
- * ends land exactly on the input and on the target. Alpha is carried through
- * untouched - the edges of a frame are exactly as opaque as its face. */
+ * Plain 8-bit channels, unlike gfx_color_mix() in gfx_color.h, which
+ * unpacks the panel's byte-swapped RGB565 first - a style works in
+ * microui's colour space, never sees a panel pixel; the conversion
+ * happens once, in ui.c's draw_command(). Same rounded
+ * (a*(255-t) + b*t + 127)/255 mix, so the ends land exactly on the
+ * input and target. Alpha is carried through untouched - the edges of a
+ * frame are exactly as opaque as its face. */
 static inline uint8_t ui_shade_channel(uint8_t v, int t)
 {
     const int target = (t >= 0) ? 255 : 0;
@@ -107,24 +106,14 @@ static inline mu_Color ui_shade(mu_Color c, int t)
                        c.a };
 }
 
-/* The rectangles making up one bezelled frame, back to front.
- *
- * `sunken` swaps which pair of edges is lit, turning a raised button into a
- * pressed one. Returns how many spans were written, at most
- * UI_BEZEL_MAX_SPANS, or 0 if `max` cannot hold a whole bezel - a partial one
- * would draw a face with edges missing, which looks like a bug rather than
- * like a plainer style.
- *
- * The edge rects deliberately OVERLAP at the corners, and the shadowed pair
- * is written last, so both the top-right and bottom-left corners come out
- * dark. That is the classic mitre-free bevel: the alternative, insetting each
- * edge so nothing overlaps, leaves two bare corner pixels of face colour that
- * read as chipped at this thickness.
- *
- * Thickness is clamped so the two edges can never meet or cross in a control
- * smaller than the bezel was drawn for; if there is no room for even one
- * pixel of edge, the result is a single flat face span, which is the same
- * picture UI_BUTTON_FLAT would give without its border. */
+/* The rects making one bezelled frame, back to front. `sunken` swaps
+ * which edge pair is lit, raised into pressed. Returns spans written, or
+ * 0 if `max` can't hold a bezel - a partial one looks like a bug. Edge
+ * rects OVERLAP at corners, shadowed pair last, so both dark corners
+ * come out right - the classic mitre-free bevel; insetting leaves bare
+ * corner pixels that read as chipped. Thickness is clamped so edges
+ * never cross; with no room, the result is one flat face span, same as
+ * UI_BUTTON_FLAT. */
 static inline int ui_bezel_spans(mu_Rect r, mu_Color face, bool sunken,
                                  ui_span_t *out, int max)
 {
@@ -176,16 +165,13 @@ typedef struct { int dx, dy; bool ink; } ui_text_pass_t;
  * largest of the three sizes the buffer for all of them. */
 #define UI_TEXT_MAX_PASSES 9
 
-/* The passes making up one styled string, back to front. Returns how many
- * were written, or 0 if `max` cannot hold them all - the same all-or-nothing
- * rule ui_bezel_spans() follows, for the same reason: a half-drawn outline
- * looks like a bug rather than like a plainer style.
- *
- * THE INK PASS MUST ALWAYS BE LAST. Every other pass paints the halo, which
- * has to sit *behind* the glyph it is haloing, so the ink pass has to be
- * painted over it rather than under it - draw the halo first and the glyph
- * on top, not the other way round, or the glyph disappears under its own
- * halo. */
+/* The passes making up one styled string, back to front. Returns how
+ * many were written, or 0 if `max` cannot hold them all - the same
+ * all-or-nothing rule ui_bezel_spans() follows, for the same reason: a
+ * half-drawn outline looks like a bug. THE INK PASS MUST ALWAYS BE
+ * LAST. Every other pass paints the halo, which has to sit *behind* the
+ * glyph it is haloing - draw the halo first and the glyph on top, or
+ * the glyph disappears under its own halo. */
 static inline int ui_text_passes(ui_text_style_t style, ui_text_pass_t *out,
                                  int max)
 {
@@ -234,26 +220,14 @@ static inline int ui_text_passes(ui_text_style_t style, ui_text_pass_t *out,
     }
 }
 
-/* The halo colour for a given ink.
- *
- * Derived from the ink's own luminance, the same way the bezel's edges are
- * derived from the face they belong to rather than fixed - see the comment
- * above on UI_BEZEL_HIGHLIGHT/UI_BEZEL_SHADOW. A FIXED halo colour fails the
- * same way a fixed button highlight would: it vanishes against whichever ink
- * happens to match it. This is also exactly the bug app_sand.c's own comment
- * describes for the palette's spawn badge, which used to derive its ring
- * from the swatch face and went unreadable on Snow - the badge was changed
- * to a fixed maximum-contrast pair instead because IT already had a fixed
- * pair (black glyph, white halo) available and needed to stay legible
- * against every material swatch, a much wider range than one ink colour ever
- * spans. A general-purpose halo has no such fixed pair to fall back on, so
- * it takes the other fix: go all the way to the opposite extreme of the ink
- * itself, via ui_shade(), so it can never land near it.
- *
- * Full reach to the extreme (t = +/-255) rather than a partial mix, same as
- * the bezel could in principle use a partial shade too: a near-black ink
- * mixed only partway toward white can still end up close enough to itself to
- * wash out, and the whole point of a halo is separation. */
+/* The halo colour for a given ink, derived from the ink's luminance
+ * rather than fixed - see UI_BEZEL_HIGHLIGHT/SHADOW above. A fixed halo
+ * fails like a fixed button highlight: it vanishes against whichever
+ * ink matches it. Same bug app_sand.c's palette spawn badge hit
+ * deriving its ring from the swatch face (unreadable on Snow) - fixed
+ * there to a max-contrast pair since it already had one. A general halo
+ * has none, so it goes to the opposite extreme via ui_shade() - a
+ * partial mix can still wash out. */
 static inline mu_Color ui_text_halo(mu_Color ink)
 {
     /* Same weights as a standard perceptual luma (~0.30/0.59/0.11 scaled to

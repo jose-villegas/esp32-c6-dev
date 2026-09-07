@@ -46,46 +46,38 @@ static inline uint8_t tween_ramp(uint32_t now_ms, uint32_t start_ms,
     return (uint8_t)((elapsed * 255u) / dur_ms);
 }
 
-/* Fast off the mark, settling as it arrives. Motion that starts and stops at
- * the same speed reads as mechanical; one squared term is enough to stop it
- * looking like a progress bar. Endpoints are exact (0 stays 0, 255 stays
- * 255), so composing this with tween_ramp() never drifts a settled value
- * off its target. */
+/* Fast off the mark, settling as it arrives. Motion that starts and
+ * stops at the same speed reads as mechanical; one squared term is
+ * enough to stop it looking like a progress bar. Endpoints are exact
+ * (0 stays 0, 255 stays 255), so composing this with tween_ramp() never
+ * drifts a settled value off its target. */
 static inline uint8_t tween_ease_out(uint8_t linear)
 {
     const uint32_t left = 255u - linear;
     return (uint8_t)(255u - (left * left) / 255u);
 }
 
-/* Slow off the mark, fast by the end - the mirror image of tween_ease_out()
- * above. Where that one belongs on a motion arriving somewhere (it should
- * slow down as it gets there), this one belongs on a motion LEAVING
- * somewhere it was sitting still - a swell easing back down off its own
- * peak, say. Composed back to back (ease_out into a value, ease_in away
- * from it) the two curves meet at that value with a matching, near-zero
- * rate of change on both sides, so the value reads as a single smooth
- * apex rather than a flat hold with a corner at each end - which is the
- * whole reason this exists rather than reusing tween_ease_out() for both
- * halves. Endpoints are exact, same as tween_ease_out(). */
+/* Slow off the mark, fast by the end - mirror of tween_ease_out() above.
+ * That belongs on motion arriving somewhere (slowing as it gets there);
+ * this belongs on motion LEAVING somewhere it sat still - a swell
+ * easing down off its own peak. Composed back to back (ease_out then
+ * ease_in) the curves meet with a matching, near-zero rate of change,
+ * reading as one smooth apex rather than a flat hold with a corner at
+ * each end - the whole reason this exists over reusing tween_ease_out()
+ * for both halves. */
 static inline uint8_t tween_ease_in(uint8_t linear)
 {
     return (uint8_t)(((uint32_t)linear * linear) / 255u);
 }
 
-/* a, at u8 = 0; b, at u8 = 255; linear between. The one shape "interpolate
- * toward a target by this much of the way there" keeps taking in this tree -
- * a position lerping toward where a letter settles, an angle turning toward
- * where a camera ends up, a length growing from a short arm to a long one -
- * so it is worth naming once rather than re-deriving `a + (b - a) * u8 / 255`
- * at every call site, where it also has to keep guarding against widening
- * one more time.
- *
- * int64_t on the way through the same widening fixed.h's fx_mul_floor()
- * insists on: (b - a) can be tens of thousands (a pixel span, a Q12 angle,
- * a Q8 height) and u8 up to 255, and a naive int32_t product of those is not
- * actually going to overflow at today's call sites, but nothing about the
- * TYPE says so, and the cost of being wrong about that later is a silent
- * wraparound in an animation, not a compiler error. */
+/* a, at u8 = 0; b, at u8 = 255; linear between. The shape "interpolate
+ * toward a target" recurs in this tree - a position lerping to a settle
+ * point, an angle turning to a camera's end, a growing length - worth
+ * naming once rather than re-deriving `a + (b - a) * u8 / 255`
+ * everywhere. int64_t through the widening fx_mul_floor() insists on:
+ * (b - a) can be tens of thousands, a naive int32_t product won't
+ * overflow today, but the cost of being wrong later is a silent
+ * wraparound, not a compiler error. */
 static inline int32_t tween_lerp_i32(int32_t a, int32_t b, uint8_t u8)
 {
     return a + (int32_t)(((int64_t)(b - a) * u8) / 255);
