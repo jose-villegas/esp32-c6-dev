@@ -1255,8 +1255,11 @@ material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_col
                  * hash. */
 
 
-                /* ADD, not XOR - prevents matches. 0x9E37u steps low-bit
-                 * values. */
+                /* ADD, not XOR: XOR maps a power-of-two-aligned threshold
+                 * window either onto itself or another aligned window
+                 * depending only on phase's low bits, so about half of all
+                 * phase steps left the foam set unchanged - addition has no
+                 * such alignment to preserve. */
                 const unsigned dithered = hash + foam_phase * 0x9E37u;
                 if ((dithered & 7u) < water_foam_threshold[curvature]) {
                     out[0] = water_foam;
