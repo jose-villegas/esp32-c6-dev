@@ -624,6 +624,14 @@ extern volatile bool sand_step_gate_cross_flow;
 extern volatile bool sand_step_gate_gas;
 extern volatile bool sand_step_gate_reactions;
 
+/* Splits cross-flow itself: this one keeps the per-cell WALK and its liquid
+ * mask test and suppresses only the transfer work they lead to, so the walk's
+ * own share can be read against the whole pass. Volatile for the same reason
+ * the others are, and here it is load-bearing - an `#if` would let the
+ * compiler see the work is unreachable and delete the walk with it, which is
+ * how a previous code-skip probe in this campaign measured nothing. */
+extern volatile bool sand_step_gate_xflow_body;
+
 /* Wraps a pass's call site in `if (sand_step_gate_<name>)` when compiled in,
  * and in nothing at all otherwise - a release build's sand_step() has no
  * extra branch to fold away, because there was never a branch there to
