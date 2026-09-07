@@ -316,6 +316,12 @@ typedef struct {
 
     uint8_t dissolvable;
 
+    /* Overrides materials[]'s shared density for the dislodge-toughness
+     * roll (queue_flying_grain(), sand_impulse.c) - the only place an
+     * extended static's own density matters, since every extended code
+     * otherwise inherits one shared materials[] row. 0 = no override. */
+    uint8_t dislodge_density;
+
     /* Separate from `residue` to avoid overload. Smoke means generic
      * destruction, not steam or acid. */
     uint8_t fizz;
