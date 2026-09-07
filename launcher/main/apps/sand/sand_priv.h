@@ -918,6 +918,32 @@ static inline bool tick_decay(sand_t *s, uint8_t *row, int x, int y,
     return true;
 }
 
+/* Per-pass volatile gates for sand_step() (bd esp32c6-8zx), default enabled
+ * so behaviour is untouched. One binary, five configurations, one boot - a
+ * device pass decomposition with no layout difference between
+ * configurations, unlike four separate images each drawing their own
+ * flash-layout ticket. Defined in sand.c; same CONFIG_LAUNCHER_DEVELOPMENT
+ * guard as sand_work_counters.h. See Perf-Round-Guide.md's pass-map note. */
+#if CONFIG_LAUNCHER_DEVELOPMENT
+extern volatile bool sand_step_gate_main_sweep;
+extern volatile bool sand_step_gate_cross_flow;
+extern volatile bool sand_step_gate_gas;
+extern volatile bool sand_step_gate_reactions;
+
+/* Wraps a pass's call site in `if (sand_step_gate_<name>)` when compiled in,
+ * and in nothing at all otherwise - a release build's sand_step() has no
+ * extra branch to fold away, because there was never a branch there to
+ * begin with. */
+#define SAND_STEP_GATE(name) if (sand_step_gate_##name)
+/* Same idea, ANDed into an existing condition rather than wrapping a bare
+ * call - for the one pass (gas) whose call site already has a condition of
+ * its own. */
+#define SAND_STEP_GATED(name, cond) (sand_step_gate_##name && (cond))
+#else
+#define SAND_STEP_GATE(name)
+#define SAND_STEP_GATED(name, cond) (cond)
+#endif
+
 /* Defined in sand_reactions.c: the whole of a step's fire-chemistry work
  * for every burning cell (reaction_t.burns - fire and ember today) -
  * ignition of adjacent flammable neighbours, extinguishing by adjacent

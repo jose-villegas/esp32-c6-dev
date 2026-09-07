@@ -2030,6 +2030,18 @@ static void step_impulses(sand_t *s, int dx, int dy)
     }
 }
 
+#if CONFIG_LAUNCHER_DEVELOPMENT
+/* Declared extern in sand_priv.h, next to the SAND_STEP_GATE()/
+ * SAND_STEP_GATED() macros sand_step() below uses them through - see that
+ * declaration's own comment for what these buy and why they are safe to
+ * leave enabled. Not `static`: those macros expand at sand_step()'s own
+ * call sites, in this file, but a probe outside it needs to flip them. */
+volatile bool sand_step_gate_main_sweep = true;
+volatile bool sand_step_gate_cross_flow = true;
+volatile bool sand_step_gate_gas        = true;
+volatile bool sand_step_gate_reactions  = true;
+#endif
+
 /* Pinned to a cache-line boundary so this function's placement is not a
  * coin flip of whatever unrelated code sits before it: a host bisect found
  * sand_step()'s compiled bytes IDENTICAL across commits that never touched
@@ -2109,22 +2121,26 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
     const int w = s->w;
     const uint16_t is_liquid = liquid_mask();
 
-    for (int y = y_from; y != y_to; y += y_step) {
-        step_one_row(s, y, w, dx, dy, slide_a, slide_b, x_step,
-                    load_dx, load_dy, jostle, settled_bit, is_liquid, driven);
+    SAND_STEP_GATE(main_sweep) {
+        for (int y = y_from; y != y_to; y += y_step) {
+            step_one_row(s, y, w, dx, dy, slide_a, slide_b, x_step,
+                        load_dx, load_dy, jostle, settled_bit, is_liquid, driven);
+        }
     }
 
     /* Cross-flow for liquids, excluding gravity. See sand_step_liquids() in
      * sand_liquid.c. Runs before finalising block sleep states to ensure
      * BLOCK_ACTIVE reflects entire step. */
-    sand_step_liquids(s, &flow, dx, dy);
+    SAND_STEP_GATE(cross_flow) {
+        sand_step_liquids(s, &flow, dx, dy);
+    }
 
     /* Rising gas doesn't join main sweep. Order of sand_step_liquids()
      * doesn't matter; both must finish before finalize_settling(). Checked
      * here, not via sand_step_gas()'s early return. Called every step,
      * skipping avoids marshalling nine arguments if no gas. Flash layout
      * cost. */
-    if (s->may_have_gas) {
+    if (SAND_STEP_GATED(gas, s->may_have_gas)) {
         sand_step_gas(s, gx, gy, dx, dy, slide_a, slide_b, perp_a, perp_b,
                      load_dx, load_dy, x_step, jostle);
     }
@@ -2134,7 +2150,9 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
      * Takes `s` argument, unlike sand_step_gas(). Boiling now happens at heat
      * source. No cost to dodge by checking may_have_burning, internal check
      * suffices. */
-    sand_step_reactions(s);
+    SAND_STEP_GATE(reactions) {
+        sand_step_reactions(s);
+    }
 
     /* Final step after others to ensure correct position and arc for thrown
      * grains, adding outward half after gravity. */
