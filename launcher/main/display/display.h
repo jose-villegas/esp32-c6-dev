@@ -67,23 +67,22 @@
 
 /* tan(60 deg) = 1.732..., approximated as a small integer ratio so the
  * hysteresis test is exact integer (cross-multiplied) arithmetic - no
- * division, no float, no rounding to reason about. See this header's top
- * comment for why one ratio, applied relative to whichever quarter is
- * currently committed, is enough to give both the 60-degrees-out and the
- * 30-degrees-back behaviour. */
+ * division, no float, no rounding to reason about. See this header's
+ * top comment for why one ratio, applied relative to whichever quarter
+ * is currently committed, is enough to give both the 60-degrees-out and
+ * the 30-degrees-back behaviour. */
 #define DISPLAY_HYST_NUM 7
 #define DISPLAY_HYST_DEN 4
 
 typedef struct {
-    /* Which quarter turn currently reads as "upright" - numbered the same
-     * way gfx_text_turned() and ui_transform_quarter_turn() do: 0 upright, 1
-     * top-to-bottom, 2 upside down, 3 bottom-to-top.
-     *
-     * The only state this module keeps. The hysteresis test above is a pure
-     * function of (quarter, gx, gy) - nothing here accumulates over time or
-     * needs a clock, which is also why display_update() takes no dt: main.c
-     * controls how often it is called (see its own comment on sampling this
-     * at a modest, fixed rate), and the decision itself does not care. */
+    /* Which quarter turn currently reads as "upright" - numbered the
+     * same way gfx_text_turned() and ui_transform_quarter_turn() do: 0
+     * upright, 1 top-to-bottom, 2 upside down, 3 bottom-to-top. The only
+     * state this module keeps. The hysteresis test above is a pure
+     * function of (quarter, gx, gy) - nothing here accumulates over
+     * time or needs a clock, which is also why display_update() takes
+     * no dt: main.c controls how often it is called, and the decision
+     * itself does not care. */
     int quarter;
 } display_t;
 
@@ -92,54 +91,29 @@ typedef struct {
  * common way, and the first real reading corrects it if that guess was
  * wrong, the same as any other update. */
 
-/* WHAT EACH QUARTER ACTUALLY IS, MEASURED - NOT DERIVED
- *
- * 0/1/2/3 name a quarter-turn from the panel's native upright (GFX_WIDTH x
- * GFX_HEIGHT, 368 x 448 - a "portrait" shape). Which physical orientation
- * that actually corresponds to is not visible from source - it depends on
- * how the case is held versus how the panel's native rows and columns are
- * wired - so it could not be derived, only measured, the same way
- * GRAVITY_SCREEN_X/Y in apps/sand/app_sand.c was found: hold the board,
- * flash a build with the Diagnostics app's "show orientation" toggle on
- * (see app_diagnostics.c), read the reported quarter off for each hold.
- *
- * Measured against this board on 2026-08-27:
+/* WHAT EACH QUARTER IS, MEASURED NOT DERIVED: which orientation a turn
+ * corresponds to is not visible from source - depends on how the case
+ * is held versus how the panel's rows/columns are wired - so it was
+ * measured (same method as GRAVITY_SCREEN_X/Y in app_sand.c:
+ * Diagnostics' "show orientation" toggle, read per hold).
  *
  *     0   Portrait               (USB connector to the right)
  *     1   Landscape              (USB connector at the top)
  *     2   Portrait, upside down
- *     3   Landscape, upside down
- *
- * The USB position was first recorded backwards - written down as "landscape,
- * USB right" before it was actually checked against the board, when it is
- * portrait that has USB on the right; landscape has it at the top. Corrected
- * once, not because it changes DISPLAY_DEFAULT_QUARTER below (that stays
- * quarter 1, confirmed independently of which edge USB sits on), but because
- * a wrong physical fact sitting in a comment is worse than no comment at all -
- * the next reader has no way to know it was never checked.
- *
- * These four names are the start of the vocabulary this shell's apps
- * should share for "which way is the board being held" - use them instead
- * of a bare quarter number anywhere the number is standing in for one of
- * these four physical facts rather than for arithmetic on the transform
- * itself (composing turns, deriving ui_width()/height(), and the like stay
- * plain ints - that math does not care what a quarter is CALLED). */
+ *     3   Landscape, upside down */
 #define DISPLAY_PORTRAIT              0
 #define DISPLAY_LANDSCAPE             1
 #define DISPLAY_PORTRAIT_UPSIDE_DOWN  2
 #define DISPLAY_LANDSCAPE_UPSIDE_DOWN 3
 
 /* The orientation the SHELL applies at boot, before the first gravity
- * sample arrives - main.c sets this once, right after display_init(),
- * which itself stays a neutral 0 with no opinion about it (see that
- * function's own comment: this is a physical fact about one board, not
- * something a device-agnostic module should bake into its own reset).
- *
+ * sample arrives - main.c sets this once, after display_init(), which
+ * stays a neutral 0: this is a physical fact about one board, not
+ * something a device-agnostic module should bake into its reset.
  * DISPLAY_LANDSCAPE, not a bare 1 - this board is normally held sideways
- * to its native upright, and the table above is what confirms that is
- * quarter 1 specifically, independent of which edge USB sits on in that
- * hold. It was a first guess when this constant was written; it no
- * longer is. */
+ * to its native upright, and the table above confirms that is quarter
+ * 1, independent of which edge USB sits on. It was a first guess when
+ * written; it no longer is. */
 #define DISPLAY_DEFAULT_QUARTER DISPLAY_LANDSCAPE
 
 void display_init(display_t *d);
@@ -152,18 +126,12 @@ bool display_update(display_t *d, int gx, int gy);
 
 int display_quarter(const display_t *d);
 
-/* The shell's own orientation - the quarter main.c last set the UI transform
- * to. Declared here because display.h is the layer an app already depends on
- * for the quarter numbering, but defined in main.c, not display.c: main.c is
- * the only thing that ever calls display_update(), and owns the display_t
- * that decision is made against. This module stays a plain, instantiable
- * decision function with no state of its own beyond what a caller passes it
- * (see this header's top comment) - the same split app_register()/app_list()
- * draw in app.h between "declared where callers already look" and "defined
- * where the one real instance lives".
- *
- * For an app that draws through the shell's UI transform rather than owning
- * it: knowing when that transform changed underneath you, without reading
- * the IMU a second time or duplicating the hysteresis above. See
- * app_sand.c's palette repaint for why a panel needs to ask this. */
+/* The shell's own orientation - the quarter main.c last set the UI
+ * transform to. Declared here but defined in main.c, not display.c:
+ * main.c is the only thing that calls display_update() and owns the
+ * display_t the decision is made against - the same app.h split between
+ * "declared where callers look" and "defined where the instance lives".
+ * For an app drawing through the shell's transform: knowing when it
+ * changed underneath you, without reading the IMU again or duplicating
+ * the hysteresis above. */
 int display_shell_quarter(void);
