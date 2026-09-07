@@ -101,8 +101,8 @@ const material_t materials[MATERIAL_ROWS] = {
                                  * turbulent rise, tune independently
                                  * later if it should read differently */
 
-            .decay = 96,    /* Gap > 32: ~40 steps, ~1s at 60fps. Fire burns
-                             * faster than gas. Tune on device. */
+            .decay = 96,    /* Gap > 32: ~40 steps, under a second at 60fps.
+                             * Fire burns faster than gas. Tune on device. */
             .mobility = 96, /* Tune independently if fire should rise
                              * faster/slower than gas */
             .sight = 5,     /* noticeably tighter than gas's 16 -
@@ -137,7 +137,9 @@ const material_t materials[MATERIAL_ROWS] = {
                                * MAT_SMOKE. Initially one material, but
                                * separate rows for correct visuals. */
 
-            .density = 5, /* Steam bubbles up due to lower density than WATER. */
+            .density = 5, /* Below gas and fire so it can't displace them
+                           * (can_enter() needs strictly greater density);
+                           * lighter than water, so it bubbles up through it. */
             .slip = 255,  /* no resistance, same reasoning as
                                      * gas's own row */
             .repose = 0,
@@ -334,7 +336,9 @@ const reaction_t reactions[MATERIAL_MAX] = {
              * sand, wood, ash. Adjust as needed. */
             .dissolvable = 220,
 
-            /* Acid, below, is at the opposite end. Tune on device. */
+            /* Low, deliberately: a poured stream can occasionally outpace
+             * evaporation over hot stone crust. Acid, below, is at the
+             * opposite end. Tune on device. */
             .boils = 29,
         },
 
@@ -1472,8 +1476,11 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_CODES] = {
             .withers = 1,
             .sheltered_by = MAT_WOOD,
 
-            /* Root cell rolls into soil, `roots_to` doubles as target, 8 in
-             * 256, slow, see ROOT_SURFACE_MAX */
+            /* Root cell rolls into soil, `roots_to` doubles as target. Kept
+             * low (8 in 256) since, unlike the one-time collar seed, this
+             * rolls every step for every root cell - a low base rate is
+             * part of what bounds the cost, alongside ROOT_SURFACE_MAX
+             * (sand_reactions.c). */
             .roots = 8,
             .roots_to = MATX(MATX_ROOT),
 
