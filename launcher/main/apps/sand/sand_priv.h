@@ -1,5 +1,6 @@
 /*=============================================================================
- * sand_priv - internals shared between sand.c and sand_liquid.c.
+ * sand_priv - internals shared between sand.c, sand_liquid.c and
+ * sand_impulse.c.
  *
  * Not a public header: nothing outside this module includes it, and nothing
  * in it is part of sand.h's API. It exists only because splitting the liquid
@@ -17,24 +18,25 @@
  * this ever stopped being true.
  *
  * THE REAL CRITERION FOR WHAT ELSE LIVES HERE, STATED HONESTLY: not every
- * `static` helper in sand.c that could sit here (this header is app-internal
- * and portable either way, so there is no layering reason it could not) does.
- * blocker_normal(), reflect_off_normal() and impulse_drag_of() are here
- * because a test needed to call them directly - the sand test suite (split
- * across suite_sand_*.c) cannot reach a
- * function `static` inside sand.c at all, only ones declared where it can
+ * `static` helper in sand.c or sand_impulse.c that could sit here (this
+ * header is app-internal and portable either way, so there is no layering
+ * reason it could not) does. blocker_normal(), reflect_off_normal() and
+ * impulse_drag_of() are here because a test needed to call them directly -
+ * the sand test suite (split across suite_sand_*.c) cannot reach a
+ * function `static` inside a .c file at all, only ones declared where it can
  * include them, and this header is that place. can_impulse_enter(),
  * can_impulse_enter_gravity_ward() and impulse_gravity_candidates() stay
- * `static` in sand.c, right next to step_impulses(), because nothing has yet
- * needed to drive one of them in isolation - every existing test reaches
- * them through step_impulses()'s own observable behaviour instead. All six
- * are equally pure - none touches anything this header's own functions do
- * not already touch - so "pure enough to live here" was never the actual
- * test being applied, whatever an earlier version of this comment implied.
- * An adversarial architecture review (bd esp32c6-w2h) named this directly:
- * the three left in sand.c are also the three with a documented history of
- * their own two call sites quietly disagreeing about what they compute (see
- * impulse_gravity_candidates()'s own comment in sand.c for that history) -
+ * `static` in sand_impulse.c, right next to step_impulses(), because
+ * nothing has yet needed to drive one of them in isolation - every existing
+ * test reaches them through step_impulses()'s own observable behaviour
+ * instead. All six are equally pure - none touches anything this header's
+ * own functions do not already touch - so "pure enough to live here" was
+ * never the actual test being applied, whatever an earlier version of this
+ * comment implied. An adversarial architecture review (bd esp32c6-w2h)
+ * named this directly: the three left beside step_impulses() are also the
+ * three with a documented history of their own two call sites quietly
+ * disagreeing about what they compute (see impulse_gravity_candidates()'s
+ * own comment in sand_impulse.c for that history) -
  * exactly the kind of bug a direct test would have caught sooner. Moving
  * them is not this fix: stating the true rule is, so the next helper this
  * file's own history repeats on is moved (or not) on purpose, by whoever
@@ -267,7 +269,7 @@ static inline int ring_of(int dx, int dy)
     return 0;   /* unreachable for a unit direction */
 }
 
-/* KIND_STATIC wall-bounce geometry for step_impulses() (sand.c). Same
+/* KIND_STATIC wall-bounce geometry for step_impulses() (sand_impulse.c). Same
  * 3-cell arc as cover_mask(), same reason. sand_at()'s out-of-bounds-is-
  * STONE makes board edges bounce too. Quantised by MAGNITUDE, not sign:
  * sign-per-axis makes every diagonal dir degenerate to a plain reverse
@@ -605,6 +607,12 @@ void sand_step_gas(sand_t *s, int gx, int gy, int dx, int dy,
                    const int *slide_a, const int *slide_b,
                    const int *perp_a, const int *perp_b,
                    int load_dx, int load_dy, int x_step, int jostle);
+
+/* The flight pass - explosions, debris, splash pushback - lives in
+ * sand_impulse.c since it moves OUTWARD, not gravity-ward. Called once
+ * from sand_step(), the same seam sand_step_liquids()/sand_step_gas() use;
+ * must run LAST - see sand_impulse.c's own banner. */
+void step_impulses(sand_t *s, int dx, int dy);
 
 /* try_fall_or_scatter()/try_slide() moved here, static inline, same
  * reason as dest_row()/mark_rows(): hottest-path, called once per grain
