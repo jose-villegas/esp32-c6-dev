@@ -223,7 +223,7 @@ META_REPLY = re.compile(
 # start-to-end (not .search()) so this never matches a real rewrite that
 # merely happens to start with one of these words.
 BARE_ACK = re.compile(
-    r"^(?:understood|got it|sure|okay|ok|noted|acknowledged)\.?\s*"
+    r"^(?:understood|got it|sure|okay|ok|noted|acknowledged)[.!]?\s*"
     r"(?:please (?:provide|send|give).*)?$", re.I)
 
 # Phrases that only exist in THIS script's own PROMPT/RETRY templates -
