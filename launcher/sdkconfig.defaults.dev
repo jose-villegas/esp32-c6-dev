@@ -2,7 +2,7 @@
 # timings, the screenshot listener - see docs/Testing-Guide.md's
 # "Development-only instrumentation" section), WITHOUT the on-device test
 # suites or the Diagnostics app. See sdkconfig.defaults.diag for that
-# combination - CONFIG_LAUNCHER_SELFTEST there `select`s this same flag on
+# combination - CONFIG_LAUNCHER_SELFTEST there requires this same flag on
 # (main/Kconfig.projbuild), so a diag build carries everything this one
 # does plus the test harness; this file is what gets just the first half.
 #
