@@ -35,6 +35,14 @@ static int panel_top_y(int count, int cols, int screen_h)
     return (screen_h - rows * PALETTE_TILE) / 2;
 }
 
+/* Horizontally a full row exactly fills the panel when
+ * `cols * PALETTE_TILE` equals screen_w, which palette_cols() makes true
+ * up to the leftover PALETTE_TILE cannot fill. Vertically the block is
+ * offset by (screen_h - rows*PALETTE_TILE)/2. A short last row centres
+ * the same way: row width `row_count*PALETTE_TILE`, offset
+ * (screen_w - row_width)/2 - a full row's row_count is `cols`, landing
+ * that formula on the left edge, so there is only one centring rule, not
+ * a special case for the last row. */
 void palette_tile_rect(int index, int count, int cols, int screen_w,
                        int screen_h, int *x, int *y, int *w, int *h)
 {
