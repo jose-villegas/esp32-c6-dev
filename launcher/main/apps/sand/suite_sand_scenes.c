@@ -85,22 +85,94 @@ cell_t all_pairs_spawn_cell(int index)
     return GUNPOWDER_CELL(0);
 }
 
-/* Every pair of materials really is adjacent somewhere in that scene - a
- * property derived from the tiling, not measured by hand, so a coverage
- * loss shows up here instead of silently shrinking a passing device
- * budget's worst case. Host-side: coverage needs no clock. */
+/* The tiling scatters gunpowder as one isolated cell in nineteen, which
+ * can never form the fuse's fully-lit 2x2, so Gunpowder.explodes never
+ * fires here. A fire cell is planted beside each patch rather than left
+ * to the tiling's luck - build_gunpowder_basin_scene proved that pairing
+ * reliable at scale. A handful, fixed and deterministic, not a field. */
+typedef struct {
+    int x, y;
+} all_pairs_patch_t;
 
-/* Gunpowder and the extended statics (ice, plant, leaf, metal, root) count
- * here too, via all_pairs_spawn_cell(). Both used to be unreachable, and
- * an earlier version of this comment blamed gunpowder specifically - the
- * real cause was a tiling keyed on material_id_t, which can never reach
- * past MAT_COUNT - 1. */
-static void test_the_mixed_scene_puts_every_material_pair_in_contact(void)
+#define ALL_PAIRS_PATCH_SIZE 3
+
+static const all_pairs_patch_t all_pairs_gunpowder_patches[] = {
+    {40, 100},
+    {120, 180},
+};
+#define ALL_PAIRS_PATCH_COUNT \
+    (int)(sizeof(all_pairs_gunpowder_patches) / sizeof(all_pairs_gunpowder_patches[0]))
+
+/* Paints the tiling, then overwrites the patches above - both device timing
+ * and the host coverage test below call this one function, so they can
+ * never see two different grids. */
+void build_all_pairs_scene(sand_t *s)
 {
     const int first  = 0;
     const int n_mats = ALL_PAIRS_SPAWN_COUNT;
     const int top    = (REAL_H * EMPTY_SHARE_PERCENT) / 100;
+
+    for (int y = top; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            const int idx = all_pairs_material_at(x, y, first, n_mats);
+            /* sand_spawn_cell() with radius 0 rather than sand_set(): see
+             * the device test's own comment (suite_sand_perf.c) for why. */
+            sand_spawn_cell(s, x, y, 0, all_pairs_spawn_cell(idx));
+        }
+    }
+
+    for (int p = 0; p < ALL_PAIRS_PATCH_COUNT; p++) {
+        const int px = all_pairs_gunpowder_patches[p].x;
+        const int py = all_pairs_gunpowder_patches[p].y;
+        for (int dy = 0; dy < ALL_PAIRS_PATCH_SIZE; dy++) {
+            for (int dx = 0; dx < ALL_PAIRS_PATCH_SIZE; dx++) {
+                sand_set(s, px + dx, py + dy, GUNPOWDER_CELL(0));
+            }
+        }
+        sand_set(s, px + ALL_PAIRS_PATCH_SIZE, py, FIRE);
+    }
+}
+
+/* The exact inverse of all_pairs_spawn_cell() above: buckets a real cell
+ * back into the tiling's own species index. Reading the grid this way,
+ * rather than re-deriving what the tiling formula WOULD have painted, is
+ * what lets the coverage test below see the patches overwriting cells -
+ * the formula has no idea they exist. */
+static int all_pairs_species_of(cell_t c)
+{
+    if (cell_is_gunpowder(c)) {
+        return ALL_PAIRS_SPAWN_COUNT - 1;
+    }
+    if (cell_is_extended(c)) {
+        return ALL_PAIRS_ORDINARY_COUNT + (c & 0x07);
+    }
+    const int m = CELL_MATERIAL(c);
+    return (m < ALL_PAIRS_SKIPPED_ORDINARY) ? m - 1 : m - 2;
+}
+
+/* Every pair of materials really is adjacent somewhere in that scene - a
+ * property of the ACTUAL BUILT GRID, not the tiling formula: this test
+ * used to compute adjacency from all_pairs_material_at() directly, which
+ * cannot see a patch overwriting a cell and would keep reporting full
+ * coverage even if one destroyed the only place two materials touched.
+ * Host-side: coverage needs no clock. */
+static void test_the_mixed_scene_puts_every_material_pair_in_contact(void)
+{
+    const int n_mats = ALL_PAIRS_SPAWN_COUNT;
+    const int top    = (REAL_H * EMPTY_SHARE_PERCENT) / 100;
     const int want   = (n_mats * (n_mats - 1)) / 2;
+
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
+                              ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t s;
+    sand_init(&s, big, REAL_W, REAL_H, 23u);
+    sand_enable_sleeping(&s, blocks);
+
+    build_all_pairs_scene(&s);
 
     /* One bit per unordered pair, sized to the tiling's own index range -
      * no longer MATERIAL_MAX, since an index past
@@ -112,10 +184,10 @@ static void test_the_mixed_scene_puts_every_material_pair_in_contact(void)
     int found = 0;
     for (int y = top; y < REAL_H; y++) {
         for (int x = 0; x < REAL_W; x++) {
-            const int m = all_pairs_material_at(x, y, first, n_mats);
+            const int m = all_pairs_species_of(sand_at(&s, x, y));
             const int nb[2] = {
-                x + 1 < REAL_W ? all_pairs_material_at(x + 1, y, first, n_mats) : m,
-                y + 1 < REAL_H ? all_pairs_material_at(x, y + 1, first, n_mats) : m,
+                x + 1 < REAL_W ? all_pairs_species_of(sand_at(&s, x + 1, y)) : m,
+                y + 1 < REAL_H ? all_pairs_species_of(sand_at(&s, x, y + 1)) : m,
             };
             for (int k = 0; k < 2; k++) {
                 const int a = m < nb[k] ? m : nb[k];
@@ -128,15 +200,10 @@ static void test_the_mixed_scene_puts_every_material_pair_in_contact(void)
         }
     }
 
-    /* GENUINE GAP AT n = 20: MAT_SMOKE (index 7) and MATX_METAL (index
-     * 17) never touch. Their difference is n/2 = 10, and this scene's
-     * 151-row fill band only carries stride 10 eight times, short of the
-     * ten rows gcd(10, 20) needs to cycle every residue horizontally. */
+    free(big);
+    free(blocks);
 
-    /* Not fixable by reordering the table - some antipodal pair is
-     * always the one a short row count strands, whichever materials land
-     * on it. Left failing on purpose rather than weakening `want`. */
-    char why[160];
+    char why[200];
     snprintf(why, sizeof why,
              "the mixed-material scene must put all %d pairs of %d "
              "materials in contact - it reached %d, so some reaction it "

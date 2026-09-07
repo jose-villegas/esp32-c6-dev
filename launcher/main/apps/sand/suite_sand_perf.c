@@ -629,10 +629,12 @@ void sand_host_probe_run_mixed_flip(void)
  * time anyone runs this on hardware. */
 static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
 {
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    uint8_t   *big      = malloc(REAL_W * REAL_H);
+    uint8_t   *blocks   = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    impulse_t *impulses = malloc((size_t)ALL_PAIRS_IMPULSE_MAX * sizeof *impulses);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
+    TEST_ASSERT_NOT_NULL(impulses);
 
     sand_t real;
     sand_init(&real, big, REAL_W, REAL_H, 23u);
@@ -640,6 +642,9 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
     sand_set_scatter(&real, SAND_SCATTER_PER_MATERIAL);
     sand_set_decay(&real, SAND_DECAY_PER_MATERIAL);
     sand_set_mobility(&real, SAND_MOBILITY_PER_MATERIAL);
+    /* Without this, sand_explode() has nowhere to write and the gunpowder
+     * patches below can never detonate - see ALL_PAIRS_IMPULSE_MAX. */
+    sand_enable_impulses(&real, impulses, ALL_PAIRS_IMPULSE_MAX);
 
     /* The scene is DERIVED from materials[] and laid out by
      * all_pairs_material_at() so that every PAIR of materials touches -
@@ -649,36 +654,13 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
      * checks the coverage on the host rather than leaving it a claim in
      * a comment. */
 
-    /* Also covers the extended statics and gunpowder now, via the shared
-     * all_pairs_spawn_cell() table (suite_sand_scenes.c) - not just the
-     * fourteen ordinary materials, so gunpowder and the extended
-     * reactions finally get a chance to fire in the scene whose whole
-     * purpose is "every material at once".
-     *
-     * A share of the board is left empty (EMPTY_SHARE_PERCENT) so the
-     * flip has somewhere to launch into - the same reasoning as the
-     * other flip tests. */
-    const int first = 0;
-    const int n_mats = ALL_PAIRS_SPAWN_COUNT;
-    const int top = (REAL_H * EMPTY_SHARE_PERCENT) / 100;
-
-    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(1, n_mats,
+    /* build_all_pairs_scene() (suite_sand_scenes.c) also plants the
+     * deliberate gunpowder patches - the tiling alone scatters gunpowder
+     * as one cell in nineteen, never enough to form the fuse's 2x2. */
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(1, ALL_PAIRS_SPAWN_COUNT,
         "the pattern below needs at least two materials to interleave");
 
-    for (int y = top; y < REAL_H; y++) {
-        for (int x = 0; x < REAL_W; x++) {
-            const int idx = all_pairs_material_at(x, y, first, n_mats);
-            /* sand_spawn_cell() with radius 0 rather than sand_set():
-             * for an ordinary material's CELL_MAKE(m, 0) spec it takes
-             * the exact path sand_spawn() itself does (try_spawn_one(),
-             * sand.c), so a liquid still arrives full, a transient at
-             * full life and a powder gets a shade - the same cells a
-             * real pour produces. An extended static or gunpowder spec,
-             * which plain sand_spawn() cannot express, is written
-             * through as-is (gunpowder re-toned by random_gunpowder()). */
-            sand_spawn_cell(&real, x, y, 0, all_pairs_spawn_cell(idx));
-        }
-    }
+    build_all_pairs_scene(&real);
 
     /* Let it get going - long enough for the reactions to be under way and
      * the liquids to have found their levels, so the flip lands on a live
@@ -706,6 +688,7 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
      * this one, not just the one that got caught. */
     free(big);
     free(blocks);
+    free(impulses);
 
     /* THE 87800 BUDGET IS INVALIDATED, NOT CARRIED FORWARD: it was
      * measured against the fourteen-material scene, and this scene is
