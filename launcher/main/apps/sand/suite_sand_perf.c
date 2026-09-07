@@ -158,11 +158,13 @@ void sand_host_probe_run_full_step_control(void)
 }
 #endif
 
-static void test_a_screen_of_water_fits_in_the_frame_budget(void)
+/* THE SCENE THE BUDGET TEST BELOW MEASURES, built fresh per call. Shared
+ * with the pass decomposition after it, which has to rebuild between
+ * configurations: a disabled pass leaves a different grid behind, so
+ * reusing one scene would have each configuration measuring a board the
+ * previous one shaped. */
+static int64_t water_scene_us_per_step(void)
 {
-    /* Measured separately from sand, because water takes an entirely different
-     * path through the step - and the one part of it that is not local, the
-     * search across the flow, runs per cell. Something has to watch that. */
     uint8_t *big    = malloc(REAL_W * REAL_H);
     uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
@@ -187,11 +189,20 @@ static void test_a_screen_of_water_fits_in_the_frame_budget(void)
     }
     const int64_t per_step = (esp_timer_get_time() - start) / steps;
 
-    ESP_LOGI("device_tests", "water flowing on %dx%d: %lld us per step",
-             REAL_W, REAL_H, (long long)per_step);
-
     free(big);
     free(blocks);
+    return per_step;
+}
+
+static void test_a_screen_of_water_fits_in_the_frame_budget(void)
+{
+    /* Measured separately from sand, because water takes an entirely different
+     * path through the step - and the one part of it that is not local, the
+     * search across the flow, runs per cell. Something has to watch that. */
+    const int64_t per_step = water_scene_us_per_step();
+
+    ESP_LOGI("device_tests", "water flowing on %dx%d: %lld us per step",
+             REAL_W, REAL_H, (long long)per_step);
 
     /* Water gets a budget of its own, and a larger one, because it genuinely
      * does more: it moves an amount rather than a cell, and it takes a second
@@ -224,6 +235,72 @@ static void test_a_screen_of_water_fits_in_the_frame_budget(void)
         "a screen-wide collapse of water must still land inside a frame or "
         "two - the search across the flow is the thing to suspect");
 }
+
+#if defined(DEVICE_BUILD) && CONFIG_LAUNCHER_SAND_PASS_GATES
+/* Which pass owns the water scene's time.
+ *
+ * Measure-by-deleting, so these are upper bounds, not a partition: with a
+ * pass off the others see a board it never touched, and the five figures
+ * need not sum to the whole.
+ *
+ * Volatile gates rather than five images - a separately-linked image draws
+ * its own flash-layout ticket, and that lottery moves a scene by more than
+ * the differences being read here.
+ *
+ * Prints rather than asserts: inventing a budget would peg a number nobody
+ * has argued for. */
+static void test_the_water_scene_decomposes_by_pass(void)
+{
+    /* The last one is the ceiling test that splits cross-flow: its walk and
+     * mask test still run, only the transfer work they find is suppressed.
+     * Against "cross-flow off" it says whether the pass costs what it DOES or
+     * what it LOOKS AT. */
+    static const char *const names[] = {
+        "every pass on",  "main sweep off", "cross-flow off",
+        "gas off",        "reactions off",  "cross-flow walk only",
+    };
+    volatile bool *const gates[] = {
+        NULL,
+        &sand_step_gate_main_sweep,
+        &sand_step_gate_cross_flow,
+        &sand_step_gate_gas,
+        &sand_step_gate_reactions,
+        &sand_step_gate_xflow_body,
+    };
+
+    int64_t whole = 0;
+    for (size_t i = 0; i < sizeof(gates) / sizeof(gates[0]); i++) {
+        if (gates[i] != NULL) {
+            *gates[i] = false;
+        }
+        const int64_t us = water_scene_us_per_step();
+        if (gates[i] != NULL) {
+            *gates[i] = true;   /* restored before the next configuration, and
+                                 * before any later test in this binary runs */
+        }
+
+        if (i == 0) {
+            whole = us;
+            ESP_LOGI("device_tests", "water pass decomposition: %s: %lld us",
+                     names[i], (long long)us);
+        } else {
+            const int64_t saved = whole - us;
+            ESP_LOGI("device_tests",
+                     "water pass decomposition: %s: %lld us (%lld us, %lld%% "
+                     "of the whole)", names[i], (long long)us,
+                     (long long)saved,
+                     whole > 0 ? (long long)((saved * 100) / whole) : 0);
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(sand_step_gate_main_sweep &&
+                             sand_step_gate_cross_flow &&
+                             sand_step_gate_gas && sand_step_gate_reactions &&
+                             sand_step_gate_xflow_body,
+        "every gate must be back on before the next test in this binary "
+        "runs - a gate left off silently changes every measurement after it");
+}
+#endif
 
 #ifdef SAND_HOST_PROBE
 /* Host-only timing probe (see the full-step control's own wrapper above,
@@ -2261,6 +2338,9 @@ void run_sand_perf_suite(void)
     RUN_TEST(test_turning_a_settled_pool_to_landscape_fits_in_the_frame_budget);
     RUN_TEST(test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget);
     RUN_TEST(test_a_screen_of_water_fits_in_the_frame_budget);
+#if CONFIG_LAUNCHER_SAND_PASS_GATES
+    RUN_TEST(test_the_water_scene_decomposes_by_pass);
+#endif
     RUN_TEST(test_a_gravity_flip_on_every_material_at_once_stays_sane);
     RUN_TEST(test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget);
     RUN_TEST(test_a_full_screen_of_fire_fits_in_the_frame_budget);

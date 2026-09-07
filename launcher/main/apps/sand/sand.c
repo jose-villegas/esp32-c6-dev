@@ -1035,6 +1035,7 @@ volatile bool sand_step_gate_main_sweep = true;
 volatile bool sand_step_gate_cross_flow = true;
 volatile bool sand_step_gate_gas        = true;
 volatile bool sand_step_gate_reactions  = true;
+volatile bool sand_step_gate_xflow_body = true;
 #endif
 
 /* Pinned to a cache-line boundary so this function's placement is not a
