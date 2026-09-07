@@ -21,6 +21,7 @@
 
 #include <string.h>
 
+#include "sand_liquid_move.h"
 #include "util/fixed.h"
 #include "util/intmath.h"
 
