@@ -213,7 +213,7 @@ def build(tree: Path, cc: str, out: Path) -> None:
         app_sand / "tilt.c",
     ]
     optional = [app_sand / "palette.c", app_sand / "sand_ui.c",
-                app_sand / "sand_plants.c"]
+                app_sand / "sand_plants.c", app_sand / "sand_impulse.c"]
     missing = [str(p) for p in required if not p.is_file()]
     if missing:
         raise RuntimeError(f"missing source(s) in extracted tree: {missing}")
