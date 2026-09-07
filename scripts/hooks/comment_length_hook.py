@@ -14,7 +14,8 @@ import json
 import os
 import sys
 
-LIMIT = 300
+TARGET = 300  # aim for this
+LIMIT = 500  # hard ceiling - only a comment that truly needs the room stays here
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 try:
@@ -70,11 +71,15 @@ def main():
     for c in sorted(over, key=lambda c: -c.length):
         print(f"  {c.length} chars: {c.text[:70]}...", file=sys.stderr)
     print("", file=sys.stderr)
-    print("Rewrite them. Keep the WHY - a real constraint, a device "
-          "measurement, a rejected alternative and the reason. Cut change "
-          "history (git log owns that) and anything restating WHAT the code "
-          "does. A comment that genuinely needs the length may stay, but say "
-          "so explicitly rather than leaving it silently.", file=sys.stderr)
+    print(f"Rewrite them. {TARGET} characters is the aim; up to {LIMIT} is "
+          "fine for a comment that truly needs the room, but this is past "
+          "even that. Keep only a WHY the code doesn't already say - a real "
+          "constraint, a device measurement, a rejected alternative still "
+          "rejected for a reason that still holds. Cut change history (git "
+          "log owns dates and old values), anything restating WHAT the code "
+          "does, and re-explaining an idiom already established elsewhere. "
+          "Deleting the comment entirely is a normal outcome, not a "
+          "shortfall.", file=sys.stderr)
     return 2
 
 

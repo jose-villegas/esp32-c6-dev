@@ -62,11 +62,24 @@ scripts/check-format.sh <file.c> [<file.h> ...]         # format in place
 scripts/check-format.sh --check <file.c> [<file.h> ...]  # verify only
 ```
 
-**No comment longer than 300 characters.** A run of consecutive `//` lines
-counts as one comment; length is the prose, markers and `*` gutters stripped,
-so re-wrapping never changes the score. File and section header banners
-(`/*====`) are exempt — asked to fit, a model deletes the rule rather than the
-prose. The rule is aimed at comments beside code.
+**Comment the WHY, not the WHAT — and only when the code doesn't already say
+it.** Clean, well-named code mostly speaks for itself; a comment exists for
+context, a decision, or a non-obvious constraint, not to restate what the
+next line does. Keep comments accurate — an outdated one is worse than none,
+so update it in the same edit that changes the code it describes. Length
+follows from this, not the other way around: **300 characters is the aim,
+500 the hard ceiling** for a comment that still needs the room after cutting
+everything the code already says and everything that's really change history
+(git log owns that — dates, old values, "raised from X to Y", a bug's own
+incident report all belong there, not in the source). A short remainder, or
+none at all, is the normal, correct outcome for most fields and functions —
+not a sign the cut fell short. A run of consecutive own-line `//` lines, or
+of consecutive own-line `/* */` blocks with no code between them, counts as
+one comment for scoring; length is the prose, markers and `*` gutters
+stripped, so re-wrapping never changes the score and chopping one
+explanation into several adjacent blocks doesn't dodge it either. File and
+section header banners (`/*====`) are exempt — asked to fit, a model deletes
+the rule rather than the prose. The rule is aimed at comments beside code.
 
 ```sh
 scripts/check-comment-length.sh                 # whole repo, 20 worst listed
@@ -75,14 +88,15 @@ scripts/check-comment-length.sh --files         # per-file counts
 ```
 
 Enforcement is a PostToolUse hook (`scripts/hooks/comment_length_hook.py`)
-that blocks an Edit or Write whose *own new text* carries an over-long
-comment — the backlog in the tree is somebody's cleanup, not the current
-edit's problem. The hook script is tracked; the settings entry pointing at it
-is not (`.claude/*` is gitignored), so a fresh clone has the rule without the
-enforcement until a settings file names the script. Put that entry in
-`~/.claude/settings.json` rather than per-worktree — every worktree gets its
-own `.claude/`, and one user-level entry covers all of them. Guard it so a
-project without the script is a no-op:
+that blocks an Edit or Write whose *own new text* carries a comment past the
+500-char ceiling — the backlog in the tree is somebody's cleanup, not the
+current edit's problem, and the hook stays silent on anything at or under it
+even if above the 300 aim. The hook script is tracked; the settings entry
+pointing at it is not (`.claude/*` is gitignored), so a fresh clone has the
+rule without the enforcement until a settings file names the script. Put
+that entry in `~/.claude/settings.json` rather than per-worktree — every
+worktree gets its own `.claude/`, and one user-level entry covers all of
+them. Guard it so a project without the script is a no-op:
 
 ```sh
 f="$CLAUDE_PROJECT_DIR/scripts/hooks/comment_length_hook.py"
@@ -91,9 +105,9 @@ if [ -f "$f" ] && command -v python >/dev/null 2>&1; then python "$f"; else exit
 
 The guard is not cosmetic: `python <missing file>` exits 2, and 2 is the code
 that blocks the edit, so an unguarded user-level entry would refuse every
-write in every other project. As of
-2026-09-06 the tree still holds ~2,065 comments over the limit, 79% of them
-in the sand app; `--comments-only <ref>` proves a bulk trim moved no code.
+write in every other project. The tree holds 1,394 comments over the 300
+aim (748 over the 500 ceiling), 67% of them in the sand app; `--comments-only
+<ref>` proves a bulk trim moved no code.
 
 Requires a **host** compiler (not the ESP32 toolchain) for the host tests:
 Windows `winget install BrechtSanders.WinLibs.POSIX.UCRT`, Debian/Ubuntu
@@ -274,11 +288,15 @@ over-long comments the same local-Ollama way, but hands the model one
 comment's PROSE and never a line of code — the rewrite goes back into that
 comment's own span, so a bad generation can only produce a bad sentence, and
 a file that ends up differing in anything but comments is discarded. A
-comment it cannot get under the limit keeps its original text. `--review`
-then checks each rewrite for dropped numbers, dropped named functions and
-dropped negations (no model needed for those — that check alone caught every
-known-bad rewrite in the trial that chose this design), before asking a
-reviewer model for a verdict on meaning; `--review-packet` writes the
+comment it cannot get under the limit keeps its original text. `--via
+hybrid` tries a free OmniRoute model first, in parallel across the whole
+file, for reasoning this machine cannot run locally at no local-GPU cost —
+but never blindly: an automated check (dropped facts, a fabricated number,
+wholesale unrelated content — OmniRoute's free routing produces all three)
+gates every answer, and anything that fails falls back to the local model.
+`--review` then checks each rewrite for dropped numbers, dropped named
+functions and dropped negations — no model needed for any of that — before
+asking a reviewer model for a verdict on meaning; `--review-packet` writes the
 prose-only pairs out for a reviewer the script cannot call itself. Expect
 ~45 s per comment, and read the report: a local model does occasionally drop
 a WHY.

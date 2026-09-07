@@ -62,20 +62,13 @@
 
 #include <stdint.h>
 
-/* The rounding primitive underneath fx_mul_round(): shift an ALREADY-COMBINED
- * accumulator `v` down by `shift`, rounding to the nearest representable
- * value with ties broken away from zero (not toward it, and not floored -
- * see this header's top comment on the difference). Splitting on sign rather
- * than just adding half and shifting matters here: a plain arithmetic shift
- * of a negative number rounds toward -infinity, which would push a value
- * exactly half a unit below zero further from zero than one that is half a
- * unit above it - a bias a truncating cast does not have either.
- *
- * Exposed separately from fx_mul_round() because not every caller's
- * accumulator is a single product of two operands - ui_transform.h's
- * ui_fp_round() rounds a SUM of several Q16.16 products (see
- * ui_transform_point()), so it has nothing to hand fx_mul_round() and needs
- * this lower primitive directly instead. */
+/* Rounds `v`, ties away from zero (see header top for floor vs round).
+ * Splitting on sign matters: a plain arithmetic shift on a negative value
+ * rounds toward -infinity, pushing a value half a unit below zero further
+ * from zero than one half above it - unlike a truncating cast. Exposed
+ * separately from fx_mul_round() because ui_transform.h's ui_fp_round()
+ * sums several Q16.16 products (see ui_transform_point()), not a single
+ * product, so it needs this directly. */
 static inline int64_t fx_round_shift(int64_t v, int shift)
 {
     const int64_t half = (int64_t)1 << (shift - 1);

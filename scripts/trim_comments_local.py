@@ -7,22 +7,101 @@ shape and dropped into its original span. Code cannot be damaged by a bad
 generation because code is never in the model's hands; the worst case is a bad
 sentence, which the report puts in front of a reviewer.
 
-A comment the model cannot get under the limit in `--retries` attempts keeps
+A comment the model cannot get under `--ceiling` in `--retries` attempts keeps
 its ORIGINAL text. Failing to shorten is a fine outcome; silently losing a
-constraint is not.
+constraint is not. One that lands between `--limit` and `--ceiling` is kept
+as an improvement even though it missed the aim - a comment that truly needs
+the room is allowed up to the ceiling, it just should not still be at its
+starting length.
+
+The standard is WHY-only, not "shorter but keep everything": cut anything
+the code already says, all change history (git log owns that), and idiom
+re-explanation repeated across constants - keep only a still-true constraint,
+a still-rejected alternative, or a short cross-reference. Most comments end
+up far under `--limit`, or DELETED entirely - that is the normal, correct
+outcome, not a shortfall. Every deletion is flagged in both reports for a
+human to confirm nothing load-bearing went with it. (This standard replaced
+an earlier "compress into ~300-500 chars while keeping every fact" one after
+review found the old approach bloating files with dated tuning journeys and,
+once, an outright fabricated number - see the "Hard rules" in PROMPT below
+for the fabrication guard this earned.)
+
+`--via hybrid` tries OmniRoute first, in parallel across every comment in
+the file, and verifies each answer before trusting it (see
+`response_problems()`): over the ceiling, meta-commentary, a number the
+original text never stated, or - the shape a wholesale hallucinated reply
+takes - no word in common with what was actually asked about. Anything that
+fails falls back to the local model, one comment at a time as usual. The
+point is not "OmniRoute is fine now" - the same corruption shapes this
+guards against were observed directly, repeatedly, in this file's own
+history - it is that OmniRoute can reach reasoning this machine cannot run
+locally, and an automated check plus a reliable local fallback is cheaper
+than either trusting it blindly or refusing to use it at all. `--review`
+afterward is still the real check for meaning, whichever backend answered.
+
+A comment over `--skip-over` is left untouched rather than attempted at all -
+a single automated rewrite of something this large tends to miss whichever
+one sentence in it is still load-bearing, however careful the prompt. These
+need a human (or an agent working under direct human review) reading the
+whole thing and applying the same WHY-only standard by hand, one paragraph
+at a time - not a different automated pass, just a slower, closer one.
+Skipping them outright here saves the retries that would only be thrown
+away, and the report lists them so they're not silently forgotten.
 
 Usage:
   trim_comments_local.py [options] [<path>...]     (default: the sand app)
 
 Options:
-  --limit N       character ceiling (default 300)
-  --model NAME    ollama model (default qwen2.5-coder:32b-instruct-q4_K_M)
+  --limit N       character aim, retried against (default 300)
+  --ceiling N     hard cap - a result over this is left unresolved, original
+                  text kept (default 500)
+  --skip-over N   don't even attempt a comment past this length - it needs
+                  manual splitting, not compression (default 1500, 0 to
+                  disable and attempt everything)
+  --model NAME    ollama model (default qwen2.5-coder:32b-instruct-q4_K_M) -
+                  the LOCAL model, used directly under --via ollama and as
+                  the fallback generator under --via hybrid
+  --via WHERE     ollama (default, local, sequential - see hybrid below for
+                  why this stays the fallback rather than the first try),
+                  omniroute (routes every comment to a free remote model via
+                  the `omniroute` CLI - no local GPU contention, confirmed $0
+                  cost, but the combo auto-selects a different underlying
+                  model per request and has been observed replying with
+                  meta-commentary, a bare acknowledgement, an echo of this
+                  script's own prompt text, or - worst - fully unrelated
+                  hallucinated content instead of a real rewrite, on the
+                  generative path specifically; its DELETE-or-keep judgment
+                  has stayed reliable through every one of those incidents),
+                  or hybrid (below).
+  --omniroute-model NAME   OmniRoute combo (default docs-update-free) - only
+                  read under --via hybrid, where it is the first attempt for
+                  every comment, run in parallel (see --workers). --model
+                  above is unaffected: it stays the local fallback.
+  --workers N     hybrid's OmniRoute first pass runs this many requests
+                  concurrently (default 6) - OmniRoute has no local GPU to
+                  contend for, unlike local Ollama, which gets slower under
+                  concurrency on this hardware (measured: 4 parallel
+                  requests took longer than sequential) and is never run in
+                  parallel by this script for that reason.
+  --omniroute-retries N   attempts via OmniRoute before falling back to the
+                  local model (default 2) - resends the same fresh prompt,
+                  not the shorten-focused RETRY template below: a bad
+                  OmniRoute answer is usually a flaky response, not one
+                  that just needs to try harder to be shorter, and a
+                  different attempt often lands on a different underlying
+                  model entirely (the combo routes per-request).
   --retries N     attempts per comment before giving up (default 3)
   --banners       also rewrite file/section header banners (off: their `====`
                   rules do not survive re-wrapping)
   --max N         stop after N comments, for a smoke test
   --dry-run       write nothing; still produce the report
   --report PATH   markdown report (default scripts/results/comment-trim.md)
+  --log PATH      transcript log (default scripts/results/comment-trim
+                  {,-review}.server.log, matching --review below) - give
+                  each a distinct --report/--pairs/--log (and --review-report
+                  for the review pass) when running more than one instance
+                  at once against different files, or they will clobber each
+                  other's output.
 
 Reviewing a finished run - it writes its was/now pairs to
 scripts/results/comment-trim.json, and the review reads that back, so it can
@@ -39,6 +118,8 @@ run later, on another machine, or with a different reviewer:
                   a reviewer this script cannot call - a stronger model, or a
                   person. No code goes in them.
   --pairs PATH    the pairs file to review (default the one above)
+  --review-report PATH  where the review's own report goes (default
+                  scripts/results/comment-trim-review.md)
 """
 
 import json
@@ -46,29 +127,59 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from check_comment_length import code_only, scan  # noqa: E402
 
 DEFAULT_MODEL = "qwen2.5-coder:32b-instruct-q4_K_M"
 DEFAULT_REVIEW_MODEL = "mistral-nemo:latest"
+DEFAULT_COMBO = "docs-update-free"
 DEFAULT_PATHS = ["launcher/main/apps/sand"]
 
-PROMPT = """You shorten source-code comments. Rewrite the comment below so it \
-is at most {limit} characters, and reply with NOTHING but the rewritten prose.
+PROMPT = """You cut source-code comments down to only what the code doesn't \
+already say. Most comments should end up much shorter than {limit} \
+characters, or deleted outright - that is the normal, correct result, not a \
+shortfall. Reply with NOTHING but the cut prose, OR, if nothing in the \
+comment survives the rules below, reply with exactly the single word \
+DELETE.
 
-Rules:
-- Keep every concrete fact: numbers with units, measured percentages and frame
-  rates, hardware constraints, named functions and files, and any alternative
-  that was tried and rejected together with the reason it was rejected.
-- Do not re-attribute a reason. If the text says X is done because of A, your
-  version must not say it is done because of B.
-- If the text describes a LIMITATION or a problem, your version must still read
-  as a limitation, not as a benefit.
-- Cut: narration of how the code got here over time (first attempt, second
-  attempt, this version), restatements of what the code obviously does, and
-  repeated phrasing.
+Cut, always:
+- Anything restating WHAT the code obviously does - trust well-named
+  identifiers and the code itself.
+- Change history: dates, old values, "raised/lowered/changed from X to Y",
+  a bug's own incident report, an investigation that confirmed something was
+  never broken. git log owns all of this. Keep only a WHY that is true of
+  the CODE AS IT STANDS TODAY, never a WHY for why an OLD value was chosen.
+- Re-explanation of an idiom already established elsewhere in this file
+  (e.g. what a chance-in-256 roll is) - say it once, not on every constant.
+- Arithmetic or measurement whose only role was explaining why an OLD value
+  failed, once that value is no longer in the code.
+
+Keep, only if still true and not obvious from the code:
+- A real constraint or invariant - especially "do NOT do X here, because Y"
+  warnings that would let a bug come back if ignored.
+- A rejected alternative that is STILL rejected for a reason that STILL
+  holds (not a tuning journey - just the current shape and why).
+- A short cross-reference to where fuller logic or history lives (a
+  function name, a doc path) - do not restate what's at the destination.
+
+Hard rules, regardless of length:
+- Never invent, compute, or round a number, name, or fact that is not
+  already stated (or spelled out in words, e.g. "five thousand") in the
+  original text below. If you are not sure a number belongs, leave it out
+  entirely rather than guess - an omitted number is safe, a wrong one is not.
+- Do not re-attribute a reason: if the text says X is done because of A,
+  your version must not say it is done because of B.
+- If the text describes a LIMITATION or a problem, your version must still
+  read as a limitation, not as a benefit.
+- If the text names a copyright holder, a licence (Apache-2.0, MIT, ...),
+  or says code was copied/adapted from somewhere else, that attribution
+  is not "change history" and must survive verbatim in your version,
+  regardless of length - reply DELETE instead of dropping it if nothing
+  else in the comment is worth keeping.
 - British spelling as in the original (colour, behaviour). Plain prose, no
   bullet lists, no headings, no markdown, no code fences, no preamble.
 
@@ -83,30 +194,238 @@ Reply with nothing but the prose.
 """
 
 
-def ask(model, prompt, log):
+LOG_LOCK = threading.Lock()
+
+
+def ask(model, prompt, log, via="ollama"):
+    """`model` is an Ollama model name for via="ollama", or an OmniRoute
+    combo name for via="omniroute" - the two aren't interchangeable, callers
+    pick one deliberately (see --via/--combo).
+
+    Safe to call from multiple threads at once (hybrid's parallel OmniRoute
+    first pass does exactly that) - LOG_LOCK keeps one call's write from
+    interleaving with another's in the shared transcript file. A failed or
+    empty subprocess (a flaky free-tier route that never returned) becomes
+    an empty string here rather than an exception; the caller's own
+    trustworthiness check is what decides whether that needs a fallback.
+    """
     started = time.time()
-    with open(log, "a", encoding="utf-8") as f:
-        f.write(f"\n===== {time.strftime('%H:%M:%S')} =====\n{prompt}\n")
-    r = subprocess.run(
-        ["ollama", "run", model, "--think=false", "--nowordwrap"],
-        input=prompt, capture_output=True, text=True, encoding="utf-8",
-        errors="replace",
-    )
+    with LOG_LOCK, open(log, "a", encoding="utf-8") as f:
+        f.write(f"\n===== {time.strftime('%H:%M:%S')} ===== [{via}:{model}]\n"
+                f"{prompt}\n")
+    if via == "omniroute":
+        r = subprocess.run(
+            ["omniroute.cmd", "chat", "-m", model, "--no-history", prompt],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+    else:
+        r = subprocess.run(
+            ["ollama", "run", model, "--think=false", "--nowordwrap"],
+            input=prompt, capture_output=True, text=True, encoding="utf-8",
+            errors="replace",
+        )
     out = clean(r.stdout or "")
-    with open(log, "a", encoding="utf-8") as f:
+    with LOG_LOCK, open(log, "a", encoding="utf-8") as f:
         f.write(f"----- {time.time() - started:.1f}s -----\n{out}\n")
     return out
 
 
 def clean(raw):
     """Strip the wrapper a chat model puts around the thing you asked for."""
-    text = re.sub(r"```[a-z]*\n?", "", raw)
+    text = re.sub(r"\x1b\[[0-9;]*m", "", raw)  # ANSI colour codes (omniroute)
+    text = re.sub(r"^.*Loaded env from.*\n?", "", text, flags=re.M)
+    text = re.sub(r"```[a-z]*\n?", "", text)
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)
     lines = [ln for ln in text.strip().split("\n")]
     while lines and re.match(r"^(here|sure|okay|certainly|rewritten|shortened)"
                              r"\b.*:\s*$", lines[0].strip(), re.I):
         lines.pop(0)
     return re.sub(r"\s+", " ", " ".join(lines)).strip()
+
+
+LEADING_DELETE = re.compile(r"^\s*DELETE\b", re.I)
+TRAILING_DELETE = re.compile(r"[:.\s]*\bDELETE\s*\.?\s*$", re.I)
+
+
+def split_delete(prose):
+    """A model asked to reply with prose OR the bare word DELETE sometimes
+    mixes the two, two different ways that need opposite handling:
+
+    - DELETE leading, with or without a reason after it ("DELETE: this is
+      just change history") - a real delete decision, reason discarded.
+    - DELETE trailing, tacked onto an otherwise complete rewrite - a leftover
+      artifact of the model trying to do both; the rewrite is the real
+      answer and the stray word must not end up written into a live comment.
+    """
+    if LEADING_DELETE.match(prose):
+        return True, ""
+    return False, TRAILING_DELETE.sub("", prose).strip() or prose
+
+
+META_REPLY = re.compile(
+    r"\byour (?:next )?repl(?:y|ies)\b|\byou should (?:reply|respond)\b|"
+    r"^(?:i will|i'll|i am going to|let me) (?:now )?(?:reply|rewrite|"
+    r"provide|shorten)\b|\bas an ai\b", re.I)
+
+# A reply that is ONLY an acknowledgement, with nothing else - observed
+# verbatim: "Understood." replacing real comment text outright. Anchored
+# start-to-end (not .search()) so this never matches a real rewrite that
+# merely happens to start with one of these words.
+BARE_ACK = re.compile(
+    r"^(?:understood|got it|sure|okay|ok|noted|acknowledged)[.!]?\s*"
+    r"(?:please (?:provide|send|give).*)?$", re.I)
+
+# Phrases that only exist in THIS script's own PROMPT/RETRY templates -
+# their presence in a reply means the model echoed the instruction back
+# instead of following it, also observed verbatim ("That was 102
+# characters, still over 100. Reword it shorter.").
+PROMPT_ECHO = re.compile(
+    r"characters,?\s*still over|reply with nothing but|cut prose|"
+    r"rewrite it shorter", re.I)
+
+
+def looks_like_meta_reply(prose):
+    """Catches a model responding to the TASK rather than doing it. Three
+    shapes have been observed directly, all short enough to pass the length
+    check and easy to mistake for real content: talking about what it will
+    reply (META_REPLY - "Your next reply should provide..."), a bare
+    acknowledgement with nothing else (BARE_ACK - "Understood."), and an
+    echo of this script's own prompt wording back at it (PROMPT_ECHO -
+    "That was 102 characters, still over 100. Reword it shorter."). Not
+    exhaustive, just the shapes actually seen; treated the same as an empty
+    reply - forces a retry rather than being accepted."""
+    return bool(META_REPLY.search(prose) or BARE_ACK.match(prose.strip())
+                or PROMPT_ECHO.search(prose))
+
+
+DIGIT = re.compile(r"\d+")
+WORD = re.compile(r"[A-Za-z]{4,}")
+
+
+def fabricates_number(old, new):
+    """A digit in `new` that appears nowhere in `old` - the hard rule this
+    script's own PROMPT states ("never invent, compute, or round a number")
+    but a model does not reliably follow, confirmed directly: "under a
+    second" rounded into a literal "~1s", and a "chance/256"-style field
+    comment (no digit at all for the probability) rewritten with an
+    invented "1/256". Presence-only, not context-aware - it also catches
+    "moisture 1" in one clause licensing a fabricated "1 in 256" in
+    another, which a naive digit-set check misses - but it does not verify
+    a correctly-reused digit is attached to the same fact twice; that part
+    still needs a human read of the pair.
+    """
+    return bool(DIGIT.findall(new)) and \
+        not set(DIGIT.findall(new)) <= set(DIGIT.findall(old))
+
+
+def shares_vocabulary(old, new):
+    """False only for a reply with NOT ONE word of four-plus letters in
+    common with what was actually asked about - the shape wholesale
+    hallucinated content takes (observed verbatim via OmniRoute: "I gnaw
+    nerves, whisper agony. You feel me, I devour." for a comment about
+    foam dithering). A real rewrite, however aggressively cut, keeps at
+    least one identifier or word from its own subject; this is a floor,
+    not a meaning check. Skipped (returns True) for an original too short
+    to have real vocabulary to lose, so a terse source comment cannot
+    trip this on a legitimate paraphrase.
+    """
+    old_words = {w.lower() for w in WORD.findall(old)}
+    if len(old_words) < 3:
+        return True
+    return bool(old_words & {w.lower() for w in WORD.findall(new)})
+
+
+ATTRIBUTION = re.compile(
+    r"\bcopyright\b|\(c\)\s*\d{4}|\bapache-?2\.?0\b|\bmit licen[cs]e\b|"
+    r"\bbsd licen[cs]e\b|\bgpl\b|\bcopied from\b|\badapted from\b", re.I)
+
+
+def drops_attribution(old, new):
+    """A copyright holder, licence name, or "copied/adapted from" note in
+    the original that is gone from the rewrite - confirmed happening for
+    real (a Waveshare BSP attribution silently dropped by this exact
+    pipeline, caught only by a human content review, not by anything
+    automated). Not "change history": an attribution notice does not go
+    stale and git log does not substitute for it - the rule in PROMPT
+    above says to keep it verbatim, but a model has not reliably done
+    that, so this is the deterministic backstop.
+    """
+    return bool(ATTRIBUTION.search(old)) and not ATTRIBUTION.search(new)
+
+
+def response_problems(original, prose, ceiling):
+    """Automated defects in a candidate rewrite, regardless of which
+    backend produced it - the concrete failure shapes OmniRoute corruption
+    has actually taken in this repo, not a meaning check (review() and a
+    human still do that). Used both to decide whether an OmniRoute first
+    answer can be trusted without falling back to the local model, and, in
+    the retry loop, whether ANY answer (local or remote) needs another
+    attempt.
+    """
+    problems = []
+    if len(prose) > ceiling:
+        problems.append("over ceiling")
+    if looks_like_meta_reply(prose):
+        problems.append("meta-reply")
+    if fabricates_number(original, prose):
+        problems.append("fabricated number")
+    if drops_attribution(original, prose):
+        problems.append("dropped attribution/licence notice")
+    if not shares_vocabulary(original, prose):
+        problems.append("no shared vocabulary")
+    return problems
+
+
+def trustworthy(original, wants_delete, prose, ceiling):
+    """Whether a first-pass OmniRoute answer is safe to use as-is. A DELETE
+    decision is trusted unconditionally: across every OmniRoute corruption
+    incident this repo has hit, the binary delete-or-keep judgment stayed
+    reliable even when the SAME run's generative rewrites did not - only
+    the "produce real prose" path has ever gone wrong. Everything else
+    goes through response_problems().
+    """
+    if wants_delete:
+        return True
+    return bool(prose) and not response_problems(original, prose, ceiling)
+
+
+def try_omniroute_batch(targets, opts, log):
+    """Hybrid's first pass: attempt every target via OmniRoute at once.
+
+    Run in a thread pool rather than sequentially because OmniRoute is a
+    remote call with no local GPU to contend for - unlike local Ollama,
+    which this script never parallelizes (measured on this hardware: 4
+    concurrent local requests took LONGER than sequential, single-GPU
+    serialization).
+
+    Each target gets up to `--omniroute-retries` attempts, resending the
+    SAME fresh prompt rather than the shorten-focused RETRY template a bad
+    answer here is not usually "too long", it is a flaky free-tier
+    response, and a different attempt often lands on a different
+    underlying model entirely (the combo routes per-request). Retrying is
+    still cheap and still parallel; only a target that keeps failing every
+    attempt falls through to the sequential local model afterward.
+    """
+    results = {}
+
+    def attempt(i, com):
+        wants_delete, prose = False, ""
+        for _ in range(opts["omniroute_retries"]):
+            raw = ask(opts["omniroute_model"],
+                      PROMPT.format(limit=opts["limit"], length=com.length,
+                                    text=com.text), log, via="omniroute")
+            wants_delete, prose = split_delete(raw)
+            if trustworthy(com.text, wants_delete, prose, opts["ceiling"]):
+                break
+        return i, wants_delete, prose
+
+    with ThreadPoolExecutor(max_workers=opts["workers"]) as ex:
+        futures = [ex.submit(attempt, i, com)
+                   for i, com in enumerate(targets)]
+        for fut in as_completed(futures):
+            i, wants_delete, prose = fut.result()
+            results[i] = (wants_delete, prose)
+    return results
 
 
 def rewrap(comment, prose, width, source):
@@ -150,39 +469,106 @@ def wrap_width(source):
     return min(78, max(widths) if widths else 78)
 
 
+def current_head():
+    r = subprocess.run(["git", "rev-parse", "HEAD"],
+                        capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def whole_line_span(comment, source):
+    """The comment's own lines, leading indentation and trailing newline
+    included, so removing it leaves no blank line behind."""
+    start = comment.spans[0][0]
+    end = comment.spans[-1][1]
+    bol = source.rfind("\n", 0, start) + 1
+    eol = source.find("\n", end)
+    eol = len(source) if eol < 0 else eol + 1
+    return bol, eol
+
+
 def trim_file(path, opts, log, results):
     source = open(path, encoding="utf-8", errors="replace").read()
     width = wrap_width(source)
     targets = [c for c in scan(path, source) if c.length > opts["limit"]]
+    if opts["skip_over"]:
+        # Wave 1 found that anything this large is bundling several topics a
+        # single ~300-500 char rewrite cannot hold - every one of the 16 over
+        # ~2500 chars needed reverting and manually splitting instead. Don't
+        # burn retries chasing a compression that review will just undo.
+        skipped = [c for c in targets if c.length > opts["skip_over"]]
+        for c in skipped:
+            results.setdefault("skipped", []).append(
+                {"path": path, "line": c.line, "before": c.length})
+        targets = [c for c in targets if c.length <= opts["skip_over"]]
     if not opts["banners"]:
         targets = [c for c in targets if not c.is_banner]
     if not targets:
         return 0
 
+    # HYBRID: attempt every target via OmniRoute at once, in parallel, before
+    # the sequential loop below even starts - see try_omniroute_batch()'s own
+    # comment for why that's safe to do blind (nothing here trusts a first
+    # answer without trustworthy() re-checking it per comment, right where
+    # the fallback to the local model actually happens).
+    first_pass = try_omniroute_batch(targets, opts, log) \
+        if opts["via"] == "hybrid" else {}
+
     edits = []
-    for com in targets:
+    for i, com in enumerate(targets):
         if opts["max"] and results["attempted"] >= opts["max"]:
             break
         results["attempted"] += 1
         original = com.text
-        prose = ask(opts["model"],
-                    PROMPT.format(limit=opts["limit"], length=com.length,
-                                  text=original), log)
+
+        from_omniroute = opts["via"] == "hybrid" and i in first_pass and \
+            trustworthy(original, *first_pass[i], opts["ceiling"])
+        if from_omniroute:
+            wants_delete, prose = first_pass[i]
+            via, model = "omniroute", opts["omniroute_model"]
+            results["hybrid_from_omniroute"] = \
+                results.get("hybrid_from_omniroute", 0) + 1
+        else:
+            via = "ollama" if opts["via"] == "hybrid" else opts["via"]
+            model = opts["model"]
+            if opts["via"] == "hybrid":
+                results["hybrid_fell_back"] = \
+                    results.get("hybrid_fell_back", 0) + 1
+            prose = ask(model, PROMPT.format(limit=opts["limit"],
+                        length=com.length, text=original), log, via=via)
+            wants_delete, prose = split_delete(prose)
+
+        if com.own_line and wants_delete:
+            row = {"path": path, "line": com.line, "before": com.length,
+                   "after": 0, "tries": 1, "kept": False, "deleted": True,
+                   "original": original, "new": ""}
+            results["trimmed"].append(row)
+            start, end = whole_line_span(com, source)
+            edits.append((start, end, ""))
+            continue
+
         tries = 1
-        while prose and len(prose) > opts["limit"] and tries < opts["retries"]:
-            prose = ask(opts["model"],
-                        RETRY.format(got=len(prose), limit=opts["limit"],
-                                     text=prose), log)
+        while prose and tries < opts["retries"] and \
+                (len(prose) > opts["limit"] or
+                 response_problems(original, prose, opts["ceiling"])):
+            prose = ask(model, RETRY.format(got=len(prose),
+                        limit=opts["limit"], text=prose), log, via=via)
             tries += 1
+
+        if prose and response_problems(original, prose, opts["ceiling"]):
+            # Retries exhausted and it's still a bad answer by one of the
+            # concrete measures response_problems() checks - discard rather
+            # than risk writing this into a live comment.
+            prose = ""
 
         row = {"path": path, "line": com.line, "before": com.length,
                "after": len(prose) if prose else 0, "tries": tries,
                "original": original, "new": prose}
-        if not prose or len(prose) > opts["limit"]:
+        if not prose or len(prose) > opts["ceiling"]:
             row["kept"] = True
             results["unresolved"].append(row)
             continue
         row["kept"] = False
+        row["over_aim"] = len(prose) > opts["limit"]
         results["trimmed"].append(row)
         start = com.spans[0][0]
         end = com.spans[-1][1]
@@ -198,7 +584,19 @@ def trim_file(path, opts, log, results):
     if code_only(source) != code_only(out):
         results["rejected"].append(path)
         return 0
+
     if not opts["dry_run"]:
+        # Something else checking out a different branch in this same
+        # worktree mid-run has actually happened here once - see esp32c6-90z.
+        # A run this long has to notice before it writes over whatever that
+        # left behind, not after.
+        now = current_head()
+        if opts["expected_head"] is not None and now != opts["expected_head"]:
+            print(f"\nABORTING: HEAD moved from {opts['expected_head']} to "
+                  f"{now} while this run was in progress - something else "
+                  f"checked out a different branch in this worktree. "
+                  f"Refusing to write {path}.", file=sys.stderr)
+            sys.exit(1)
         with open(path, "w", encoding="utf-8", newline="") as f:
             f.write(out)
     return len(edits)
@@ -260,18 +658,32 @@ def facts_lost(old, new):
     if NEGATION.search(old) and not NEGATION.search(new):
         lost.append("every negation dropped (a limitation may now read as a "
                     "benefit)")
+    if drops_attribution(old, new):
+        lost.append("copyright/licence attribution dropped - restore "
+                    "verbatim, this is not change history")
     return lost
 
 
 def review(rows, opts, log):
-    """Check each rewrite for dropped facts, then optionally ask a model."""
+    """Check each rewrite for dropped facts, then optionally ask a model.
+
+    A deletion is always flagged for a human look - facts_lost trivially
+    reports everything as lost against empty text, and a reviewer model has
+    nothing to compare a verdict against, so neither is worth spending on it.
+    """
     for i, r in enumerate(rows, 1):
-        r["lost"] = facts_lost(r["original"], r["new"])
-        r["verdict"] = ""
-        if opts["review_model"] != "none":
-            out = ask(opts["review_model"],
-                      VERDICT.format(old=r["original"], new=r["new"]), log)
-            r["verdict"] = "" if out.upper().startswith("OK") else out[:400]
+        if r.get("deleted"):
+            r["lost"] = ["entire comment removed - verify nothing here was "
+                         "load-bearing"]
+            r["verdict"] = ""
+        else:
+            r["lost"] = facts_lost(r["original"], r["new"])
+            r["verdict"] = ""
+            if opts["review_model"] != "none":
+                out = ask(opts["review_model"],
+                          VERDICT.format(old=r["original"], new=r["new"]),
+                          log)
+                r["verdict"] = "" if out.upper().startswith("OK") else out[:400]
         flagged = "!" if (r["lost"] or r["verdict"]) else "."
         print(flagged, end="" if i % 60 else f" {i}\n", flush=True)
     print(flush=True)
@@ -296,8 +708,9 @@ def write_packet(directory, rows, per_file=40):
                     "limitation turned into a benefit, or a claim the "
                     "original did not make. Do not flag mere brevity.\n\n")
             for n, r in enumerate(chunk, start + 1):
+                new = "(deleted entirely)" if r.get("deleted") else r["new"]
                 f.write(f"## {n}  {r['path']}:{r['line']}\n\n")
-                f.write(f"OLD: {r['original']}\n\nNEW: {r['new']}\n\n")
+                f.write(f"OLD: {r['original']}\n\nNEW: {new}\n\n")
         written.append(path)
     return written
 
@@ -319,7 +732,8 @@ def write_review_report(path, rows, opts):
                 f.write(f"- dropped: {', '.join(r['lost'])}\n")
             if r.get("verdict"):
                 f.write(f"- reviewer: {r['verdict']}\n")
-            f.write(f"\nOLD: {r['original']}\n\nNEW: {r['new']}\n\n")
+            new = "(deleted entirely)" if r.get("deleted") else r["new"]
+            f.write(f"\nOLD: {r['original']}\n\nNEW: {new}\n\n")
         f.write(f"## Passed\n\n{len(rows) - len(flagged)} rewrites raised "
                 f"nothing.\n")
 
@@ -327,24 +741,61 @@ def write_review_report(path, rows, opts):
 def write_report(path, results, opts, seconds):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     t, u = results["trimmed"], results["unresolved"]
+    deleted = [r for r in t if r.get("deleted")]
+    shortened = [r for r in t if not r.get("deleted")]
+    over_aim = [r for r in shortened if r.get("over_aim")]
     saved = sum(r["before"] - r["after"] for r in t)
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write("# Comment trim (local model)\n\n")
-        f.write(f"- model: `{opts['model']}`\n")
-        f.write(f"- limit: {opts['limit']} characters\n")
+        if opts["via"] == "hybrid":
+            f.write(f"- model: `{opts['omniroute_model']}` (OmniRoute, first "
+                    f"pass, {opts['workers']} parallel) falling back to "
+                    f"`{opts['model']}` (local)\n")
+            fo = results.get("hybrid_from_omniroute", 0)
+            fb = results.get("hybrid_fell_back", 0)
+            total = fo + fb
+            f.write(f"- resolved from OmniRoute's first pass: **{fo}**"
+                    f"{f' ({100*fo/total:.0f}%)' if total else ''},"
+                    f" fell back to local: {fb}\n")
+        else:
+            f.write(f"- model: `{opts['model']}`\n")
+        f.write(f"- aim: {opts['limit']} characters,"
+                f" ceiling: {opts['ceiling']} characters\n")
         f.write(f"- ran: {time.strftime('%Y-%m-%d %H:%M')}"
                 f" ({seconds / 60:.1f} min)\n")
-        f.write(f"- shortened: **{len(t)}**, left alone: {len(u)}\n")
+        f.write(f"- shortened: **{len(shortened)}**"
+                f" ({len(shortened) - len(over_aim)} to the aim,"
+                f" {len(over_aim)} only within the ceiling),"
+                f" deleted entirely: **{len(deleted)}**"
+                f" (pure change history - git log owns it),"
+                f" left alone: {len(u)}\n")
         f.write(f"- prose removed: {saved:,} characters\n")
+        skipped = results.get("skipped") or []
+        if skipped:
+            f.write(f"- **skipped (over {opts['skip_over']} chars, needs "
+                    f"manual splitting instead): {len(skipped)}**\n")
+            for r in sorted(skipped, key=lambda r: -r["before"]):
+                f.write(f"  - {r['path']}:{r['line']} ({r['before']} chars)\n")
         if results["rejected"]:
             f.write(f"- **files discarded (code would have moved): "
                     f"{', '.join(results['rejected'])}**\n")
+        if deleted:
+            f.write("\n## Deleted entirely\n\nEach was judged to be pure "
+                    "change-history narration with no constraint that still "
+                    "applies. Verify none of these was actually load-bearing "
+                    "before trusting this list.\n\n")
+            for r in sorted(deleted, key=lambda r: -r["before"]):
+                f.write(f"### {r['path']}:{r['line']}  ({r['before']} chars"
+                        f" removed)\n\n")
+                f.write(f"**was:** {r['original']}\n\n")
         f.write("\n## Review these\n\nEvery rewrite, longest first. Read the "
                 "pair: the new line must not invert a limitation into a "
                 "benefit or move a reason onto a different cause.\n\n")
-        for r in sorted(t, key=lambda r: -r["before"]):
+        for r in sorted(shortened, key=lambda r: -r["before"]):
+            tag = "  *(over the aim, within ceiling)*" if r.get("over_aim") \
+                else ""
             f.write(f"### {r['path']}:{r['line']}"
-                    f"  ({r['before']} -> {r['after']})\n\n")
+                    f"  ({r['before']} -> {r['after']}){tag}\n\n")
             f.write(f"**was:** {r['original']}\n\n")
             f.write(f"**now:** {r['new']}\n\n")
         if u:
@@ -355,19 +806,39 @@ def write_report(path, results, opts, seconds):
 
 
 def main(argv):
-    opts = {"limit": 300, "model": DEFAULT_MODEL, "retries": 3,
-            "banners": False, "max": 0, "dry_run": False,
-            "review_model": DEFAULT_REVIEW_MODEL}
+    opts = {"limit": 300, "ceiling": 500, "model": None, "via": "ollama",
+            "omniroute_model": DEFAULT_COMBO, "workers": 6,
+            "omniroute_retries": 2,
+            "retries": 3, "banners": False, "max": 0, "dry_run": False,
+            "review_model": DEFAULT_REVIEW_MODEL, "skip_over": 1500}
     report = "scripts/results/comment-trim.md"
     pairs = "scripts/results/comment-trim.json"
+    review_report = "scripts/results/comment-trim-review.md"
+    log_path = None
     review_only, packet = False, ""
     paths = []
     it = iter(argv)
     for arg in it:
         if arg == "--limit":
             opts["limit"] = int(next(it))
+        elif arg == "--ceiling":
+            opts["ceiling"] = int(next(it))
+        elif arg == "--skip-over":
+            opts["skip_over"] = int(next(it))
+        elif arg == "--via":
+            opts["via"] = next(it)
+            if opts["via"] not in ("ollama", "omniroute", "hybrid"):
+                print(f"unknown --via: {opts['via']!r} (want ollama, "
+                      f"omniroute, or hybrid)", file=sys.stderr)
+                return 2
         elif arg == "--model":
             opts["model"] = next(it)
+        elif arg == "--omniroute-model":
+            opts["omniroute_model"] = next(it)
+        elif arg == "--workers":
+            opts["workers"] = int(next(it))
+        elif arg == "--omniroute-retries":
+            opts["omniroute_retries"] = int(next(it))
         elif arg == "--retries":
             opts["retries"] = int(next(it))
         elif arg == "--max":
@@ -378,10 +849,14 @@ def main(argv):
             opts["dry_run"] = True
         elif arg == "--report":
             report = next(it)
+        elif arg == "--log":
+            log_path = next(it)
         elif arg == "--review":
             review_only = True
         elif arg == "--pairs":
             pairs = next(it)
+        elif arg == "--review-report":
+            review_report = next(it)
         elif arg == "--review-model":
             opts["review_model"] = next(it)
         elif arg == "--review-packet":
@@ -392,13 +867,21 @@ def main(argv):
         else:
             paths.append(arg)
 
+    if opts["model"] is None:
+        opts["model"] = DEFAULT_COMBO if opts["via"] == "omniroute" \
+            else DEFAULT_MODEL
+
     if review_only or packet:
-        return run_review(pairs, packet, opts, review_only)
+        review_log = log_path or "scripts/results/comment-trim-review.server.log"
+        return run_review(pairs, packet, opts, review_only, review_log,
+                          review_report)
 
     files = sources_under(paths or DEFAULT_PATHS)
-    log = "scripts/results/comment-trim.server.log"
+    log = log_path or "scripts/results/comment-trim.server.log"
     os.makedirs(os.path.dirname(log), exist_ok=True)
     open(log, "w", encoding="utf-8").close()
+
+    opts["expected_head"] = current_head()
 
     results = {"trimmed": [], "unresolved": [], "rejected": [], "attempted": 0}
     started = time.time()
@@ -421,7 +904,7 @@ def main(argv):
     return 0
 
 
-def run_review(pairs, packet, opts, review_only):
+def run_review(pairs, packet, opts, review_only, log_path, out):
     """--review / --review-packet: judge a finished run's rewrites."""
     if not os.path.exists(pairs):
         print(f"no pairs file at {pairs} - run a trim first, or pass --pairs",
@@ -441,10 +924,9 @@ def run_review(pairs, packet, opts, review_only):
         if not review_only:
             return 0
 
-    log = "scripts/results/comment-trim-review.server.log"
+    log = log_path
     os.makedirs(os.path.dirname(log), exist_ok=True)
     open(log, "w", encoding="utf-8").close()
-    out = "scripts/results/comment-trim-review.md"
     review(rows, opts, log)
     write_review_report(out, rows, opts)
     flagged = sum(1 for r in rows if r.get("lost") or r.get("verdict"))

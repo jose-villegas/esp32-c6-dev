@@ -110,29 +110,24 @@ static const char *TAG = "screenshot";
 
 static volatile bool s_request_pending;
 
-/* Reads lines from stdin forever, setting s_request_pending on an exact
- * match. Runs at a low priority (below touch/buttons - see input/touch.c,
- * input/buttons.c for their own 6/5) since it spends essentially all its
- * time blocked waiting on bytes nobody is usually sending; when a line does
- * arrive there is nothing time-critical about noticing it a frame or two
- * later.
- *
- * A line over SCREENSHOT_LINE_MAX is never going to match either trigger -
- * dropped by resetting `len`, not by growing the buffer, so a host
- * accidentally in the wrong mode (pasting binary, say) cannot run this off
- * the end of a fixed buffer. Sized for RUNSUITE_TRIGGER plus the longest
- * suite name today (run_boot_anim_perf_suite, 25 chars) with real headroom
- * for names not yet written - bump this rather than trim a name to fit it,
- * the same "headroom, not a tight fit" reasoning SUITE_MAX already states. */
+/* A line over SCREENSHOT_LINE_MAX is never going to match either trigger
+ * - dropped by resetting `len`, not by growing the buffer, so a host
+ * accidentally in the wrong mode (pasting binary, say) cannot run this
+ * off the end of a fixed buffer. Sized for RUNSUITE_TRIGGER plus the
+ * longest suite name today (run_boot_anim_perf_suite, 25 chars) with
+ * real headroom for names not yet written - bump this rather than trim
+ * a name to fit it, the same "headroom, not a tight fit" reasoning
+ * SUITE_MAX already states. */
 #define SCREENSHOT_LINE_MAX 48
 
 #if CONFIG_LAUNCHER_SELFTEST
-/* Set by screenshot_task() below on a RUNSUITE line, consumed by main.c's
- * loop via screenshot_take_runsuite_request() - see this file's own "WHY
- * THE RESULT COMES BACK THROUGH A FLAG" section for why this cannot just
- * call suites_run_one() directly from this task. Not stack-local for the
- * same reason screenshot_dump()'s own scratch buffer below is not: this
- * outlives the line that set it, read back by a different task entirely. */
+/* Set by screenshot_task() below on a RUNSUITE line, consumed by
+ * main.c's loop via screenshot_take_runsuite_request() - see this
+ * file's own "WHY THE RESULT COMES BACK THROUGH A FLAG" section for
+ * why this cannot just call suites_run_one() directly from this task.
+ * Not stack-local for the same reason screenshot_dump()'s own scratch
+ * buffer below is not: this outlives the line that set it, read back
+ * by a different task entirely. */
 static volatile bool s_runsuite_pending;
 static char s_runsuite_name[SCREENSHOT_LINE_MAX];
 #endif
@@ -153,13 +148,14 @@ static void screenshot_task(void *arg)
             continue;
         }
 
+        /* Either terminator ends a line - tools/screenshot.py sends a
+         * bare '\n', but treating '\r' the same way means a line typed
+         * by hand into monitor.sh (whose Enter key may send either,
+         * depending on platform) still reaches the strcmp() below,
+         * which is what makes "type SCREENSHOT into monitor.sh" a valid
+         * way to test this listener in isolation from the host
+         * script. */
         if (c == '\n' || c == '\r') {
-            /* Either terminator ends a line - tools/screenshot.py sends a
-             * bare '\n', but treating '\r' the same way means a line typed
-             * by hand into monitor.sh (whose Enter key may send either,
-             * depending on platform) still reaches the strcmp() below,
-             * which is what makes "type SCREENSHOT into monitor.sh" a valid
-             * way to test this listener in isolation from the host script. */
             if (len > 0) {
                 line[len] = '\0';
                 if (strcmp(line, SCREENSHOT_TRIGGER) == 0) {
@@ -195,8 +191,8 @@ void screenshot_start(void)
     usb_serial_jtag_driver_config_t cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
     const esp_err_t err = usb_serial_jtag_driver_install(&cfg);
     if (err != ESP_OK) {
-        /* The one most worth calling out by name: this is what happens if
-         * something else already installed this driver before
+        /* The one most worth calling out by name: this is what happens
+         * if something else already installed this driver before
          * screenshot_start() ran (ESP_ERR_INVALID_STATE) - silently
          * leaving the console on its default non-blocking reader, which
          * looks from the host exactly like a request that vanished into
@@ -208,15 +204,21 @@ void screenshot_start(void)
 
     usb_serial_jtag_vfs_use_driver();
 
-    /* Either terminator accepted on the way in - see screenshot_task()'s own
-     * comment on why '\r' is treated the same as '\n' there. Left at LF here
-     * (no translation) rather than switched to CR/CRLF: translating would
-     * only rewrite '\r' into '\n' before screenshot_task() ever sees it,
-     * which the task already does itself, and leaving translation off means
-     * a stray '\r' from either source arrives unchanged instead of being
-     * silently turned into two line endings for one keypress. */
+    /* Either terminator accepted on the way in - see screenshot_task()'s
+     * own comment on why '\r' is treated the same as '\n' there. Left at
+     * LF here (no translation) rather than switched to CR/CRLF:
+     * translating would only rewrite '\r' into '\n' before
+     * screenshot_task() ever sees it, which the task already does
+     * itself, and leaving translation off means a stray '\r' from
+     * either source arrives unchanged instead of being silently turned
+     * into two line endings for one keypress. */
     usb_serial_jtag_vfs_set_rx_line_endings(ESP_LINE_ENDINGS_LF);
 
+    /* Runs at a low priority (below touch/buttons - see input/touch.c,
+     * input/buttons.c for their own 6/5) since it spends essentially
+     * all its time blocked waiting on bytes nobody is usually sending;
+     * when a line does arrive there is nothing time-critical about
+     * noticing it a frame or two later. */
     const BaseType_t created =
         xTaskCreate(screenshot_task, "screenshot", 3072, NULL, 4, NULL);
     if (created != pdPASS) {
@@ -254,47 +256,33 @@ bool screenshot_take_runsuite_request(char *name_out, size_t name_out_size)
 }
 #endif
 
-/* Not stack-local: screenshot_dump() runs on main.c's shell task, which has
- * a 3584-byte stack (CONFIG_ESP_MAIN_TASK_STACK_SIZE) shared with everything
- * else that task does. A 1104-byte row plus its 1472-byte base64 encoding
- * would be most of that budget on top of whatever printf and ESP_LOG
- * already use internally - see gfx.h's own top comment on why this board's
- * RAM is counted this closely everywhere else in the shell.
- *
- * Not permanently static either, as they were before: malloc'd in
- * screenshot_dump() and freed before it returns, so these 2,577 bytes are
- * only ever reserved for the duration of an actual capture instead of for
- * the whole life of the process. A CONFIG_LAUNCHER_DEVELOPMENT build (this
- * file is compiled into nothing else) carries them at every boot whether or
- * not a screenshot is ever taken - static here competed directly with
- * app_sand.c's grid for the single largest contiguous heap block it needs
- * (see that allocation's own comment), which is exactly the failure a --dev
- * build hit opening the sand app. */
+/* Not stack-local: screenshot_dump() runs on main.c's shell task
+ * (3584-byte stack); a 1104-byte row plus 1472-byte base64 would be
+ * most of that budget on top of printf/ESP_LOG's own use. Not
+ * permanently static either: malloc'd here and freed before returning,
+ * so these 2,577 bytes are reserved only for the duration of a capture
+ * - static here once competed directly with app_sand.c's grid for the
+ * single largest contiguous heap block it needs, the exact failure a
+ * --dev build hit opening the sand app. */
 static uint8_t *row;
 static char    *row_b64;   /* +1: NUL, for printf("%s") */
 
-/* How much room an app's diagnostic_json() fragment is given - see app_t's
- * own comment in app.h for what it may contain. Generous relative to what
- * either existing implementation (app_sand.c's) actually uses, on the same
- * reasoning DEVICE_STATE_JSON_MAX budgets headroom rather than a tight fit -
- * this is a diagnostic path, not one worth re-deriving an exact bound for. */
+/* How much room an app's diagnostic_json() fragment is given - see
+ * app_t's own comment in app.h for what it may contain. Generous
+ * relative to what either existing implementation (app_sand.c's)
+ * actually uses, on the same reasoning DEVICE_STATE_JSON_MAX budgets
+ * headroom rather than a tight fit - this is a diagnostic path, not
+ * one worth re-deriving an exact bound for. */
 #define APP_DIAGNOSTIC_JSON_MAX 256
 
-/* Prints one SCREENSHOT_STATE: line of plain-text JSON (no base64 - it is
- * already printable ASCII, and small enough next to the image that the
- * base64 encoding's whole reason to exist - staying inside a UART-safe
- * byte range - is not worth the extra decode step on the host for this
- * one line) describing device state at this same frame. The reading and
- * the formatting both live in util/device_state.h/.c - see that module's
- * own comment for the field list and why it is split out rather than
- * living here.
- *
- * `current_app`'s OPTIONAL diagnostic_json() (app_t, app.h) is spliced in
- * as an "app" key AFTER device_state_format_json() has already produced a
- * complete, valid JSON object - by overwriting that object's closing `}`
- * with `,"app":<fragment>}` rather than teaching device_state.h anything
- * about apps at all. device_state.h stays exactly what its own top comment
- * says it is: board state, nothing else. */
+/* Prints one SCREENSHOT_STATE: line of plain-text JSON (no base64 -
+ * it's already printable ASCII, small enough that base64's reason to
+ * exist, staying UART-safe, isn't worth the decode step for one line).
+ * Reading/formatting live in util/device_state.h/.c. `current_app`'s
+ * OPTIONAL diagnostic_json() is spliced in as an "app" key AFTER
+ * device_state_format_json() produces a complete object - by
+ * overwriting its closing `}` with `,"app":<fragment>}` rather than
+ * teaching device_state.h about apps. */
 static void dump_state(const input_t *input, const app_t *current_app)
 {
     device_state_t state;
@@ -310,12 +298,13 @@ static void dump_state(const input_t *input, const app_t *current_app)
         const size_t len = strlen(json);
         /* json[len-1] is device_state_format_json()'s own closing `}` -
          * always present, since that function always emits a complete
-         * object. Only splice if there is genuinely room for the fragment
-         * plus the `,"app":` wrapper plus the new closing `}` - a
-         * truncated app fragment would rather be dropped than emitted as
-         * broken JSON the host script's json.loads() then rejects
-         * outright, losing the WHOLE line (device state included, not
-         * just the app part) rather than only the addition. */
+         * object. Only splice if there is genuinely room for the
+         * fragment plus the `,"app":` wrapper plus the new closing `}`
+         * - a truncated app fragment would rather be dropped than
+         * emitted as broken JSON the host script's json.loads() then
+         * rejects outright, losing the WHOLE line (device state
+         * included, not just the app part) rather than only the
+         * addition. */
         if (len > 0 && json[len - 1] == '}' &&
             len - 1 + strlen(",\"app\":") + strlen(app_json) + 1
                 < sizeof json) {
@@ -357,11 +346,12 @@ void screenshot_dump(const input_t *input, const app_t *current_app)
     ESP_LOGI(TAG, "streaming %lu bytes to the console", (unsigned long)total_bytes);
 
     /* The marker and data lines are plain printf(), not ESP_LOGx: a log
-     * line carries a "I (12345) TAG: " prefix (see boot/post.c's report()
-     * for an ordinary use of that prefix) that tools/screenshot.py would
-     * otherwise have to strip back off before the fixed-prefix match it
-     * does on every line - simpler for both ends to keep the protocol's
-     * own lines free of it from the start. */
+     * line carries a "I (12345) TAG: " prefix (see boot/post.c's
+     * report() for an ordinary use of that prefix) that
+     * tools/screenshot.py would otherwise have to strip back off before
+     * the fixed-prefix match it does on every line - simpler for both
+     * ends to keep the protocol's own lines free of it from the
+     * start. */
     printf("SCREENSHOT_BEGIN size=%lu\n", (unsigned long)total_bytes);
 
     uint8_t header[SCREENSHOT_BMP_HEADER_SIZE];

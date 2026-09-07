@@ -29,6 +29,7 @@
 #include "unity.h"
 #include "suites.h"
 
+#include "material_palette.h"
 #include "sand.h"
 #include "sand_priv.h"
 #include "util/intmath.h"
@@ -2146,7 +2147,7 @@ static void test_every_extended_material_shares_one_physics_row(void)
         TEST_ASSERT_EQUAL_PTR_MESSAGE(powder, material_of(GUNPOWDER_CELL(v)),
                                       why);
     }
-    TEST_ASSERT_NOT_EQUAL_PTR_MESSAGE(first, powder,
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(first, powder,
         "gunpowder must NOT read the statics' shared row - that is the "
         "entire reason the hot table grew a second row for nibble 15");
     TEST_ASSERT_EQUAL_INT_MESSAGE(KIND_POWDER, powder->kind,

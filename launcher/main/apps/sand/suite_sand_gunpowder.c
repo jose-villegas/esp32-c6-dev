@@ -24,6 +24,7 @@
 #include "unity.h"
 #include "suites.h"
 
+#include "material_palette.h"
 #include "sand.h"
 #include "sand_priv.h"
 #include "util/intmath.h"
@@ -1324,7 +1325,16 @@ static void test_water_wets_gunpowder_and_it_dries_out_slowly(void)
     free(gp_grid);
     free(dirt_grid);
 
-    char why[224];
+    /* 224 measured the actual message, not what -Wformat-truncation proves:
+     * five %d's, each assumed worst-case absent a range the compiler can
+     * see, put its own bound at 241 - real ints here or not, this only
+     * compiles clean on the device toolchain past that mark. */
+
+    /* static, not a stack frame: the device's main task stack is 3584
+     * bytes total, shared with Unity and printf, and check_stack_usage.py
+     * gates any one frame at 1024 - this buffer has no reason to sit on
+     * the stack at all. */
+    static char why[320];
     snprintf(why, sizeof why,
              "gunpowder dries at half dirt's rate so after the SAME "
              "%d-step budget more of it must still be wet - gunpowder "

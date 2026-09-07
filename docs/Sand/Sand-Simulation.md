@@ -95,7 +95,9 @@ undefined behaviour.
 The 256-entry colour palette (`material_palette()`) is built the same way -
 16 shades per material, interpolated at compile time into another `const`
 table, so drawing a cell is one array index and zero colour maths at
-runtime.
+runtime. It lives in `material_palette.c`/`.h`, split from `material.c`/`.h`
+for the same reason `sand.c`/`sand_liquid.c` are two files below - colour is
+a different concern from identity and behaviour.
 
 ## Movement: one rule, and one invariant that has to be right
 
@@ -670,7 +672,7 @@ grows from that connection gets its shape.
 
 **The problem.** Dirt is a powder and shifts. A tree finds water by
 walking down its own stem to the ground and on down into the soil
-(`find_water()`, `sand_reactions.c`) - and when the soil directly under
+(`find_water()`, `sand_plants.c`) - and when the soil directly under
 the tree's collar (where the trunk actually touches ground) slides away,
 that walk finds neither more stem nor ground below it and simply returns
 failure. The tree is stranded, sometimes with plenty of water two rows
@@ -793,11 +795,11 @@ depth and spread caps as a second, separate kind of bound beside it.
    sat there BYTE-IDENTICAL through the remaining 18,000 steps, seed after
    seed - a genuine fixed point.
 3. **`reaction_t.roots` itself, 8 in 256 on the root row** - a small
-   chance, the same discipline every roll in `sand_reactions.c` follows.
+   chance, the same discipline every roll in `sand_plants.c` follows.
 
 No depth or spread cap was needed in the end - the walk-shaped first
 draft's `ROOT_DEPTH_MAX` is retired entirely (see its own RETIRED comment
-in `sand_reactions.c`, where the constant used to live). A local rule with
+in `sand_plants.c`, where the constant used to live). A local rule with
 no notion of "the collar" has nothing to measure a depth cap FROM in the
 first place, and `ROOT_SURFACE_MAX` alone already produces a genuine fixed
 point at the scale this feature actually runs at.
@@ -812,18 +814,19 @@ actually produces the wandering, forking shape a root system is supposed
 to have. The difference was qualitative, not a rounding error.
 
 **Shade follows structure, not age.** A root darkens from the fresh tan
-toward a wood-like brown (`ROOT_OLD`, `material.c`) as more root grows
-around it: the painter hands `material_colours()` the count of root
+toward a wood-like brown (`ROOT_OLD`, `material_palette.c`) as more root
+grows around it: the painter hands `material_colours()` the count of root
 neighbours in the `depth` slot only a liquid's interior otherwise reads
-(`material_root_neighbours()`, `material.h`), and that count picks one of
-`ROOT_SHADES` steps. A tip touching one other root wears the fresh colour;
-a cell that has put out children steps darker; the collar, touched on most
-sides, wears the darkest. Not a lifetime, on purpose and not only because
-a root has nowhere to store one: an age would darken the tips too, and the
-tips are the part meant to stay fresh. Lose a child to rot or lava and the
-parent lightens again. The eating rule above is what makes this visible at
-all - a straight column is almost entirely two-neighbour cells, while a
-branching system is full of the junctions the darker steps are keyed to.
+(`material_root_neighbours()`, `material_palette.h`), and that count picks
+one of `ROOT_SHADES` steps. A tip touching one other root wears the fresh
+colour; a cell that has put out children steps darker; the collar, touched
+on most sides, wears the darkest. Not a lifetime, on purpose and not only
+because a root has nowhere to store one: an age would darken the tips too,
+and the tips are the part meant to stay fresh. Lose a child to rot or lava
+and the parent lightens again. The eating rule above is what makes this
+visible at all - a straight column is almost entirely two-neighbour cells,
+while a branching system is full of the junctions the darker steps are
+keyed to.
 
 **Measured, before and after** (60 wide, 70 tall; stone floor; 20 rows of
 saturated dirt; one seed on the surface; the 13 cells around the collar
@@ -1033,6 +1036,16 @@ call across translation units is not guaranteed to inline the way a call
 within one file is. Confirmed on device rather than assumed: the
 frame-budget tests above are what would have caught it if splitting the
 file had cost anything.
+
+The same reasoning later split `sand_impulse.c` out of `sand.c` too: queued
+explosions, thrown debris and splash pushback move OUTWARD rather than
+gravity-ward, so `step_impulses()` is called from `sand_step()` exactly
+once, the same seam `sand_step_liquids()` and `sand_step_gas()` use.
+
+`sand_reactions.c` later split the same way: fire chemistry and the
+tree/root/leaf growth system it also housed shared almost no call graph, so
+the growth half moved into its own `sand_plants.c` - see that file's own
+top comment for the rationale.
 
 ## The sweep and the cross-flow pass, broken down further
 

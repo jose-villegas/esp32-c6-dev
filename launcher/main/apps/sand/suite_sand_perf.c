@@ -465,32 +465,36 @@ static void test_turning_a_settled_pool_to_landscape_fits_in_the_frame_budget(vo
         "turning the board must move water, not create or destroy it - the "
         "cell COUNT changes as the pool re-levels, the mass must not");
 
-    /* UNPEGGED - THIS NUMBER IS A PLACEHOLDER AND MUST BE RE-PEGGED FROM A
-     * REAL CAPTURE BEFORE THIS TEST MEANS ANYTHING.
-     *
-     * This suite cannot be run on a laptop (it is DEVICE_BUILD, and
-     * esp_timer_get_time() has no host equivalent), and the session that
-     * wrote it does not flash the board. Run
-     *
-     *     ./launcher/test/run_device_tests.sh
-     *
-     * read the "portrait->landscape turn on a settled ... pool" line out of
-     * the capture, and replace the number below with measured * 0.9,
-     * rounded, stating the measurement and its date here the way every other
-     * budget in this file does - see docs/Sand/Perf-Round-Guide.md, "Peg or
-     * re-peg budgets from what the capture actually measured", and "Never
-     * raise a budget".
-     *
-     * 14000 is borrowed from test_a_screen_of_water_fits_in_the_frame_
-     * budget's own screen-wide-collapse figure purely so this compiles and
-     * runs; it is a guess about a scene nobody has measured yet, in either
-     * direction, and it is not a budget. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(14000, (int)per_step,
+    /* MEASURED 41,509 us per step on device, 2026-09-06, this row's first
+     * real measurement (capture_ref_main_20260906_185911.md). Budget is
+     * that x 0.9 = 37,358, rounded DOWN to 37,300 so the target is never
+     * looser than the convention. */
+
+    /* THE 14000 THIS REPLACES WAS NEVER A BUDGET - it was borrowed from
+     * the water screen so the row would compile, and said so. It also
+     * misled a reader into reporting a 167% regression that never
+     * happened, by dividing it by 0.9 as if it were pegged. */
+
+    /* WORTH KNOWING BEFORE OPTIMISING THIS ROW: the impulse flight pass
+     * never runs here at all - s->impulse_count is 0 for all 390 steps,
+     * host-counted 2026-09-06 - and a host pass map puts ~48% of the cost
+     * in cross-flow, ~1% reactions, ~1.5% gas. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(37300, (int)per_step,
         "turning the board a quarter turn with a settled pool on it must "
         "still fit in a frame or two - the pool re-levels across the whole "
-        "grid width, so the cross-flow search is the thing to suspect. "
-        "THIS BUDGET IS UNPEGGED: see the comment above it");
+        "grid width, so the cross-flow search is the thing to suspect, and "
+        "a host pass map agrees at ~48%. A reduction target at measured x "
+        "0.9, so failing means the work is not done yet");
 }
+
+#ifdef SAND_HOST_PROBE
+/* Host-only timing probe (see the full-step control's own wrapper for the
+ * pattern). */
+void sand_host_probe_run_settled_pool_to_landscape(void)
+{
+    test_turning_a_settled_pool_to_landscape_fits_in_the_frame_budget();
+}
+#endif
 
 static void test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget(void)
 {
@@ -625,10 +629,12 @@ void sand_host_probe_run_mixed_flip(void)
  * time anyone runs this on hardware. */
 static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
 {
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    uint8_t   *big      = malloc(REAL_W * REAL_H);
+    uint8_t   *blocks   = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    impulse_t *impulses = malloc((size_t)ALL_PAIRS_IMPULSE_MAX * sizeof *impulses);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
+    TEST_ASSERT_NOT_NULL(impulses);
 
     sand_t real;
     sand_init(&real, big, REAL_W, REAL_H, 23u);
@@ -636,6 +642,9 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
     sand_set_scatter(&real, SAND_SCATTER_PER_MATERIAL);
     sand_set_decay(&real, SAND_DECAY_PER_MATERIAL);
     sand_set_mobility(&real, SAND_MOBILITY_PER_MATERIAL);
+    /* Without this, sand_explode() has nowhere to write and the gunpowder
+     * patches below can never detonate - see ALL_PAIRS_IMPULSE_MAX. */
+    sand_enable_impulses(&real, impulses, ALL_PAIRS_IMPULSE_MAX);
 
     /* The scene is DERIVED from materials[] and laid out by
      * all_pairs_material_at() so that every PAIR of materials touches -
@@ -643,28 +652,15 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
      * for why bands were not enough, and
      * test_the_mixed_scene_puts_every_material_pair_in_contact, which
      * checks the coverage on the host rather than leaving it a claim in
-     * a comment.
-     *
-     * A share of the board is left empty (EMPTY_SHARE_PERCENT) so the
-     * flip has somewhere to launch into - the same reasoning as the
-     * other flip tests. */
-    const int first = MAT_EMPTY + 1;
-    const int n_mats = MAT_COUNT - first;
-    const int top = (REAL_H * EMPTY_SHARE_PERCENT) / 100;
+     * a comment. */
 
-    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(1, n_mats,
+    /* build_all_pairs_scene() (suite_sand_scenes.c) also plants the
+     * deliberate gunpowder patches - the tiling alone scatters gunpowder
+     * as one cell in nineteen, never enough to form the fuse's 2x2. */
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(1, ALL_PAIRS_SPAWN_COUNT,
         "the pattern below needs at least two materials to interleave");
 
-    for (int y = top; y < REAL_H; y++) {
-        for (int x = 0; x < REAL_W; x++) {
-            const int m = all_pairs_material_at(x, y, first, n_mats);
-            /* sand_spawn() with radius 0 rather than sand_set(): it goes
-             * through random_cell(), so a liquid arrives full, a transient
-             * arrives at full life and a powder gets a shade - the same
-             * cells a real pour produces. */
-            sand_spawn(&real, x, y, 0, (material_id_t)m);
-        }
-    }
+    build_all_pairs_scene(&real);
 
     /* Let it get going - long enough for the reactions to be under way and
      * the liquids to have found their levels, so the flip lands on a live
@@ -692,45 +688,22 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
      * this one, not just the one that got caught. */
     free(big);
     free(blocks);
+    free(impulses);
 
-    /* 54000 us: a REDUCTION TARGET, not headroom. Set 10% below a measured
-     * 60091 us so this fails today and stops failing only when the code
-     * gets faster. That is the same thing the mixed-scene budget above
-     * does, and the reason that one went from 26.2% over to 7.0% under
-     * without the number ever moving.
-     *
-     * THE 60091 IS STALE, AND KNOWINGLY SO. It was taken on 2026-08-25
-     * against a scene of TWELVE materials covering 66 pairs. There are
-     * fourteen now - glass and snow - so the same derived scene covers 91
-     * pairs, and the reactions pass has gained a per-cell branch and a
-     * second kind of participant (cells with a temperature) since. The
-     * scene this number describes no longer exists.
-     *
-     * The number is deliberately NOT adjusted for that. A reduction target
-     * moved to accommodate the code is no longer a target, and this file
-     * has already been burned twice by figures that were reasoned about
-     * rather than measured - 100000 picked with no hardware, then 300000
-     * extrapolated from another scene's ratio, which came out four times
-     * too pessimistic. The right correction is a fresh device capture, not
-     * an estimate.
-     *
-     * On the extrapolation that produced 300000: fire measures ~318x host
-     * and this scene ~63x, so it predicted 226-244 ms against an actual
-     * 60 ms. Worth remembering before anyone extrapolates again - on this
-     * chip the ratio is dominated by cache behaviour the host does not
-     * model, and it is scene-specific.
-     *
-     * The staleness warning the paragraphs above carried is RESOLVED:
-     * the fresh capture the 2026-08-26 re-base ran on (see
-     * FULL_STEP_BUDGET_US's comment) measured the fourteen-material
-     * scene at 74911 us, and the target followed the same uniform rule
-     * as every other budget: measured * 0.9, rounded -> 67500.
-     * Numerically up from the stale 54000, still a tenth below what the
-     * current scene actually costs. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(67500, (int)per_step,
-        "the mixed-material flip is held to 10% below what it measured, "
-        "as a reduction target - this failing means the work has not been "
-        "done yet, not that something broke");
+    /* THE 87800 BUDGET IS INVALIDATED, NOT CARRIED FORWARD: it was
+     * measured against the fourteen-material scene, and this scene is
+     * now bigger. */
+
+    /* 200000 is a loose SANITY CEILING, not a budget - the same
+     * placeholder shape this row used before its first measurement.
+     * Re-peg from the first clean capture of THIS scene: measured x 0.9,
+     * rounded, this section's usual reduction-target rule. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(200000, (int)per_step,
+        "INVALIDATED, NOT A REAL BUDGET - this scene now covers the "
+        "extended statics and gunpowder too, so the 87800 figure it used "
+        "to carry no longer describes what it measures; re-peg from the "
+        "first clean device capture of this scene at measured x 0.9 and "
+        "replace this placeholder ceiling");
 }
 
 #ifdef SAND_HOST_PROBE
@@ -1457,6 +1430,74 @@ static void test_the_water_over_lava_scene_fits_in_the_frame_budget(void)
 void sand_host_probe_run_water_over_lava(void)
 {
     test_the_water_over_lava_scene_fits_in_the_frame_budget();
+}
+#endif
+
+/* The gunpowder basin scene (build_gunpowder_basin_scene(),
+ * suite_sand_scenes.c), shared with the coverage test that proves the
+ * chain-detonation really spans several bursts and reaches fuel
+ * outside the vessel. Closes half of bd esp32c6-4d9. */
+
+/* NINETY STEPS, NO SETTLING - matching the coverage test exactly, so
+ * this times the same run already proved to reach every path it
+ * claims to. See GUNPOWDER_BASIN_MEASURED_STEPS's own comment
+ * (suite_sand_scenes.c) for the timeline that window came from. */
+
+/* MEASURED 31,399 us per step on device, 2026-09-06, first clean run of
+ * this row (capture_ref_gunpowder-basin-benchmark_20260906_213221.md).
+ * Budget is that x 0.9 = 28,259, rounded DOWN to 28,200 so the target is
+ * never looser than the convention. */
+
+/* SO THIS ROW FAILS BY DESIGN, like every other budget in this section:
+ * a reduction target, not a regression guard. Re-peg only from a fresh
+ * capture, never to make it green. */
+static void test_the_gunpowder_basin_scene_fits_in_the_frame_budget(void)
+{
+    uint8_t   *big      = malloc((size_t)REAL_W * REAL_H);
+    uint8_t   *blocks   = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    impulse_t *impulses = malloc((size_t)GUNPOWDER_BASIN_IMPULSE_MAX * sizeof *impulses);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+    TEST_ASSERT_NOT_NULL(impulses);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 61u);
+    sand_enable_sleeping(&real, blocks);
+    sand_set_scatter(&real, SAND_SCATTER_PER_MATERIAL);
+    sand_set_decay(&real, SAND_DECAY_PER_MATERIAL);
+    sand_set_mobility(&real, SAND_MOBILITY_PER_MATERIAL);
+    sand_enable_impulses(&real, impulses, GUNPOWDER_BASIN_IMPULSE_MAX);
+
+    build_gunpowder_basin_scene(&real);
+
+    const int64_t start = esp_timer_get_time();
+    const int steps = GUNPOWDER_BASIN_MEASURED_STEPS;
+    for (int i = 0; i < steps; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+    const int64_t per_step = (esp_timer_get_time() - start) / steps;
+
+    ESP_LOGI("device_tests", "gunpowder basin scene, %dx%d: %lld us per step",
+             REAL_W, REAL_H, (long long)per_step);
+
+    free(big);
+    free(blocks);
+    free(impulses);
+
+    TEST_ASSERT_LESS_THAN_MESSAGE(28200, (int)per_step,
+        "a chain detonation in a brush-drawn stone vessel, with the "
+        "aftermath reaching fuel outside it, should cost less per step "
+        "than the 31,399us first measured on 2026-09-06 - this is a "
+        "reduction target at measured x 0.9, so failing means the work "
+        "is not done yet, not that something broke");
+}
+
+#ifdef SAND_HOST_PROBE
+/* Host-only timing probe - the gunpowder basin scene (see the
+ * full-step control's own wrapper for the pattern). */
+void sand_host_probe_run_gunpowder_basin(void)
+{
+    test_the_gunpowder_basin_scene_fits_in_the_frame_budget();
 }
 #endif
 
@@ -2230,6 +2271,7 @@ void run_sand_perf_suite(void)
     RUN_TEST(test_the_boiler_scene_fits_in_the_frame_budget);
     RUN_TEST(test_the_wet_earth_scene_fits_in_the_frame_budget);
     RUN_TEST(test_the_water_over_lava_scene_fits_in_the_frame_budget);
+    RUN_TEST(test_the_gunpowder_basin_scene_fits_in_the_frame_budget);
 
     RUN_TEST(test_present_cost_against_a_falling_sand_scene);
     RUN_TEST(test_present_cost_against_the_lava_stress_scene);

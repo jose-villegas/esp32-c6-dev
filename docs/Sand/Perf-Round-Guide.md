@@ -39,6 +39,12 @@ Never skip step 1. Every round in this campaign that designed a fix before
 counting spent at least one device cycle on code the failing test never
 called or work that was already cheap to fall through.
 
+But step 1 tells you where the cost *is*, not what a change will *save*,
+and its host numbers have one measured blind spot: a candidate that stops
+executing work can read as zero on a laptop and win several percent on the
+board. Read "The one class where a host null means nothing" below before
+you drop a candidate because the host shrugged at it.
+
 ## Exact commands
 
 Host suite (portable suites, <1s):
@@ -170,6 +176,50 @@ host can see is flash placement against the 32 KB instruction cache. The
 route to that number, once a QEMU with TCG plugins exists, is sketched and
 half-built in `launcher/tools/oracle/`.
 
+### The one class where a host null means nothing (bd esp32c6-vk4)
+
+**A change that stops EXECUTING work can measure zero on the host and win
+several percent on the device.** Not a magnitude error - a sign error. The
+0.7x-2x range above does not hold here, and this has already cost this
+campaign real decisions.
+
+Measured 2026-09-07 with a probe built for the question: 32 dummy field
+tests per non-empty cell, one build executing them and one skipping them,
+gated on a `volatile` so both builds emit *identical* code (4,833
+instructions, same function inventory) and differ only in one `.data`
+initialiser. Each machine's delta against its own baseline for the same
+scene:
+
+| scene | host | device | device/host |
+|---|---:|---:|---:|
+| water | 33.7% | 67.3% | **2.0x** |
+| every-material flip | 5.0% | 32.9% | **6.6x** |
+
+So the host understates the cost of executed instructions by 2-6.6x
+relative to the surrounding simulation work. It is not that the device is
+uniformly slower - a uniform slowdown cancels in that ratio.
+
+**Do not write "i-cache" as the cause.** That was assumed twice and is
+still unproven. This part is single-issue in-order while the host is wide
+superscalar out-of-order, so 32 extra ALU ops cost ~32 cycles here and far
+less there through instruction-level parallelism alone; fetch and IPC both
+fit these numbers and the experiment cannot separate them. A separate test
+- growing flash-resident const data read per cell from 4 KB to 32 KB -
+measured *exactly zero* on device, which is weak evidence against the
+cache half. What is established is the effect, not the mechanism.
+
+Two consequences for how you run a round:
+
+- **A host null is not a reason to abandon a candidate that removes
+  executed work.** Round 6's own ceiling test measured +1% on host; the
+  device paid -7.4% for the same idea, and the round was nearly closed on
+  that null before the code was written.
+- **Candidates already retired on host nulls of this class are suspect
+  and may be worth re-testing on device.** Named: attempt 12's per-cell
+  "can this material react at all" mask, retired at -0.1%
+  (Performance-Tuning-Attempts.md, "Never retry"), and round 6's ceiling
+  test above.
+
 ```sh
 bash launcher/main/apps/sand/tools/perf_probe/build_probe.sh out/probe
 out/probe --list                      # every scene this build knows
@@ -194,6 +244,56 @@ python launcher/main/apps/sand/tools/compare_reports.py <before>.md <after>.md
 It derives the noise floor from the two control rows in the reports being
 compared rather than hardcoding one, so a run that was noisier than usual
 does not get read as a win.
+
+### Count, do not time, when the question is "did the work change"
+
+Host wall-clock timing carries a 7-15% cross-binary noise floor - two
+separately-linked host binaries of the SAME source disagree by that much
+before either one has changed anything. bd esp32c6-8zx hit this chasing a
+sub-20% water regression: the liquid-free control moved MORE between two
+builds than the effect being chased, so no amount of extra host timing
+rounds could ever resolve the question. Counting the actual work instead -
+calls, rows walked, blocks/cells examined, transfers - sidesteps the noise
+floor entirely: two builds of byte-identical source produce byte-identical
+counts, so a real change shows up as a real difference and a no-op window
+shows up as exact equality, not "probably nothing."
+
+`sand_liquid.c` itself carries none of this instrumentation - counting is
+injection, not an in-tree opt-in. `sand_work_counters.h`/`.c` live as tool
+assets in `tools/perf_probe/`, and `tools/perf_probe/compare_counters.py` is
+the driver: point it at two refs and it `git archive`s each into a scratch
+tree (never checking out over a worktree), carries the current counters and
+a small standalone scene driver into both, injects the `SAND_WORK_COUNT()`
+call sites into each scratch tree's own `sand_liquid.c` at verified text
+anchors, builds, runs the water scene, and prints a per-counter delta table
+- no device, no capture, and it bisects for free the way a timed capture
+never could (~8 minutes each on device vs. two host builds). A release or
+ordinary development build never sees a single increment, because the
+source they compile never carries one.
+
+```sh
+python launcher/main/apps/sand/tools/perf_probe/compare_counters.py <ref> [<ref>]
+```
+
+The second ref defaults to `<ref>^` - the ordinary case is "did this one
+commit change the work."
+
+### Verify both endpoints of a bisect window are actually measured
+
+Before spending anything INSIDE a window, confirm both ends of it were
+freshly measured rather than assumed. bd esp32c6-8zx picked an old bisect
+endpoint on the assumption a scene's cost was still what an earlier
+capture said, never re-verified it, and spent a full day attributing a
+window that turned out to contain no change at all - the real regression
+was in a different six-day span nobody had looked at yet.
+
+The counters caught this before anyone thought to question the window: a
+window that truly contains a regression does not produce EXACT equality
+across rows walked, blocks examined, cells examined and transfers all at
+once. Twelve counters landing on the same digit - not approximately equal,
+identical to the digit - is the signature of a window in which nothing
+happened, not evidence that "the work did not grow." Read that result as a
+prompt to move an endpoint and re-run, not as a finished answer.
 
 ### Unattended candidate evaluation
 
@@ -259,6 +359,13 @@ that can re-record its own baseline has no baseline.
   against `RUN_TEST()` in the current `suite_sand_*.c` files before
   trusting any number from it — a stale capture has cost this campaign real time more
   than once.
+- **Check that an artifact exists for the SPECIFIC ref before reading any
+  number out of it.** `ls -t results/` hands you the most recently
+  generated file, which is not the same claim as "the file for the ref I
+  am asking about" - it can be a neighbouring ref's report, and it reads
+  entirely plausibly right up until a conclusion is drawn from it. This
+  has cost this campaign real time twice in one session; name the ref you
+  expect and confirm the artifact actually says so before trusting it.
 
 ## Budget rules
 
@@ -302,10 +409,24 @@ Pass ownership (who to blame first for a given scene) is mapped in
 scene" table: water and the mixed flip are the cross-flow pass; thermal
 shock and the boiler are the reactions pass; the three gas-heavy scenes
 are the gas pass; the every-material flip is genuinely diffuse (no single
-pass owns more than 44% of it). Build a four-way stub-each-pass map like
-that one before designing anything, on any new failing scene — it is four
-builds and it has caught a wrong-pass experiment every time it's been
-skipped.
+pass owns more than 44% of it). Build a pass-decomposition map like that
+one before designing anything, on any new failing scene — it has caught a
+wrong-pass experiment every time it's been skipped.
+
+Do this with the four `sand_step_gate_*` volatiles (`sand_priv.h`, bd
+esp32c6-8zx), not four separately-built stub-each-pass images: one binary,
+five configurations (all passes on, then each disabled in turn) in ONE
+device capture, so there is zero layout difference between configurations
+to confound the comparison — the failure mode four separate images cannot
+avoid, since each one draws its own flash-layout ticket. Default true at
+runtime (every pass on), gated behind its own Kconfig option,
+`CONFIG_LAUNCHER_SAND_PASS_GATES` — opt-in on top of
+`CONFIG_LAUNCHER_DEVELOPMENT`, for the same reason a plain `build.diag`
+should not silently carry them: they measure TIME on device, and the counters
+(injected by `compare_counters.py`, not an in-tree option) measurably perturb
+codegen, so the two are kept apart to make sure measuring one never perturbs
+the other. The gates cost release nothing and, with the option on, are
+available in a diagnostics build.
 
 Open items, as of this file's writing:
 

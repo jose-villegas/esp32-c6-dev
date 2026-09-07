@@ -28,20 +28,21 @@
  * string instead.
  *
  * Usage:
- *   probe                    run every scene, in table order
- *   probe --list             print scene names, one per line, and exit
- *   probe SCENE [SCENE...]   run exactly the named scenes, in the order
- *                            given (repeats allowed) - what
- *                            launcher/main/apps/sand/tools/perf_probe/
- *                            run_probe.py drives, one child process per
- *                            (scene, round) pair, for interleaved best-of-N
- *                            timing.
+ *   probe                       run every scene, in table order
+ *   probe --list                print scene names, one per line, and exit
+ *   probe SCENE [SCENE...]      run exactly the named scenes, in the order
+ *                               given (repeats allowed) - what
+ *                               launcher/main/apps/sand/tools/perf_probe/
+ *                               run_probe.py drives, one child process per
+ *                               (scene, round) pair, for interleaved best-of-N
+ *                               timing.
  *
  * Each scene reports its own per-step microsecond figure via the same
  * ESP_LOGI() line the device build prints (see suite_sand.c) - this driver
  * does not re-time anything itself. run_probe.py parses that line back out
  * of captured stdout.
  *===========================================================================*/
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -58,12 +59,14 @@ extern void sand_host_probe_run_full_step_control(void);
 extern void sand_host_probe_run_settled_flip_control(void);
 extern void sand_host_probe_run_water(void);
 extern void sand_host_probe_run_mixed_flip(void);
+extern void sand_host_probe_run_settled_pool_to_landscape(void);
 extern void sand_host_probe_run_lava_stress(void);
 extern void sand_host_probe_run_four_liquids(void);
 extern void sand_host_probe_run_wet_earth(void);
 extern void sand_host_probe_run_water_over_lava(void);
 extern void sand_host_probe_run_every_material_flip(void);
 extern void sand_host_probe_run_smoke_and_steam(void);
+extern void sand_host_probe_run_gunpowder_basin(void);
 
 typedef struct {
     const char* name;
@@ -78,12 +81,14 @@ static const probe_scene_t SCENES[] = {
     {"settled_flip_control", sand_host_probe_run_settled_flip_control},
     {"water", sand_host_probe_run_water},
     {"mixed_flip", sand_host_probe_run_mixed_flip},
+    {"settled_pool_to_landscape", sand_host_probe_run_settled_pool_to_landscape},
     {"lava_stress", sand_host_probe_run_lava_stress},
     {"four_liquids", sand_host_probe_run_four_liquids},
     {"wet_earth", sand_host_probe_run_wet_earth},
     {"water_over_lava", sand_host_probe_run_water_over_lava},
     {"every_material_flip", sand_host_probe_run_every_material_flip},
     {"smoke_and_steam", sand_host_probe_run_smoke_and_steam},
+    {"gunpowder_basin", sand_host_probe_run_gunpowder_basin},
 };
 #define SCENE_COUNT (int)(sizeof(SCENES) / sizeof(SCENES[0]))
 

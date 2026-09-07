@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Report C/C++ comments longer than a character limit (default 300).
 
-A run of consecutive own-line `//` comments counts as ONE comment, the way a
-reader sees it; a `//` trailing on a code line stands alone. Length is measured
+A run of consecutive own-line `//` comments, or of consecutive own-line
+`/* */` blocks with no code between them, counts as ONE comment, the way a
+reader sees it - otherwise one explanation chopped into several blocks would
+each score under the limit while the paragraph they form does not. A `//`
+trailing on a code line stands alone. Length is measured
 on the comment's prose - markers, per-line indentation, `*` gutters and the
 blank line inside a paragraph break are stripped first - so reformatting a
 comment across more or fewer lines never changes its score.
@@ -115,11 +118,26 @@ def scan(path, source):
                 i += 1
             i += 1
         elif source.startswith("/*", i):
+            start_of_line = source.rfind("\n", 0, i) + 1
+            own_line = source[start_of_line:i].strip() == ""
             end = source.find("*/", i + 2)
             end = n if end < 0 else end + 2
-            com = Comment(path, line, "block", i, end)
-            com.raw_lines = source[i:end].split("\n")
-            comments.append(com)
+            prev = comments[-1] if comments else None
+            mergeable = (
+                own_line
+                and prev is not None
+                and prev.kind == "block"
+                and prev.own_line
+                and prev.line + len(prev.raw_lines) == line
+            )
+            if mergeable:
+                prev.raw_lines += source[i:end].split("\n")
+                prev.spans.append((i, end))
+            else:
+                com = Comment(path, line, "block", i, end)
+                com.own_line = own_line
+                com.raw_lines = source[i:end].split("\n")
+                comments.append(com)
             line += source.count("\n", i, end)
             i = end
         elif source.startswith("//", i):

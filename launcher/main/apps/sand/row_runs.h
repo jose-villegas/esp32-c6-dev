@@ -48,26 +48,14 @@ int row_runs_find(const uint8_t *row, int width, uint8_t empty,
 void row_runs_span_fallback(const uint8_t *row, int width, uint8_t empty,
                             int *x0, int *x1);
 
-/* Reconciles this frame's runs against what was sent last time, so a run
- * that shrank or vanished still sends far enough to clear its old pixels -
- * the multi-run generalisation of a single previous/current range union:
- *
- *   - a current run absorbs (unions with) every previous run it overlaps,
- *     same as a plain single-range union would, just per-run instead of
- *     whole-row;
- *   - a previous run that no current run overlaps just went entirely
- *     empty, and gets its own send range so its stale pixels still clear.
- *
- * Deliberately simple over perfectly tight: with only ROW_MAX_RUNS runs a
- * side, a single pass can occasionally leave two resulting ranges
- * overlapping, or miss folding a previous run into an extension made by a
- * later match, rather than fully re-merging afterwards. That costs at most
- * one extra small send or some double-marking, never a dropped pixel -
- * which is the property that actually matters here, and callers that mark
- * dirty regions additively (gfx_mark_dirty()) are unaffected either way.
- *
- * `send_x0`/`send_x1` must have room for cur_n + prev_n entries. Returns
- * how many send ranges resulted. */
+/* Reconciles this frame's runs against last send, so a shrunk or
+ * vanished run still sends enough to clear its old pixels: a current
+ * run absorbs every previous run it overlaps; a run no current run
+ * overlaps gets its own send range so its stale pixels clear. Simple
+ * over tight - a pass can occasionally leave overlapping ranges rather
+ * than fully re-merging, costing at most one extra small send, never a
+ * dropped pixel, the property that matters. `send_x0`/`send_x1` need
+ * room for cur_n + prev_n entries. */
 int row_runs_reconcile(const uint16_t *cur_x0, const uint16_t *cur_x1,
                        int cur_n, const uint16_t *prev_x0,
                        const uint16_t *prev_x1, int prev_n,

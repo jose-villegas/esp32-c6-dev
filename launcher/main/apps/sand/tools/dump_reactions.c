@@ -71,6 +71,7 @@
 #endif
 
 #include "material.h"
+#include "material_palette.h"
 
 /* Not defined anywhere in this codebase today (checked) - every other array
  * here is either sized by a named constant or walked with sizeof/pointer
@@ -568,6 +569,7 @@ static size_t causes_count;
  * column would be. */
 static const char *const causes_expected[] = {
     "shatters_to",
+    "soaks_to",
     "spoils_to",
 };
 
@@ -2002,9 +2004,9 @@ static void emit_wet(const reaction_t *r, uint8_t cell)
              * nothing for a reader to picture; "enough" says the same
              * true thing (there is a threshold) without it. */
             printf("- It *soaks up* any %s it touches%s, and turns into "
-                   "%s once it has soaked up enough.\n",
+                   "%s once it has soaked up enough - %s.\n",
                    wetting_liquids, rate_gap(adverb_child("soaks", r->soaks)),
-                   mat_span_v(r->soaks_to));
+                   mat_span_v(r->soaks_to), cause_marked("soaks_to", 0));
         } else {
             /* The old parenthetical "(its own moisture rises)" and the
              * trailing "rather than changing into anything" were both
@@ -3263,7 +3265,9 @@ static void emit_anatomy(void)
         seg_rate_gap(segs, &n, adverb("soaks", row->r->soaks));
         seg_glue(segs, &n, ", becoming ");
         seg_material(segs, &n, soaks_color, soaks_name);
-        seg_glue(segs, &n, " once it takes a unit in.");
+        seg_glue(segs, &n, " once it takes a unit in - ");
+        seg_mark(segs, &n, MARK_CAUSE, cause_at("soaks_to", 0));
+        seg_glue(segs, &n, ".");
         print_example("Wet - GRP_WET: soaks, soaks_to, wetting_liquids "
                        "(emit_wet)", segs, n);
     }
@@ -3441,12 +3445,14 @@ static void emit_anatomy(void)
 
 int main(int argc, char **argv)
 {
-    if (argc != 2) {
-        fprintf(stderr, "usage: %s <path/to/sand_reactions.c>\n",
+    if (argc < 2) {
+        fprintf(stderr, "usage: %s <path/to/sand_reactions.c> "
+                "[<path/to/sand_plants.c> ...]\n",
                 (argc > 0) ? argv[0] : "dump_reactions");
-        fprintf(stderr, "  sand_reactions.c is read as TEXT, never linked - "
-                "see reaction_doc.h and this file's own "
-                "parse_reaction_docs() for why.\n");
+        fprintf(stderr, "  Each argument is read as TEXT, never linked - see "
+                "reaction_doc.h and this file's own parse_reaction_docs() "
+                "for why. sand_reactions.c and sand_plants.c both carry "
+                "REACTION_DOC() calls; pass both.\n");
         return 1;
     }
 #ifdef _WIN32
@@ -3464,13 +3470,13 @@ int main(int argc, char **argv)
     build_rows();
     adverb_exceptions_are_sound();
     legibility_overrides_are_sound();
-    /* sand_reactions.c's own REACTION_DOC() calls, read as text - must run
-     * before any emit_*() call below, since emit_shatter(), emit_spoils()
+    /* Every REACTION_DOC() call across the given files, read as text - must
+     * run before any emit_*() call below, since emit_shatter(), emit_spoils()
      * and emit_pairwise_table() all pull their cause clauses out of this. */
-    {
-        char *sand_reactions_src = read_whole_file(argv[1]);
-        parse_reaction_docs(argv[1], sand_reactions_src);
-        free(sand_reactions_src);
+    for (int i = 1; i < argc; i++) {
+        char *src = read_whole_file(argv[i]);
+        parse_reaction_docs(argv[i], src);
+        free(src);
     }
     causes_are_complete();
     /* Each of these four is only ever read in DEFAULT-section prose
