@@ -521,6 +521,59 @@ static inline bool tick_decay(sand_t *s, uint8_t *row, int x, int y,
     return true;
 }
 
+/* Per-pass volatile gates for sand_step() (bd esp32c6-8zx), default enabled
+ * so behaviour is untouched. One binary, five configurations, one boot - a
+ * device pass decomposition with no layout difference between
+ * configurations, unlike four separate images each drawing their own
+ * flash-layout ticket. Defined in sand.c. */
+
+/* OPT-IN, for the reason sand_work_counters.h spells out: development
+ * alone puts these in build.diag, the capture build, and an instrument
+ * that shifts every measurement is worse than none. CONFIG_LAUNCHER_
+ * SAND_PASS_GATES already `select`s LAUNCHER_DEVELOPMENT, so the guard
+ * checks only this option. Kept separate from the work counters: the
+ * gates measure TIME, the counters measurably perturb codegen, so one
+ * option covering both would perturb exactly what the gates measure. */
+#if CONFIG_LAUNCHER_SAND_PASS_GATES
+extern volatile bool sand_step_gate_main_sweep;
+extern volatile bool sand_step_gate_cross_flow;
+extern volatile bool sand_step_gate_gas;
+extern volatile bool sand_step_gate_reactions;
+
+/* Wraps a pass's call site in `if (sand_step_gate_<name>)` when compiled in,
+ * and in nothing at all otherwise - a release build's sand_step() has no
+ * extra branch to fold away, because there was never a branch there to
+ * begin with. */
+#define SAND_STEP_GATE(name) if (sand_step_gate_##name)
+/* Same idea, ANDed into an existing condition rather than wrapping a bare
+ * call - for the one pass (gas) whose call site already has a condition of
+ * its own. */
+#define SAND_STEP_GATED(name, cond) (sand_step_gate_##name && (cond))
+#else
+#define SAND_STEP_GATE(name)
+#define SAND_STEP_GATED(name, cond) (cond)
+#endif
+
+/* Defined in sand_reactions.c: the whole of a step's fire-chemistry work
+ * for every burning cell (reaction_t.burns - fire and ember today) -
+ * ignition of adjacent flammable neighbours, extinguishing by adjacent
+ * liquid, burning out via tick_decay() above, (ember only) flaring a
+ * flame upward, and now heat conduction through a material like stone
+ * (reaction_t.conducts - see conduct_heat() in sand_reactions.c). Called
+ * once from sand_step(), after sand_step_gas() finishes and before
+ * finalize_settling() - same slot, same reasoning as sand_step_liquids()/
+ * sand_step_gas() before it: BLOCK_ACTIVE has to reflect the whole step.
+ * Gated on s->may_have_burning alone (not may_have_gas too) - a burning
+ * cell is the only actor here; gas is passive fuel with nothing to do on
+ * its own.
+ *
+ * Takes only `s`. It briefly took (gx, gy) too, while boiling walked
+ * against gravity to find a liquid's surface; boiling happens at the
+ * heat source now and the steam bubbles up by itself, so this pass has
+ * no interest in gravity at all. That also restores the original reason
+ * may_have_burning is checked INSIDE rather than at the call site:
+ * there are no arguments to marshal for a call that will immediately
+ * return. */
 void sand_step_reactions(sand_t *s);
 
 bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
