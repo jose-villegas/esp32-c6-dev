@@ -314,7 +314,7 @@ try_heat_transform_given(sand_t* s, int nx, int ny, int w, int h, size_t at, cel
 static inline void
 place_cracked(sand_t* s, int x, int y, size_t at, material_id_t into) {
     if (into == MAT_SAND) {
-        place_cell(s, x, y, at, CELL_MAKE(into, (uint8_t)(SAND_CULLET_BASE + rng_below(&s->rng, SAND_CULLET_SHADES))));
+        place_cell(s, x, y, at, cullet_cell(s));
         return;
     }
     place_reacted(s, x, y, at, into);

@@ -511,9 +511,22 @@ static void queue_flying_grain(sand_t *s, int x, int y, int dir, int speed,
         }
     }
 
+    /* A pane knocked loose is a pane broken: it flies on as cullet,
+     * carrying the push that dislodged it rather than sailing off as an
+     * intact sheet. Written to the grid as well as the entry - flight
+     * matches `cell` against what is actually there before moving it. */
+    cell_t flying = cell;
+    if (CELL_MATERIAL(cell) == MAT_GLASS) {
+        flying = cullet_cell(s);
+        s->cells[at] = flying;
+        latch_content_flags(s, flying);
+        mark_rows(s, y, y);
+        wake_block_and_neighbors(s, x, y);
+    }
+
     impulse_t *entry = &s->impulse_buf[s->impulse_count++];
     entry->index = (uint16_t)at;
-    entry->cell  = cell;
+    entry->cell  = flying;
     entry->dir   = (uint8_t)dir;
     entry->speed = (uint8_t)speed;
     entry->ramp  = (uint8_t)ramp;
