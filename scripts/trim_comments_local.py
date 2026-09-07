@@ -175,6 +175,11 @@ Hard rules, regardless of length:
   your version must not say it is done because of B.
 - If the text describes a LIMITATION or a problem, your version must still
   read as a limitation, not as a benefit.
+- If the text names a copyright holder, a licence (Apache-2.0, MIT, ...),
+  or says code was copied/adapted from somewhere else, that attribution
+  is not "change history" and must survive verbatim in your version,
+  regardless of length - reply DELETE instead of dropping it if nothing
+  else in the comment is worth keeping.
 - British spelling as in the original (colour, behaviour). Plain prose, no
   bullet lists, no headings, no markdown, no code fences, no preamble.
 
@@ -330,6 +335,24 @@ def shares_vocabulary(old, new):
     return bool(old_words & {w.lower() for w in WORD.findall(new)})
 
 
+ATTRIBUTION = re.compile(
+    r"\bcopyright\b|\(c\)\s*\d{4}|\bapache-?2\.?0\b|\bmit licen[cs]e\b|"
+    r"\bbsd licen[cs]e\b|\bgpl\b|\bcopied from\b|\badapted from\b", re.I)
+
+
+def drops_attribution(old, new):
+    """A copyright holder, licence name, or "copied/adapted from" note in
+    the original that is gone from the rewrite - confirmed happening for
+    real (a Waveshare BSP attribution silently dropped by this exact
+    pipeline, caught only by a human content review, not by anything
+    automated). Not "change history": an attribution notice does not go
+    stale and git log does not substitute for it - the rule in PROMPT
+    above says to keep it verbatim, but a model has not reliably done
+    that, so this is the deterministic backstop.
+    """
+    return bool(ATTRIBUTION.search(old)) and not ATTRIBUTION.search(new)
+
+
 def response_problems(original, prose, ceiling):
     """Automated defects in a candidate rewrite, regardless of which
     backend produced it - the concrete failure shapes OmniRoute corruption
@@ -346,6 +369,8 @@ def response_problems(original, prose, ceiling):
         problems.append("meta-reply")
     if fabricates_number(original, prose):
         problems.append("fabricated number")
+    if drops_attribution(original, prose):
+        problems.append("dropped attribution/licence notice")
     if not shares_vocabulary(original, prose):
         problems.append("no shared vocabulary")
     return problems
@@ -633,6 +658,9 @@ def facts_lost(old, new):
     if NEGATION.search(old) and not NEGATION.search(new):
         lost.append("every negation dropped (a limitation may now read as a "
                     "benefit)")
+    if drops_attribution(old, new):
+        lost.append("copyright/licence attribution dropped - restore "
+                    "verbatim, this is not change history")
     return lost
 
 
