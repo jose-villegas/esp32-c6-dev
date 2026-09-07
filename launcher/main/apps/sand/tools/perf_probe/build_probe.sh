@@ -106,6 +106,7 @@ $APP_SAND/sand.c
 $APP_SAND/sand_liquid.c
 $APP_SAND/sand_gas.c
 $APP_SAND/sand_reactions.c
+$APP_SAND/sand_plants.c
 $APP_SAND/material.c
 $APP_SAND/palette.c
 $APP_SAND/row_runs.c

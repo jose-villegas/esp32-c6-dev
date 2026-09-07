@@ -3445,12 +3445,14 @@ static void emit_anatomy(void)
 
 int main(int argc, char **argv)
 {
-    if (argc != 2) {
-        fprintf(stderr, "usage: %s <path/to/sand_reactions.c>\n",
+    if (argc < 2) {
+        fprintf(stderr, "usage: %s <path/to/sand_reactions.c> "
+                "[<path/to/sand_plants.c> ...]\n",
                 (argc > 0) ? argv[0] : "dump_reactions");
-        fprintf(stderr, "  sand_reactions.c is read as TEXT, never linked - "
-                "see reaction_doc.h and this file's own "
-                "parse_reaction_docs() for why.\n");
+        fprintf(stderr, "  Each argument is read as TEXT, never linked - see "
+                "reaction_doc.h and this file's own parse_reaction_docs() "
+                "for why. sand_reactions.c and sand_plants.c both carry "
+                "REACTION_DOC() calls; pass both.\n");
         return 1;
     }
 #ifdef _WIN32
@@ -3468,13 +3470,13 @@ int main(int argc, char **argv)
     build_rows();
     adverb_exceptions_are_sound();
     legibility_overrides_are_sound();
-    /* sand_reactions.c's own REACTION_DOC() calls, read as text - must run
-     * before any emit_*() call below, since emit_shatter(), emit_spoils()
+    /* Every REACTION_DOC() call across the given files, read as text - must
+     * run before any emit_*() call below, since emit_shatter(), emit_spoils()
      * and emit_pairwise_table() all pull their cause clauses out of this. */
-    {
-        char *sand_reactions_src = read_whole_file(argv[1]);
-        parse_reaction_docs(argv[1], sand_reactions_src);
-        free(sand_reactions_src);
+    for (int i = 1; i < argc; i++) {
+        char *src = read_whole_file(argv[i]);
+        parse_reaction_docs(argv[i], src);
+        free(src);
     }
     causes_are_complete();
     /* Each of these four is only ever read in DEFAULT-section prose

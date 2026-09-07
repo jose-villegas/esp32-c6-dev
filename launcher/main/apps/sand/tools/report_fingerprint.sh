@@ -70,6 +70,7 @@ OUT_BIN="$BUILD_DIR/grid_fingerprint"
     "$SAND_DIR/sand.c" \
     "$SAND_DIR/sand_reactions.c" \
     "$SAND_DIR/sand_impulse.c" \
+    "$SAND_DIR/sand_plants.c" \
     "$SAND_DIR/sand_gas.c" \
     "$SAND_DIR/sand_liquid.c" \
     "$SAND_DIR/material.c" \
