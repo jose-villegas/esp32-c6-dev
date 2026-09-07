@@ -1,6 +1,6 @@
 /*=============================================================================
- * sand_priv - internals shared between sand.c, sand_liquid.c and
- * sand_impulse.c.
+ * sand_priv - internals shared across sand.c, sand_liquid.c, sand_gas.c,
+ * sand_reactions.c, sand_plants.c and sand_impulse.c.
  *
  * Not a public header: nothing outside this module includes it, and nothing
  * in it is part of sand.h's API. It exists only because splitting the liquid
@@ -52,16 +52,16 @@
 #include "sand.h"
 
 /* NULL if off grid; vertical bounds checked per row, not per grain. */
-static inline uint8_t *dest_row(const sand_t *s, int y)
-{
+static inline uint8_t*
+dest_row(const sand_t* s, int y) {
     if (y < 0 || y >= s->h) {
         return NULL;
     }
     return s->cells + (size_t)y * (size_t)s->w;
 }
 
-static inline void mark_rows(sand_t *s, int y0, int y1)
-{
+static inline void
+mark_rows(sand_t* s, int y0, int y1) {
     if (s->dirty_rows != NULL) {
         if ((unsigned)y0 < (unsigned)s->h) {
             s->dirty_rows[y0] = 1;
@@ -80,8 +80,8 @@ static inline void mark_rows(sand_t *s, int y0, int y1)
  * MATERIAL_LIQUID_DEPTH_BAND of the surface can read differently,
  * further out already saturates. Direction-agnostic, avoiding coupling
  * to app_sand.c's gravity bookkeeping. */
-static inline void mark_depth_band(sand_t *s, int y)
-{
+static inline void
+mark_depth_band(sand_t* s, int y) {
     if (s->dirty_rows == NULL) {
         return;
     }
@@ -111,8 +111,8 @@ static inline void mark_depth_band(sand_t *s, int y)
 #define BLOCK_HAS_LIQUID      0x8
 #define BLOCK_LIQUID_NEAR     0x10
 
-static inline uint16_t liquid_mask(void)
-{
+static inline uint16_t
+liquid_mask(void) {
     uint16_t mask = 0;
     for (int m = 0; m < MATERIAL_MAX; m++) {
         if (material_by_id((material_id_t)m)->kind == KIND_LIQUID) {
@@ -122,14 +122,13 @@ static inline uint16_t liquid_mask(void)
     return mask;
 }
 
-static inline int block_of(const sand_t *s, int x, int y)
-{
+static inline int
+block_of(const sand_t* s, int x, int y) {
     return (y / SAND_BLOCK_H) * s->block_cols + (x / SAND_BLOCK_W);
 }
 
-static inline void wake_blocks_range(sand_t *s, int bx0, int by0, int bx1,
-                                     int by1)
-{
+static inline void
+wake_blocks_range(sand_t* s, int bx0, int by0, int bx1, int by1) {
     if (s->block_state == NULL) {
         return;
     }
@@ -154,16 +153,15 @@ static inline void wake_blocks_range(sand_t *s, int bx0, int by0, int bx1,
 
     for (int by = lo_y; by <= hi_y; by++) {
         for (int bx = lo_x; bx <= hi_x; bx++) {
-            s->block_state[by * s->block_cols + bx] &=
-                (uint8_t)~(BLOCK_SETTLED_NEAREST | BLOCK_SETTLED_OTHER);
+            s->block_state[by * s->block_cols + bx] &= (uint8_t)~(BLOCK_SETTLED_NEAREST | BLOCK_SETTLED_OTHER);
         }
     }
     s->block_state[by0 * s->block_cols + bx0] |= BLOCK_ACTIVE;
     s->block_state[by1 * s->block_cols + bx1] |= BLOCK_ACTIVE;
 }
 
-static inline bool any_neighbor_active(const sand_t *s, int bx, int by)
-{
+static inline bool
+any_neighbor_active(const sand_t* s, int bx, int by) {
     const int lo_x = (bx > 0) ? bx - 1 : bx;
     const int hi_x = (bx + 1 < s->block_cols) ? bx + 1 : bx;
     const int lo_y = (by > 0) ? by - 1 : by;
@@ -183,9 +181,8 @@ static inline bool any_neighbor_active(const sand_t *s, int bx, int by)
 }
 
 /* Expands BLOCK_HAS_LIQUID, counts itself too */
-static inline bool block_or_neighbour_has_liquid(const sand_t *s, int bx,
-                                                 int by)
-{
+static inline bool
+block_or_neighbour_has_liquid(const sand_t* s, int bx, int by) {
     const int lo_x = (bx > 0) ? bx - 1 : bx;
     const int hi_x = (bx + 1 < s->block_cols) ? bx + 1 : bx;
     const int lo_y = (by > 0) ? by - 1 : by;
@@ -209,8 +206,8 @@ static inline bool block_or_neighbour_has_liquid(const sand_t *s, int bx,
  * precision is not needed - see
  * test_undermining_a_sleeping_pile_collapses_it: erasing must wake a
  * NEIGHBOURING block's resting pile, with no sweep-internal fallback. */
-static inline void wake_block_and_neighbors(sand_t *s, int x, int y)
-{
+static inline void
+wake_block_and_neighbors(sand_t* s, int x, int y) {
     if (s->block_state == NULL) {
         return;
     }
@@ -229,8 +226,7 @@ static inline void wake_block_and_neighbors(sand_t *s, int x, int y)
 
     for (int ny = lo_y; ny <= hi_y; ny++) {
         for (int nx = lo_x; nx <= hi_x; nx++) {
-            s->block_state[ny * s->block_cols + nx] &=
-                (uint8_t)~(BLOCK_SETTLED_NEAREST | BLOCK_SETTLED_OTHER);
+            s->block_state[ny * s->block_cols + nx] &= (uint8_t)~(BLOCK_SETTLED_NEAREST | BLOCK_SETTLED_OTHER);
         }
     }
     s->block_state[by * s->block_cols + bx] |= BLOCK_ACTIVE;
@@ -243,30 +239,30 @@ static inline void wake_block_and_neighbors(sand_t *s, int x, int y)
  * Ring order below: neighbours of any direction are the entries either
  * side, working at any gravity angle. Shared with sand.c: "either side
  * of up" is NOT up plus a perpendicular except when axis-aligned. */
-static inline const int *ring_dir(int i)
-{
+static inline const int*
+ring_dir(int i) {
     static const int ring8[8][2] = {
-        {  0,  1 },   /* 0  down            */
-        {  1,  1 },   /* 1  down-right      */
-        {  1,  0 },   /* 2  right           */
-        {  1, -1 },   /* 3  up-right        */
-        {  0, -1 },   /* 4  up              */
-        { -1, -1 },   /* 5  up-left         */
-        { -1,  0 },   /* 6  left            */
-        { -1,  1 },   /* 7  down-left       */
+        {0, 1},   /* 0  down            */
+        {1, 1},   /* 1  down-right      */
+        {1, 0},   /* 2  right           */
+        {1, -1},  /* 3  up-right        */
+        {0, -1},  /* 4  up              */
+        {-1, -1}, /* 5  up-left         */
+        {-1, 0},  /* 6  left            */
+        {-1, 1},  /* 7  down-left       */
     };
     return ring8[i & 7];
 }
 
-static inline int ring_of(int dx, int dy)
-{
+static inline int
+ring_of(int dx, int dy) {
     for (int i = 0; i < 8; i++) {
-        const int *d = ring_dir(i);
+        const int* d = ring_dir(i);
         if (d[0] == dx && d[1] == dy) {
             return i;
         }
     }
-    return 0;   /* unreachable for a unit direction */
+    return 0; /* unreachable for a unit direction */
 }
 
 /* KIND_STATIC wall-bounce geometry for step_impulses() (sand_impulse.c). Same
@@ -276,14 +272,14 @@ static inline int ring_of(int dx, int dy)
  * (centre cell contributes -1 both axes), so diagonal throws could never
  * glance. Comparing magnitudes - larger axis wins, both count within 2x -
  * lets diagonal hits glance while a flat wall still reverses exactly. */
-static inline int blocker_normal(const sand_t *s, int x, int y, int dir)
-{
+static inline int
+blocker_normal(const sand_t* s, int x, int y, int dir) {
     int sx = 0;
     int sy = 0;
     bool any = false;
 
     for (int i = -1; i <= 1; i++) {
-        const int *d = ring_dir(dir + i);
+        const int* d = ring_dir(dir + i);
         const cell_t c = sand_at(s, x + d[0], y + d[1]);
         if (CELL_IS_EMPTY(c) || material_of(c)->kind != KIND_STATIC) {
             continue;
@@ -318,10 +314,10 @@ static inline int blocker_normal(const sand_t *s, int x, int y, int dir)
     return ring_of(nx, ny);
 }
 
-static inline int reflect_off_normal(int dir, int normal)
-{
-    const int *d = ring_dir(dir);
-    const int *n = ring_dir(normal);
+static inline int
+reflect_off_normal(int dir, int normal) {
+    const int* d = ring_dir(dir);
+    const int* n = ring_dir(normal);
     const int n2 = n[0] * n[0] + n[1] * n[1];
     const int dn = d[0] * n[0] + d[1] * n[1];
     const int rx = d[0] * n2 - 2 * dn * n[0];
@@ -336,8 +332,7 @@ static inline int reflect_off_normal(int dir, int normal)
 }
 
 static inline bool
-neighbor_smothers(const sand_t *s, int nx, int ny, int w, int h, uint8_t density)
-{
+neighbor_smothers(const sand_t* s, int nx, int ny, int w, int h, uint8_t density) {
     if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
         return false;
     }
@@ -345,7 +340,7 @@ neighbor_smothers(const sand_t *s, int nx, int ny, int w, int h, uint8_t density
     if (CELL_IS_EMPTY(n)) {
         return false;
     }
-    const material_t *nm = material_of(n);
+    const material_t* nm = material_of(n);
     return nm->kind != KIND_LIQUID && nm->density > density;
 }
 
@@ -364,12 +359,11 @@ neighbor_smothers(const sand_t *s, int nx, int ny, int w, int h, uint8_t density
  * would swing the lid between two orientations every step, flickering a
  * cell that is genuinely sealed. */
 static inline unsigned
-cover_mask(const sand_t *s, int x, int y, int w, int h, uint8_t density)
-{
+cover_mask(const sand_t* s, int x, int y, int w, int h, uint8_t density) {
     const int anti = ring_of(s->last_load_dx, s->last_load_dy) + 4;
     unsigned mask = 0;
     for (int i = 0; i < 3; i++) {
-        const int *d = ring_dir(anti - 1 + i);
+        const int* d = ring_dir(anti - 1 + i);
         if (neighbor_smothers(s, x + d[0], y + d[1], w, h, density)) {
             mask |= 1u << i;
         }
@@ -379,8 +373,7 @@ cover_mask(const sand_t *s, int x, int y, int w, int h, uint8_t density)
 
 /* Checks if (x, y) has a complete lid over it, gravity-relative. */
 static inline bool
-covered_at(const sand_t *s, int x, int y, int w, int h, uint8_t density)
-{
+covered_at(const sand_t* s, int x, int y, int w, int h, uint8_t density) {
     return cover_mask(s, x, y, w, h, density) == COVER_LID;
 }
 
@@ -399,7 +392,7 @@ static inline uint8_t impulse_drag_of(cell_t displaced)
     unsigned d = (unsigned)m->density;
 
     if (m->kind == KIND_LIQUID) {
-        return 0u;   /* a fluid parts around a mover - see the constant */
+        return 0u; /* a fluid parts around a mover - see the constant */
     }
     if (m->kind == KIND_POWDER) {
         d <<= SAND_IMPULSE_DRAG_POWDER_SHIFT;
@@ -407,28 +400,28 @@ static inline uint8_t impulse_drag_of(cell_t displaced)
     return (uint8_t)(d > 255u ? 255u : d);
 }
 
-static inline void clear_content_flags(sand_t *s)
-{
-    s->may_have_liquid      = false;
-    s->may_have_gas         = false;
-    s->may_have_burning     = false;
-    s->may_have_dissolver   = false;
+static inline void
+clear_content_flags(sand_t* s) {
+    s->may_have_liquid = false;
+    s->may_have_gas = false;
+    s->may_have_burning = false;
+    s->may_have_dissolver = false;
     s->may_have_temperature = false;
-    s->may_have_moisture    = false;
-    s->may_have_faller      = false;
+    s->may_have_moisture = false;
+    s->may_have_faller = false;
     s->may_have_heat_holder = false;
 
-    s->may_have_withering   = false;
-    s->may_have_condenser   = false;
+    s->may_have_withering = false;
+    s->may_have_condenser = false;
 }
 
-static inline void latch_content_flags(sand_t *s, cell_t cell)
-{
+static inline void
+latch_content_flags(sand_t* s, cell_t cell) {
     if (CELL_IS_EMPTY(cell)) {
         return;
     }
-    const material_t *mat = material_of(cell);
-    const reaction_t *r = reaction_of(cell);   /* decodes MAT_EXTENDED */
+    const material_t* mat = material_of(cell);
+    const reaction_t* r = reaction_of(cell); /* decodes MAT_EXTENDED */
 
     if (mat->kind == KIND_LIQUID) {
         s->may_have_liquid = true;
@@ -451,22 +444,105 @@ static inline void latch_content_flags(sand_t *s, cell_t cell)
     if (r->condenses != 0) {
         s->may_have_condenser = true;
     }
-    if (r->chills != 0 || r->warms != 0 ||
-        (r->heat_ramp != 0 && CELL_VARIANT(cell) != SAND_AMBIENT_HEAT)) {
+    if (r->chills != 0 || r->warms != 0 || (r->heat_ramp != 0 && CELL_VARIANT(cell) != SAND_AMBIENT_HEAT)) {
         s->may_have_temperature = true;
     }
-    if (r->heat_ramp != 0 ||
-        (r->chills != 0 && r->heats_to != 0 && r->heat_chance != 0)) {
+    if (r->heat_ramp != 0 || (r->chills != 0 && r->heats_to != 0 && r->heat_chance != 0)) {
         s->may_have_heat_holder = true;
     }
-    if (mat->kind == KIND_LIQUID ||
-        (r->dries != 0 && moisture_of(cell, r) != 0)) {
+    if (mat->kind == KIND_LIQUID || (r->dries != 0 && moisture_of(cell, r) != 0)) {
         s->may_have_moisture = true;
     }
 }
 
-static inline void mark_move(sand_t *s, int x0, int y0, int x1, int y1)
-{
+/* The four-cardinal-direction table every per-cell reaction pass walks
+ * neighbours through - fire chemistry (sand_reactions.c) and tree/root
+ * growth (sand_plants.c) both need it, unlike ring_dir()'s 8-way table
+ * above, which the gravity-relative powder sweep uses instead. */
+static const int reaction_dirs[4][2] = {
+    {0, -1},
+    {0, 1},
+    {-1, 0},
+    {1, 0},
+};
+
+/* Use precomputed `at` index to write `mat` into cell. Every cell creation
+ * goes through here. */
+
+/* may_have_* latching needed; different cell kinds created */
+
+/* may_have_* flag required; forget leads to frozen cell */
+
+static inline void
+place_cell(sand_t* s, int x, int y, size_t at, cell_t c) {
+    s->cells[at] = c;
+    latch_content_flags(s, c);
+    mark_rows(s, y, y);
+    wake_block_and_neighbors(s, x, y);
+}
+
+static inline void
+place_reacted(sand_t* s, int x, int y, size_t at, uint8_t spec) {
+    if (spec >= (MAT_EXTENDED << 4)) {
+        place_cell(s, x, y, at, (cell_t)spec); /* identity IS low nibble for
+                                                 * static (0xF0-F7) */
+        return;
+    }
+    const material_id_t mat = (material_id_t)spec;
+    /* HEAT starts at zero. MATERIAL_VARIANTS - 1 turns sand to lava, wood to
+     * flame. Cold tracks exposure. Use place_cell() for non-fire. */
+    place_cell(s, x, y, at, CELL_MAKE(mat, reactions[mat].heat_ramp != 0 ? SAND_AMBIENT_HEAT : MATERIAL_VARIANTS - 1));
+}
+
+/* Cell pays 1 mass. Stops fire from draining. Preserves slow quench. Follows
+ * give_mass(). */
+
+/* Fire's own helper, but sand_plants.c's step_one_drinking_cell() calls it
+ * too, when a tree drinks from a puddle. */
+static inline void
+pay_quench_cost(sand_t* s, int nx, int ny, int w) {
+    const size_t at = (size_t)ny * (size_t)w + (size_t)nx;
+    const cell_t n = s->cells[at];
+    const int mass = CELL_VARIANT(n) - 1;
+    s->cells[at] = (mass > 0) ? CELL_MAKE(CELL_MATERIAL(n), mass) : CELL_EMPTY;
+    mark_rows(s, ny, ny);
+    wake_block_and_neighbors(s, nx, ny);
+}
+
+/* Dry front marks zero moisture, new tone, skips flat soil. See
+ * CELL_WITH_MOISTURE(). */
+
+/* nearby_moisture: moisture level at last watering hand-off or root sink */
+
+/* Pass 0 for no neighbour; cell dries to same look. */
+
+/* SCALED THROUGH `dry_tone_from_moisture()` - `nearby_moisture` equals tone
+ * if ranges match. */
+
+static inline cell_t
+soil_dry_out(cell_t c, uint8_t nearby_moisture) {
+    /* Handles any material; avoids MAT_EXTENDED index error. Byte-identical
+     * to CELL_SOIL() for dirt. */
+    const reaction_t* r = reaction_of(c);
+    return soil_cell(c, dry_tone_from_moisture(nearby_moisture, r), 0, r);
+}
+
+_Static_assert(SOIL_DRY_TONES - 1 == SOIL_MOISTURE_MAX, "dry_tone_from_moisture() is identity for dirt only because "
+                                                        "these two ranges are the same width - the fingerprint gate "
+                                                        "is what actually proves soil_dry_out() stayed byte-"
+                                                        "identical for dirt after this stopped being a direct read");
+
+/* All sites changing soil moisture call this instead of CELL_WITH_MOISTURE().
+ * Calls soil_dry_out() at zero moisture, adjusted by `nearby_moisture`.
+ * Fire's soaking/heat-transform passes and sand_plants.c's root conduction
+ * and growth-cost spending all change soil moisture through here. */
+static inline cell_t
+soil_set_moisture(cell_t c, uint8_t new_moisture, uint8_t nearby_moisture) {
+    return new_moisture != 0 ? with_moisture(c, new_moisture, reaction_of(c)) : soil_dry_out(c, nearby_moisture);
+}
+
+static inline void
+mark_move(sand_t* s, int x0, int y0, int x1, int y1) {
     mark_rows(s, y0, y1);
     wake_block_and_neighbors(s, x0, y0);
     wake_block_and_neighbors(s, x1, y1);
@@ -480,9 +556,8 @@ static inline void mark_move(sand_t *s, int x0, int y0, int x1, int y1)
  * variant is life but decay 0 (wood, burning). Burns at r->lit_from,
  * not hardcoded 1 - gunpowder needs this since lit is not always the
  * whole nibble. */
-static inline bool tick_decay_at(sand_t *s, uint8_t *row, int x, int y,
-                                 cell_t *grain, const reaction_t *r, int decay)
-{
+static inline bool
+tick_decay_at(sand_t* s, uint8_t* row, int x, int y, cell_t* grain, const reaction_t* r, int decay) {
     if (decay == 0) {
         return true;
     }
@@ -505,10 +580,8 @@ static inline bool tick_decay_at(sand_t *s, uint8_t *row, int x, int y,
     return true;
 }
 
-static inline bool tick_decay(sand_t *s, uint8_t *row, int x, int y,
-                              cell_t *grain, const material_t *mat,
-                              uint8_t mat_id)
-{
+static inline bool
+tick_decay(sand_t* s, uint8_t* row, int x, int y, cell_t* grain, const material_t* mat, uint8_t mat_id) {
     const int decay = (s->decay >= 0) ? s->decay : mat->decay;
     if (decay == 0) {
         return true;
@@ -555,7 +628,7 @@ extern volatile bool sand_step_gate_reactions;
  * and in nothing at all otherwise - a release build's sand_step() has no
  * extra branch to fold away, because there was never a branch there to
  * begin with. */
-#define SAND_STEP_GATE(name) if (sand_step_gate_##name)
+#define SAND_STEP_GATE(name)        if (sand_step_gate_##name)
 /* Same idea, ANDed into an existing condition rather than wrapping a bare
  * call - for the one pass (gas) whose call site already has a condition of
  * its own. */
@@ -585,12 +658,24 @@ extern volatile bool sand_step_gate_reactions;
  * may_have_burning is checked INSIDE rather than at the call site:
  * there are no arguments to marshal for a call that will immediately
  * return. */
-void sand_step_reactions(sand_t *s);
+void sand_step_reactions(sand_t* s);
 
-bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
-                       int x, int y, int dx, int dy,
-                       const int *slide_a, const int *slide_b,
-                       cell_t grain, uint8_t mat_id);
+/* Defined in sand_plants.c: the tree/root/leaf growth half of what used to
+ * be one reactions file - see that file's own top comment. Each is one
+ * stage of step_one_reacting_row()'s (sand_reactions.c) per-cell dispatch,
+ * called across the file boundary the same way sand_step_reactions() above
+ * is called from sand.c. */
+bool step_one_falling_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r);
+bool step_one_conducting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r);
+bool step_one_rooting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r);
+bool step_one_drinking_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r, cell_t self);
+bool step_one_sprouting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r);
+bool step_one_budding_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r);
+bool step_one_withering_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r);
+bool step_one_growing_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r);
+
+bool move_liquid_grain(sand_t* s, uint8_t* row, uint8_t* prow, int x, int y, int dx, int dy, const int* slide_a,
+                       const int* slide_b, cell_t grain, uint8_t mat_id);
 
 /* A pool's true perpendicular to gravity rarely lines up with a ring
  * direction - bracketed between an axis ray (ax) and the diagonal
@@ -601,21 +686,19 @@ bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
  * answer every step, while the MIX across the pool still reads as the
  * true angle. */
 typedef struct {
-    int ax[2];        /* the axis ray - perpendicular to the dominant axis */
-    int dg[2];        /* the diagonal ray beside it, the way the tilt leans */
-    int q_q8;         /* how often a column takes the diagonal ray, 0-256   */
-    int bias_ax_q8;   /* mass a level surface gains per step of each ray,   */
-    int bias_dg_q8;   /*   in 1/256 units - zero when the ray is level      */
+    int ax[2];      /* the axis ray - perpendicular to the dominant axis */
+    int dg[2];      /* the diagonal ray beside it, the way the tilt leans */
+    int q_q8;       /* how often a column takes the diagonal ray, 0-256   */
+    int bias_ax_q8; /* mass a level surface gains per step of each ray,   */
+    int bias_dg_q8; /*   in 1/256 units - zero when the ray is level      */
 } xflow_t;
 
 /* Cross-flow levelling. Called from `sand_step()`. `flow` levels, `dx`/`dy`
  * gravity direction. */
-void sand_step_liquids(sand_t *s, const xflow_t *flow, int dx, int dy);
+void sand_step_liquids(sand_t* s, const xflow_t* flow, int dx, int dy);
 
-void sand_step_gas(sand_t *s, int gx, int gy, int dx, int dy,
-                   const int *slide_a, const int *slide_b,
-                   const int *perp_a, const int *perp_b,
-                   int load_dx, int load_dy, int x_step, int jostle);
+void sand_step_gas(sand_t* s, int gx, int gy, int dx, int dy, const int* slide_a, const int* slide_b, const int* perp_a,
+                   const int* perp_b, int load_dx, int load_dy, int x_step, int jostle);
 
 /* The flight pass - explosions, debris, splash pushback - lives in
  * sand_impulse.c since it moves OUTWARD, not gravity-ward. Called once
@@ -635,16 +718,15 @@ void step_impulses(sand_t *s, int dx, int dy);
 /* Static materials never yield regardless of density, so a wall stays a
  * wall - the general "yields to denser" rule below has this one
  * exception. */
-static inline bool can_enter(uint8_t mover_density, uint8_t mover_id, cell_t target)
-{
+static inline bool
+can_enter(uint8_t mover_density, uint8_t mover_id, cell_t target) {
     if (CELL_IS_EMPTY(target)) {
         return true;
     }
 
-    const material_t *t = material_of(target);
+    const material_t* t = material_of(target);
 
-    if (!(t->kind == KIND_LIQUID || t->kind == KIND_GAS) ||
-        mover_density <= t->density) {
+    if (!(t->kind == KIND_LIQUID || t->kind == KIND_GAS) || mover_density <= t->density) {
         return false;
     }
 
@@ -653,31 +735,27 @@ static inline bool can_enter(uint8_t mover_density, uint8_t mover_id, cell_t tar
 
 /* Check cell existence for scatter decision. Avoids redundant random number
  * generation. */
-static inline bool cell_open(const uint8_t *row, int nx, int w, uint8_t density,
-                             uint8_t mat_id)
-{
-    return row != NULL && (unsigned)nx < (unsigned)w &&
-           can_enter(density, mat_id, row[nx]);
+static inline bool
+cell_open(const uint8_t* row, int nx, int w, uint8_t density, uint8_t mat_id) {
+    return row != NULL && (unsigned)nx < (unsigned)w && can_enter(density, mat_id, row[nx]);
 }
 
 /* Single comparison catches nx < 0 by wrapping. */
-static inline bool move_to(uint8_t *from_row, uint8_t *to_row,
-                           int x, int nx, int w, cell_t mover, uint8_t density)
-{
-    if (to_row == NULL || (unsigned)nx >= (unsigned)w ||
-        !can_enter(density, CELL_MATERIAL(mover), to_row[nx])) {
+static inline bool
+move_to(uint8_t* from_row, uint8_t* to_row, int x, int nx, int w, cell_t mover, uint8_t density) {
+    if (to_row == NULL || (unsigned)nx >= (unsigned)w || !can_enter(density, CELL_MATERIAL(mover), to_row[nx])) {
         return false;
     }
 
     const cell_t displaced = to_row[nx];
 
-    to_row[nx]  = mover;
+    to_row[nx] = mover;
     from_row[x] = displaced;
     return true;
 }
 
-static inline int slide_chance(const material_t *m, int load, int jostle)
-{
+static inline int
+slide_chance(const material_t* m, int load, int jostle) {
     /* slip == 255 is never held by load at all - most of what separates a
      * liquid from a powder: water at the bottom of a deep pool carries
      * just as much weight as sand at the bottom of a dune, and flows
@@ -691,14 +769,10 @@ static inline int slide_chance(const material_t *m, int load, int jostle)
     return chance > jostle ? chance : jostle;
 }
 
-static inline bool try_scatter(sand_t *s, uint8_t *row, uint8_t *prow,
-                               uint8_t *arow, uint8_t *brow, int x, int y,
-                               int w, int dx, const int *slide_a,
-                               const int *slide_b, cell_t grain,
-                               uint8_t density, int scatter)
-{
-    if (scatter == 0 ||
-        !cell_open(prow, x + dx, w, density, CELL_MATERIAL(grain))) {
+static inline bool
+try_scatter(sand_t* s, uint8_t* row, uint8_t* prow, uint8_t* arow, uint8_t* brow, int x, int y, int w, int dx,
+            const int* slide_a, const int* slide_b, cell_t grain, uint8_t density, int scatter) {
+    if (scatter == 0 || !cell_open(prow, x + dx, w, density, CELL_MATERIAL(grain))) {
         return false;
     }
 
@@ -709,9 +783,9 @@ static inline bool try_scatter(sand_t *s, uint8_t *row, uint8_t *prow,
 
     if ((r & 0x100) == 0) {
         const bool pick_a = (r & 0x200) != 0;
-        uint8_t  *drow = pick_a ? arow : brow;
-        const int ddx  = pick_a ? slide_a[0] : slide_b[0];
-        const int ddy  = pick_a ? slide_a[1] : slide_b[1];
+        uint8_t* drow = pick_a ? arow : brow;
+        const int ddx = pick_a ? slide_a[0] : slide_b[0];
+        const int ddy = pick_a ? slide_a[1] : slide_b[1];
 
         if (move_to(row, drow, x, x + ddx, w, grain, density)) {
             mark_rows(s, y, y + ddy);
@@ -720,16 +794,11 @@ static inline bool try_scatter(sand_t *s, uint8_t *row, uint8_t *prow,
     return true;
 }
 
-static inline bool try_fall_or_scatter_impl(sand_t *s, uint8_t *row,
-                                            uint8_t *prow, uint8_t *arow,
-                                            uint8_t *brow, int x, int y,
-                                            int w, int dx, int dy,
-                                            const int *slide_a,
-                                            const int *slide_b, cell_t grain,
-                                            uint8_t density, int scatter)
-{
-    if (try_scatter(s, row, prow, arow, brow, x, y, w, dx, slide_a, slide_b,
-                    grain, density, scatter)) {
+static inline bool
+try_fall_or_scatter_impl(sand_t* s, uint8_t* row, uint8_t* prow, uint8_t* arow, uint8_t* brow, int x, int y, int w,
+                         int dx, int dy, const int* slide_a, const int* slide_b, cell_t grain, uint8_t density,
+                         int scatter) {
+    if (try_scatter(s, row, prow, arow, brow, x, y, w, dx, slide_a, slide_b, grain, density, scatter)) {
         return true;
     }
 
@@ -740,90 +809,78 @@ static inline bool try_fall_or_scatter_impl(sand_t *s, uint8_t *row,
     return false;
 }
 
-static inline void pick_slide_order(uint32_t r, uint8_t *arow, uint8_t *brow,
-                                    const int *slide_a, const int *slide_b,
-                                    uint8_t driven_row, bool driven[][2],
-                                    uint8_t **first_row, int *first_dx,
-                                    int *first_dy, bool *first_driven,
-                                    uint8_t **second_row, int *second_dx,
-                                    int *second_dy, bool *second_driven)
-{
+static inline void
+pick_slide_order(uint32_t r, uint8_t* arow, uint8_t* brow, const int* slide_a, const int* slide_b, uint8_t driven_row,
+                 bool driven[][2], uint8_t** first_row, int* first_dx, int* first_dy, bool* first_driven,
+                 uint8_t** second_row, int* second_dx, int* second_dy, bool* second_driven) {
     if (r & 1) {
-        *first_row  = arow; *first_dx  = slide_a[0]; *first_dy  = slide_a[1];
+        *first_row = arow;
+        *first_dx = slide_a[0];
+        *first_dy = slide_a[1];
         *first_driven = driven[driven_row][0];
-        *second_row = brow; *second_dx = slide_b[0]; *second_dy = slide_b[1];
+        *second_row = brow;
+        *second_dx = slide_b[0];
+        *second_dy = slide_b[1];
         *second_driven = driven[driven_row][1];
     } else {
-        *first_row  = brow; *first_dx  = slide_b[0]; *first_dy  = slide_b[1];
+        *first_row = brow;
+        *first_dx = slide_b[0];
+        *first_dy = slide_b[1];
         *first_driven = driven[driven_row][1];
-        *second_row = arow; *second_dx = slide_a[0]; *second_dy = slide_a[1];
+        *second_row = arow;
+        *second_dx = slide_a[0];
+        *second_dy = slide_a[1];
         *second_driven = driven[driven_row][0];
     }
 }
 
 /* Friction on slides: grain shuffle depends on surface. Reached if
  * gravity-ward move fails. Grain skips this in open air. */
-static inline bool try_slide_pair(sand_t *s, uint8_t *row, int x, int y, int w,
-                                  cell_t grain, uint8_t density,
-                                  const material_t *mat, int load_dx,
-                                  int load_dy, int jostle, uint32_t r,
-                                  uint8_t *first_row, int first_dx,
-                                  int first_dy, bool first_driven,
-                                  uint8_t *second_row, int second_dx,
-                                  int second_dy, bool second_driven)
-{
+static inline bool
+try_slide_pair(sand_t* s, uint8_t* row, int x, int y, int w, cell_t grain, uint8_t density, const material_t* mat,
+               int load_dx, int load_dy, int jostle, uint32_t r, uint8_t* first_row, int first_dx, int first_dy,
+               bool first_driven, uint8_t* second_row, int second_dx, int second_dy, bool second_driven) {
     const int load = sand_load_above(s, x, y, load_dx, load_dy);
     const int allowance = slide_chance(mat, load, jostle);
     if (allowance < 256 && (int)((r >> 16) & 0xFF) >= allowance) {
         return false;
     }
 
-    if (first_driven &&
-        move_to(row, first_row, x, x + first_dx, w, grain, density)) {
+    if (first_driven && move_to(row, first_row, x, x + first_dx, w, grain, density)) {
         mark_rows(s, y, y + first_dy);
         return true;
     }
-    if (second_driven &&
-        move_to(row, second_row, x, x + second_dx, w, grain, density)) {
+    if (second_driven && move_to(row, second_row, x, x + second_dx, w, grain, density)) {
         mark_rows(s, y, y + second_dy);
         return true;
     }
     return false;
 }
 
-static inline bool try_slide_impl(sand_t *s, uint8_t *row, uint8_t *prow,
-                                  uint8_t *arow, uint8_t *brow, int x, int y,
-                                  int w, int dx, int dy, const int *slide_a,
-                                  const int *slide_b, int load_dx,
-                                  int load_dy, int jostle, cell_t grain,
-                                  uint8_t driven_row, uint8_t density,
-                                  const material_t *mat,
-                                  bool driven[][2])
-{
+static inline bool
+try_slide_impl(sand_t* s, uint8_t* row, uint8_t* prow, uint8_t* arow, uint8_t* brow, int x, int y, int w, int dx,
+               int dy, const int* slide_a, const int* slide_b, int load_dx, int load_dy, int jostle, cell_t grain,
+               uint8_t driven_row, uint8_t density, const material_t* mat, bool driven[][2]) {
     const uint32_t r = rng_next(&s->rng);
 
-    uint8_t *first_row,  *second_row;
-    int      first_dx,    second_dx;
-    int      first_dy,    second_dy;
-    bool     first_driven, second_driven;
-    pick_slide_order(r, arow, brow, slide_a, slide_b, driven_row, driven,
-                     &first_row, &first_dx, &first_dy, &first_driven,
-                     &second_row, &second_dx, &second_dy, &second_driven);
+    uint8_t *first_row, *second_row;
+    int first_dx, second_dx;
+    int first_dy, second_dy;
+    bool first_driven, second_driven;
+    pick_slide_order(r, arow, brow, slide_a, slide_b, driven_row, driven, &first_row, &first_dx, &first_dy,
+                     &first_driven, &second_row, &second_dx, &second_dy, &second_driven);
 
     /* Shaken grain spreads sideways before dropping. Every destination stays
      * inside already-swept half. */
     const bool shaken = jostle > 0 && (int)((r >> 8) & 0xFF) < jostle;
 
-    if (!shaken && jostle > 0 &&
-        move_to(row, prow, x, x + dx, w, grain, density)) {
+    if (!shaken && jostle > 0 && move_to(row, prow, x, x + dx, w, grain, density)) {
         mark_rows(s, y, y + dy);
         return true;
     }
 
-    if (try_slide_pair(s, row, x, y, w, grain, density, mat, load_dx,
-                       load_dy, jostle, r, first_row, first_dx, first_dy,
-                       first_driven, second_row, second_dx, second_dy,
-                       second_driven)) {
+    if (try_slide_pair(s, row, x, y, w, grain, density, mat, load_dx, load_dy, jostle, r, first_row, first_dx, first_dy,
+                       first_driven, second_row, second_dx, second_dy, second_driven)) {
         return true;
     }
 
@@ -835,11 +892,9 @@ static inline bool try_slide_impl(sand_t *s, uint8_t *row, uint8_t *prow,
     return false;
 }
 
-bool try_fall_or_scatter(sand_t *s, uint8_t *row, uint8_t *prow,
-                         uint8_t *arow, uint8_t *brow, int x, int y,
-                         int w, int dx, int dy, const int *slide_a,
-                         const int *slide_b, cell_t grain,
-                         uint8_t density, int scatter);
+bool try_fall_or_scatter(sand_t* s, uint8_t* row, uint8_t* prow, uint8_t* arow, uint8_t* brow, int x, int y, int w,
+                         int dx, int dy, const int* slide_a, const int* slide_b, cell_t grain, uint8_t density,
+                         int scatter);
 
 /* `driven_row`/`bool driven[][2]`, not `mat_id`/`driven[MATERIAL_MAX][2]`:
  * step_one_grain() (sand.c) backs this with driven[MATERIAL_ROWS][2]
@@ -847,23 +902,19 @@ bool try_fall_or_scatter(sand_t *s, uint8_t *row, uint8_t *prow,
  * driven_gas[MATERIAL_MAX][2] indexed by material id - two different real
  * bounds behind the same shape, so naming either one here was never
  * accurate for both callers. */
-bool try_slide(sand_t *s, uint8_t *row, uint8_t *prow, uint8_t *arow,
-               uint8_t *brow, int x, int y, int w, int dx, int dy,
-               const int *slide_a, const int *slide_b, int load_dx,
-               int load_dy, int jostle, cell_t grain, uint8_t driven_row,
-               uint8_t density, const material_t *mat,
-               bool driven[][2]);
+bool try_slide(sand_t* s, uint8_t* row, uint8_t* prow, uint8_t* arow, uint8_t* brow, int x, int y, int w, int dx,
+               int dy, const int* slide_a, const int* slide_b, int load_dx, int load_dy, int jostle, cell_t grain,
+               uint8_t driven_row, uint8_t density, const material_t* mat, bool driven[][2]);
 
 /* Moved from sand.c. sand_gas.c uses REVERSED gravity vector. */
-static inline bool driven_by_gravity(int mx, int my, int gx, int gy,
-                                     int repose)
-{
+static inline bool
+driven_by_gravity(int mx, int my, int gx, int gy, int repose) {
     const int descent = mx * gx + my * gy;
     if (descent <= 0) {
-        return false;              /* uphill, or across a level slope */
+        return false; /* uphill, or across a level slope */
     }
     if (repose == 0) {
-        return true;               /* no friction angle at all - a liquid */
+        return true; /* no friction angle at all - a liquid */
     }
 
     int lateral = mx * gy - my * gx;
@@ -902,8 +953,7 @@ enum {
 
 /* `is_acid_rain_material` gates material-specific stage, not reaction type. */
 static inline uint8_t
-reaction_first_stage(const reaction_t *r, bool is_acid_rain_material)
-{
+reaction_first_stage(const reaction_t* r, bool is_acid_rain_material) {
     if (r->burns != 0) {
         return RSTAGE_BURN_ALWAYS;
     }

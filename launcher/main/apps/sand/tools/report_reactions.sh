@@ -95,13 +95,15 @@ OUT_BIN="$BUILD_DIR/dump_reactions"
 [ -x "$OUT_BIN" ] || OUT_BIN="$OUT_BIN.exe"
 
 TMP_MD="$BUILD_DIR/Reaction-Table.generated.md"
-# sand_reactions.c is passed as the one required argument and read as TEXT
-# at runtime (see reaction_doc.h and dump_reactions.c's own parse_reaction_
-# docs()) - it is deliberately NOT part of the compile line above: linking
-# it would drag sand.c, the RNG and the rest of the simulation into this
-# doc build's link graph just to resolve a handful of REACTION_DOC()
-# strings.
-"$OUT_BIN" "$SAND_DIR/sand_reactions.c" > "$TMP_MD"
+# sand_reactions.c and sand_plants.c both carry REACTION_DOC() calls (the
+# fire chemistry and tree/root growth halves of what used to be one file -
+# see sand_plants.c's own top comment) and are passed as arguments, read as
+# TEXT at runtime (see reaction_doc.h and dump_reactions.c's own parse_
+# reaction_docs()) - deliberately NOT part of the compile line above:
+# linking them would drag sand.c, the RNG and the rest of the simulation
+# into this doc build's link graph just to resolve a handful of
+# REACTION_DOC() strings.
+"$OUT_BIN" "$SAND_DIR/sand_reactions.c" "$SAND_DIR/sand_plants.c" > "$TMP_MD"
 
 # The doc must already exist and already carry both markers - on either
 # path below. Silently creating a fresh file, or silently doing nothing,

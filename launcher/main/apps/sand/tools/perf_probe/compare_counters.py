@@ -33,7 +33,8 @@ For each of two refs:
      fails loudly rather than silently mismeasuring.
   4. Compile counters_scene_main.c against the ref's OWN algorithm sources
      (sand.c, sand_liquid.c now carrying the injected counters, sand_gas.c,
-     sand_reactions.c, material.c, palette.c, row_runs.c, sand_ui.c, tilt.c)
+     sand_reactions.c, sand_plants.c when the ref has it, material.c,
+     palette.c, row_runs.c, sand_ui.c, tilt.c)
      plus the carried-in sand_work_counters.c, and run it.
 
 Then prints one table: per-counter values at each ref, the delta, and the
@@ -211,7 +212,8 @@ def build(tree: Path, cc: str, out: Path) -> None:
         app_sand / "row_runs.c",
         app_sand / "tilt.c",
     ]
-    optional = [app_sand / "palette.c", app_sand / "sand_ui.c"]
+    optional = [app_sand / "palette.c", app_sand / "sand_ui.c",
+                app_sand / "sand_plants.c", app_sand / "sand_impulse.c"]
     missing = [str(p) for p in required if not p.is_file()]
     if missing:
         raise RuntimeError(f"missing source(s) in extracted tree: {missing}")

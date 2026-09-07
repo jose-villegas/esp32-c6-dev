@@ -103,10 +103,13 @@ $HERE/esp_timer_oracle_stub.c
 $TEST_DIR/suites.c
 $TEST_DIR/timing.c
 $APP_SAND/sand.c
+$APP_SAND/sand_impulse.c
 $APP_SAND/sand_liquid.c
 $APP_SAND/sand_gas.c
 $APP_SAND/sand_reactions.c
+$APP_SAND/sand_plants.c
 $APP_SAND/material.c
+$APP_SAND/material_palette.c
 $APP_SAND/palette.c
 $APP_SAND/row_runs.c
 $APP_SAND/sand_ui.c

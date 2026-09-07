@@ -59,23 +59,14 @@
  * what limits depth in any scene the brush can actually draw.
  *===========================================================================*/
 
-#include "sand_priv.h"
 #include "reaction_doc.h"
-
-static const int reaction_dirs[4][2] = {
-    {0, -1},
-    {0, 1},
-    {-1, 0},
-    {1, 0},
-};
+#include "sand_priv.h"
 
 /* PAIR_BITS - classifies neighbour probes, replacing s->heat_mask/s->wet_mask
  * and adding three more. */
 
-
 /* HONESTY: All but PAIR_DENSER use `theirs`. See top comment and
  * docs/Sand/Reaction-Table.md. */
-
 
 /* Consistent lookup shape for every consumer. PAIR_DENSER is genuinely
  * pairwise. */
@@ -95,35 +86,6 @@ pair_theirs_bits(uint8_t theirs) {
     return pair_bits[MAT_EMPTY][theirs];
 }
 
-/* Use precomputed `at` index to write `mat` into cell. Every cell creation
- * goes through here. */
-
-/* may_have_* latching needed; different cell kinds created */
-
-/* may_have_* flag required; forget leads to frozen cell */
-
-
-static inline void
-place_cell(sand_t* s, int x, int y, size_t at, cell_t c) {
-    s->cells[at] = c;
-    latch_content_flags(s, c);
-    mark_rows(s, y, y);
-    wake_block_and_neighbors(s, x, y);
-}
-
-static inline void
-place_reacted(sand_t* s, int x, int y, size_t at, uint8_t spec) {
-    if (spec >= (MAT_EXTENDED << 4)) {
-        place_cell(s, x, y, at, (cell_t)spec); /* identity IS low nibble for
-                                                * static (0xF0-F7) */
-        return;
-    }
-    const material_id_t mat = (material_id_t)spec;
-    /* HEAT starts at zero. MATERIAL_VARIANTS - 1 turns sand to lava, wood to
-     * flame. Cold tracks exposure. Use place_cell() for non-fire. */
-    place_cell(s, x, y, at, CELL_MAKE(mat, reactions[mat].heat_ramp != 0 ? SAND_AMBIENT_HEAT : MATERIAL_VARIANTS - 1));
-}
-
 static inline bool
 neighbor_quenches(const sand_t* s, int nx, int ny, int w, int h) {
     if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
@@ -135,7 +97,6 @@ neighbor_quenches(const sand_t* s, int nx, int ny, int w, int h) {
     }
     return (pair_theirs_bits(CELL_MATERIAL(n)) & PAIR_QUENCHES) != 0;
 }
-
 
 /* Checks burial; returns false on failure. No cover_mask()/covered_at().
  * Burial skips rotation, side. */
@@ -165,8 +126,6 @@ touches_air(const sand_t* s, int x, int y, int w, int h) {
     return false;
 }
 
-static inline void pay_quench_cost(sand_t* s, int nx, int ny, int w);
-
 static void crack_run(sand_t* s, int x, int y, int w, int h, material_id_t from, material_id_t into);
 
 static inline bool emit_into_empty_neighbor(sand_t* s, int x, int y, int w, int h, uint8_t spec);
@@ -174,19 +133,13 @@ static inline bool emit_into_empty_neighbor(sand_t* s, int x, int y, int w, int 
 static inline __attribute__((always_inline)) bool try_heat_transform_given(sand_t* s, int nx, int ny, int w, int h,
                                                                            size_t at, cell_t n);
 
-static inline cell_t soil_set_moisture(cell_t c, uint8_t new_moisture, uint8_t nearby_moisture);
-
 #define HEAT_FLAW_CLUMP 5
 
 /* FORCED INLINE, and that is a performance fix rather than a
  * preference. */
 
-
 /* Flaw/spoils branches grow function; unmeasured. Check cost if ratio
  * changes. */
-
-
-
 
 /* Inline costs more than call on this chip. Forces four call sites. Capture
  * pending. */
@@ -197,8 +150,6 @@ static inline cell_t soil_set_moisture(cell_t c, uint8_t new_moisture, uint8_t n
  * burning. */
 
 /* Sand into glass is the only use. Kept separate from try_ignite_given(). */
-
-
 
 /* Wrapper checks before calling core; returns change status. */
 static inline __attribute__((always_inline)) bool
@@ -270,16 +221,12 @@ try_heat_transform_given(sand_t* s, int nx, int ny, int w, int h, size_t at, cel
         /* See reaction_t.spoils_to (material.h). Spoil pre-empts moisture
          * reduction. */
 
-
         /* Dirt dries ambiently, so cell may be below SOIL_MOISTURE_MAX before
          * HEAT. */
 
-
-
         /* Wet ore cracking on first contact, not after warning. */
         REACTION_DOC(spoils_to, "if wet when heat reaches it");
-        if (r->spoils_to != 0 &&
-            (int)(rng_next(&s->rng) & 0xFF) < r->spoils_chance) {
+        if (r->spoils_to != 0 && (int)(rng_next(&s->rng) & 0xFF) < r->spoils_chance) {
             place_reacted(s, nx, ny, at, (material_id_t)r->spoils_to);
             return true;
         }
@@ -295,8 +242,7 @@ try_heat_transform_given(sand_t* s, int nx, int ny, int w, int h, size_t at, cel
 
     if (r->flaw_to != 0) {
         if (s->heat_flaw_seq % HEAT_FLAW_CLUMP == 0) {
-            s->heat_flaw_is_flawed =
-                (int)(rng_next(&s->rng) & 0xFF) < r->flaw_chance;
+            s->heat_flaw_is_flawed = (int)(rng_next(&s->rng) & 0xFF) < r->flaw_chance;
         }
         s->heat_flaw_seq++;
         if (s->heat_flaw_is_flawed) {
@@ -355,10 +301,7 @@ crack_run(sand_t* s, int x, int y, int w, int h, material_id_t from, material_id
 
 /* Walks lava-cooling chain, freezes neighbours holding same liquid. */
 
-
-
 /* See KIND_LIQUID gate */
-
 
 /* Iterative, not recursive. Stack limit on 368 KB RAM. */
 
@@ -400,39 +343,6 @@ cool_off_chain(sand_t* s, int x, int y, int w, int h, uint8_t product, int chanc
 
 /* `#define` used for materials with `dries != 0` */
 #define SOIL_PERCOLATE_CHANCE 15
-
-/* Dry front marks zero moisture, new tone, skips flat soil. See
- * CELL_WITH_MOISTURE(). */
-
-/* nearby_moisture: moisture level at last watering hand-off or root sink */
-
-/* Pass 0 for no neighbour; cell dries to same look. */
-
-/* SCALED THROUGH `dry_tone_from_moisture()` - `nearby_moisture` equals tone
- * if ranges match. */
-
-static inline cell_t soil_dry_out(cell_t c, uint8_t nearby_moisture)
-{
-    /* Handles any material; avoids MAT_EXTENDED index error. Byte-identical
-     * to CELL_SOIL() for dirt. */
-    const reaction_t* r = reaction_of(c);
-    return soil_cell(c, dry_tone_from_moisture(nearby_moisture, r), 0, r);
-}
-
-_Static_assert(SOIL_DRY_TONES - 1 == SOIL_MOISTURE_MAX,
-               "dry_tone_from_moisture() is identity for dirt only because "
-               "these two ranges are the same width - the fingerprint gate "
-               "is what actually proves soil_dry_out() stayed byte-"
-               "identical for dirt after this stopped being a direct read");
-
-/* All sites changing soil moisture call this instead of CELL_WITH_MOISTURE().
- * Calls soil_dry_out() at zero moisture, adjusted by `nearby_moisture`. */
-static inline cell_t soil_set_moisture(cell_t c, uint8_t new_moisture, uint8_t nearby_moisture)
-{
-    return new_moisture != 0
-               ? with_moisture(c, new_moisture, reaction_of(c))
-               : soil_dry_out(c, nearby_moisture);
-}
 
 /* Splits cell for input/output. Soaks UNIT, transforms or increases variant.
  * Drying decreases variant. Returns true if wet/near liquid. Prevents
@@ -483,8 +393,7 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
             REACTION_DOC(soaks_to, "unless the grain is cullet, which is glass and holds no water");
             if (r->soaks_to != 0) {
                 s->cells[(size_t)y * (size_t)w + (size_t)x] =
-                    soil_cell(CELL_MAKE(r->soaks_to, 0), 0, 1,
-                             &reactions[r->soaks_to]);
+                    soil_cell(CELL_MAKE(r->soaks_to, 0), 0, 1, &reactions[r->soaks_to]);
                 latch_content_flags(s, s->cells[(size_t)y * (size_t)w + (size_t)x]);
                 mark_rows(s, y, y);
                 wake_block_and_neighbors(s, x, y);
@@ -527,8 +436,7 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
                 }
                 cost = give;
                 recv_m = give;
-                s->cells[nat] = soil_cell(CELL_MAKE(nr->soaks_to, 0), 0,
-                                         (uint8_t)give, &reactions[nr->soaks_to]);
+                s->cells[nat] = soil_cell(CELL_MAKE(nr->soaks_to, 0), 0, (uint8_t)give, &reactions[nr->soaks_to]);
                 latch_content_flags(s, s->cells[nat]);
             } else if (same_species(n, c) && !cell_is_burning(n)) {
                 /* Moisture_of() reads lit fuse as 0. Gap calc overwrites lit
@@ -554,9 +462,6 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
     }
 
     /* Water percolates downhill, not just diffuses. */
-
-
-
 
     /* A fixed direction would advance a flat, evenly-damped sheet; a
      * wandering direction driving a real share down through the soil
@@ -584,8 +489,8 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
                 continue;
             }
             /* Lit fuse carve-out: prevent dousing */
-            if (!cell_is_burning(below) &&
-                (br->soaks_to != 0 || (br->dries != 0 && moisture_of(below, br) < br->moist_max))) {
+            if (!cell_is_burning(below)
+                && (br->soaks_to != 0 || (br->dries != 0 && moisture_of(below, br) < br->moist_max))) {
                 open[n_open++] = i;
             }
         }
@@ -609,8 +514,7 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
                 recv_m = give;
                 /* Arrives WET, so no tone of its own - the soaking
                  * branch above's own comment covers why. */
-                s->cells[nat] = soil_cell(CELL_MAKE(br->soaks_to, 0), 0,
-                                          (uint8_t)give, &reactions[br->soaks_to]);
+                s->cells[nat] = soil_cell(CELL_MAKE(br->soaks_to, 0), 0, (uint8_t)give, &reactions[br->soaks_to]);
                 latch_content_flags(s, s->cells[nat]);
             } else {
                 const int room = (int)br->moist_max - moisture_of(below, br);
@@ -676,10 +580,6 @@ step_one_warming_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
 
         /* And something that CANNOT bank it melts outright. */
 
-
-
-
-
         /* Both gates. Gas must warm and target melt. Convection melts slower
          * than flame. */
 
@@ -698,1015 +598,6 @@ step_one_warming_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
         }
         place_reacted(s, nx, ny, nat, (material_id_t)nr->heats_to);
     }
-}
-
-/* FALLS in cold pass, not sweep. Gravity-ward, checks space. Determines (ax,
- * ay) type. */
-static inline bool
-is_kin(cell_t a, cell_t self, const reaction_t* r) {
-    return a == self || (r->clings_to != 0 && CELL_MATERIAL(a) == r->clings_to);
-}
-
-/* Leaf-to-roots mimic, efficient on crowded boards. Larger bodies shed outer
- * cells. */
-#define SUPPORT_MAX 48
-
-static bool
-anchored(sand_t* s, int x, int y, int w, int h, cell_t self, const reaction_t* r) {
-    uint16_t body[SUPPORT_MAX];
-    int n = 0, head = 0;
-
-    body[n++] = (uint16_t)((size_t)y * (size_t)w + (size_t)x);
-
-    const int down = ring_of(s->last_load_dx, s->last_load_dy);
-
-    while (head < n) {
-        const int at = (int)body[head++];
-        const int cx = at % w, cy = at / w;
-
-        for (int d = 0; d < 8; d++) {
-            const int* nd = ring_dir(down + d);
-            const int nx = cx + nd[0], ny = cy + nd[1];
-            if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
-                continue;
-            }
-            const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
-            const cell_t c = s->cells[nat];
-            if (CELL_IS_EMPTY(c)) {
-                continue;
-            }
-            if (!is_kin(c, self, r)) {
-                /* Diagonals not counted; wall sticks in narrow shafts. */
-                if (d == 0) {
-                    return true; /* this body is resting on something */
-                }
-                continue;
-            }
-            if (n >= SUPPORT_MAX) {
-                continue; /* too big to finish; treat as loose */
-            }
-            bool known = false;
-            for (int i = 0; i < n && !known; i++) {
-                known = (body[i] == (uint16_t)nat);
-            }
-            if (!known) {
-                body[n++] = (uint16_t)nat;
-            }
-        }
-    }
-    return false;
-}
-
-static bool
-step_one_falling_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
-    const int nx = x + s->last_load_dx;
-    const int ny = y + s->last_load_dy;
-    if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
-        return false;
-    }
-    const size_t at = (size_t)y * (size_t)w + (size_t)x;
-    const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
-    if (!CELL_IS_EMPTY(s->cells[nat])) {
-        return false; /* landed */
-    }
-    if (anchored(s, x, y, w, h, s->cells[at], r)) {
-        return false;
-    }
-    if ((int)(rng_next(&s->rng) & 0xFF) >= r->falls) {
-        return true; /* still falling, just not now */
-    }
-
-    s->cells[nat] = s->cells[at];
-    s->cells[at] = SAND_EMPTY;
-    mark_rows(s, y, y);
-    mark_rows(s, ny, ny);
-    wake_block_and_neighbors(s, x, y);
-    wake_block_and_neighbors(s, nx, ny);
-    return true;
-}
-
-/* Growth stops when soil dries. Bound to prevent unnecessary searches. */
-#define GROW_REACH  48
-
-/* Three for crown, small enough for shaping. */
-#define CANOPY_SPAN 3
-
-/* See step_one_budding_cell() - water bounds bud. */
-#define BUD_COST    3
-
-/* Root depth balance: avoids board starvation, ensures survival. */
-#define ROOT_REACH  6
-
-/* Plant stems restrict water flow, capping tree height and branch spread,
- * guided by water paths or moisture availability. */
-#define TREE_LIFT   10
-
-
-/* Thickening turns sapling into trunk; cells nearest ground have unlimited
- * lift. */
-#define TRUNK_WIDTH 3
-
-
-
-/* Moisture soaks; bottom wet, top dry. Plant paused, watered two rows below. */
-
-
-static int
-find_water(sand_t* s, int x, int y, int w, int h, const reaction_t* r, cell_t self, int* lift, int* contact_at,
-           int* root_depth, bool wants_room) {
-    const int dx = s->last_load_dx, dy = s->last_load_dy;
-    const int down = ring_of(dx, dy);
-
-    *contact_at = -1;
-
-    int cx = x, cy = y;
-    int lift_count = 0;
-    int roots_passed = 0;
-    for (int step = 0; step < GROW_REACH; step++) {
-        /* `lift_count` tracks STEM transitions; `step` reuses fails, counting
-         * roots incorrectly. */
-        *lift = lift_count;
-        *root_depth = roots_passed;
-        int nx = -1, ny = -1;
-        bool on_soil = false;
-        bool via_root = false;
-        /* COMMITTED to root. Not `nx >= 0`. Testing nx stops scan on
-         * fallback, missing ground. See lookahead. */
-        bool took_root = false;
-
-        /* ORDERING is critical; incorrect ordering led to single-row roots. */
-
-
-
-        /* Fallback crosses root; contact drops row. Not reliable. */
-
-
-
-
-        /* One cell lookahead fixes bed shifting. */
-        if (r->roots_to != 0) {
-            const int* fd = ring_dir(down);
-            const int tx = cx + fd[0], ty = cy + fd[1];
-            if ((unsigned)tx < (unsigned)w && (unsigned)ty < (unsigned)h
-                && s->cells[(size_t)ty * (size_t)w + (size_t)tx] == (cell_t)r->roots_to) {
-                const int ax = tx + dx, ay = ty + dy;
-                if ((unsigned)ax < (unsigned)w && (unsigned)ay < (unsigned)h) {
-                    const cell_t under = s->cells[(size_t)ay * (size_t)w + (size_t)ax];
-                    if (!CELL_IS_EMPTY(under)
-                        && (reaction_of(under)->soil != 0 || under == (cell_t)r->roots_to)) {
-                        nx = tx;
-                        ny = ty;
-                        via_root = true;
-                        took_root = true;
-                    }
-                }
-            }
-        }
-
-        for (int i = 0; !took_root && i < 3; i++) {
-            const int* fd = ring_dir(down + (i == 0 ? 0 : i == 1 ? 1 : 7));
-            const int tx = cx + fd[0], ty = cy + fd[1];
-            if ((unsigned)tx >= (unsigned)w || (unsigned)ty >= (unsigned)h) {
-                continue;
-            }
-            const cell_t c = s->cells[(size_t)ty * (size_t)w + (size_t)tx];
-            if (CELL_IS_EMPTY(c)) {
-                continue;
-            }
-            if (reaction_of(c)->soil != 0) {
-                nx = tx;
-                ny = ty;
-                on_soil = true;
-                break; /* ground: stop looking for stem */
-            }
-            if (nx < 0 && (c == self || (r->clings_to != 0 && CELL_MATERIAL(c) == r->clings_to))) {
-                nx = tx;
-                ny = ty; /* more stem, keep it as a fallback */
-            } else if (nx < 0 && r->roots_to != 0 && c == (cell_t)r->roots_to) {
-                /* ROOT counts as stem. Fixes bug where stem finds neither
-                 * stem nor ground. */
-                nx = tx;
-                ny = ty;
-                via_root = true;
-            }
-        }
-        if (nx < 0) {
-            return -1; /* neither stem nor ground below */
-        }
-        if (!on_soil) {
-            if (via_root) {
-                roots_passed++; /* below the water line - see this
-                                  * function's own top comment */
-            } else {
-                lift_count++;
-            }
-            cx = nx;
-            cy = ny; /* carry on down the stem */
-            continue;
-        }
-
-        /* Into the soil. This is the collar. */
-        cx = nx;
-        cy = ny;
-        *contact_at = (int)((size_t)cy * (size_t)w + (size_t)cx);
-        for (int depth = 0; depth < ROOT_REACH; depth++) {
-            if ((unsigned)cx >= (unsigned)w || (unsigned)cy >= (unsigned)h) {
-                return -1;
-            }
-            const size_t at = (size_t)cy * (size_t)w + (size_t)cx;
-            const cell_t c = s->cells[at];
-            /* Root must be TRANSPARENT to avoid cutting off water. */
-            if (r->roots_to != 0 && c == (cell_t)r->roots_to) {
-                cx += dx;
-                cy += dy;
-                continue;
-            }
-            if (CELL_IS_EMPTY(c) || reaction_of(c)->soil == 0) {
-                return -1;
-            }
-            /* growth seeks nutrient-rich soil, drinking seeks room to expand */
-            {
-                const reaction_t* cr = reaction_of(c);
-                /* Lit cell never has room or water. */
-                if (!cell_is_burning(c) &&
-                    (wants_room ? moisture_of(c, cr) < cr->moist_max
-                                : moisture_of(c, cr) != 0)) {
-                    return (int)at;
-                }
-            }
-            cx += dx;
-            cy += dy;
-        }
-        return -1;
-    }
-    return -1;
-}
-
-/* See PART 1 of roots feature. Rolls CONTACT cell welding into FIRST root. */
-
-/* `root_depth == 0` means tree not embedded, see reaction_t.roots in
- * material.h. */
-
-/* PART 2 - step_one_rooting_cell() handles growth starting from the root. */
-
-/* Gating shuts path to prevent root conflicts. */
-
-/* soil_at skips conversion to avoid disconnected woody specks. */
-
-static void
-spend_soil_moisture(sand_t* s, int w, const reaction_t* r, int soil_at, uint8_t amount, int contact_at,
-                     int root_depth) {
-    const cell_t soil = s->cells[soil_at];
-    s->cells[soil_at] = soil_set_moisture(
-        soil, (uint8_t)(moisture_of(soil, reaction_of(soil)) - amount), 0);
-    mark_rows(s, soil_at / w, soil_at / w);
-
-    if (r->roots == 0 || contact_at < 0 || root_depth != 0) {
-        return;
-    }
-    if ((int)(rng_next(&s->rng) & 0xFF) >= r->roots) {
-        return;
-    }
-    place_reacted(s, contact_at % w, contact_at / w, (size_t)contact_at, r->roots_to);
-}
-
-/* Max neighbours; 2 ensures filamentary shape, not slab.
- * Docs/Sand/Sand-Simulation.md */
-#define ROOT_SURFACE_MAX 2
-
-/* DOWN/AWAY=2. Trunk=parent. Roots stop at dry soil. Weights guide moist cell
- * selection. */
-#define ROOT_WEIGHT_AWAY 2
-#define ROOT_WEIGHT_DOWN 2
-
-#define ROOT_CONDUCT_CHANCE 64
-
-/* One cell of ROOT, carrying water DOWN through itself - a conduit. */
-
-
-
-/* Moves only, gravity-ward. */
-
-
-/* Sides count as sources. Drawing from soil allows full column drainage. */
-
-static bool
-step_one_conducting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
-    const int down = ring_of(s->last_load_dx, s->last_load_dy);
-    (void)r;
-
-    int src_at = -1, src_x = 0, src_y = 0, src_m = 0;
-    int dst_at = -1, dst_x = 0, dst_y = 0, dst_m = 0;
-
-    for (int k = 0; k < 8; k++) {
-        const int* nd = ring_dir(down + k);
-        const int nx = x + nd[0], ny = y + nd[1];
-        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
-            continue;
-        }
-        const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
-        const cell_t c = s->cells[nat];
-        if (CELL_IS_EMPTY(c)) {
-            continue;
-        }
-        const reaction_t* cr = reaction_of(c);
-        if (cr->soil == 0) {
-            continue; /* not soil: root, wood, stone, air - and, since D1,
-                        * gunpowder: a fuse is not ground a root conducts
-                        * water through. */
-        }
-        const int m = moisture_of(c, cr);
-        if (k == 0 || k == 1 || k == 7) {
-            /* Keeps codec soil below moist_max. Ensures !cell_is_burning(c)
-             * for accurate moisture readings. */
-            if (m < cr->moist_max && !cell_is_burning(c) && (dst_at < 0 || m < dst_m)) {
-                dst_m = m;
-                dst_at = (int)nat;
-                dst_x = nx;
-                dst_y = ny;
-            }
-        } else if (m > src_m) {
-            /* Beside or above: a source, if it holds anything. */
-            src_m = m;
-            src_at = (int)nat;
-            src_x = nx;
-            src_y = ny;
-        }
-    }
-    if (src_at < 0 || dst_at < 0) {
-        return false; /* nothing to carry, or nowhere to carry it */
-    }
-    if ((int)(rng_next(&s->rng) & 0xFF) >= ROOT_CONDUCT_CHANCE) {
-        return true;
-    }
-    const cell_t src = s->cells[src_at], dst = s->cells[dst_at];
-    s->cells[src_at] = soil_set_moisture(src, (uint8_t)(src_m - 1), (uint8_t)(dst_m + 1));
-    s->cells[dst_at] = with_moisture(dst, (uint8_t)(dst_m + 1), reaction_of(dst));
-    mark_rows(s, src_y, src_y);
-    mark_rows(s, dst_y, dst_y);
-    wake_block_and_neighbors(s, src_x, src_y);
-    wake_block_and_neighbors(s, dst_x, dst_y);
-    return true;
-}
-
-/* ROOT cell consumes soil moisture with chance, docs/Sand/Sand-Simulation.md */
-
-
-
-/* Root does not need stem's machinery. Uses existing resource bound. */
-
-
-/* Prevents system becoming a block. Uses standard roll discipline. */
-static bool
-step_one_rooting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
-    /* Cheapest question first, rejects thick columns without neighbour scan
-     * touching RNG. */
-    int root_neighbors = 0;
-    for (int d = 0; d < 8; d++) {
-        const int* nd = ring_dir(d);
-        const int nx = x + nd[0], ny = y + nd[1];
-        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
-            continue;
-        }
-        if (s->cells[(size_t)ny * (size_t)w + (size_t)nx] == (cell_t)r->roots_to) {
-            root_neighbors++;
-        }
-    }
-    if (root_neighbors > ROOT_SURFACE_MAX) {
-        return false; /* buried inside its own kind; nothing to do here */
-    }
-
-
-    /* Qualitative difference, not rounding error. Uses ring_dir() instead of
-     * four-neighbour scan. */
-
-    /* WEIGHTED PICK, not uniform. Moisture spreads sideways, favouring sides
-     * over depth. */
-
-
-    /* GRAVITY-WARD biases depth: root seeks water beneath, not beside. */
-
-    /* TRUNK IS PARENT. First root has no neighbors, zero away-vector, gravity
-     * dominant, critical for heading. */
-
-
-    int away_x = 0, away_y = 0;
-    for (int d = 0; d < 8; d++) {
-        const int* nd = ring_dir(d);
-        const int nx = x + nd[0], ny = y + nd[1];
-        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
-            continue;
-        }
-        const cell_t c = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
-        if (c == (cell_t)r->roots_to || (!CELL_IS_EMPTY(c) && CELL_MATERIAL(c) == r->clings_to)) {
-            away_x -= nd[0];
-            away_y -= nd[1];
-        }
-    }
-    const int gx = s->last_load_dx, gy = s->last_load_dy;
-
-    int cand_at[8], cand_x[8], cand_y[8], cand_w[8];
-    int n_cand = 0, total_w = 0;
-    for (int d = 0; d < 8; d++) {
-        const int* nd = ring_dir(d);
-        const int nx = x + nd[0], ny = y + nd[1];
-        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
-            continue;
-        }
-        const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
-        const cell_t n = s->cells[nat];
-        if (CELL_IS_EMPTY(n) || reaction_of(n)->soil == 0 ||
-            moisture_of(n, reaction_of(n)) == 0) {
-            continue;
-        }
-        int wgt = 1;
-        if (nd[0] * away_x + nd[1] * away_y > 0) {
-            wgt += ROOT_WEIGHT_AWAY; /* carries on away from its parent */
-        }
-        if (nd[0] * gx + nd[1] * gy > 0) {
-            wgt += ROOT_WEIGHT_DOWN; /* reaches down */
-        }
-        cand_at[n_cand] = (int)nat;
-        cand_x[n_cand] = nx;
-        cand_y[n_cand] = ny;
-        cand_w[n_cand] = wgt;
-        total_w += wgt;
-        n_cand++;
-    }
-    if (n_cand == 0) {
-        return false; /* nothing moist beside it right now */
-    }
-    if ((int)(rng_next(&s->rng) & 0xFF) >= r->roots) {
-        return true; /* a candidate exists; just not this roll */
-    }
-    int pick = rng_below(&s->rng, total_w);
-    int k = 0;
-    while (pick >= cand_w[k]) {
-        pick -= cand_w[k];
-        k++;
-    }
-    const int eat_at = cand_at[k], ex = cand_x[k], ey = cand_y[k];
-
-    place_reacted(s, ex, ey, (size_t)eat_at, r->roots_to);
-    return true;
-}
-
-/* DRINKS adds moisture. `KIND_STATIC` blocks water via foliage. Water moves
- * from stem to roots. */
-static bool
-step_one_drinking_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r, cell_t self) {
-    int lx = -1, ly = -1;
-    for (int d = 0; d < 4; d++) {
-        const int nx = x + reaction_dirs[d][0];
-        const int ny = y + reaction_dirs[d][1];
-        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
-            continue;
-        }
-        const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
-        if (!CELL_IS_EMPTY(n) && material_of(n)->kind == KIND_LIQUID && reaction_of(n)->wets != 0) {
-            lx = nx;
-            ly = ny;
-            break;
-        }
-    }
-    if (lx < 0) {
-        return false; /* nothing to drink */
-    }
-
-    int lift = 0, contact_at = -1, root_depth = 0; /* drinking never spends
-                                                     * soil moisture, so
-                                                     * nothing here roots -
-                                                     * scratch values */
-    const int soil_at = find_water(s, x, y, w, h, r, self, &lift, &contact_at, &root_depth, true);
-    if (soil_at < 0) {
-        return true; /* thirsty, but nowhere to put it */
-    }
-    if ((int)(rng_next(&s->rng) & 0xFF) >= r->drinks) {
-        return true;
-    }
-
-    pay_quench_cost(s, lx, ly, w);
-
-    const cell_t soil = s->cells[soil_at];
-    const reaction_t* sr = reaction_of(soil);
-    s->cells[soil_at] = with_moisture(soil, (uint8_t)(moisture_of(soil, sr) + 1), sr);
-    mark_rows(s, soil_at / w, soil_at / w);
-    wake_block_and_neighbors(s, soil_at % w, soil_at / w);
-    return true;
-}
-
-/* SPROUTS: Consume soil, close loop, grow into wood, end trees, leave posts.
- * Trunks live. */
-static bool
-step_one_sprouting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
-    int soil_at = -1, empty_at = -1, ex = 0, ey = 0;
-
-    for (int d = 0; d < 4; d++) {
-        const int nx = x + reaction_dirs[d][0];
-        const int ny = y + reaction_dirs[d][1];
-        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
-            continue;
-        }
-        const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
-        const cell_t n = s->cells[nat];
-        if (CELL_IS_EMPTY(n)) {
-            if (empty_at < 0) {
-                empty_at = (int)nat;
-                ex = nx;
-                ey = ny;
-            }
-            continue;
-        }
-        if (soil_at < 0 && reaction_of(n)->soil != 0 &&
-            moisture_of(n, reaction_of(n)) != 0) {
-            soil_at = (int)nat;
-        }
-    }
-    if (soil_at < 0 || empty_at < 0) {
-        return soil_at >= 0;
-    }
-    if ((int)(rng_next(&s->rng) & 0xFF) >= r->sprouts) {
-        return true;
-    }
-
-    place_reacted(s, ex, ey, (size_t)empty_at, r->sprouts_to);
-
-    /* SPENDS, NEVER SEEDS -1. 0 reports collar, disconnected roots. Sprouting
-     * pays for leaf. */
-    spend_soil_moisture(s, w, r, soil_at, 1, -1, 0);
-    return true;
-}
-
-static bool
-step_one_budding_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
-    const cell_t self = s->cells[(size_t)y * (size_t)w + (size_t)x];
-
-    bool crowned = false;
-    for (int d = 0; d < 8 && !crowned; d++) {
-        const int* nd = ring_dir(d);
-        const int nx = x + nd[0], ny = y + nd[1];
-        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
-            continue;
-        }
-        crowned = (s->cells[(size_t)ny * (size_t)w + (size_t)nx] == (cell_t)r->sprouts_to);
-    }
-    if (!crowned) {
-        return false;
-    }
-    {
-        const int ax = x - s->last_load_dx, ay = y - s->last_load_dy;
-        if ((unsigned)ax < (unsigned)w && (unsigned)ay < (unsigned)h
-            && s->cells[(size_t)ay * (size_t)w + (size_t)ax] == self) {
-            return false;
-        }
-    }
-
-    /* Somewhere to put it, up and away from gravity. */
-    const int up_i = ring_of(-s->last_load_dx, -s->last_load_dy);
-    static const int out[5] = {7, 0, 1, 2, 6};
-    int at = -1, bx = 0, by = 0;
-    for (int d = 0; d < 5; d++) {
-        const int* nd = ring_dir(up_i + out[d]);
-        const int nx = x + nd[0], ny = y + nd[1];
-        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
-            continue;
-        }
-        const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
-        if (CELL_IS_EMPTY(s->cells[nat])) {
-            at = (int)nat;
-            bx = nx;
-            by = ny;
-            break;
-        }
-    }
-    if (at < 0) {
-        return true; /* crowned, but boxed in */
-    }
-
-    int lift = 0, contact_at = -1, root_depth = 0;
-    const int soil_at = find_water(s, x, y, w, h, r, self, &lift, &contact_at, &root_depth, false);
-    if (soil_at < 0) {
-        return true; /* nothing to drink */
-    }
-    const cell_t soil = s->cells[soil_at];
-    if (moisture_of(soil, reaction_of(soil)) < BUD_COST) {
-        return true;
-    }
-    if ((int)(rng_next(&s->rng) & 0xFF) >= r->buds) {
-        return true;
-    }
-
-    place_reacted(s, bx, by, (size_t)at, r->buds_to);
-
-    spend_soil_moisture(s, w, r, soil_at, BUD_COST, contact_at, root_depth);
-    return true;
-}
-
-/* Stems grow along DITHERED gravity, alternating steps. Prevents rigid
- * angles, makes trunk wander. */
-static bool
-stem_next(sand_t* s, int x, int y, int ux, int uy, int w, int h, cell_t self, int* ox, int* oy) {
-    const int up = ring_of(ux, uy);
-    for (int i = 0; i < 3; i++) {
-        const int* d = ring_dir(up + (i == 0 ? 0 : i == 1 ? 1 : 7));
-        const int nx = x + d[0], ny = y + d[1];
-        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
-            continue;
-        }
-        if (s->cells[(size_t)ny * (size_t)w + (size_t)nx] == self) {
-            *ox = nx;
-            *oy = ny;
-            return true;
-        }
-    }
-    return false;
-}
-
-/* Bound so plant under half board does not walk it */
-#define PUSH_REACH 8
-
-/* Shift cells (dx, dy) from (gx, gy), halting at STATICs. Checks if (gx, gy)
- * is free. */
-static bool
-shove_aside(sand_t* s, int gx, int gy, int dx, int dy, int w, int h) {
-    int ex = gx, ey = gy;
-    int run = 0;
-
-    while (run < PUSH_REACH) {
-        if ((unsigned)ex >= (unsigned)w || (unsigned)ey >= (unsigned)h) {
-            return false; /* shoved into the wall */
-        }
-        const cell_t c = s->cells[(size_t)ey * (size_t)w + (size_t)ex];
-        if (CELL_IS_EMPTY(c)) {
-            break; /* somewhere to put it all */
-        }
-        if (material_of(c)->kind == KIND_STATIC) {
-            return false; /* will not budge */
-        }
-        ex += dx;
-        ey += dy;
-        run++;
-    }
-    if (run == 0) {
-        return true; /* was empty to begin with */
-    }
-    if (run >= PUSH_REACH) {
-        return false; /* too much of it to lift */
-    }
-
-    /* Back to front, so nothing is overwritten before it has moved. */
-    for (int i = 0; i < run; i++) {
-        const int tx = ex, ty = ey;
-        ex -= dx;
-        ey -= dy;
-        s->cells[(size_t)ty * (size_t)w + (size_t)tx] = s->cells[(size_t)ey * (size_t)w + (size_t)ex];
-        mark_rows(s, ty, ty);
-        wake_block_and_neighbors(s, tx, ty);
-    }
-    s->cells[(size_t)gy * (size_t)w + (size_t)gx] = SAND_EMPTY;
-    mark_rows(s, gy, gy);
-    wake_block_and_neighbors(s, gx, gy);
-    return true;
-}
-
-/* Cells WITHER without drink or trunk. Touch wood first (8 reads). Dried soil
- * keeps leaves. */
-static bool
-step_one_withering_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
-    const size_t at = (size_t)y * (size_t)w + (size_t)x;
-    const cell_t self = s->cells[at];
-
-    if (r->sheltered_by != 0) {
-        for (int d = 0; d < 8; d++) {
-            const int* nd = ring_dir(d);
-            const int nx = x + nd[0], ny = y + nd[1];
-            if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
-                continue;
-            }
-            const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
-            if (!CELL_IS_EMPTY(n) && CELL_MATERIAL(n) == r->sheltered_by) {
-                return false; /* under its tree; it stays */
-            }
-            /* ROOT counts as shelter; `roots_to` matches `find_water()`.
-             * Roots touch wood; else, column rots from bottom. */
-            if (r->roots_to != 0 && n == (cell_t)r->roots_to) {
-                return false;
-            }
-        }
-    }
-
-    /* See lignifying branch. Leaf, no hardens_to, skips reads. */
-    bool attached = false;
-    if (r->hardens_to != 0 && r->clings_to != 0) {
-        for (int d = 0; d < 8; d++) {
-            const int* nd = ring_dir(d);
-            const int nx = x + nd[0], ny = y + nd[1];
-            if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
-                continue;
-            }
-            const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
-            if (!CELL_IS_EMPTY(n) && CELL_MATERIAL(n) == r->clings_to) {
-                attached = true;
-                break;
-            }
-        }
-    }
-
-    int lift = 0, contact_at = -1, root_depth = 0; /* just a reachability
-                                                     * check - nothing here
-                                                     * spends, so nothing
-                                                     * roots */
-    if (find_water(s, x, y, w, h, r, self, &lift, &contact_at, &root_depth, false) >= 0) {
-        return false; /* it can still drink */
-    }
-    if ((int)(rng_next(&s->rng) & 0xFF) >= r->withers) {
-        return false;
-    }
-
-    /* Withering prevents shoot from becoming permanent woody speck. CELL_MAKE
-     * used for wood burn progress. */
-    REACTION_DOC(hardens_to, "if withering but still touching its own hardened trunk");
-    if (attached) {
-        place_cell(s, x, y, at, CELL_MAKE(r->hardens_to, 0));
-        return true;
-    }
-
-    s->cells[at] = SAND_EMPTY;
-    mark_rows(s, y, y);
-    wake_block_and_neighbors(s, x, y);
-    return true;
-}
-
-static bool
-step_one_growing_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
-    const cell_t self = s->cells[(size_t)y * (size_t)w + (size_t)x];
-
-    /* Prevent rigid stems using dithered sweep. */
-    const int ux = -s->last_step_dx;
-    const int uy = -s->last_step_dy;
-    if (ux == 0 && uy == 0) {
-        return true; /* free fall: no up to grow towards */
-    }
-
-    /* Reach aids, BURIED stagnate, growth peaks early, surface optimal, dense
-     * skip scans. */
-    int packed = 0;
-    for (int d = 0; d < 8; d++) {
-        const int* nd = ring_dir(d);
-        const int nx = x + nd[0], ny = y + nd[1];
-        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
-            packed++;
-            continue;
-        }
-        if (is_kin(s->cells[(size_t)ny * (size_t)w + (size_t)nx], self, r)) {
-            packed++;
-        }
-    }
-    if (packed >= 5) {
-        return true; /* inside the crowd, not at its edge */
-    }
-
-    int lift = 0, contact_at = -1, root_depth = 0;
-    const int soil_at = find_water(s, x, y, w, h, r, self, &lift, &contact_at, &root_depth, false);
-    if (soil_at < 0) {
-        return true; /* nothing to drink */
-    }
-    if (lift >= TREE_LIFT) {
-        return true; /* too high up to be fed */
-    }
-    if ((int)(rng_next(&s->rng) & 0xFF) >= r->grows) {
-        return true;
-    }
-
-    int run = 1, tx = x, ty = y;
-    for (int i = 0; i < GROW_REACH; i++) {
-        int nx, ny;
-        if (!stem_next(s, tx, ty, ux, uy, w, h, self, &nx, &ny)) {
-            break;
-        }
-        tx = nx;
-        ty = ny;
-        run++;
-    }
-
-    /* Round RING, not up-plus-perpendicular: one step round is adjacent. */
-    const int up = ring_of(ux, uy);
-    const int side = rng_below(&s->rng, 2) ? 1 : 7; /* +1 or -1 round */
-
-    int site, dx, dy;
-    bool thicken = false;
-    const int what = rng_below(&s->rng, 8);
-    if (what < 4 || run < 3) {
-        site = run - 1; /* HEIGHT: straight on from the tip */
-        dx = 0;
-        dy = 0; /* along the run - filled in below */
-    } else if (what < 6) {
-        site = run - 1; /* LEAN: the tip, one step round */
-        dx = side;
-        dy = 0; /* one step round from the run */
-    } else if (what < 7) {
-        site = rng_below(&s->rng, run - 1); /* BRANCH: out and up */
-        dx = side;
-        dy = 0;
-    } else {
-        /* WIDTH simulates tree growth by thickening trunk. */
-        site = rng_below(&s->rng, (run + 1) / 2);
-        dx = side * 2; /* square on to the run */
-        dy = 0;
-        thicken = true;
-    }
-    /* Back up the stem to the chosen site, the same way. */
-    int sx = x, sy = y;
-    for (int i = 0; i < site; i++) {
-        int nx, ny;
-        if (!stem_next(s, sx, sy, ux, uy, w, h, self, &nx, &ny)) {
-            break;
-        }
-        sx = nx;
-        sy = ny;
-    }
-
-    /* Gravity triggers `run < 3`, `holds_line` restores old behavior. */
-    int head = up;
-    if (r->holds_line != 0 && (int)(rng_next(&s->rng) & 0xFF) < r->holds_line) {
-        /* Longer baseline increases horizontal drift from 24 to 38. Shorter
-         * baseline simpler. */
-        int px, py;
-        if (stem_next(s, sx, sy, -ux, -uy, w, h, self, &px, &py)) {
-            head = ring_of(sx - px, sy - py);
-        }
-    }
-    {
-        const int* hd = ring_dir(head + dx);
-        dx = hd[0];
-        dy = hd[1];
-    }
-
-    if (thicken) {
-        /* TAPERED: allowance shrinks with height, fat at foot, single cell by
-         * branches. Uniform grows a pillar, not a tree. */
-        const int allowed = TRUNK_WIDTH - (lift + site) / 3;
-        if (allowed < 2) {
-            return true; /* too high up to be thickening */
-        }
-        int wide = 0;
-        for (int i = 1; i < allowed; i++) {
-            const int wx = sx + dx * i;
-            const int wy = sy + dy * i;
-            if ((unsigned)wx >= (unsigned)w || (unsigned)wy >= (unsigned)h) {
-                break;
-            }
-            const cell_t c = s->cells[(size_t)wy * (size_t)w + (size_t)wx];
-            if (c != self && !(r->clings_to != 0 && CELL_MATERIAL(c) == r->clings_to)) {
-                break;
-            }
-            wide++;
-        }
-        if (wide >= allowed - 1) {
-            return true; /* thick enough already */
-        }
-    }
-
-    const int gx = sx + dx, gy = sy + dy;
-    if ((unsigned)gx >= (unsigned)w || (unsigned)gy >= (unsigned)h) {
-        return true;
-    }
-    /* Growth limited to tip; produces trees mostly underground. */
-    const bool shoot = (site == run - 1) && !thicken;
-
-    const size_t gat = (size_t)gy * (size_t)w + (size_t)gx;
-    if (!CELL_IS_EMPTY(s->cells[gat]) && !(shoot && shove_aside(s, gx, gy, dx, dy, w, h))) {
-        return true; /* in the way, and will not move */
-    }
-
-    /* Grow, and spend the water. */
-    s->cells[gat] = self;
-    latch_content_flags(s, self);
-    mark_rows(s, gy, gy);
-    wake_block_and_neighbors(s, gx, gy);
-
-    spend_soil_moisture(s, w, r, soil_at, 1, contact_at, root_depth);
-
-    /* HARDENING. Counted from the bottom; run measured once regardless of
-     * growth. */
-    if (r->hardens_to == 0 || r->harden_run == 0) {
-        return true;
-    }
-    int cx = x, cy = y;
-    for (int i = 0; i < GROW_REACH; i++) {
-        int nx, ny;
-        if (!stem_next(s, cx, cy, -ux, -uy, w, h, self, &nx, &ny)) {
-            break;
-        }
-        cx = nx;
-        cy = ny;
-    }
-    const int fx = cx, fy = cy;
-
-    int trunk = 1;
-    while (trunk < GROW_REACH) {
-        int nx, ny;
-        if (!stem_next(s, cx, cy, ux, uy, w, h, self, &nx, &ny)) {
-            break;
-        }
-        cx = nx;
-        cy = ny;
-        trunk++;
-    }
-    if (trunk < r->harden_run) {
-        return true;
-    }
-
-
-
-
-
-
-
-    /* Runs harden before long, wood does not grow. */
-    if (__builtin_expect((int)(rng_next(&s->rng) & 0xFF) >= r->harden_chance, 1)) {
-        return true;
-    }
-
-    /* SHAPING PASS: Hardens, converts to wood, thickens trunk, adds canopy.
-     * Last cell green. Growth ends. */
-    const int up_i = ring_of(ux, uy);
-
-    /* Growth now from crowned wood (reaction_t.buds). */
-    const int hard = trunk;
-
-    int topx[CANOPY_SPAN], topy[CANOPY_SPAN];
-    int ntop = 0;
-
-    cx = fx;
-    cy = fy;
-    for (int i = 0; i < hard; i++) {
-        int nx = 0, ny = 0;
-        const bool more = stem_next(s, cx, cy, ux, uy, w, h, self, &nx, &ny);
-        place_cell(s, cx, cy, (size_t)cy * (size_t)w + (size_t)cx, CELL_MAKE(r->hardens_to, 0));
-
-        /* Taper linear by LENGTH. Step is taper. Twelve hardenings merge
-         * trees; 6-7 preferred. */
-        const int span = (hard > 1) ? hard - 1 : 1;
-        const int extra = (int)r->trunk_girth * (span - i) / span;
-        for (int g = 1; g <= extra; g++) {
-            const int sidei = (g & 1) ? 2 : 6; /* square on, both ways */
-            const int* gd = ring_dir(up_i + sidei);
-            const int gx = cx + gd[0] * ((g + 1) / 2);
-            const int gy = cy + gd[1] * ((g + 1) / 2);
-            if ((unsigned)gx >= (unsigned)w || (unsigned)gy >= (unsigned)h) {
-                continue;
-            }
-            const size_t gat = (size_t)gy * (size_t)w + (size_t)gx;
-            if (!CELL_IS_EMPTY(s->cells[gat])) {
-                continue;
-            }
-            place_cell(s, gx, gy, gat, CELL_MAKE(r->hardens_to, 0));
-        }
-
-        /* Hang crown once cells below are wood, avoid foliage. stem_next()
-         * still walking. */
-        if (ntop < CANOPY_SPAN) {
-            topx[ntop] = cx;
-            topy[ntop] = cy;
-            ntop++;
-        } else {
-            for (int k = 1; k < CANOPY_SPAN; k++) {
-                topx[k - 1] = topx[k];
-                topy[k - 1] = topy[k];
-            }
-            topx[CANOPY_SPAN - 1] = cx;
-            topy[CANOPY_SPAN - 1] = cy;
-        }
-
-        if (!more) {
-            break;
-        }
-        cx = nx;
-        cy = ny;
-    }
-
-    if (r->canopy != 0 && r->canopy_to != 0) {
-        static const int crown[4] = {7, 1, 2, 6};
-        for (int t = 0; t < ntop; t++) {
-            for (int c = 0; c < 4; c++) {
-                const int* cd = ring_dir(up_i + crown[c]);
-                const int lx = topx[t] + cd[0], ly = topy[t] + cd[1];
-                if ((unsigned)lx >= (unsigned)w || (unsigned)ly >= (unsigned)h) {
-                    continue;
-                }
-                const size_t lat = (size_t)ly * (size_t)w + (size_t)lx;
-                if (!CELL_IS_EMPTY(s->cells[lat])) {
-                    continue;
-                }
-                if ((int)(rng_next(&s->rng) & 0xFF) >= r->canopy) {
-                    continue;
-                }
-                place_reacted(s, lx, ly, lat, r->canopy_to);
-            }
-        }
-    }
-    return true;
 }
 
 /* COLD melts, pulls temp, cracks if hot. Chilling, melting snow. Warm liquid
@@ -1773,13 +664,10 @@ step_one_tempered_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cons
     const cell_t c = row[x];
     const uint8_t temp = CELL_VARIANT(c);
 
-
     /* Spreading makes frost patch visible. */
 
     /* PUSHED to avoid ambient cell noticing frosted neighbour. Similar to
      * chilling bug. */
-
-
 
     /* Push question to where it is already cheap */
     bool wet = false;
@@ -1814,10 +702,6 @@ step_one_tempered_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cons
         mark_rows(s, ny, ny);
         wake_block_and_neighbors(s, nx, ny);
     }
-
-
-
-
 
     /* MULTIPLIES DRAIN BY SAND_WET_COOLING_FACTOR (sand.h) */
 
@@ -1904,8 +788,7 @@ try_ignite_given(sand_t* s, int nx, int ny, int w, int h, size_t at, cell_t n) {
     if (f < 255 && (int)(rng_next(&s->rng) & 0xFF) >= f) {
         return false;
     }
-    if (s->impulse_buf != NULL && material_of(n)->kind == KIND_GAS &&
-        gas_ignite_confined(s, nx, ny, w, h)) {
+    if (s->impulse_buf != NULL && material_of(n)->kind == KIND_GAS && gas_ignite_confined(s, nx, ny, w, h)) {
         sand_explode(s, nx, ny, SAND_GAS_IGNITE_BLAST_RADIUS);
         return true;
     }
@@ -1932,10 +815,7 @@ emit_into_empty_neighbor(sand_t* s, int x, int y, int w, int h, uint8_t spec) {
     return false;
 }
 
-
-
 /* Lava LANDS as separate grains, spends steps in open air. */
-
 
 /* MAT_FIRE cells burn, react, roll smoke; suspect in lava pours. */
 
@@ -1946,14 +826,12 @@ emit_into_empty_neighbor(sand_t* s, int x, int y, int w, int h, uint8_t spec) {
 /* KIND_STATIC exempt; never moves, thus unaffected by gravity. */
 
 static inline bool
-try_flare(sand_t* s, int x, int y, int w, int h, const material_t* mat,
-         uint8_t flare) {
+try_flare(sand_t* s, int x, int y, int w, int h, const material_t* mat, uint8_t flare) {
     if (flare == 0) {
         return false;
     }
     if (mat->kind != KIND_STATIC) {
-        const cell_t below = sand_at(s, x + s->last_step_dx,
-                                     y + s->last_step_dy);
+        const cell_t below = sand_at(s, x + s->last_step_dx, y + s->last_step_dy);
         if (CELL_IS_EMPTY(below)) {
             return false;
         }
@@ -1964,22 +842,9 @@ try_flare(sand_t* s, int x, int y, int w, int h, const material_t* mat,
     return emit_into_empty_neighbor(s, x, y, w, h, MAT_FIRE);
 }
 
-/* Cell pays 1 mass. Stops fire from draining. Preserves slow quench. Follows
- * give_mass(). */
-static inline void
-pay_quench_cost(sand_t* s, int nx, int ny, int w) {
-    const size_t at = (size_t)ny * (size_t)w + (size_t)nx;
-    const cell_t n = s->cells[at];
-    const int mass = CELL_VARIANT(n) - 1;
-    s->cells[at] = (mass > 0) ? CELL_MAKE(CELL_MATERIAL(n), mass) : CELL_EMPTY;
-    mark_rows(s, ny, ny);
-    wake_block_and_neighbors(s, nx, ny);
-}
-
 /* Bounds conduct_heat() walk - see "THE BOILER" for rationale. Caps cold
  * pass. */
 #define CONDUCT_REACH 32
-
 
 /* Attempts direct connection, fails. Rolls `conducts` to CONDUCT_REACH. Stops
  * on failure, off-grid, or empty. Liquid boils, fuel ignites, neighbors warm.
@@ -2039,10 +904,6 @@ conduct_heat(sand_t* s, int x, int y, int w, int h) {
         const cell_t bc = s->cells[bat];
         const material_t* bm = material_of(bc);
 
-
-
-
-
         if (bm->kind == KIND_LIQUID && reaction_of(bc)->burns == 0 && reaction_of(bc)->flammability == 0) {
             /* Boils cells near conductor, replacing old method. Eliminates
              * deadlock via `boils` in reaction_t; retries on failure. */
@@ -2073,18 +934,12 @@ conduct_heat(sand_t* s, int x, int y, int w, int h) {
 
 /* ACID BUBBLES - CONTINUOUS, AMBIENT look, not event-specific. */
 
-
-
-
 /* LIVES HERE, NOT IN move_liquid_grain() - skips settled blocks. */
-
 
 /* NOT gated by block-sleeping - needed for dissolving, cooling, and bubbling. */
 
-
 /* NO dx,dy PARAMETER - uses s->last_step_dx/last_step_dy for "which way is
  * down" (sand.h). */
-
 
 /* UPWARD, STRAIGHT, MINIMAL SPREAD - NOT splash_displace()'s full ring. */
 static void
@@ -2101,7 +956,6 @@ acid_bubble(sand_t* s, int x, int y) {
     const int spread = (int)(rng_next(&s->rng) % 3) - 1; /* -1, 0 or 1 */
     sand_impulse(s, x, y, (i_up + spread + 8) & 7, SAND_ACID_BUBBLE_SPEED);
 }
-
 
 /* A separate, much higher evaporate roll (below) can consume the whole
  * acid cell in one bite, so acid has a real chance to run out rather than
@@ -2167,10 +1021,9 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
                     water_backing++;
                 }
             }
-            const int mass_bias = (s->acid_dilute_mass_bias >= 0)
-                                       ? s->acid_dilute_mass_bias : SAND_ACID_DILUTE_MASS_BIAS;
-            const int water_wins_chance = SAND_ACID_DILUTE_TO_WATER_CHANCE
-                                           + (water_backing - acid_backing) * mass_bias;
+            const int mass_bias =
+                (s->acid_dilute_mass_bias >= 0) ? s->acid_dilute_mass_bias : SAND_ACID_DILUTE_MASS_BIAS;
+            const int water_wins_chance = SAND_ACID_DILUTE_TO_WATER_CHANCE + (water_backing - acid_backing) * mass_bias;
 
             const int roll = (int)(rng_next(&s->rng) & 0xFF);
             const size_t self_at = (size_t)y * (size_t)w + (size_t)x;
@@ -2190,8 +1043,8 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
 
         /* Oil turns to gas. Acid dies or pays quench cost. Rolls independent. */
         if (CELL_MATERIAL(n) == MAT_OIL) {
-            const uint8_t oil_residue = ((int)(rng_next(&s->rng) & 0xFF) < SAND_ACID_OIL_TO_GAS_CHANCE)
-                                         ? MAT_GAS : MAT_ACID;
+            const uint8_t oil_residue =
+                ((int)(rng_next(&s->rng) & 0xFF) < SAND_ACID_OIL_TO_GAS_CHANCE) ? MAT_GAS : MAT_ACID;
             place_reacted(s, nx, ny, at, oil_residue);
 
             if ((int)(rng_next(&s->rng) & 0xFF) < SAND_ACID_OIL_DEATH_CHANCE) {
@@ -2232,9 +1085,6 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
 
 /* 2x2, NOT 3x3. Burn-out rolls independent per cell. */
 
-
-
-
 /* gunpowder shares high nibble with extended statics; avoid counting ice as
  * fuse */
 
@@ -2249,8 +1099,8 @@ lit_here(const sand_t* s, int nx, int ny, int w, int h, cell_t grain, const reac
 }
 
 static inline bool
-find_lit_two_by_two(const sand_t* s, int x, int y, int w, int h, cell_t grain, const reaction_t* r,
-                     int* out_dx, int* out_dy) {
+find_lit_two_by_two(const sand_t* s, int x, int y, int w, int h, cell_t grain, const reaction_t* r, int* out_dx,
+                    int* out_dy) {
     for (int dy = -1; dy <= 1; dy += 2) {
         if (!lit_here(s, x, y + dy, w, h, grain, r)) {
             continue;
@@ -2294,12 +1144,14 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
     if (lit_state ? !tick_decay_at(s, row, x, y, &grain, rx, burn_rate)
                   : !tick_decay(s, row, x, y, &grain, mat, mat_id)) {
         if (rx->explodes != 0) {
-            REACTION_DOC(explodes, "at burn-out, if it is one corner of a 2x2 that is all lit and the board's blast cooldown has run out");
+            REACTION_DOC(
+                explodes,
+                "at burn-out, if it is one corner of a 2x2 that is all lit and the board's blast cooldown has run out");
             int dx = 0, dy = 0;
-            if (s->impulse_buf != NULL && s->fuse_blast_wait == 0 &&
-                find_lit_two_by_two(s, x, y, w, h, grain, rx, &dx, &dy)) {
-                s->fuse_blast_wait = (uint8_t)((s->fuse_cooldown >= 0) ? s->fuse_cooldown
-                                                                       : SAND_GUNPOWDER_BLAST_COOLDOWN);
+            if (s->impulse_buf != NULL && s->fuse_blast_wait == 0
+                && find_lit_two_by_two(s, x, y, w, h, grain, rx, &dx, &dy)) {
+                s->fuse_blast_wait =
+                    (uint8_t)((s->fuse_cooldown >= 0) ? s->fuse_cooldown : SAND_GUNPOWDER_BLAST_COOLDOWN);
                 spend_lit_two_by_two(s, x, y, w, dx, dy);
                 sand_explode(s, x, y, rx->explodes);
             } else {
@@ -2333,18 +1185,15 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
                         wake_block_and_neighbors(s, x, y);
                     }
                 } else if (quench_to != 0) {
-                    uint8_t product      = quench_to;
-                    bool leaves_residue  = true;
+                    uint8_t product = quench_to;
+                    bool leaves_residue = true;
                     if (mat_id == MAT_FIRE) {
                         const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
                         const uint8_t liquid_boils_to = reaction_of(s->cells[nat])->boils_to;
                         if (liquid_boils_to == MAT_GAS) {
-                            leaves_residue = (int)(rng_next(&s->rng) & 0xFF)
-                                             < SAND_ACID_QUENCH_RESIDUE_CHANCE;
-                            product = ((int)(rng_next(&s->rng) & 0xFF)
-                                       < SAND_ACID_QUENCH_SMOKE_CHANCE)
-                                          ? MAT_SMOKE
-                                          : MAT_GAS;
+                            leaves_residue = (int)(rng_next(&s->rng) & 0xFF) < SAND_ACID_QUENCH_RESIDUE_CHANCE;
+                            product =
+                                ((int)(rng_next(&s->rng) & 0xFF) < SAND_ACID_QUENCH_SMOKE_CHANCE) ? MAT_SMOKE : MAT_GAS;
                         } else {
                             product = liquid_boils_to ? liquid_boils_to : MAT_STEAM;
                         }
@@ -2353,9 +1202,8 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
                         place_reacted(s, x, y, at, product);
                         /* Gated on KIND_LIQUID. Only lava quenches AS liquid. */
                         if (mat->kind == KIND_LIQUID) {
-                            const int lava_cooloff = (s->lava_cooloff >= 0)
-                                                          ? s->lava_cooloff
-                                                          : SAND_LAVA_COOLOFF_CHANCE;
+                            const int lava_cooloff =
+                                (s->lava_cooloff >= 0) ? s->lava_cooloff : SAND_LAVA_COOLOFF_CHANCE;
                             cool_off_chain(s, x, y, w, h, product, lava_cooloff);
                         }
                     } else {
@@ -2374,10 +1222,6 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
         }
     }
 
-
-
-
-
     /* Covered_at checks lid with cover_mask. */
 
     if (mat->kind != KIND_LIQUID && rx->explodes == 0 && smothered(s, x, y, w, h, mat->density)) {
@@ -2389,19 +1233,13 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
 
     bool acted = false;
 
-
-
     /* WHOLE-CELL EVENT, NOT PER-NEIGHBOUR PROBE */
-
-
 
     /* NOT smothered()'s all-4 test - fixes cover_count(), SCREEN cardinal
      * count, and pool neighbor limits. */
 
-
     /* covered_at()'s lid with diagonal crust cells fixes
      * test_a_wide_pool_under_a_crust_bursts. */
-
 
     /* NOT GATED ON s->impulse_buf. No fallback needed: sand_explode() is a
      * no-op with impulses off. */
@@ -2412,33 +1250,26 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
     /* Test at 255 means 'fire on every cell'; 1-in-N complicates testing. */
     const bool burst_natural = s->lava_burst < 0;
     const int burst_chance = burst_natural ? SAND_LAVA_BURST_CHANCE : s->lava_burst;
-    if (is_lava && burst_chance != 0 &&
-        (int)(rng_next(&s->rng) & 0xFF) < burst_chance &&
-        (!burst_natural || (rng_next(&s->rng) % SAND_LAVA_BURST_GATE) == 0) &&
-        covered_at(s, x, y, w, h, mat->density)) {
+    if (is_lava && burst_chance != 0 && (int)(rng_next(&s->rng) & 0xFF) < burst_chance
+        && (!burst_natural || (rng_next(&s->rng) % SAND_LAVA_BURST_GATE) == 0)
+        && covered_at(s, x, y, w, h, mat->density)) {
         place_reacted(s, x, y, at, rx->quench_to);
         sand_explode(s, x, y, SAND_LAVA_BURST_RADIUS);
         return true;
     }
-
-
-
 
     /* DO NOT merge with quench or conduct_heat walks - see top comment for
      * RNG draw reasons. */
 
     /* HOISTED OUT OF THE LOOP: mat_id fixed, pair_bits[mat_id] reused. */
 
-
-
     /* Host numbers mispredict device; capture settles it. */
 
     /* TRIGGER A of cool_off_chain(): 0 short-circuits check before loop
      * starts. */
     const int lava_cooloff = (mat->kind == KIND_LIQUID && rx->quench_to != 0)
-                                  ? ((s->lava_cooloff >= 0) ? s->lava_cooloff
-                                                             : SAND_LAVA_COOLOFF_CHANCE)
-                                  : 0;
+                                 ? ((s->lava_cooloff >= 0) ? s->lava_cooloff : SAND_LAVA_COOLOFF_CHANCE)
+                                 : 0;
     const uint8_t* my_pair_row = pair_bits[mat_id];
     for (int d = 0; d < 4; d++) {
         const int nx = x + reaction_dirs[d][0];
@@ -2472,8 +1303,8 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
             }
             if (changed) {
                 acted = true;
-                if (lava_cooloff != 0 && CELL_MATERIAL(s->cells[nat]) != before_mat &&
-                    (int)(rng_next(&s->rng) & 0xFF) < lava_cooloff) {
+                if (lava_cooloff != 0 && CELL_MATERIAL(s->cells[nat]) != before_mat
+                    && (int)(rng_next(&s->rng) & 0xFF) < lava_cooloff) {
                     place_reacted(s, x, y, at, rx->quench_to);
                     cool_off_chain(s, x, y, w, h, rx->quench_to, lava_cooloff);
                     return true;
@@ -2499,15 +1330,15 @@ step_one_condensing_cell(sand_t* s, int x, int y, int w, int h, const reaction_t
     if (x + 1 >= w || y + 1 >= h) {
         return false;
     }
-    const size_t at    = (size_t)y * (size_t)w + (size_t)x;
-    const size_t at_r  = at + 1;
-    const size_t at_d  = at + (size_t)w;
+    const size_t at = (size_t)y * (size_t)w + (size_t)x;
+    const size_t at_r = at + 1;
+    const size_t at_d = at + (size_t)w;
     const size_t at_dr = at_d + 1;
     const uint8_t mat_id = CELL_MATERIAL(s->cells[at]);
 
-    if (CELL_IS_EMPTY(s->cells[at_r]) || CELL_MATERIAL(s->cells[at_r]) != mat_id
-        || CELL_IS_EMPTY(s->cells[at_d]) || CELL_MATERIAL(s->cells[at_d]) != mat_id
-        || CELL_IS_EMPTY(s->cells[at_dr]) || CELL_MATERIAL(s->cells[at_dr]) != mat_id) {
+    if (CELL_IS_EMPTY(s->cells[at_r]) || CELL_MATERIAL(s->cells[at_r]) != mat_id || CELL_IS_EMPTY(s->cells[at_d])
+        || CELL_MATERIAL(s->cells[at_d]) != mat_id || CELL_IS_EMPTY(s->cells[at_dr])
+        || CELL_MATERIAL(s->cells[at_dr]) != mat_id) {
         return false;
     }
 
@@ -2530,21 +1361,20 @@ step_one_acid_rain_cell(sand_t* s, int x, int y, int w, int h) {
     if (x + 1 >= w || y + 1 >= h) {
         return false;
     }
-    const size_t at    = (size_t)y * (size_t)w + (size_t)x;
-    const size_t at_r  = at + 1;
-    const size_t at_d  = at + (size_t)w;
+    const size_t at = (size_t)y * (size_t)w + (size_t)x;
+    const size_t at_r = at + 1;
+    const size_t at_d = at + (size_t)w;
     const size_t at_dr = at_d + 1;
     const uint8_t m0 = CELL_MATERIAL(s->cells[at]);
     const uint8_t m1 = CELL_MATERIAL(s->cells[at_r]);
     const uint8_t m2 = CELL_MATERIAL(s->cells[at_d]);
     const uint8_t m3 = CELL_MATERIAL(s->cells[at_dr]);
 
-    if ((m0 != MAT_STEAM && m0 != MAT_GAS) || (m1 != MAT_STEAM && m1 != MAT_GAS)
-        || (m2 != MAT_STEAM && m2 != MAT_GAS) || (m3 != MAT_STEAM && m3 != MAT_GAS)) {
+    if ((m0 != MAT_STEAM && m0 != MAT_GAS) || (m1 != MAT_STEAM && m1 != MAT_GAS) || (m2 != MAT_STEAM && m2 != MAT_GAS)
+        || (m3 != MAT_STEAM && m3 != MAT_GAS)) {
         return false;
     }
-    const int steam_count = (m0 == MAT_STEAM) + (m1 == MAT_STEAM)
-                             + (m2 == MAT_STEAM) + (m3 == MAT_STEAM);
+    const int steam_count = (m0 == MAT_STEAM) + (m1 == MAT_STEAM) + (m2 == MAT_STEAM) + (m3 == MAT_STEAM);
     if (steam_count != 2) {
         return false;
     }
@@ -2583,7 +1413,6 @@ step_one_acid_rain_cell(sand_t* s, int x, int y, int w, int h) {
 /* REACTION-STAGE DISPATCH TABLE skips PREFIX rows. Water, oil, metal traverse
  * all fields. */
 
-
 /* Two tables: key NOT material nibble - 16 different rows for each. */
 
 static uint8_t material_first_stage[MATERIAL_MAX];
@@ -2594,10 +1423,10 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
     uint8_t* row = s->cells + (size_t)y * (size_t)w;
 
     static void* const stage_labels[RSTAGE_COUNT] = {
-        &&stage_burn_any,  &&stage_burn_always, &&stage_burn_check, &&stage_dissolve, &&stage_acid_rain,
-        &&stage_condense,  &&stage_heat_ramp,   &&stage_chill,      &&stage_warm,     &&stage_soak_dry,
-        &&stage_fall,      &&stage_wither,      &&stage_drink,      &&stage_root,     &&stage_grow,
-        &&stage_sprout,    &&stage_bud,         &&stage_end,
+        &&stage_burn_any, &&stage_burn_always, &&stage_burn_check, &&stage_dissolve, &&stage_acid_rain,
+        &&stage_condense, &&stage_heat_ramp,   &&stage_chill,      &&stage_warm,     &&stage_soak_dry,
+        &&stage_fall,     &&stage_wither,      &&stage_drink,      &&stage_root,     &&stage_grow,
+        &&stage_sprout,   &&stage_bud,         &&stage_end,
     };
 
     unsigned found = 0;
@@ -2652,11 +1481,9 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
         }
         /* See SAND_ACID_RAIN_CHANCE's comment (sand.h). */
 
-
         /* found |= ... survivor writes at (x, y), walk never revisits, no
          * other branch reports FOUND_DISSOLVER/FOUND_MOISTURE, steam can't
          * report FOUND_CONDENSING. */
-
 
     stage_acid_rain:
         if (CELL_MATERIAL(c) == MAT_GAS || CELL_MATERIAL(c) == MAT_STEAM) {
@@ -2775,10 +1602,6 @@ sand_step_reactions(sand_t* s) {
         return;
     }
 
-
-
-
-
     uint8_t theirs_bits[MATERIAL_MAX] = {0};
     for (int m = 1; m < MAT_COUNT; m++) {
         const reaction_t* r = &reactions[m];
@@ -2869,7 +1692,6 @@ sand_step_reactions(sand_t* s) {
     /* Clearing wipes flag; convection dead. */
 
     /* Measured: arm-only version byte-identical to HEAD on eight scenes. */
-
 
     /* Nobody pays per-step upkeep once armed. */
 }
