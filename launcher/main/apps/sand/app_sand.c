@@ -473,156 +473,27 @@ static uint32_t cullet_elapsed_ms;
 static int glass_last_phase;
 
 /*=============================================================================
- * A LIQUID INTERIOR'S LOCAL DEPTH - replaces a screen-position gradient with
- * one that follows each puddle's own shape.
+ * A LIQUID INTERIOR'S LOCAL DEPTH.
  *
- * Reported from the device, twice, about the OLD mechanism (a plain affine
- * function of screen position, walked as a per-row depth_acc/depth_col_step
- * pair that no longer exists in this file, set up once a frame by a
- * material.c that no longer needs to either - see git log if the old shape
- * is ever wanted back): "the sensibility against gravity makes it behave
- * almost like platinum" - a uniform gradient swept across the WHOLE SCREEN,
- * independent of where the water actually is, reads as a metallic sheen
- * rather than depth through a medium - and "there is no arcs... maybe it's
- * better if the depth just follows the shape of the
- * puddle", asking, in so many words, for exactly what this is.
+ * Local depth follows each puddle's own shape rather than the old flat
+ * screen-position gradient, which read as a metallic sheen across the whole
+ * screen rather than depth into a liquid - see
+ * test_local_depth_follows_the_puddles_own_shape. An obstacle poking
+ * through a pool casts a depth "shadow"; that shadow is a deliberate
+ * feature, but earlier shapes of this mechanism could only draw it
+ * axis-aligned, never along the true gravity direction (git log up to
+ * commit 3376c8e has the full history of those attempts and why each was
+ * replaced).
  *
- * LOCAL DEPTH, for a liquid cell: 0 if the neighbour one step TOWARD THE
- * SURFACE is not the SAME MATERIAL - a different liquid, empty space, or
- * solid all count as "not the same", the boundary of THIS material's own
- * body - otherwise, one more than that neighbour's own local depth. A
- * puddle with a rock poking through it dips back to a small depth right
- * where the rock breaks its surface, instead of painting straight through
- * the rock as if it were not there - "follows the shape of the puddle",
- * exactly what the second report above asked for. See
- * suite_sand_liquid_depth.c's
- * test_local_depth_follows_the_puddles_own_shape for the actual
- * before/after comparison, run through real sand_t/sand_step(), that
- * motivated this. THE OBSTACLE'S SHADOW THIS PRODUCES IS A KEPT, DELIBERATE
- * FEATURE, not a bug - see "THE SHADOW MUST FOLLOW GRAVITY" below for the
- * one requirement on it that changed.
- *
- * THIS MECHANISM HAS BEEN THROUGH FOUR SHAPES, each replacing the last after
- * a device report the previous one could not explain away. In order:
- *
- *   (1) a single dominant axis (`|gy| >= |gx|`) with hysteresis at the tie
- *       point - replaced because hysteresis only reduced how OFTEN the axis
- *       flipped, not how SEVERE the jump was on the rare frame it still
- *       did ("if i leave the device near a 45 degree position i can see
- *       artifacts for both direction trying to reconcile... we should have
- *       a single source of truth for this vector") - measured an 11-cell
- *       disagreement between the two axes' own readings on the same grid,
- *       all of it landing on-screen at once whenever the flip fired;
- *   (2) both axes computed unconditionally and BLENDED (a Q8 crossfade by
- *       gravity's own |gx|/|gy| ratio) - fixed the chatter (nothing left to
- *       flip) but introduced two of its own defects, a shadow beside every
- *       submerged obstacle and a depth that "breathed" with tilt angle on a
- *       flat surface;
- *   (3) both axes PROJECTED onto gravity, then combined with MAX rather
- *       than a blend - closed the shadow (a lower bound can only
- *       under-report, so max recovers the true depth from whichever axis
- *       was not blocked) and the tilt-inflation (a projected count already
- *       reads the true depth on a flat surface, so max of two things that
- *       both read it still reads it) - the full account of shapes (2) and
- *       (3), every defect, every rejected ceiling design, and the exact
- *       numbers behind each, is preserved in git log up to commit 3376c8e
- *       and is NOT repeated here; read it there before proposing another
- *       combiner-only fix, because an axis-aligned walk was ALWAYS going to
- *       hit the wall shape (4) exists to fix, however the two readings get
- *       combined;
- *   (4) THIS ONE - one walk that steps ALONG GRAVITY ITSELF, replacing the
- *       two axis-aligned walks and their combiner outright.
- *
- * THE SHADOW MUST FOLLOW GRAVITY - the defect shape (3) could not fix
- * because it is not a combiner defect at all. An axis-aligned walk can only
- * ever produce an axis-aligned SHADOW: whichever axis the obstacle blocks
- * resets to 0 and climbs back up walking straight along that axis, so the
- * shallow region behind a submerged obstacle is always a horizontal or
- * vertical band, never a diagonal one - no projection or combiner
- * downstream of that walk can rotate a shape the walk itself never drew.
- * Reported from the device after shape (3) had already shipped and closed
- * both of its own defects: the shadow's own direction still ran straight
- * down or straight sideways, never along the tilt. MEASURED, on a settled
- * pool with a submerged 3x3 stone, comparing the shadow's own deficit-
- * weighted centroid bearing against true gravity's bearing, across six
- * tilts (SHIPPED = shape (3), the two projected-axis walks; RAY = this
- * walk):
- *
- *     tilt from vertical   SHIPPED bearing        RAY bearing    true gravity
- *          33.1 deg          -90.0 (33.1 off)      -124.6 (1.5 off)   -123.1
- *          33.3 deg          +90.0 (33.3 off)       +57.6 (1.0 off)    +56.7
- *          37.8 deg          +90.0 (37.8 off)      +128.1 (0.2 off)   +127.8
- *          45.0 deg          no shadow at all       +45.0 (0.0 off)    +45.0
- *          16.7 deg          +90.0 (16.7 off)       +72.6 (0.7 off)    +73.3
- *          73.3 deg           +0.0 (16.7 off)       +17.9 (1.2 off)    +16.7
- *
- * SHIPPED's bearing is always exactly +/-90 or 0 and its error always
- * equals the tilt angle - the axis-aligned signature stated plainly. The 45
- * degree row shows SHIPPED with no shadow at all, not a small one: at the
- * exact tie point both projected axes reach the true surface equally, so
- * max() hides the shadow entirely there - which is also why the whole
- * effect visibly appears and disappears as the device rotates through that
- * angle, on top of never pointing the right way anywhere else. RAY is
- * within 1.5 degrees of true gravity at every tilt tried, INCLUDING the tie
- * point where SHIPPED loses the shadow completely.
- *
- * THE FIX: ONE walk that steps along the gravity ray by Bresenham, in place
- * of the two axis-aligned walks - not a third combiner shape layered on top
- * of them. Two regimes, switching at 45 degrees on `|gy| >= |gx|` exactly
- * like shape (1)'s own dominant-axis pick once did:
- *
- *   - VERTICAL-DOMINANT (`|gy| >= |gx|`): one ROW per step toward the
- *     surface. The cell one step back along the ray from (cx, cy) is
- *     `(cx + step, cy - vdir)`, `vdir = sign(gy)` (the real, already-
- *     adjacent grid row `vdir` steps away - `above`/`below` below, same
- *     pointers this file has always read for the vertical case), `step` a
- *     PER-ROW value shared by every column in that row (gravity does not
- *     change from one column to the next), computed fresh from `cy` alone
- *     every time this row is painted - see "THE ROW OFFSET, WITHOUT AN
- *     ACCUMULATOR" below for why it must be, and cannot be carried as
- *     running state, under this file's own sparse-repaint discipline.
- *   - HORIZONTAL-DOMINANT (`|gx| > |gy|`): the transpose - one COLUMN per
- *     step, source cell `(cx - hdir, cy + step)`, `hdir = sign(gx)`, `step`
- *     now a PER-CELL value (0 most cells, +/-1 wherever the ray's own
- *     diagonal drift crosses a row boundary), walked by a plain Bresenham
- *     accumulator reset at the start of every row - safe to reset per row
- *     BECAUSE a row-call always processes its own full width in one pass
- *     (see "THE HORIZONTAL WITHIN-ROW ACCUMULATOR" below), unlike the
- *     vertical case's per-row value, which spans separate calls and needs
- *     the closed form instead.
- *
- * THIS IS NOT SHAPE (1) AGAIN, even though it is once more a single,
- * discrete regime pick with a real seam at 45 degrees - the two prior
- * rejections do not apply here, and the reason is worth stating precisely
- * rather than assumed: shape (1)'s two sides measured DIFFERENT quantities
- * (a plain vertical cell count and a plain horizontal cell count, related
- * to the true depth by two different, angle-dependent factors), so a flip
- * between them was a jump in the reported value itself, however rarely it
- * fired. Both regimes here measure the SAME quantity - distance along the
- * gravity ray, in cells - so a regime flip changes only HOW that quantity
- * gets computed, not what it means; the two sides agree exactly at the
- * 45-degree crossing by construction (both walk the same ray there), so
- * there is no discrete jump in the reported depth to chatter on, only a
- * discrete change in bookkeeping mechanics, reset cleanly the same way a
- * `local_depth_v_reverse`/`local_depth_h_reverse` flip already was.
- * Measured directly, the same 30-to-60-degree sweep test_the_blend_has_no_
- * jump_crossing_45_degrees has used since shape (2): worst single-degree
- * step across the crossing, SHIPPED (shape 3) 1, THIS WALK 0.
- *
- * DEPTH IN CELLS IS `count * |g| / |dominant axis|`, applied ONCE, AT
- * COMBINE TIME, to a raw STEP COUNT - not baked into the climb itself. See
- * "THE COUNT MUST STAY A RAW COUNT" below for why: this is the one property
- * every prior shape's own history (git log, commit 3376c8e and earlier)
- * already proved is load-bearing, and it survives this rewrite unchanged.
- *
- * STORAGE: ONE walk now needs only ONE shared pair of arrays, not two -
- * local_depth_row_a[]/local_depth_row_b[] below (a plain double buffer,
- * pointer-swapped at the end of every row, never copied) replace
- * col_stable_depth[]/row_stable_depth[] together, and local_depth_top_row[]
- * replaces col_top_row[]/row_top_col[] together. See each array's own
- * comment for the mechanism and, for local_depth_top_row[] specifically,
- * for why the DEBOUNCE KEY it stores means something different in each
- * regime - a genuine finding from writing this, not a stylistic choice. */
+ * This walk instead steps along the gravity ray itself (Bresenham),
+ * switching between a per-row and a per-column regime at 45 degrees - NOT
+ * the same mistake an even earlier, single-dominant-axis shape made: both
+ * regimes here measure the same quantity, distance along the gravity ray,
+ * so the regime flip changes only how that count is computed, never what
+ * it means, and the two sides agree exactly at the 45-degree crossing by
+ * construction. See LOCAL_DEPTH_COUNT_CEILING below for why the raw step
+ * count is scaled to cells only once, at combine time.
+ *===========================================================================*/
 
 static unsigned local_depth_scale_q8;
 static bool local_depth_vertical_dominant;
