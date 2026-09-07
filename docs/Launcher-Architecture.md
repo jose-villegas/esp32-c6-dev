@@ -381,7 +381,7 @@ first tenant - it only ever touches `sand.h` - while
 *and* a `launcher/main/gfx/gfx_dirty.h` constant together, stays shared for exactly that
 reason.
 
-See `docs/Sand/Sand-Simulation.md` for how the pieces above fit together - the
+See `docs/sand/Sand-Simulation.md` for how the pieces above fit together - the
 material system, the water model, and why the liquid logic is split into its
 own file.
 
@@ -439,7 +439,7 @@ compile out of `--dev`, while the POST report and the rest of the toggle
 page (gfx debug overlays, interlace, the orientation readout) are
 DEVELOPMENT-shaped and ship in both. Splitting that surviving DEVELOPMENT
 content into its own Settings app is still open; see
-[Settings-App-Plan.md](Settings-App-Plan.md).
+[Settings-App-Plan.md](plans/Settings-App-Plan.md).
 
 ### Drawing a UI, in the shell or in an app
 
@@ -651,7 +651,7 @@ the same direction once put next to each other:
 
 **The memory budget has no room for it.** There is no PSRAM - the whole
 budget is ~424 KiB of internal SRAM, and the framebuffer alone is 322 KiB of
-that (see `docs/Notes/Board-and-Memory.md`). LVGL costs roughly **67 KiB**
+that (see `docs/notes/Board-and-Memory.md`). LVGL costs roughly **67 KiB**
 before a single widget is allocated - about 16% of the entire chip's memory
 gone before drawing anything. microui needed patching too (upstream sizes
 `mu_Context` for desktop, 256 KiB for the command list alone), but that is a
@@ -724,11 +724,11 @@ requires nothing new, but reworking input handling means preserving this.
 
 ## Related
 
-- `docs/Notes/` — the hardware constraints underneath all of this: memory
+- `docs/notes/` — the hardware constraints underneath all of this: memory
   budget, panel gotchas, touch quirks, flashing and recovery. Start at
-  `docs/Notes/README.md`.
-- `docs/Sand/Sand-Simulation.md` — the falling-sand app in depth: materials, the
+  `docs/notes/README.md`.
+- `docs/sand/Sand-Simulation.md` — the falling-sand app in depth: materials, the
   water model, momentum, and why its liquid logic is its own file.
 - `docs/Testing-Guide.md` — how to test any of it.
-- `docs/Settings-App-Plan.md` — planned split of the Diagnostics app's
+- `docs/plans/Settings-App-Plan.md` — planned split of the Diagnostics app's
   developer-toggle page into its own Settings app.

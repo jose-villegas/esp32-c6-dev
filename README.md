@@ -23,7 +23,7 @@ removing one touches no other file. Currently:
   substantial piece of engineering in this repo: a flash-resident material
   system, a hybrid mass-diffusion water model, gyroscope-driven momentum for
   a wall-rebound splash, and a device-verified performance budget for every
-  hot path. See `docs/Sand/Sand-Simulation.md`.
+  hot path. See `docs/sand/Sand-Simulation.md`.
 - **3D Cube** — a Gouraud-shaded software rasterizer, no GPU.
 - **Diagnostics** — a bench tool: a hardware self-test (POST) report plus a
   developer-toggles page; ships in any development build (`--dev` or the
@@ -77,10 +77,10 @@ this, not a tour. Start wherever your question is:
 | | |
 |---|---|
 | [`docs/Launcher-Architecture.md`](docs/Launcher-Architecture.md) | How the shell and its apps fit together; the three rules that shape everything; how to add an app; why the UI toolkit is microui, not LVGL. |
-| [`docs/Sand/Sand-Simulation.md`](docs/Sand/Sand-Simulation.md) | The falling-sand app in depth: materials, the water model, momentum, and the performance numbers behind every design choice. |
-| [`docs/Notes/`](docs/Notes/README.md) | Board-specific hardware notes: the memory budget, panel and touch gotchas, flashing and recovery. Split by topic - start at the index. |
+| [`docs/sand/Sand-Simulation.md`](docs/sand/Sand-Simulation.md) | The falling-sand app in depth: materials, the water model, momentum, and the performance numbers behind every design choice. |
+| [`docs/notes/`](docs/notes/README.md) | Board-specific hardware notes: the memory budget, panel and touch gotchas, flashing and recovery. Split by topic - start at the index. |
 | [`docs/Testing-Guide.md`](docs/Testing-Guide.md) | How the host and on-device test suites work, and why release builds carry none of the test code. |
-| [`docs/Model-Delegation-Workflow.md`](docs/Model-Delegation-Workflow.md) | Delegating feature implementation to local Ollama models or free-tier models through OmniRoute, with review and verification kept on the driving session. |
+| [`docs/workflows/Model-Delegation-Workflow.md`](docs/workflows/Model-Delegation-Workflow.md) | Delegating feature implementation to local Ollama models or free-tier models through OmniRoute, with review and verification kept on the driving session. |
 
 ## Status
 

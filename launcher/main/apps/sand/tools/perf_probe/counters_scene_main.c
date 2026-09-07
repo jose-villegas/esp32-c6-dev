@@ -11,7 +11,7 @@
  * at all would also mean matching its Unity/timing.h scaffolding version for
  * version across the whole range being bisected - exactly the tooling drift
  * that burned a full day chasing this same regression by capture (see
- * docs/Sand/Perf-Round-Guide.md's "check artifacts exist for the SPECIFIC
+ * docs/sand/Perf-Round-Guide.md's "check artifacts exist for the SPECIFIC
  * ref" note).
  *
  * So this file bypasses the suite entirely and drives sand_step() through

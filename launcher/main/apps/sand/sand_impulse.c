@@ -513,8 +513,8 @@ static void impulse_charge_displacement(sand_t *s, impulse_t *entry,
 /* The flight pass: every entry in s->impulse_buf either moves one cell
  * along its queued direction, waits another turn, or is finally dropped.
  * Called from sand_step(), immediately before finalize_settling() - see
- * docs/Sand/Explosion-Plan.md's "Where the pass runs, and why it must be
- * LAST": running after every pass that can move a cell keeps an entry's
+ * docs/sand/Impulse-Mechanics.md's "Why the flight pass runs LAST": running
+ * after every pass that can move a cell keeps an entry's
  * position honest, and turns a plain outward push into a ballistic arc
  * for free, since gravity has already pulled by the time this runs. */
 

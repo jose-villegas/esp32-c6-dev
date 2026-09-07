@@ -41,7 +41,7 @@
 # to \r\n on the way out - so a doc generated and committed on Windows is
 # CRLF while the same generator's output on the ubuntu-latest CI runner is
 # LF, and the check fails on every line of every run, forever, independent
-# of whatever the commit actually changed. (docs/Sand/Reaction-Table.md hit
+# of whatever the commit actually changed. (docs/sand/Reaction-Table.md hit
 # exactly this.) eol=lf overrides the checking-out machine's own
 # core.autocrlf, so this holds regardless of how any one clone is
 # configured, the same as the two rules above.

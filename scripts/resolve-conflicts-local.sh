@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Auto-resolve a git merge's conflicts with local Ollama models, verify the
 # result with THIS repo's real build/test gate, and only ever commit if that
-# gate is green. Zero cloud calls -- see docs/Model-Delegation-Workflow.md's
+# gate is green. Zero cloud calls -- see docs/workflows/Model-Delegation-Workflow.md's
 # "Route local through the Ollama CLI directly" section, which this follows
 # exactly (--think=false, stderr routed to a log not merged into stdout,
 # qwen2.5:14b / mistral-nemo:latest as fixer/reviewer).
@@ -14,7 +14,7 @@
 # check_app_sources.sh (the latter compile-checks the hardware-facing
 # app_*.c files run_tests.sh cannot link), plus report_reactions.sh --check
 # when it exists (sand's reaction-doc generator can compile clean and pass
-# every host test while still leaving docs/Sand/Reaction-Table.md stale --
+# every host test while still leaving docs/sand/Reaction-Table.md stale --
 # a real regression this script's own first end-to-end replay test against
 # an actual historical conflict caught escaping the first two checks). A
 # resolution that reads plausibly but breaks the build, a behavioral
@@ -94,7 +94,7 @@
 # one script's models never silently changes the other's):
 #   CONFLICT_FIXER_MODEL   default qwen2.5:14b
 #   CONFLICT_REVIEW_MODEL  default mistral-nemo:latest
-# See docs/Model-Delegation-Workflow.md's "Which local model for which job"
+# See docs/workflows/Model-Delegation-Workflow.md's "Which local model for which job"
 # for why these two -- both chosen so their weights alone (~9GB / ~7GB) fit
 # a 16GB card, with bigger/higher-quality options like
 # qwen2.5-coder:32b-instruct-q4_K_M or gemma4:26b (~18-19GB each) available
@@ -637,7 +637,7 @@ if [ "$GATE_OK" = "1" ] && ! ./launcher/test/check_app_sources.sh; then
 fi
 # run_tests.sh/check_app_sources.sh alone missed a real regression once
 # already: a resolved dump_reactions.c conflict can compile clean and pass
-# every host test while still leaving docs/Sand/Reaction-Table.md stale
+# every host test while still leaving docs/sand/Reaction-Table.md stale
 # relative to what the generator it's paired with would now produce -- the
 # exact bug this script's own design doc references. Only one such
 # generator/doc-consistency check exists in the repo today; if another app
@@ -677,7 +677,7 @@ if [ "$NO_PUSH" = "1" ]; then
 fi
 
 if [ -n "$WORKTREE_DIR" ]; then
-  # See docs/Model-Delegation-Workflow.md's "Git mechanics specific to
+  # See docs/workflows/Model-Delegation-Workflow.md's "Git mechanics specific to
   # worktrees": this worktree's branch is a throwaway temp name, but
   # pushing straight to the remote ref of the branch actually checked out
   # elsewhere is unaffected by the "can't update a ref checked out in

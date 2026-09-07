@@ -7,7 +7,7 @@ Everything else in this folder is specific to this board. This file is not —
 it is the general-purpose techniques that came out of optimizing on it,
 written so they travel to a different chip, project, or person. Each one is
 grounded in a real measurement, mostly from
-[`../Sand/Performance-Tuning-Attempts.md`](../Sand/Performance-Tuning-Attempts.md)
+[`../sand/Performance-Tuning-Attempts.md`](../sand/Performance-Tuning-Attempts.md)
 and [Display-and-Rendering.md](Display-and-Rendering.md), but the lesson
 itself is not about falling sand or this particular display.
 
@@ -357,9 +357,9 @@ where the three crossfade dips had sat at 12–14 (2026-09-04, measured via
 
 ## Related
 
-- [`../Sand/Performance-Tuning-Attempts.md`](../Sand/Performance-Tuning-Attempts.md)
+- [`../sand/Performance-Tuning-Attempts.md`](../sand/Performance-Tuning-Attempts.md)
   — the campaign several of the techniques above were extracted from.
-- [`../Sand/Tuning-At-a-Glance.md`](../Sand/Tuning-At-a-Glance.md) — the
+- [`../sand/Tuning-At-a-Glance.md`](../sand/Tuning-At-a-Glance.md) — the
   visual map of that campaign.
 - [Display-and-Rendering.md](Display-and-Rendering.md) — the dirty-region
   tracking system, another case of the skip-structure lesson above.

@@ -2,7 +2,7 @@
  * A first-fit arena allocator that stands in for malloc/calloc/realloc/free
  * in the HOST test build, sized to what this project's device profile says
  * is actually free once the framebuffer is carved out (device_profiles/
- * esp32c6.sh's DP_FREE_HEAP_BYTES) - see docs/Sand/Performance-Tuning-
+ * esp32c6.sh's DP_FREE_HEAP_BYTES) - see docs/sand/Performance-Tuning-
  * Attempts.md's "recurring failure modes": a fixture that fits comfortably
  * in a laptop's gigabytes has twice now turned out to be impossible on the
  * board, and nothing on the host caught it before a whole capture cycle

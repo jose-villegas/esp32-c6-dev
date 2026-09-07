@@ -282,7 +282,7 @@ typedef struct {
      * plain fire - see SAND_GUNPOWDER_BLAST_RADIUS for why 16. Earlier
      * versions blasted the instant a spark touched one grain, which
      * measured as gunpowder spending nearly every blast on itself - see
-     * docs/Sand/Explosion-Plan.md. */
+     * docs/sand/Impulse-Mechanics.md. */
     uint8_t explodes;
 
     /* Only what touches air burns. */
@@ -460,7 +460,7 @@ typedef enum {
     MATX_PLANT,
     MATX_LEAF,
 
-    /* METAL: see docs/Sand/Metal-Smelting-Plan.md. Slot 5, now 3. 11 slots
+    /* METAL: see docs/plans/Metal-Smelting-Plan.md. Slot 5, now 3. 11 slots
      * remain. */
     MATX_METAL,
 
