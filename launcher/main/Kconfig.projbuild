@@ -28,8 +28,8 @@ menu "Launcher"
                 timing, step counters, that kind of thing. Guard code with
                 CONFIG_LAUNCHER_DEVELOPMENT, not CONFIG_LAUNCHER_SELFTEST,
                 unless what it is actually gating is the test suites
-                themselves - see LAUNCHER_SELFTEST below, which selects this
-                automatically. Turn this on by itself for a build that wants
+                themselves - see LAUNCHER_SELFTEST below, which requires
+                this rather than turning it on for you. Turn this on by itself for a build that wants
                 the profiling and logging without the test suites too.
 
     endchoice
@@ -37,7 +37,7 @@ menu "Launcher"
     config LAUNCHER_SELFTEST
         bool "Include the on-device test suites"
         default n
-        select LAUNCHER_DEVELOPMENT
+        depends on LAUNCHER_DEVELOPMENT
         help
             Compiles the test suites into the firmware and runs them at boot,
             before the shell starts.
@@ -79,7 +79,7 @@ menu "Launcher"
     config LAUNCHER_SAND_PASS_GATES
         bool "Sand: per-pass volatile gates for sand_step()"
         default n
-        select LAUNCHER_DEVELOPMENT
+        depends on LAUNCHER_DEVELOPMENT
         help
             Compiles in four volatile bools (sand_priv.h) that let a probe
             disable one of sand_step()'s four passes - main sweep,
