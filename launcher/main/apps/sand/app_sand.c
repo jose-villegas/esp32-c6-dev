@@ -102,30 +102,9 @@ static int cell, grid_w, grid_h, block_cols, block_rows;
 
 #define ERASE_EMITTER_RADIUS_PX  32
 
-
-
-
-
-
-
-
-
 #define DETONATE_RADIUS_PX  50
 
 #define APP_IMPULSE_MAX  2048
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 #define SAND_IMPULSE_BUDGET_BYTES  12288
 
@@ -144,36 +123,12 @@ _Static_assert(
     "heap_caps_get_largest_free_block() at the point impulse_buf is "
     "allocated - never from arithmetic alone.");
 
-/* What the finger puts down. Selected from the palette panel (BOOT's release
- * edge opens it - see sand_ui.c's open_palette(), and sand_frame()'s own
- * comment on why that is the release and not the press; a tap on a tile
- * selects it - see draw_palette()'s own mu_button() loop and sand_ui.c's
- * sand_ui_tile_clicked()) rather than cycled one button press at a time.
- * Cycling was the palette's stand-in before the panel existed, and it aged
- * badly for the obvious reason: reaching the Nth material cost N presses, and
- * every material added since - eight of them - pushed everything after it
- * that much further away. The panel costs one press to open and one tap to
- * choose, whatever this list grows to. PWR still cycles PAINT/ERASE/DETONATE
- * directly, unchanged from before the panel existed - see sand_ui.c's
- * handle_brush_input() and sand_mode_t's own comment in sand_ui.h for why
- * DETONATE rides along on this cycle rather than living in the palette. A
- * plain press is the cheaper action for all three: a HOLD costs
- * BUTTON_HOLD_US (600 ms) of waiting before it even registers, every single
- * time, and paying that tax on a control used this often would make erasing
- * feel sluggish next to the immediacy pouring already has. A dedicated
- * button's press has none of that cost. MAT_WOOD but not MAT_STEAM: every
- * entry here costs a tile in the palette panel - see BRUSH_COUNT and the
- * _Static_assert on PALETTE_FITS below - so only materials someone actually
- * paints belong. Wood is something you build a fire out of; steam is a
- * byproduct you watch happen. Burning wood is not listed either, because it
- * is a STATE of wood rather than a material - see reaction_t.burn_decay, and
- * docs/Sand/Adding-a-Material.md for this as a worked example. Whole CELLS
- * rather than material ids, because an extended material cannot be named by
- * an id - for the static half its whole low nibble is its identity (MATX() in
- * material.h); gunpowder only goes as far as bit 3 of the low nibble
- * (GUNPOWDER_CELL()), the bottom three bits being a code rather than part of
- * what names it. An ordinary material is written CELL_MAKE(id, 0) and its
- * variant is chosen the usual way when it is painted. */
+/* Selected from the palette panel, not cycled - a cycle's cost grows with
+ * material count, a panel's doesn't. PWR still cycles PAINT/ERASE/DETONATE
+ * directly: a HOLD's 600ms tax is too slow for a control used this often.
+ * Only paintable materials get a tile - burning wood is a STATE, not a
+ * material (reaction_t.burn_decay). Whole CELLS, not ids: an extended
+ * material isn't nameable by id alone (MATX() in material.h). */
 static const cell_t brushes[] = {
     CELL_MAKE(MAT_SAND, 0),  CELL_MAKE(MAT_WATER, 0),
     CELL_MAKE(MAT_STONE, 0), CELL_MAKE(MAT_GAS, 0),
@@ -389,65 +344,23 @@ static void start_sim(void)
     if (grid == NULL) {
         grid = malloc((size_t)GRID_W_MAX * GRID_H_MAX);
     }
-    /* impulse_buf GOES LAST, AFTER grid, DELIBERATELY - TRIED GOING FIRST
-     * INSTEAD AND A DEVICE FLASH MADE IT WORSE. A live serial capture that
-     * showed impulse_buf's malloc failing with "largest free block is 14592"
-     * at three different quality settings was misread once as "impulse_buf
-     * never gets a fair shot because grid/dirty_rows/ sleep_blocks fragment
-     * the heap ahead of it" - grid's own request (GRID_W_MAX * GRID_H_MAX) is
-     * actually a FIXED 41,216 bytes regardless of quality (the varying
-     * numbers in that capture were the ACTIVE grid_w*grid_h subset in use,
-     * not the allocation size), and it succeeded cleanly in all three
-     * captures. So the real picture those three captures agree on is: this
-     * heap reliably has one contiguous run big enough for grid's 41,216
-     * bytes, and roughly 14,592 bytes left over after grid and the small
-     * buffers land - which is a single largest-block ordering fact, not a
-     * fragmentation problem this app's own allocation order was causing.
-     * Moving impulse_buf's smaller (12,288-byte, see APP_IMPULSE_MAX) request
-     * to go FIRST was tried anyway, on the chance that ordering still
-     * mattered - and a device flash of that build produced "no memory for the
-     * grid" instead, a WORSE failure than impulse_buf alone failing:
-     * impulse_buf grabbed a piece of the one heap region big enough for it,
-     * and grid's subsequent 41,216-byte request then found nowhere left to
-     * land, tripping the mandatory-buffer fallback below (`ui.screen =
-     * SAND_UI_RUNNING` with the grid's own "could not allocate" message).
-     * Reordering does not create more contiguous space anywhere in the heap -
-     * it only decides who gets first pick of what already exists - and on
-     * THIS device grid is the one allocation that needs the single largest
-     * contiguous run, so it has to be the one that picks first. This ordering
-     * (grid and the other mandatory buffers before impulse_buf) is the one
-     * three real device captures confirm actually works; do not move
-     * impulse_buf ahead of grid again without a fresh device capture that
-     * shows it helping, because the only capture that ever tried has already
-     * shown it hurting. */
+    /* impulse_buf allocates LAST, deliberately: grid needs the single
+     * largest contiguous heap run, so it must pick first. Reordering does
+     * not create more contiguous space, only decides who gets first pick -
+     * moving impulse_buf ahead of grid was tried and produced a WORSE
+     * failure (no memory for the grid at all). Do not reorder without a
+     * fresh device capture showing it helps; the only one that ever tried
+     * showed it hurting. */
     if (impulse_buf == NULL) {
         impulse_buf = malloc((size_t)APP_IMPULSE_MAX * sizeof(*impulse_buf));
-        /* LOUD, BUT NOT FATAL - unlike every buffer in the big OR-check
-         * below. Those are all load-bearing for the simulation existing at
-         * all; this one is not - sand_enable_impulses(NULL, ...) is a
-         * documented, safe way to disable just the blast mechanic (see its
-         * own comment in sand.h), and sand_explode() already no-ops
-         * gracefully without it. Refusing to run the WHOLE app because the
-         * one buffer detonate needs could not be found would strand a
-         * player who only ever wanted to pour sand behind a "no memory"
-         * screen for a feature they were not using. What must not happen
-         * instead is silence: this exact allocation has already failed
-         * silently on real hardware twice, at two different budgets this
-         * app shipped believing were safe - see SAND_IMPULSE_BUDGET_
-         * BYTES's own comment for both incidents and what each got wrong.
-         *
-         * THE %u THIS LOGS - largest_free_block, from heap_caps_get_
-         * largest_free_block() - IS THE DIAGNOSTIC THAT SOLVED THIS. Not
-         * a guess added for completeness: a live serial capture of this
-         * exact line, at three different grid sizes, is what showed the
-         * largest free block sitting at an identical 14,592 bytes
-         * regardless of quality - the observation that turned "why did
-         * this fail" into "the buffer was never sized against the right
-         * number" (total free heap, not the actual largest contiguous
-         * run malloc() has to satisfy from). Keep this argument in every
-         * failure log this file ever adds for an allocation that matters -
-         * total free bytes told a story that was flatly wrong twice
-         * running; the largest block told the truth in one capture. */
+        /* LOUD, NOT FATAL, unlike the buffers below: sand_enable_impulses
+         * (NULL, ...) safely disables just DETONATE, so failing here alone
+         * shouldn't strand a player who never wanted it behind a "no
+         * memory" screen. Logs largest_free_block, not total free heap:
+         * total free heap already told a wrong story for two failed
+         * budgets this app shipped believing were safe (see
+         * SAND_IMPULSE_BUDGET_BYTES) - largest block is what actually
+         * caught them. */
         if (impulse_buf == NULL) {
             ESP_LOGE(TAG, "Could not allocate the %d-entry blast buffer "
                           "(%u bytes) - detonate will be a no-op this "
@@ -528,16 +441,6 @@ static void sand_exit(void)
 /*---------------------------------------------------------------------------
  * Drawing
  *-------------------------------------------------------------------------*/
-
-
-
-
-
-
-
-
-
-
 
 #define SHINE_PERIOD   64      /* power of two - see the mask below */
 #define SHINE_STEP_MS  40
@@ -721,14 +624,6 @@ static int glass_last_phase;
  * for why the DEBOUNCE KEY it stores means something different in each
  * regime - a genuine finding from writing this, not a stylistic choice. */
 
-
-
-
-
-
-
-
-
 static unsigned local_depth_scale_q8;
 static bool local_depth_vertical_dominant;
 static bool local_depth_v_reverse;
@@ -741,47 +636,21 @@ static bool local_depth_vertical_dominant_prev;
 static bool local_depth_v_reverse_prev;
 static bool local_depth_h_reverse_prev;
 
-
-
-
-
-
 static uint8_t local_depth_row_a[GRID_W_MAX];
 static uint8_t local_depth_row_b[GRID_W_MAX];
 static uint8_t *local_depth_cur_row = local_depth_row_a;
 static uint8_t *local_depth_prev_row = local_depth_row_b;
-
-
 
 /* THE DEFECT, exactly. Every cross-row read in paint_row_n() below treats
  * local_depth_prev_row[qx] as "the count belonging to the cell one step
  * back along the ray, in row cy - vdir". That is only true when the row
  * painted immediately before this one WAS row cy - vdir. */
 
-
-
-
-
 /* With this guard: 83, and none of them in the body of the pool (see the
  * residual note below). */
 
-
-
-
-
-
 #define LOCAL_DEPTH_NO_ROW (-2)
 static int local_depth_prev_cy = LOCAL_DEPTH_NO_ROW;
-
-
-
-
-
-
-
-
-
-
 
 /* BOTH REGIMES SHARE THE ARRAY, NOT JUST THE TYPE, because a REGIME FLIP
  * (see update_local_depth_gravity() below) always resets it wholesale
@@ -790,31 +659,13 @@ static int local_depth_prev_cy = LOCAL_DEPTH_NO_ROW;
  * cross-regime confusion for either convention to guard against. */
 static uint8_t local_depth_top_row[GRID_W_MAX];
 
-/* local_depth_cur_row[]/local_depth_prev_row[] hold a plain CELL COUNT - see
- * LOCAL DEPTH's own top comment, "THE COUNT MUST STAY A RAW COUNT", for why
- * an eighths-of-a-cell (or any pre-scaled) accumulator was tried for an
- * earlier shape of this mechanism and rejected; that lesson transfers
- * unchanged. This is that count's saturation point. UNLIKE THE TWO-WALK
- * DESIGN'S OWN LOCAL_DEPTH_COUNT_CEILING (34, raised above
- * MATERIAL_LIQUID_DEPTH_BAND's own 24), THIS ONE NEEDS NO RAISE - and that is
- * a genuine, load-bearing difference from this walk's own scale, not an
- * oversight carried over. The two-walk design's own weight was `component /
- * len`, ALWAYS <= 256 (minimised at the 45-degree tie, around 183 of 256), so
- * a count clamped at the plain band (24) could project to BELOW the band at
- * every angle except perfect axis alignment - "breathing" - and the ceiling
- * had to be raised past the band so a saturated count still reached it after
- * being shrunk. THIS walk's own scale is `len / dominant_axis`, ALWAYS >= 256
- * (equal to 256 only at perfect axis alignment, growing at every other angle)
- * - so a count clamped at the plain band ALREADY projects to AT LEAST the
- * band at every angle, and the combiner's own explicit clamp to
- * MATERIAL_LIQUID_DEPTH_BAND (see "THE WALK ITSELF" below) does the rest.
- * Verified directly, host-side, against a fully saturated cell swept across
- * the same 0-90 degree range test_a_
- * saturated_liquid_body_reads_the_same_shade_at_every_tilt_angle uses:
- * projected depth clamps to a flat MATERIAL_LIQUID_DEPTH_BAND at every
- * sample, with the ceiling equal to the band and no raise at all - the same
- * flatness the raised ceiling existed to buy back, without needing to buy it
- * back, because this walk's own scale points the opposite way. */
+/* Unlike the two-walk design's own ceiling (34, raised above
+ * MATERIAL_LIQUID_DEPTH_BAND's 24), this walk needs no raise: that design's
+ * weight (component/len) was always <= 256, so a clamped count could
+ * project BELOW the band; this walk's scale (len/dominant_axis) is always
+ * >= 256, so a clamped count already projects AT LEAST the band at every
+ * angle. Verified host-side against
+ * test_a_saturated_liquid_body_reads_the_same_shade_at_every_tilt_angle. */
 #define LOCAL_DEPTH_COUNT_CEILING MATERIAL_LIQUID_DEPTH_BAND
 
 static void update_local_depth_gravity(int gx, int gy)
@@ -832,27 +683,11 @@ static void update_local_depth_gravity(int gx, int gy)
     const bool new_v_reverse = (gy < 0);
     const bool new_h_reverse = (gx < 0);
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     /* THE GATE IS EXACT ARITHMETIC, NOT A DEADBAND - deliberately, because
      * this mechanism already removed one tuned dead zone and should not
      * quietly grow another. Each condition below is a statement about
      * whether the flipped flag can change a number THIS grid's walk
      * actually computes, derived from the Bresenham arithmetic itself. */
-
-
 
     /* A REGIME FLIP is never gated - it always changes what the array
      * slot means, whatever the magnitudes are. */
@@ -881,20 +716,6 @@ static void update_local_depth_gravity(int gx, int gy)
     local_depth_v_reverse = new_v_reverse;
     local_depth_h_reverse = new_h_reverse;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 /* A pool's INTERIOR - the bulk of its rows, the part this array already
  * marked before the widening - is unaffected: a row with any interior
@@ -934,29 +755,14 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
     const int cx_first = local_depth_h_reverse ? grid_w - 1 : 0;
     const int cx_step  = local_depth_h_reverse ? -1 : 1;
 
-    /* THE ROW OFFSET, WITHOUT AN ACCUMULATOR - the vertical-dominant regime's
-     * own per-row horizontal drift ("step" in LOCAL DEPTH's own top comment).
-     * Every column in this row shares the SAME step (gravity does not change
-     * from one column to the next), so this is computed ONCE per row-call -
-     * but it must NOT be a running Bresenham accumulator carried across
-     * separate paint_row_n() calls the way a naive port of a reference model
-     * would do it: paint_row_n() is only ever called for DIRTY rows (LOCAL
-     * DEPTH's own top comment, "STALE READINGS...ARE ACCEPTED"), so a
-     * row-to-row accumulator would silently skip every row in between and
-     * drift out of sync with whichever row is actually being painted. `cum(n)
-     * = floor(n * minor / dominant)` is the exact total Bresenham drift after
-     * `n` row-steps starting from a clean 0 - verified by hand against a
-     * plain step-by-step Bresenham march before this was written this way,
-     * both give identical sequences - so THIS row's own step is simply
-     * `cum(n) - cum(n - 1)` for whatever `n` (this row's own distance, in the
-     * scan's own direction, from the surface-most row) this particular row
-     * happens to be, computable directly from `cy` alone with no memory of
-     * which rows were painted before it. One divide, but once per PAINTED row
-     * here, not once per cell - see update_local_depth_gravity()'s own
-     * comment for the budget this spends against. Meaningless (and left 0)
-     * when horizontal-dominant, or when gravity has no direction at all
-     * (`local_depth_ay == 0` only happens together with `local_depth_ax ==
-     * 0`, since vertical-dominant requires `ay >= ax`). */
+    /* THE ROW OFFSET, WITHOUT AN ACCUMULATOR: computed from `cy` alone, not
+     * a running Bresenham accumulator carried across paint_row_n() calls -
+     * that function only runs for DIRTY rows, so an accumulator would
+     * silently skip gaps and drift out of sync. `cum(n) - cum(n - 1)`
+     * (cum(n) = floor(n*minor/dominant)) gives the same drift a real march
+     * would, verified by hand, with no memory of prior rows needed.
+     * Meaningless (0) when horizontal-dominant or gravity has no
+     * direction. */
     int local_depth_row_step = 0;
     if (local_depth_vertical_dominant && local_depth_ay > 0u) {
         const int vdir = local_depth_vdir;
@@ -1087,7 +893,6 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
         for (int dy = 0; dy < n; dy++) {
             for (int dx = 0; dx < n; dx++) {
 
-
                 const int shine_q8 = shine_base_q8 + dx * shine_ux_q8 + dy * shine_uy_q8;
                 const int along = ((shine_q8 >> 8) + shine_offset)
                                   & (SHINE_PERIOD - 1);
@@ -1143,7 +948,6 @@ static int draw_one_row(gfx_color_t *fb, const gfx_color_t *pal, int cy,
     return n;
 }
 
-
 /* Advances the travelling shine, and says whether it moved. */
 static bool advance_shine(uint32_t dt_ms)
 {
@@ -1184,8 +988,6 @@ static bool advance_local_depth_wake(uint32_t dt_ms)
     return true;
 }
 
-
-
 static int gravity_bearing_q16(int gx, int gy)
 {
     const int64_t ax = gx < 0 ? -(int64_t)gx : (int64_t)gx;
@@ -1197,8 +999,6 @@ static int gravity_bearing_q16(int gx, int gy)
     const int64_t p_q16 = ((int64_t)gx << 16) / denom;   /* -65536..65536 */
     return (int)(gy < 0 ? (p_q16 - 65536) : (65536 - p_q16));
 }
-
-
 
 static bool advance_glass_phase(int gx, int gy)
 {
@@ -1252,32 +1052,12 @@ static void draw_dirty_rows(bool shine_moved, bool local_depth_woke,
     int redrawn = 0;
 #endif
 
-    /* Ordinarily ascending - but see
-     * local_depth_row_a[]/local_depth_row_b[]'s own comment in paint_row_n()
-     * for why a gravity-UP frame walks this loop in the OPPOSITE order
-     * instead: local_depth_cur_row[]/local_ depth_prev_row[]'s own pointer
-     * swap means "the row painted before this one" is only meaningful if rows
-     * are actually visited surface-first, or a dirty row far from the surface
-     * reads whatever a DIFFERENT, farther row left behind the last time IT
-     * was nearer the front of the sweep, not last frame's own value for the
-     * row actually being painted. UNLIKE the two-walk design (where only the
-     * vertical array needed this and the horizontal one never did), BOTH
-     * regimes of the single ray walk depend on row order now - see LOCAL
-     * DEPTH's own top comment for why one row-order rule (driven by gy's sign
-     * alone) turns out to serve both the vertical-dominant regime's own
-     * per-row chain AND the horizontal-dominant regime's own occasional
-     * cross-row reads. Just "does gravity point up" - `local_depth_v_reverse`
-     * alone - with no "and which regime is active this frame" to ask
-     * alongside it: the same rule the two-walk design would have needed one
-     * flag for, this one needs for a different, cleaner reason (see
-     * paint_row_n()'s own "THE ROW OFFSET, WITHOUT AN ACCUMULATOR").
-     * Reversing here, rather than juggling which array slot means "toward the
-     * surface" inside the depth bookkeeping itself, is safe because nothing
-     * else in this loop depends on row order - dirty_rows[cy],
-     * row_run_x0/x1/n, row_has_shine[cy], row_has_liquid[cy] and
-     * row_has_cullet[cy] are all indexed by cy directly, and gfx_mark_dirty()
-     * below only ever unions a bounding box, which does not care what order
-     * the boxes arrive in either. */
+    /* Gravity-UP reverses this loop's order: cur_row[]/prev_row[]'s pointer
+     * swap only means "row painted before this one" if rows are visited
+     * surface-first. Reversing the loop, not the array's meaning, is safe
+     * since nothing else here depends on row order - dirty_rows[cy] and
+     * friends index by cy directly, and gfx_mark_dirty() only unions a
+     * bounding box. */
     const bool reverse_rows = local_depth_v_reverse;
 
     for (int i = 0; i < grid_h; i++) {
@@ -1365,28 +1145,12 @@ static int gravity_quarter_turn(int gx, int gy)
     return (gx >= 0) ? 3 : 1;          /* down is to the right : to the left */
 }
 
-/* Draws the mode label against whichever edge is currently UP. Up is the
- * opposite of gravity, so the label follows the device rather than the
- * screen: turn the board on its side and the label moves to what is now the
- * top, and turns with it so it still reads the right way up. Anything else
- * looks like a bug the moment the device is not held upright. Snapped to one
- * of four, because the font can only be turned in quarters - a diagonal tilt
- * picks whichever quarter it is nearest. STILL ITS OWN gravity_quarter_turn()
- * CALL - NOT display_shell_quarter() This looks like an inconsistency next to
- * draw_palette(), which now just inherits the shell's orientation instead of
- * computing one. It is not: the two draw through different paths.
- * draw_palette() goes through microui, which every other described UI in this
- * shell also goes through, and which is exactly what ui_set_transform()
- * reaches - that is the whole reason the shell owning the transform is enough
- * to turn the palette. draw_mode_label() instead calls gfx_text_turned()
- * straight onto the app's own canvas, bypassing microui and the UI transform
- * entirely, the same way the sand grid itself is painted. A transform set on
- * the UI layer has no effect on either. So this is exactly the
- * canvas-versus-chrome line: the palette is chrome (drawn through microui,
- * like the launcher and every boot menu), the label is canvas (drawn straight
- * onto this app's own framebuffer region, like the sand grid itself), and
- * only chrome follows the shell's transform for free. The label keeps turning
- * itself because nothing else will. */
+/* Computes its own turn (gravity_quarter_turn()) rather than inheriting the
+ * shell's, unlike draw_palette(): that one goes through microui, which the
+ * shell's transform reaches; this one calls gfx_text_turned() straight onto
+ * the canvas, bypassing microui entirely, the same way the sand grid itself
+ * is painted. Canvas draws don't get the shell's transform for free - only
+ * chrome does. */
 static void draw_mode_label(int gx, int gy)
 {
     char text_buf[24];
@@ -1459,14 +1223,6 @@ static mu_Color mu_color_hex(uint32_t rgb)
                     (int)(rgb & 0xFF), 255);
 }
 
-
-
-
-
-
-
-
-
 static void draw_palette(const input_t *input)
 {
     mu_Context *ctx = ui_context();
@@ -1523,33 +1279,13 @@ static void draw_palette(const input_t *input)
                 sand_ui_tile_clicked(&ui, i);
             }
 
-            /* The selection cue. ui_style's own bezel already inverts a
-             * button's lit/shadowed edge pair, but only while microui's
-             * hover/focus says a finger is on it THIS frame (see
-             * styled_draw_frame() in ui.c) - there is no "selected" state for
-             * a plain mu_button() to draw, since selection is this app's own
-             * idea, not microui's. So the selected tile gets a second,
-             * purpose-drawn cue on top: ui_bezel_spans() again, called for
-             * its SUNKEN edge pair only (spans[1..4] - span[0] is the flat
-             * face, already painted by mu_button() above, so it is skipped
-             * rather than redrawn on top of itself). Those edges are mixed
-             * toward white and toward black off THIS TILE'S OWN face colour
-             * (see UI_BEZEL_HIGHLIGHT/UI_BEZEL_SHADOW in ui_style.h), not a
-             * fixed colour - which is what keeps the ring visible at both
-             * ends of the swatch range: on Snow, a near-white face, it is the
-             * mixed-toward-black edge that reads; on Stone, a near-black
-             * face, it is the mixed-toward-white edge that reads. A fixed
-             * light or dark ring would vanish on one of those two the same
-             * way the old white selection ring did, and the same way the
-             * badge's own face-derived fill did before it was changed to a
-             * fixed pair for the same reason - see
-             * PALETTE_BADGE_BORDER_COLOR/ PALETTE_BADGE_FILL_COLOR's own
-             * comment on that history. This ring gets to derive from the face
-             * instead of needing a fixed pair of its own, because unlike the
-             * badge it never has to sit ON a face of unknown lightness - it
-             * sits at the tile's own edge, always paired with the one face it
-             * was mixed from, so there is no separate swatch it has to stay
-             * legible against. */
+            /* No "selected" state exists for mu_button() (selection is this
+             * app's idea, not microui's), so this draws a second cue: the
+             * SUNKEN edge pair, mixed toward white/black off THIS TILE'S
+             * face rather than a fixed colour - keeps it visible on both
+             * Snow (black-mixed edge reads) and Stone (white-mixed edge
+             * reads). Safe here, unlike the badge below: it always sits
+             * paired with the one face it was mixed from. */
             if (i == ui.brush) {
                 ui_span_t spans[UI_BEZEL_MAX_SPANS];
                 const int n = ui_bezel_spans(mu_rect(ix, iy, iw, ih), face,
@@ -1559,40 +1295,13 @@ static void draw_palette(const input_t *input)
                 }
             }
 
-            /* The badge: zero or more rects (and an icon) drawn after the
-             * bezel, at the tile's top-right corner inside it. Three states,
-             * not one: eligible, BRUSH_POUR an empty box - a near-black
-             * border (PALETTE_BADGE_BORDER_COLOR) around a near-white fill
-             * (PALETTE_BADGE_ FILL_COLOR). The slot exists; nothing is armed.
-             * eligible, BRUSH_SPAWN the same box, with a near-black check
-             * mark drawn inside it ( MU_ICON_CHECK - draw_command() routes
-             * that to icons.h's icon_check(), the same artwork the
-             * diagnostics app's checkboxes use). The tap is armed. not
-             * eligible nothing, as before - material_can_emit() is false for
-             * every KIND_STATIC material (stone, glass, the STATIC half of
-             * the extended range - ice, plant, leaf, metal, root). Gunpowder
-             * is the one extended-range brush this rule does NOT hide: it is
-             * KIND_POWDER, so it gets a badge like any ordinary powder. The
-             * absence or presence of a badge is what makes that eligibility
-             * rule visible on the panel instead of a fact someone has to be
-             * told separately. The border and fill are a FIXED pair, not
-             * derived from the face the way the bezel above is - see
-             * PALETTE_BADGE_BORDER_ COLOR/PALETTE_BADGE_FILL_COLOR's own
-             * comment for why: the badge used to derive from the face the
-             * same way the bezel still does, and it read fine on most
-             * swatches, but Snow's face is itself near-white, so mixing
-             * toward white for the armed fill landed almost exactly on the
-             * face colour - armed and unarmed became indistinguishable on the
-             * one tile where telling them apart matters most. A mark that has
-             * to read on every swatch from snow's near-white to stone's
-             * near-black cannot itself be made of the swatch it sits on. Laid
-             * out relative to the tile's own logical (ix, iy) corner, like
-             * everything else in this loop - see this function's own top
-             * comment on why that is enough to turn with the board: the
-             * badge's rects go through draw_command() exactly like the bezel
-             * spans above, so a quarter-turn transform carries this along
-             * with the tile it sits on without this loop naming a turn
-             * anywhere. */
+            /* Badge shows eligibility (material_can_emit(), false for every
+             * KIND_STATIC material - gunpowder is the one extended-range
+             * exception, being KIND_POWDER). Border/fill are a FIXED pair,
+             * unlike the bezel above: it used to derive from the face too,
+             * but Snow's near-white face made the armed fill nearly
+             * invisible against it - a mark that must read on every swatch
+             * can't itself be made of the swatch. */
             if (material_can_emit(brushes[i])) {
                 const mu_Color border = mu_color_hex(PALETTE_BADGE_BORDER_COLOR);
                 const mu_Color fill   = mu_color_hex(PALETTE_BADGE_FILL_COLOR);
@@ -1660,7 +1369,6 @@ static void read_gravity_input(uint32_t dt_ms, imu_sample_t *sample, int *gx,
     const int shake = tilt_shake(&tilt);
     *jostle = shake > SHAKE_DEADZONE ? shake : 0;
 }
-
 
 static void handle_pour_input(const input_t *input, uint32_t dt_ms)
 {
@@ -1904,32 +1612,12 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
             label_left_ms = LABEL_MS;
         }
 
-        /* A text style is ambient context for this whole shell, not per-frame
-         * state private to the panel - ui_set_text_style() stays in force for
-         * every UI drawn after it until something changes it again (see
-         * ui.h's own comment on why, and ui_set_button_style()'s neighbouring
-         * comment for the contrast with a style that DOES reset itself).
-         * Restoring UI_TEXT_PLAIN here, the moment the panel is torn down, is
-         * what stops the outline from leaking into the launcher or the sand
-         * boot menu the next time either draws a frame - leaving this out is
-         * the obvious failure: the whole shell would come up haloed after the
-         * palette had ever been opened once. THE TRANSFORM ITSELF IS NOT
-         * RESTORED HERE ANY MORE This used to also reset
-         * ui_set_transform(ui_transform_identity()), for what was at the time
-         * the same reason as the text style: draw_palette() left the
-         * transform turned, and something had to put it back before the
-         * launcher or the sand boot menu drew again. That reasoning no longer
-         * applies, because the transform is no longer this app's to leave
-         * turned OR to put back. main.c now owns it for the whole shell (see
-         * display.h and main.c's display sampling) and sets it from the
-         * board's actual orientation on its own schedule, independent of
-         * whether this panel happens to be open. If this app reset it to
-         * identity here, it would fight the shell the moment the board was
-         * genuinely held sideways: the launcher would snap upright the
-         * instant the palette closed, and stay upright - wrong - until the
-         * shell's own next sample corrected it, on a board that never stopped
-         * being sideways. An app must not touch the shell's transform at all;
-         * it only ever inherits whatever main.c has already set. */
+        /* Restores UI_TEXT_PLAIN so the outline doesn't leak into the next
+         * UI drawn (text style stays in force until changed - ui.h). Does
+         * NOT restore the transform any more: main.c now owns that for the
+         * whole shell, sampling real orientation on its own schedule. An
+         * app must not touch it - resetting it here would fight the shell
+         * the moment the board is actually held sideways. */
         ui_set_text_style(UI_TEXT_PLAIN);
 
         sim_accumulator_q8 = 0;
@@ -1950,41 +1638,14 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
 
             palette_drawn_quarter = quarter;
         } else if (quarter != palette_drawn_quarter) {
-            /* The shell's orientation moved on since this panel was last
-             * painted - the board was turned while the palette stayed open.
-             * draw_palette() below paints UI_NO_BACKGROUND (see its own top
-             * comment: the frozen sand showing through the grout between
-             * tiles is the intended look, not a bug an opaque fill would be a
-             * lazy way to paper over), so nothing ever erases a tile's OLD
-             * footprint on its own. The panel is a square region placed by
-             * ui_transform_quarter_turn(), which lands it somewhere different
-             * on the physical screen at each quarter turn, so whatever the
-             * previous footprint covered that the new one does not is still
-             * sitting in the framebuffer as a ghost tile until something
-             * repaints it. The sand simulation itself never rotates -
-             * draw_dirty_rows() always paints in physical canvas coordinates,
-             * transform or no transform - so "repaint" here just means
-             * putting the frozen sand back the way it already looks, across
-             * the whole canvas rather than working out exactly which pixels
-             * the old footprint touched. mark_sand_fully_dirty() is the
-             * identical three-step reseed SAND_UI_CLOSE_PALETTE uses above
-             * for the same underlying reason (something that was covering the
-             * sand moved) - see its own comment. Unlike that path, this one
-             * calls draw_dirty_rows() itself, right here: there is still a
-             * panel to draw on top afterward this same frame, rather than a
-             * return that leaves the redraw for the next ordinary frame to
-             * pick up. draw_emitter_markers() follows for the same reason the
-             * ordinary running frame below always pairs it with
-             * draw_dirty_rows(): the markers are drawn straight over the
-             * grid's own pixels, not stored in it, so a full repaint of the
-             * grid alone would erase them without this. Nothing here calls
-             * advance_shine(), advance_local_depth_wake(), advance_cullet()
-             * or advance_glass_phase(), or passes any of their results along
-             * - the simulation is paused while the panel is open, so this
-             * repaint happens only on an actual orientation change, never
-             * once per frame; ticking any of the four wakes on a static
-             * canvas would be paying an animation cost for a picture that
-             * already looks right. */
+            /* Board turned while the palette stayed open: draw_palette()
+             * paints UI_NO_BACKGROUND deliberately (frozen sand shows
+             * through the grout), so the panel's old footprint - now
+             * elsewhere - is left as a ghost until repainted. Full-canvas
+             * repaint rather than the exact old footprint, since the sand
+             * itself never rotates. draw_emitter_markers() follows since
+             * markers aren't stored in the grid. No wake ticks - the sim is
+             * paused, so nothing would change anyway. */
             mark_sand_fully_dirty();
             draw_dirty_rows(false, false, false, false);
             draw_emitter_markers();
