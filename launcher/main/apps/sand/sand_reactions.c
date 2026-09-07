@@ -2560,7 +2560,11 @@ step_one_acid_rain_cell(sand_t* s, int x, int y, int w, int h) {
 
 /* Avoids treating stone as heat source */
 
-/* PRESENCE, NOT ACTIVITY: Found burning latches. Quiet cells might be missed. */
+/* PRESENCE, NOT ACTIVITY: may_have_burning latches as soon as a cell is
+ * identified as burning, before step_one_burning_cell() runs - not only
+ * when it reacts or decays this step. Latching on activity instead would
+ * let a quiet burning cell (no fuel/liquid touching it, roll not hit) fall
+ * out of the bookkeeping while still on the grid. */
 
 /* Separate flags avoid false positives. */
 #define FOUND_BURNING     1u
