@@ -47,10 +47,13 @@ fi
 # hit-test - see web_sand.c's own top comment for why.
 SOURCES="
 $SAND_DIR/material.c
+$SAND_DIR/material_palette.c
 $SAND_DIR/sand.c
+$SAND_DIR/sand_impulse.c
 $SAND_DIR/sand_liquid.c
 $SAND_DIR/sand_gas.c
 $SAND_DIR/sand_reactions.c
+$SAND_DIR/sand_plants.c
 $SAND_DIR/tilt.c
 $SCRIPT_DIR/web_sand.c
 "

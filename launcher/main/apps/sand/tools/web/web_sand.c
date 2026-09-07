@@ -41,6 +41,7 @@
 #include <emscripten.h>
 
 #include "material.h"
+#include "material_palette.h"
 #include "sand.h"
 #include "tilt.h"
 #include "util/intmath.h"
