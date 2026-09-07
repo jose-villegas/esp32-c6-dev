@@ -672,7 +672,7 @@ grows from that connection gets its shape.
 
 **The problem.** Dirt is a powder and shifts. A tree finds water by
 walking down its own stem to the ground and on down into the soil
-(`find_water()`, `sand_reactions.c`) - and when the soil directly under
+(`find_water()`, `sand_plants.c`) - and when the soil directly under
 the tree's collar (where the trunk actually touches ground) slides away,
 that walk finds neither more stem nor ground below it and simply returns
 failure. The tree is stranded, sometimes with plenty of water two rows
@@ -795,11 +795,11 @@ depth and spread caps as a second, separate kind of bound beside it.
    sat there BYTE-IDENTICAL through the remaining 18,000 steps, seed after
    seed - a genuine fixed point.
 3. **`reaction_t.roots` itself, 8 in 256 on the root row** - a small
-   chance, the same discipline every roll in `sand_reactions.c` follows.
+   chance, the same discipline every roll in `sand_plants.c` follows.
 
 No depth or spread cap was needed in the end - the walk-shaped first
 draft's `ROOT_DEPTH_MAX` is retired entirely (see its own RETIRED comment
-in `sand_reactions.c`, where the constant used to live). A local rule with
+in `sand_plants.c`, where the constant used to live). A local rule with
 no notion of "the collar" has nothing to measure a depth cap FROM in the
 first place, and `ROOT_SURFACE_MAX` alone already produces a genuine fixed
 point at the scale this feature actually runs at.
@@ -1041,6 +1041,11 @@ The same reasoning later split `sand_impulse.c` out of `sand.c` too: queued
 explosions, thrown debris and splash pushback move OUTWARD rather than
 gravity-ward, so `step_impulses()` is called from `sand_step()` exactly
 once, the same seam `sand_step_liquids()` and `sand_step_gas()` use.
+
+`sand_reactions.c` later split the same way: fire chemistry and the
+tree/root/leaf growth system it also housed shared almost no call graph, so
+the growth half moved into its own `sand_plants.c` - see that file's own
+top comment for the rationale.
 
 ## The sweep and the cross-flow pass, broken down further
 
