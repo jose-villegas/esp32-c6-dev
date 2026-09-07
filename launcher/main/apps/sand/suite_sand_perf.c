@@ -629,10 +629,12 @@ void sand_host_probe_run_mixed_flip(void)
  * time anyone runs this on hardware. */
 static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
 {
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    uint8_t   *big      = malloc(REAL_W * REAL_H);
+    uint8_t   *blocks   = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    impulse_t *impulses = malloc((size_t)ALL_PAIRS_IMPULSE_MAX * sizeof *impulses);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
+    TEST_ASSERT_NOT_NULL(impulses);
 
     sand_t real;
     sand_init(&real, big, REAL_W, REAL_H, 23u);
@@ -640,6 +642,9 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
     sand_set_scatter(&real, SAND_SCATTER_PER_MATERIAL);
     sand_set_decay(&real, SAND_DECAY_PER_MATERIAL);
     sand_set_mobility(&real, SAND_MOBILITY_PER_MATERIAL);
+    /* Without this, sand_explode() has nowhere to write and the gunpowder
+     * patches below can never detonate - see ALL_PAIRS_IMPULSE_MAX. */
+    sand_enable_impulses(&real, impulses, ALL_PAIRS_IMPULSE_MAX);
 
     /* The scene is DERIVED from materials[] and laid out by
      * all_pairs_material_at() so that every PAIR of materials touches -
@@ -647,28 +652,15 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
      * for why bands were not enough, and
      * test_the_mixed_scene_puts_every_material_pair_in_contact, which
      * checks the coverage on the host rather than leaving it a claim in
-     * a comment.
-     *
-     * A share of the board is left empty (EMPTY_SHARE_PERCENT) so the
-     * flip has somewhere to launch into - the same reasoning as the
-     * other flip tests. */
-    const int first = MAT_EMPTY + 1;
-    const int n_mats = MAT_COUNT - first;
-    const int top = (REAL_H * EMPTY_SHARE_PERCENT) / 100;
+     * a comment. */
 
-    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(1, n_mats,
+    /* build_all_pairs_scene() (suite_sand_scenes.c) also plants the
+     * deliberate gunpowder patches - the tiling alone scatters gunpowder
+     * as one cell in nineteen, never enough to form the fuse's 2x2. */
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(1, ALL_PAIRS_SPAWN_COUNT,
         "the pattern below needs at least two materials to interleave");
 
-    for (int y = top; y < REAL_H; y++) {
-        for (int x = 0; x < REAL_W; x++) {
-            const int m = all_pairs_material_at(x, y, first, n_mats);
-            /* sand_spawn() with radius 0 rather than sand_set(): it goes
-             * through random_cell(), so a liquid arrives full, a transient
-             * arrives at full life and a powder gets a shade - the same
-             * cells a real pour produces. */
-            sand_spawn(&real, x, y, 0, (material_id_t)m);
-        }
-    }
+    build_all_pairs_scene(&real);
 
     /* Let it get going - long enough for the reactions to be under way and
      * the liquids to have found their levels, so the flip lands on a live
@@ -696,18 +688,22 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
      * this one, not just the one that got caught. */
     free(big);
     free(blocks);
+    free(impulses);
 
-    /* A REDUCTION TARGET, not headroom: 10% under what the scene measured,
-     * so it fails until the code gets faster. Same rule as every budget
-     * here - see FULL_STEP_BUDGET_US's comment. */
+    /* THE 87800 BUDGET IS INVALIDATED, NOT CARRIED FORWARD: it was
+     * measured against the fourteen-material scene, and this scene is
+     * now bigger. */
 
-    /* Raised deliberately, from a fresh capture. That is the one exception
-     * to the rule against raising a budget, and the accretion evidence
-     * behind it is on bd esp32c6-8zx. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(87800, (int)per_step,
-        "the mixed-material flip is held to 10% below what it measured, "
-        "as a reduction target - this failing means the work has not been "
-        "done yet, not that something broke");
+    /* 200000 is a loose SANITY CEILING, not a budget - the same
+     * placeholder shape this row used before its first measurement.
+     * Re-peg from the first clean capture of THIS scene: measured x 0.9,
+     * rounded, this section's usual reduction-target rule. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(200000, (int)per_step,
+        "INVALIDATED, NOT A REAL BUDGET - this scene now covers the "
+        "extended statics and gunpowder too, so the 87800 figure it used "
+        "to carry no longer describes what it measures; re-peg from the "
+        "first clean device capture of this scene at measured x 0.9 and "
+        "replace this placeholder ceiling");
 }
 
 #ifdef SAND_HOST_PROBE
