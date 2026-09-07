@@ -105,11 +105,9 @@ if [ -f "$f" ] && command -v python >/dev/null 2>&1; then python "$f"; else exit
 
 The guard is not cosmetic: `python <missing file>` exits 2, and 2 is the code
 that blocks the edit, so an unguarded user-level entry would refuse every
-write in every other project. As of 2026-09-07, after re-cutting sand.c,
-sand.h, sand_reactions.c, material.c, material.h and app_sand.c to the
-WHY-only standard (this section's own rule, above), the tree holds 1,394
-comments over the 300 aim (748 over the 500 ceiling), 67% of them in the
-sand app; `--comments-only <ref>` proves a bulk trim moved no code.
+write in every other project. The tree holds 1,394 comments over the 300
+aim (748 over the 500 ceiling), 67% of them in the sand app; `--comments-only
+<ref>` proves a bulk trim moved no code.
 
 Requires a **host** compiler (not the ESP32 toolchain) for the host tests:
 Windows `winget install BrechtSanders.WinLibs.POSIX.UCRT`, Debian/Ubuntu
@@ -293,13 +291,12 @@ a file that ends up differing in anything but comments is discarded. A
 comment it cannot get under the limit keeps its original text. `--via
 hybrid` tries a free OmniRoute model first, in parallel across the whole
 file, for reasoning this machine cannot run locally at no local-GPU cost —
-but only after an automated check (dropped facts, a fabricated number,
-wholesale unrelated content, all seen for real from OmniRoute here);
-anything that fails falls back to the local model. `--review`
-then checks each rewrite for dropped numbers, dropped named functions and
-dropped negations (no model needed for those — that check alone caught every
-known-bad rewrite in the trial that chose this design), before asking a
-reviewer model for a verdict on meaning; `--review-packet` writes the
+but never blindly: an automated check (dropped facts, a fabricated number,
+wholesale unrelated content — OmniRoute's free routing produces all three)
+gates every answer, and anything that fails falls back to the local model.
+`--review` then checks each rewrite for dropped numbers, dropped named
+functions and dropped negations — no model needed for any of that — before
+asking a reviewer model for a verdict on meaning; `--review-packet` writes the
 prose-only pairs out for a reviewer the script cannot call itself. Expect
 ~45 s per comment, and read the report: a local model does occasionally drop
 a WHY.
