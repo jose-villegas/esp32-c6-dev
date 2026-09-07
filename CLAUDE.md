@@ -62,15 +62,24 @@ scripts/check-format.sh <file.c> [<file.h> ...]         # format in place
 scripts/check-format.sh --check <file.c> [<file.h> ...]  # verify only
 ```
 
-**300 characters is the aim for a comment; 500 is the hard ceiling**, for one
-that truly needs the room — say so by actually using the length, not by
-sitting at 320 out of habit. A run of consecutive own-line `//` lines, or of
-consecutive own-line `/* */` blocks with no code between them, counts as one
-comment; length is the prose, markers and `*` gutters stripped, so
-re-wrapping never changes the score and chopping one explanation into several
-adjacent blocks doesn't dodge it either. File and section header banners
-(`/*====`) are exempt — asked to fit, a model deletes the rule rather than the
-prose. The rule is aimed at comments beside code.
+**Comment the WHY, not the WHAT — and only when the code doesn't already say
+it.** Clean, well-named code mostly speaks for itself; a comment exists for
+context, a decision, or a non-obvious constraint, not to restate what the
+next line does. Keep comments accurate — an outdated one is worse than none,
+so update it in the same edit that changes the code it describes. Length
+follows from this, not the other way around: **300 characters is the aim,
+500 the hard ceiling** for a comment that still needs the room after cutting
+everything the code already says and everything that's really change history
+(git log owns that — dates, old values, "raised from X to Y", a bug's own
+incident report all belong there, not in the source). A short remainder, or
+none at all, is the normal, correct outcome for most fields and functions —
+not a sign the cut fell short. A run of consecutive own-line `//` lines, or
+of consecutive own-line `/* */` blocks with no code between them, counts as
+one comment for scoring; length is the prose, markers and `*` gutters
+stripped, so re-wrapping never changes the score and chopping one
+explanation into several adjacent blocks doesn't dodge it either. File and
+section header banners (`/*====`) are exempt — asked to fit, a model deletes
+the rule rather than the prose. The rule is aimed at comments beside code.
 
 ```sh
 scripts/check-comment-length.sh                 # whole repo, 20 worst listed
@@ -96,13 +105,11 @@ if [ -f "$f" ] && command -v python >/dev/null 2>&1; then python "$f"; else exit
 
 The guard is not cosmetic: `python <missing file>` exits 2, and 2 is the code
 that blocks the edit, so an unguarded user-level entry would refuse every
-write in every other project. As of 2026-09-06, after a first local-model
-trim wave (296 shortened, 71 of those reverted on review for losing real
-reasoning - automated one-shot compression is the wrong tool for a comment
-bundling several distinct points, which needs manual splitting instead), the
-tree holds 1,736 comments over the 300 aim (1,084 over the 500 ceiling), 79%
-of them in the sand app; `--comments-only <ref>` proves a bulk trim moved no
-code.
+write in every other project. As of 2026-09-07, after re-cutting sand.c,
+sand.h, sand_reactions.c, material.c, material.h and app_sand.c to the
+WHY-only standard (this section's own rule, above), the tree holds 1,394
+comments over the 300 aim (748 over the 500 ceiling), 67% of them in the
+sand app; `--comments-only <ref>` proves a bulk trim moved no code.
 
 Requires a **host** compiler (not the ESP32 toolchain) for the host tests:
 Windows `winget install BrechtSanders.WinLibs.POSIX.UCRT`, Debian/Ubuntu
@@ -283,7 +290,12 @@ over-long comments the same local-Ollama way, but hands the model one
 comment's PROSE and never a line of code — the rewrite goes back into that
 comment's own span, so a bad generation can only produce a bad sentence, and
 a file that ends up differing in anything but comments is discarded. A
-comment it cannot get under the limit keeps its original text. `--review`
+comment it cannot get under the limit keeps its original text. `--via
+hybrid` tries a free OmniRoute model first, in parallel across the whole
+file, for reasoning this machine cannot run locally at no local-GPU cost —
+but only after an automated check (dropped facts, a fabricated number,
+wholesale unrelated content, all seen for real from OmniRoute here);
+anything that fails falls back to the local model. `--review`
 then checks each rewrite for dropped numbers, dropped named functions and
 dropped negations (no model needed for those — that check alone caught every
 known-bad rewrite in the trial that chose this design), before asking a
