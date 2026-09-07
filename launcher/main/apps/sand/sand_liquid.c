@@ -458,7 +458,7 @@ static inline void union_touched_x(bool *touched, int *x0, int *x1,
 /* One cell's cross-flow contribution: tracked liquid, fold same-row transfer.
  * Split for complexity. */
 static inline bool equalise_one_row_cell(sand_t *s, uint8_t *row, int x, int y,
-                                         bool diagonal, const xflow_t *r,
+                                         const xflow_t *r,
                                          int dx, int dy,
                                          int sight, uint16_t is_liquid,
                                          bool *touched, int *touched_x0,
@@ -472,6 +472,17 @@ static inline bool equalise_one_row_cell(sand_t *s, uint8_t *row, int x, int y,
     if (((is_liquid >> id) & 1u) == 0) {
         return false;
     }
+
+    /* DERIVED HERE, NOT CARRIED IN, and derived only once the cell is known to
+     * be liquid - which ~30% of examined cells are. Walked incrementally by the
+     * caller it cost an add, a mask and a spilled load/store for every cell
+     * including the ~70% that never reach this line. The phase is a pure
+     * function of position: the caller seeded it as (q_q8 * cx_from) & 255 and
+     * stepped by +/-q_q8 per cell, which telescopes to (q_q8 * x) & 255 in
+     * either direction. Off the major axis it never advanced at all. */
+    const int q_q8 = r->q_q8;
+    const int pat  = (r->ax[0] != 0) ? ((q_q8 * x) & 255) : ((q_q8 * y) & 255);
+    const bool diagonal = (pat < q_q8);
 
     const int px = diagonal ? r->dg[0] : r->ax[0];
     const int py = diagonal ? r->dg[1] : r->ax[1];
@@ -499,18 +510,11 @@ static inline bool equalise_one_block(sand_t *s, uint8_t *row, int y,
 {
     bool any_liquid = false;
 
-    const int q_q8 = r->q_q8;
-
-    /* Diagonal ray density q_q8/256 - see xflow_t. Fixed along one axis,
-     * walks q_q8 per cell. */
-    const bool x_major = (r->ax[0] != 0);
-    int pat = x_major ? ((q_q8 * cx_from) & 255) : ((q_q8 * y) & 255);
-    const int pat_step = x_major ? ((x_step > 0) ? q_q8 : -q_q8) : 0;
-
+    /* The diagonal-ray phase this loop used to walk per cell now lives in
+     * equalise_one_row_cell(), derived from x once a cell is known to be
+     * liquid - see its own comment. */
     for (int x = cx_from; x != cx_to; x += x_step) {
-        const bool diagonal = (pat < q_q8);
-        pat = (pat + pat_step) & 255;
-        if (equalise_one_row_cell(s, row, x, y, diagonal, r,
+        if (equalise_one_row_cell(s, row, x, y, r,
                                   dx, dy, sight,
                                   is_liquid, touched, touched_x0,
                                   touched_x1)) {
