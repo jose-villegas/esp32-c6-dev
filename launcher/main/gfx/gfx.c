@@ -1,3 +1,4 @@
+#include "driver/gpio.h"
 #include "gfx/gfx.h"
 #include "gfx/gfx_dirty.h"
 #include "gfx/gfx_font_roles.h"
@@ -95,6 +96,28 @@ static esp_err_t panel_bring_up(bool send_init)
         return err;
     }
     spi_bus_up = true;
+
+#if GFX_QSPI_STRONG_PADS
+    /* AFTER spi_bus_initialize(), which is what configures these pads - set
+     * before it and the driver overwrites the setting. See GFX_QSPI_STRONG_PADS
+     * (gfx.h) for why edge rate is the suspect at 80 MHz. */
+    {
+        static const gpio_num_t qspi_pads[] = {
+            BSP_LCD_PCLK, BSP_LCD_DATA0, BSP_LCD_DATA1,
+            BSP_LCD_DATA2, BSP_LCD_DATA3,
+        };
+        for (size_t i = 0; i < sizeof(qspi_pads) / sizeof(qspi_pads[0]); i++) {
+            const esp_err_t derr =
+                gpio_set_drive_capability(qspi_pads[i], GPIO_DRIVE_CAP_3);
+            if (derr != ESP_OK) {
+                ESP_LOGW(TAG, "drive capability on pad %d: %s",
+                         (int)qspi_pads[i], esp_err_to_name(derr));
+            }
+        }
+        ESP_LOGI(TAG, "QSPI %d MHz, pads at 40 mA",
+                 (int)(GFX_QSPI_HZ / 1000000));
+    }
+#endif
 
     esp_lcd_panel_io_spi_config_t io_config =
         SH8601_PANEL_IO_QSPI_CONFIG(BSP_LCD_CS, on_strip_sent, NULL);

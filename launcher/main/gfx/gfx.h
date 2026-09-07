@@ -35,15 +35,27 @@
 #define GFX_HEIGHT  448
 #endif
 
-/* QSPI clock for the panel - the sole thing setting frame transfer time.
- * Vendor/Espressif validate only 40MHz; 80MHz is an undocumented overclock
- * that still produces corner artifacts (re-measured after the
- * per-cell/gathered-run rewrite) - a real panel ceiling, not a
- * stale-prototype issue. Thresholds below are tuned for 40MHz and need
- * re-measuring if this changes. No in-between clock exists: the 80MHz
- * source's integer divider (n>=2 floor) resolves everything here to
- * exactly 40 or 80. */
-#define GFX_QSPI_HZ (40 * 1000 * 1000)
+/* EXPERIMENT BRANCH, NOT FOR MERGE - bd esp32c6-kfg. Shipped value is 40 MHz;
+ * this branch sets 80 so the artifacts can be looked at WITH the timing knobs
+ * below applied, which is the part never tried. Bare 80 MHz on its own has
+ * already been measured twice and still corners.
+ *
+ * QSPI clock is the sole thing setting frame transfer time: 16.5 ms of bus at
+ * 40 MHz against 8.2 at 80, and a measured full present of 17.6 ms says there
+ * is no software slack left at this clock. Vendor/Espressif validate only
+ * 40 MHz. No in-between exists - the 80 MHz source's integer divider (n>=2
+ * floor) resolves to exactly 40 or 80.
+ *
+ * IF THIS EVER SHIPS AT 80, the dirty-band thresholds below were fitted to
+ * 40 MHz timings and are wrong until re-measured. That is part of the work. */
+#define GFX_QSPI_HZ (80 * 1000 * 1000)
+
+/* Drives the five QSPI pads at 40 mA instead of the 20 mA default, sharpening
+ * edges at 80 MHz. Corner-shaped artifacts - corrupt at the START of a burst
+ * rather than noise across the frame - read like an edge-rate or setup-margin
+ * problem at the panel's receiver, which is what this targets. Set to 0 to
+ * flip the knob back without touching the clock. */
+#define GFX_QSPI_STRONG_PADS 1
 
 /* Glyphs are 8x8 in the font data, drawn at 2x so they are legible on a
  * 368-wide panel. Text metrics elsewhere must agree with these. */
