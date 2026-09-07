@@ -561,7 +561,6 @@ const reaction_t reactions[MATERIAL_MAX] = {
 /* Ramp for `n` steps between colours, split for material limits. */
 #define SEG(lo, hi, i, n) GFX_RGB(LERP(lo, hi, ((i) * 15) / ((n) - 1)))
 
-
 /* Carried tone shape for independent moisture levels. */
 
 /* Wet soil darker, 7 point cap. */
@@ -580,7 +579,6 @@ const reaction_t reactions[MATERIAL_MAX] = {
         GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 12)), GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 13)),                                 \
         GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 15)), /* variant 14: saturated */                                            \
         GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 15))  /* variant 15: unused - same as 14 */
-
 
 /* Ember ramp: dying char through glowing orange, redder and darker than
  * fire's yellow-white. */
@@ -625,7 +623,6 @@ const reaction_t reactions[MATERIAL_MAX] = {
 /* Glass at room temp is mid. Below sand, it frosts. At shock, it breaks,
  * glowing like lava. */
 
-
 /* Shock breaks largest step: material shatters, not cools. Different
  * behaviors should look distinct. */
 
@@ -634,8 +631,6 @@ const reaction_t reactions[MATERIAL_MAX] = {
 #define GLASS_NEUTRAL 0x8C7E70
 #define GLASS_GLOW    0xC8701E
 #define GLASS_MOLTEN  0xFFD873
-
-
 
 /* Guards on denominators prevent division by zero. */
 #define GLASS_COOL(v) LERP(GLASS_FROST, GLASS_AMBIENT, ((v) * 15) / (SAND_AMBIENT_HEAT > 0 ? SAND_AMBIENT_HEAT : 1))
@@ -926,7 +921,6 @@ static const gfx_color_t palette[256] = {
  * endpoints avoid mixing. */
 #define GLASS_EDGE_V_RAW(v) ((v) + (((int)(SAND_AMBIENT_HEAT) - (int)(v)) * 10) / 15)
 
-
 /* Clamped to SAND_SHOCK_HEAT if already HOT. */
 #define GLASS_EDGE_V(v)                                                                                               \
     (((v) >= SAND_SHOCK_HEAT && GLASS_EDGE_V_RAW(v) < SAND_SHOCK_HEAT) ? SAND_SHOCK_HEAT : GLASS_EDGE_V_RAW(v))
@@ -1186,12 +1180,6 @@ material_popcount8(unsigned mask) {
 
 /* Local depth for full darkening - clamped to material's body colour. */
 
-
-
-
-
-
-
 /* SHARED with sand_liquid.c - must be 24 to prevent drift. */
 #define DEPTH_SATURATE_CELLS MATERIAL_LIQUID_DEPTH_BAND
 
@@ -1215,7 +1203,6 @@ material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_col
     /* LOCAL DEPTH, NOT SCREEN POSITION. Clamped at 255. */
 
     /* Obstacle shows dip, not band. */
-
 
     /* Staleness under dirty-row optimisation; see
      * local_depth_row_a[]/local_depth_row_b[] in app_sand.c. */
@@ -1250,10 +1237,8 @@ material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_col
                     curvature = WATER_FOAM_CURVATURE_MAX;
                 }
 
-
                 /* WARNING: Safe ONLY because foam is SOLE consumer of water's
                  * hash. */
-
 
                 /* ADD, not XOR: XOR maps a power-of-two-aligned threshold
                  * window either onto itself or another aligned window
@@ -1496,22 +1481,17 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_CODES] = {
 
 /* GUNPOWDER_BASE, material.h - one row, eight designators */
 
-
 /* flammability = 200: catches instantly - key trait for powder keg. */
 
 /* Lights fuse, not MAT_FIRE. */
 
-
 /* heat_chance = 24: wood's own smoulder figure - conducted heat is a
  * slower fuse than a direct flame. */
-
 
 /* lit_from = GUNPOWDER_LIT (7): codes below it are dry tones and moisture,
  * never mistaken for embers. */
 
-
 /* catches through volume, not just face */
-
 
 /* soaks = 60: water wets it - moisture climbs, water is consumed - dirt's
  * own rate. */
@@ -1519,12 +1499,8 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_CODES] = {
 /* soaks_to = 0: stays gunpowder while it wets, only wetter, same as
  * dirt. */
 
-
-
 /* dries = 1: far under dirt's 2 - a powder keg holds water a long time
  * once soaked. */
-
-
 
 #define GUNPOWDER_REACTION                                                                                             \
     {                                                                                                                  \
