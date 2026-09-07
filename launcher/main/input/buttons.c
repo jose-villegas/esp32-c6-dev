@@ -15,13 +15,10 @@ static const char *TAG = "buttons";
  * pulled to ground when pressed - so a LOW level means down. */
 #define BOOT_GPIO GPIO_NUM_9
 
-/* AXP2101 power-management chip. The PWR button is wired to it, not to the
- * SoC, so the only way to see a press is to ask the PMU over I2C.
- *
- * Registers from the X-Powers AXP2101 datasheet. Interrupts are arranged as
- * three enable registers and three status registers; the power-key events live
- * in the second of each. A status bit is cleared by writing a one back to it,
- * which is worth noticing - the obvious "write zero to clear" leaves the flag
+/* AXP2101 power-management chip. PWR button wired to it, not the SoC, so the
+ * only way to see a press is over I2C. Interrupts are three enable + three
+ * status registers; power-key events live in the second of each. A status
+ * bit clears by writing a ONE back, not zero - the obvious guess leaves it
  * set and the button appears stuck. */
 #define AXP2101_ADDR         0x34
 #define AXP2101_I2C_HZ       400000
@@ -30,19 +27,13 @@ static const char *TAG = "buttons";
 #define AXP2101_REG_INTEN2   0x41
 #define AXP2101_REG_INTSTS2  0x49
 
-/* Within INTEN2 / INTSTS2:
- *   bit 0  power key rising edge
- *   bit 1  power key falling edge
- *   bit 2  power key long press
- *   bit 3  power key short press
- * Short and long press are both enabled; rising/falling edge are not (see
- * buttons.h - there is no `down` level to build from them). Long press fires
- * at its own threshold (REG 0x27 bits 5:4, irqlevel - 1/1.5/2/2.5 s),
- * independent of the PMU's own power-off, a different threshold again (REG
- * 0x27 bits 3:2, offlevel - 4/6/8/10 s) gated by its own enable bit (REG
- * 0x22 bit 1, btn_pwroff_en) that firmware could clear - this bit does not
- * touch it, so both the long-press interrupt below and the PMU's own
- * eventual power-off can fire from the same sustained hold. */
+/* Within INTEN2/INTSTS2: bit 0 rising, bit 1 falling, bit 2 long press, bit 3
+ * short press. Short/long are enabled; rising/falling are not (see
+ * buttons.h - no `down` level to build them from). Long press fires at its
+ * own threshold (REG 0x27 bits 5:4, irqlevel), independent of the PMU's own
+ * power-off threshold (REG 0x27 bits 3:2, offlevel) gated by its own enable
+ * bit (REG 0x22 bit 1, btn_pwroff_en) firmware could clear but this bit does
+ * not touch - so both can fire from one hold. */
 #define AXP2101_PKEY_SHORT   (1u << 3)
 #define AXP2101_PKEY_LONG    (1u << 2)
 
@@ -51,11 +42,11 @@ static const char *TAG = "buttons";
  * PMU's own power-off, bits 1:0 power-on. Read-only here; see pmu_init(). */
 #define AXP2101_REG_LEVELS   0x27
 
-/* REG 0x22, bit 1 btn_pwroff_en - enables PWRON held past OFFLEVEL as a
- * power-off source at all - and bit 0 btn_pwroff_mode - power-off (0) vs
- * restart (1) when it fires. Both default from EFUSE/POR, so what a given
- * board actually boots with isn't knowable from the datasheet; only logged
- * here, never written. */
+/* REG 0x22, bit 1 btn_pwroff_en enables PWRON held past OFFLEVEL as a
+ * power-off source at all; bit 0 btn_pwroff_mode picks power-off vs restart
+ * when it fires. Both default from EFUSE/POR, so what a board actually
+ * boots with is not knowable from the datasheet - only logged here, never
+ * written. */
 #define AXP2101_REG_PWROFF   0x22
 
 /* 50 Hz. Fast enough that a press never feels missed, slow enough that the I2C
@@ -69,11 +60,10 @@ static bool pmu_ready;
 
 static button_fsm_t boot_fsm;
 
-/* PWR is an event, so there is nothing to debounce - just flags waiting to be
- * collected. Two of them, one per interrupt bit enabled below: the PMU
- * itself is what decides "held", by timing the press against its own
- * irqlevel threshold, so there is no local hold-timer state to keep the way
- * BOOT's button_fsm_t needs one. */
+/* PWR is an event, nothing to debounce - just flags waiting to be
+ * collected, one per interrupt bit below. The PMU itself decides "held",
+ * timing the press against its own irqlevel threshold, so there is no local
+ * hold-timer state to keep the way BOOT's button_fsm_t needs one. */
 static bool power_pressed;
 static bool power_held;
 
