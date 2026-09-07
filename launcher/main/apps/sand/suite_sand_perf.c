@@ -70,7 +70,7 @@
  * Tightened anyway, past even the ~10% headroom this file's other
  * budgets use, to 6000 - about 3.3% over the real measured 5802 us,
  * exactly reproducible across fresh captures on the current build (fixed
- * RNG seed - see docs/Sand/Architecture.md's "Verifying performance on
+ * RNG seed - see docs/sand/Architecture.md's "Verifying performance on
  * real hardware"). That thin a margin is a real bet against the
  * documented flash-cache swing above: if a future rebuild reintroduces
  * it and this starts flaking, that is the known, accepted trade-off of
@@ -1594,7 +1594,7 @@ void sand_host_probe_run_gunpowder_basin(void)
  * function to share it across a translation-unit boundary is the exact
  * shape of change a previous tuning round measured a 26% regression from
  * - not these functions, but try_fall_or_scatter()/try_slide() in sand.c -
- * see the seventh attempt in docs/Sand/Performance-Tuning-Attempts.md, and
+ * see the seventh attempt in docs/sand/Performance-Tuning-Attempts.md, and
  * the eighth for how long it took to notice a "fix" for it was aimed at
  * code the failing benchmark never even ran. So
  * mirror_app_sand_marking() below duplicates the ~15 lines of policy from

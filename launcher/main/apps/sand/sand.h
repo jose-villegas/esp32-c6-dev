@@ -33,7 +33,7 @@
 /* Cells per block, on each axis, for the settled-block tracking behind
  * sand_enable_sleeping() - see the comment there. 32x64 is the only shape,
  * of several measured on real hardware, that clears the settled-screen
- * frame budget - see docs/Sand/Simulation-Lessons.md for the sweep. */
+ * frame budget - see docs/sand/Simulation-Lessons.md for the sweep. */
 #define SAND_BLOCK_W 32
 #define SAND_BLOCK_H 64
 
@@ -202,7 +202,7 @@ void sand_track_dirty_rows(sand_t *s, uint8_t *rows);
 
 /* Skip settled BLOCKS entirely - without this, a settled grain still fails
  * its gravity-ward move and both slides, every step, to conclude nothing;
- * see docs/Sand/Simulation-Lessons.md. `blocks` is caller-owned,
+ * see docs/sand/Simulation-Lessons.md. `blocks` is caller-owned,
  * ceil(w/SAND_BLOCK_W) * ceil(h/SAND_BLOCK_H) bytes, one flag per block.
  * NULL disables sleeping. A shake, a gravity change, or sand landing in a
  * block wakes it. */

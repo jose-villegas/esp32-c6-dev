@@ -6,11 +6,11 @@
 # own --local header comment for why (OmniRoute's own ollama-local provider
 # has no working connection pool).
 #
-# --app <name> scopes to just that app's own docs (docs/<Capitalized name>/,
-# e.g. --app sand -> docs/Sand/*.md) instead of the default (every tracked
+# --app <name> scopes to just that app's own docs (docs/<name>/, e.g.
+# --app sand -> docs/sand/*.md) instead of the default (every tracked
 # doc). See fix-audited-docs-free.sh's own --app comment for why "all docs"
 # stays the default here (docs audits are cheap regardless of scope) and why
-# only some apps (today: just Sand) can be targeted this way.
+# only some apps (today: just sand) can be targeted this way.
 #
 # Any other extra arguments are forwarded to fix-audited-docs.sh as-is, e.g.
 # --no-push to stop short of pushing the resulting branch.
@@ -44,11 +44,10 @@ done
 DOC_FILE_ARGS=()
 SCOPE_LABEL="all tracked docs (default)"
 if [ -n "$APP" ]; then
-  APP_CAP="$(printf '%s' "$APP" | cut -c1 | tr '[:lower:]' '[:upper:]')$(printf '%s' "$APP" | cut -c2-)"
-  APP_DOC_DIR="docs/$APP_CAP"
+  APP_DOC_DIR="docs/$APP"
   if [ ! -d "$APP_DOC_DIR" ]; then
     echo "No $APP_DOC_DIR/ folder -- nothing to scope --app $APP to." >&2
-    echo "(Only apps with their own docs/<Name>/ folder can be targeted -- today that's just Sand.)" >&2
+    echo "(Only apps with their own docs/<name>/ folder can be targeted -- today that's just sand.)" >&2
     exit 1
   fi
   shopt -s nullglob

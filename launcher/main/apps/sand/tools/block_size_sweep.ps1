@@ -14,7 +14,7 @@
     repo and device in a known-good state.
 
     Background and the bugs this pattern hit before it worked cleanly:
-    docs/Notes/Simulation-Lessons.md, "The sixth attempt" section.
+    docs/sand/Simulation-Lessons.md, "The sixth attempt" section.
 
 .PARAMETER IdfExportPath
     Path to ESP-IDF's export.ps1. Defaults to this project's usual

@@ -169,7 +169,7 @@ LAUNCHER_DIR_WIN="$(cd "$LAUNCHER_DIR" && pwd -W 2>/dev/null || echo "$LAUNCHER_
 
 if [ "$BUILD_ONLY" -eq 1 ]; then
     # Same three sdkconfig fragments and SDKCONFIG override
-    # report_performance.sh uses (see docs/Sand/Perf-Round-Guide.md,
+    # report_performance.sh uses (see docs/sand/Perf-Round-Guide.md,
     # "Exact commands") - just the build half, with no flash and no
     # capture, so a link failure surfaces in minutes instead of after a
     # flash+18-minute-capture cycle. The stale-sdkconfig removal is the
@@ -209,7 +209,7 @@ fi
 # NAMED AFTER THE SHA ACTUALLY BUILT, not only the string typed. The report's
 # own body records paths and a timestamp but no ref, so this filename is the
 # only place a capture says which tree it measured - and "check the artifact
-# exists for the SPECIFIC ref" (docs/Sand/Perf-Round-Guide.md) is the house rule
+# exists for the SPECIFIC ref" (docs/sand/Perf-Round-Guide.md) is the house rule
 # that depends on it. A branch name alone cannot say which commit it was at.
 REF_SLUG=$(printf '%s' "$REF" | tr -c 'A-Za-z0-9._-' '-')
 if [ "$REF_SLUG" != "$CAPTURE_SHA" ]; then

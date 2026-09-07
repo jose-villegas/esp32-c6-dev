@@ -198,7 +198,7 @@ run it and wait for it to finish" won't work as written.
 ## The two validation cases this oracle must reproduce before anyone trusts it
 
 Recorded here so the next person doesn't have to rediscover them by reading
-through `docs/Sand/Performance-Tuning-Attempts.md` and old branches:
+through `docs/sand/Performance-Tuning-Attempts.md` and old branches:
 
 **(a)** Commit `8a20c86` ("sand reactions: reject non-reacting neighbours
 before the RNG, not after") vs its parent `57ff991` must show **fewer**

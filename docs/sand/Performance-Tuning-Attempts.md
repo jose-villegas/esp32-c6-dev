@@ -236,9 +236,9 @@ never merged; `git show` still works once that branch is fetched, or
   checklist this campaign's gas-material findings fed directly into.
 - [`Architecture.md`](Architecture.md) — the device-verification workflow,
   written as one exact command sequence.
-- [Display-and-Rendering.md](../Notes/Display-and-Rendering.md) — the
+- [Display-and-Rendering.md](../notes/Display-and-Rendering.md) — the
   parallel `gfx_dirty.h`/`row_runs.h` cap sweeps.
-- [Optimization-Playbook.md](../Notes/Optimization-Playbook.md) — several
+- [Optimization-Playbook.md](../notes/Optimization-Playbook.md) — several
   of the findings above generalised into board-agnostic techniques.
 - `launcher/tools/sweeps/` — the sweep automation this campaign built
   and now keeps as repo tooling.

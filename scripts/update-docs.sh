@@ -6,7 +6,7 @@
 # for a rewrite, and pushes a branch for review. That combo's last-resort
 # entry, ollama-local/gemma4:26b, routes through OmniRoute's own ollama-local
 # provider, confirmed to have no working connection pool as of 2026-08-31
-# (see docs/Model-Delegation-Workflow.md) -- if this script ever falls
+# (see docs/workflows/Model-Delegation-Workflow.md) -- if this script ever falls
 # through the whole chain, that last hop is likely to just time out rather
 # than actually answer; re-test with `omniroute_test_combo` before assuming
 # otherwise. Two-pass by design: this

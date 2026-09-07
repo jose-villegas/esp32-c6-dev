@@ -8,7 +8,7 @@ name: Build (Release)
 #
 # What this can't cover: an on-device run - GitHub-hosted runners have no
 # USB/serial access to the real board. See
-# docs/Sand/Architecture.md's "Verifying performance on real hardware"
+# docs/sand/Architecture.md's "Verifying performance on real hardware"
 # section for that workflow.
 
 on:

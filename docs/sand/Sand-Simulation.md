@@ -9,9 +9,9 @@ This document is the "why" behind it - the material encoding, the movement
 rules, the water model, and the performance discipline that shaped all of
 them. For the app-registration mechanics (how `main/apps/*` plugs into the
 shell), see `docs/Launcher-Architecture.md`. For the hardware constraints
-underneath everything here, see `docs/Notes/README.md`. The discovery
+underneath everything here, see `docs/notes/README.md`. The discovery
 narrative behind the fixes below - the bugs found and the reasoning at the
-time - lives in `docs/Sand/Simulation-Lessons.md`.
+time - lives in `docs/sand/Simulation-Lessons.md`.
 
 ---
 
@@ -978,7 +978,7 @@ dirty-tracking path's own overhead is 1,149 us - 6% - and the frame is
 produces real visual artifacts on this panel, so 17 ms is the floor.
 
 Water, not sand, is the actual bottleneck whenever a body of it is moving -
-see the correction in `docs/Sand/Simulation-Lessons.md`'s "A note on
+see the correction in `docs/sand/Simulation-Lessons.md`'s "A note on
 measurement noise", which used to say the opposite before water existed as
 a material.
 
@@ -1004,7 +1004,7 @@ step" and the numbers above:
 - **Bitmasks over flash-table reads, inside a hot loop.** Asking
   `materials[id].kind` per cell is a flash read and a likely cache miss (the
   32 KB code/constant cache on this chip, not a data cache - see
-  `docs/Sand/Simulation-Lessons.md`). Precomputing a 16-bit "is this id a
+  `docs/sand/Simulation-Lessons.md`). Precomputing a 16-bit "is this id a
   liquid" bitmask once per pass, instead of once per cell, measurably
   mattered: it alone was the difference between a settled screen of sand
   costing 17 us and costing 5.5 ms.
@@ -1111,14 +1111,14 @@ several small functions instead of one large one.
 
 - `docs/Launcher-Architecture.md` - how an app (this one included) plugs
   into the shell; the folder layout every app follows.
-- `docs/Notes/` - the hardware constraints underneath all of this: the
+- `docs/notes/` - the hardware constraints underneath all of this: the
   memory budget, the flash/RAM cache distinction, panel and touch gotchas.
-  Start at `docs/Notes/README.md`.
-- `docs/Sand/Simulation-Lessons.md` - this app's own discovery narrative,
+  Start at `docs/notes/README.md`.
+- `docs/sand/Simulation-Lessons.md` - this app's own discovery narrative,
   in the same folder as this file.
-- `docs/Sand/Adding-a-Material.md` - the practical how-to for adding a
+- `docs/sand/Adding-a-Material.md` - the practical how-to for adding a
   new material, worked through end to end against a real one (gas).
-- `docs/Sand/Shading-and-Colour.md` - how an existing material's variant
+- `docs/sand/Shading-and-Colour.md` - how an existing material's variant
   actually becomes a pixel: the palette pipeline, the recurring shading
   mistakes and their fixes, and the one item still open (liquid depth is
   not yet gravity-continuous).

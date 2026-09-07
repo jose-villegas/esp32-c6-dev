@@ -32,12 +32,12 @@ DP_TEST_FRAME_CEILING_SOURCE="derived from DP_MAIN_TASK_STACK_BYTES; see check_s
 # Free heap once gfx.c's single framebuffer (368*448*2 = 322 KiB) is carved
 # out. This is the number every device fixture is actually competing for.
 DP_FREE_HEAP_BYTES=63952
-DP_FREE_HEAP_SOURCE="free heap after framebuffer, device capture 2026-09-01 (docs/Sand/Perf-Round-Guide.md)"
+DP_FREE_HEAP_SOURCE="free heap after framebuffer, device capture 2026-09-01 (docs/sand/Perf-Round-Guide.md)"
 
 # One sand grid, for scale: a single contiguous request this size is why
 # fragmentation - not just total bytes - decides whether a fixture runs.
 DP_LARGEST_ALLOC_BYTES=41216
-DP_LARGEST_ALLOC_SOURCE="one sand grid, docs/Sand/Perf-Round-Guide.md free-heap table"
+DP_LARGEST_ALLOC_SOURCE="one sand grid, docs/sand/Perf-Round-Guide.md free-heap table"
 
 # --- toolchain and codegen -------------------------------------------------
 DP_TOOLCHAIN_PREFIX=riscv32-esp-elf
@@ -74,7 +74,7 @@ DP_CODEGEN_SOURCE="launcher/build.diag/compile_commands.json, sand_reactions.c e
 DP_ICACHE_BYTES=32768
 DP_ICACHE_LINE_BYTES=32
 DP_ICACHE_WAYS=8
-DP_ICACHE_SOURCE="ways+line from IDF esp32c6/rom/cache.h (MIN/MAX_ICACHE_WAYS 8, MIN_CACHE_LINE_SIZE 32); size 32 KB from docs/Sand/Performance-Tuning-Attempts.md 'Fixed facts' - see the caution above"
+DP_ICACHE_SOURCE="ways+line from IDF esp32c6/rom/cache.h (MIN/MAX_ICACHE_WAYS 8, MIN_CACHE_LINE_SIZE 32); size 32 KB from docs/sand/Performance-Tuning-Attempts.md 'Fixed facts' - see the caution above"
 
 # --- QEMU route ------------------------------------------------------------
 # Espressif's QEMU fork at IDF v5.5 has NO esp32c6 machine model: tools.json

@@ -1,7 +1,7 @@
 /*=============================================================================
  * dump_reactions - compile material.c's reaction tables into markdown.
  *
- * See docs/Sand/Reaction-Doc-Generator-Plan.md for the design this follows.
+ * See docs/plans/Reaction-Doc-Generator-Plan.md for the design this follows.
  * This file started as that plan's phase 1 (raw ladder output, no by-feel
  * tuning) and now carries phase 2's by-feel pass as well: the rate ladder's
  * silent middle, the chance ladders' 0/255 endpoints, the one checked
@@ -9,7 +9,7 @@
  * LEGIBILITY_OVERRIDES, and colour/typography reaching the default
  * per-material section rather than only the anatomy examples. Run through
  * report_reactions.sh, which builds this, captures its stdout, and splices
- * it into the BEGIN/END GENERATED region of docs/Sand/Reaction-Table.md
+ * it into the BEGIN/END GENERATED region of docs/sand/Reaction-Table.md
  * (see this file's own main(), and report_reactions.sh's top comment, for
  * why it is a splice and not a whole-file overwrite: some real mechanics -
  * lava's cool-off chaining, the covered-lava burst, water/acid's faster
@@ -2972,7 +2972,7 @@ static void emit_anatomy(void)
 {
     printf("\n## How these sentences are built\n\n");
     printf("Not a markup pass on the table above - that table stays as "
-           "clean prose, unedited (see docs/Sand/Reaction-Doc-Generator-"
+           "clean prose, unedited (see docs/plans/Reaction-Doc-Generator-"
            "Plan.md: it is the deliverable this whole file exists to "
            "produce). This section is generated separately, from the same "
            "decode helpers "
@@ -3458,7 +3458,7 @@ int main(int argc, char **argv)
 #ifdef _WIN32
     /* MinGW's CRT defaults stdout to text mode, which rewrites every '\n'
      * this file prints into "\r\n" - invisible on Windows, but it makes
-     * report_reactions.sh --check compare a CRLF TMP_MD against docs/Sand/
+     * report_reactions.sh --check compare a CRLF TMP_MD against docs/sand/
      * Reaction-Table.md's LF (.gitattributes forces every .md to eol=lf -
      * see that file's own comment on why - so the committed doc is LF
      * regardless of which platform generated it). Binary mode turns off
@@ -3514,7 +3514,7 @@ int main(int argc, char **argv)
            "replaced whole on every run; hand-written material outside "
            "those two markers is left untouched - see this doc's own top "
            "note. -->\n\n");
-    printf("See docs/Sand/Reaction-Doc-Generator-Plan.md for the design "
+    printf("See docs/plans/Reaction-Doc-Generator-Plan.md for the design "
            "this follows. Every rate/frequency word below is the ladder's "
            "computed bucket (see this file's own adverb_for()/"
            "chance_bucket_for()), with one checked, by-feel exception - see "

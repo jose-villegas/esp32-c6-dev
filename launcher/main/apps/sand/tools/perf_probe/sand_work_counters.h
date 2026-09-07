@@ -5,7 +5,7 @@
  * carries a 7-15% cross-binary noise floor that swamped the effect being
  * chased, while these counters proved bit-for-bit reproducible between two
  * builds of the same source and needed no device at all - see
- * docs/Sand/Perf-Round-Guide.md's "Count, do not time" section.
+ * docs/sand/Perf-Round-Guide.md's "Count, do not time" section.
  *
  * One field per counter named in bd esp32c6-8zx's attribution comments - the
  * set that actually separated a real regression from the noise, there. Every
@@ -26,7 +26,7 @@
  * Measured with codegen_diff.py against the real RISC-V toolchain: the
  * counters cost sand_step_liquids +39 instructions and +120 bytes when
  * compiled in, which is why compare_counters.py never leaves them on a
- * device build's own compile - see docs/Sand/Perf-Round-Guide.md's
+ * device build's own compile - see docs/sand/Perf-Round-Guide.md's
  * "Count, do not time" section for the full reasoning.
  *===========================================================================*/
 #pragma once

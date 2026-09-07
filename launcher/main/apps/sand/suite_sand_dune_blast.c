@@ -526,8 +526,8 @@ static void build_dune_beside_water_scene(sand_t *s)
 
 /* A cavity in a liquid is not a cavity in sand: nothing here needed the
  * ring-order fix or the cap sizing at all, but it is the one place in
- * this file that checks the claim from Explosion-Plan.md's own "what to
- * look at" list - "detonate in water: the cavity should collapse and
+ * this file that checks the claim from Impulse-Mechanics.md's own device
+ * checklist - "detonate in water: the cavity should collapse and
  * slosh" - at more than a hand-wave. Detonating inside the pool, not the
  * dune, is deliberate: the dune already has its own scene above, and
  * mixing the two claims into one scene would leave neither checked

@@ -222,7 +222,7 @@ void test_dither_at_alpha_zero_draws_nothing(void)
  * same idiom test_fill_rect_writes_exactly_its_own_area() above already
  * uses - not a whole-framebuffer snapshot compare, which would need a
  * second copy of the 322 KiB framebuffer just to hold: real DRAM this
- * board does not have to spare (see docs/Notes/Board-and-Memory.md). */
+ * board does not have to spare (see docs/notes/Board-and-Memory.md). */
 void test_dither_at_alpha_255_matches_a_solid_fill_exactly(void)
 {
     fixture();
@@ -807,7 +807,7 @@ void test_repeated_presents_stay_in_sync(void)
  * band" - which is what makes them immune to the flash-layout lottery
  * suite_sand_perf.c's simulation tests ride (measured there at ~4%, and now
  * suspected to be quantised into two states rather than continuous - see
- * docs/Sand/Performance-Tuning-Attempts.md's "the layout lottery is
+ * docs/sand/Performance-Tuning-Attempts.md's "the layout lottery is
  * quantised"). But a ratio is structurally blind to a uniform slowdown: if
  * the panel clock dropped or the bus degraded, every figure here would
  * shrink or grow together and every one of these ratios would still pass.
@@ -964,7 +964,7 @@ static void test_a_partial_change_costs_less_than_a_full_frame(void)
  * real dirty width is only a fraction of the band, written directly (not
  * through gfx_fill_rect(), which always claims the whole band via
  * mark_band() regardless of what it drew - see its comment). See
- * docs/Notes/Display-and-Rendering.md's "Still untapped" for why this
+ * docs/notes/Display-and-Rendering.md's "Still untapped" for why this
  * exists. */
 static void test_a_narrow_change_costs_less_than_a_full_band(void)
 {
@@ -1012,7 +1012,7 @@ static void test_a_narrow_change_costs_less_than_a_full_band(void)
  * wide-but-short change gathers as cheaply as a narrow-but-tall one - tilt
  * the board so gravity points sideways and a falling stream is wide and
  * short instead of narrow and tall, and a width-only bound would give it no
- * benefit at all. See docs/Notes/Display-and-Rendering.md's "Still
+ * benefit at all. See docs/notes/Display-and-Rendering.md's "Still
  * untapped". */
 static void test_a_short_wide_change_costs_less_than_a_full_band(void)
 {
@@ -1121,7 +1121,7 @@ static void test_a_full_width_partial_height_change_costs_less_than_a_band(void)
  * the case a single adaptive box per strip cannot help with at all, since
  * a box spanning both would cover nearly the whole band for no reason. Two
  * separate pools settling in the same horizontal band, say. See
- * docs/Notes/Display-and-Rendering.md's "Still untapped". */
+ * docs/notes/Display-and-Rendering.md's "Still untapped". */
 static void test_two_far_corners_cost_less_than_a_full_band(void)
 {
     fixture();
@@ -1323,7 +1323,7 @@ static void test_a_near_budget_split_crosses_the_gather_threshold(void)
  * test_two_far_corners above lands in different CELLS, which
  * collect_dirty_runs() alone already separates without any help from the
  * leaf layer; this test is the one that actually exercises it. See
- * docs/Notes/Display-and-Rendering.md's "Still untapped". */
+ * docs/notes/Display-and-Rendering.md's "Still untapped". */
 static void test_two_marks_in_one_cell_cost_less_than_the_coarse_box(void)
 {
     fixture();
@@ -1449,7 +1449,7 @@ static void test_a_suspend_resume_round_trip_costs_under_a_frame(void)
      * the point is not the exact figure but that nobody reintroduces the panel
      * init sequence. Verified by flipping the argument to gfx_resume(true),
      * which takes 230 ms and fails this by 321x.
-     * See docs/Notes/Board-and-Memory.md's "Time-multiplexing the bus". */
+     * See docs/notes/Board-and-Memory.md's "Time-multiplexing the bus". */
     TEST_ASSERT_LESS_THAN_MESSAGE(25000, (int)elapsed,
         "a round trip must fit inside one frame - did the init sequence "
         "get re-sent?");
