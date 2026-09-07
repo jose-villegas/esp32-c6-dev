@@ -1730,6 +1730,321 @@ static void test_the_water_over_lava_scene_reaches_the_quench_cooloff_and_burst_
         "gate never fired at all");
 }
 
+/* --- gunpowder basin: a brush-drawn vessel of gunpowder, lit once ------
+ * Closes half of bd esp32c6-4d9: a lit pile chain-detonating via
+ * find_lit_two_by_two()/sand_explode() (sand_reactions.c) has never been
+ * profiled on device, unlike the gas-pocket and covered-lava bursts it
+ * mirrors. */
+
+/* WALLS MUST BE BRUSH-DRAWN, NOT A CLEAN RECTANGLE like
+ * build_dune_in_a_vessel_scene's (suite_sand_dune_blast.c). A 2026-09-03
+ * confinement rule found zero eligible cells over 5000 steps on a clean
+ * rectangle, 16 on a brush-drawn one - confinement is shape-dependent. */
+#define GUNPOWDER_BASIN_INT_X0     67
+#define GUNPOWDER_BASIN_INT_W      50
+#define GUNPOWDER_BASIN_INT_Y0     150
+#define GUNPOWDER_BASIN_INT_H      45
+#define GUNPOWDER_BASIN_WALL_STEP  3
+
+/* A stroke's own natural variation in radius, 2-4 - fixed by step index
+ * rather than rolled, since this scene has to reproduce byte-identically
+ * run to run, the same as every other scene in this file. */
+static int gunpowder_basin_brush_radius(int step_index)
+{
+    static const int radii[3] = { 2, 3, 4 };
+    return radii[step_index % 3];
+}
+
+/* One run of the U-shaped wall, as overlapping sand_spawn() discs
+ * GUNPOWDER_BASIN_WALL_STEP cells apart. `vertical` true draws a
+ * vertical run (fixed x, `v` walks y); false draws a horizontal one. */
+static void gunpowder_basin_wall_run(sand_t *s, int fixed, int lo, int hi,
+                                      bool vertical)
+{
+    int i = 0;
+    for (int v = lo; v <= hi; v += GUNPOWDER_BASIN_WALL_STEP, i++) {
+        const int r = gunpowder_basin_brush_radius(i);
+        if (vertical) {
+            sand_spawn(s, fixed, v, r, MAT_STONE);
+        } else {
+            sand_spawn(s, v, fixed, r, MAT_STONE);
+        }
+    }
+}
+
+/* FIRE SITS ON THE PILE'S SURFACE, open sky above - the shape
+ * test_fire_beside_dry_gunpowder_lights_it proves ignites
+ * (suite_sand_gunpowder.c). A sealed pocket measured WORSE: mobility
+ * 96/256 leaves it sitting still, rolling every flammable side, more
+ * often than it drifts away. */
+
+/* A brush-drawn vessel of dry gunpowder, lit near the top, with water,
+ * sand, dirt, oil, wood, acid and metal placed within the blast's reach
+ * outside the walls - the aftermath cascade is the point, not just the
+ * detonation. Plants excluded - see this scene's own coverage test. */
+void build_gunpowder_basin_scene(sand_t *s)
+{
+    const int ix0 = GUNPOWDER_BASIN_INT_X0;
+    const int ix1 = GUNPOWDER_BASIN_INT_X0 + GUNPOWDER_BASIN_INT_W;
+    const int iy0 = GUNPOWDER_BASIN_INT_Y0;
+    const int iy1 = GUNPOWDER_BASIN_INT_Y0 + GUNPOWDER_BASIN_INT_H;
+
+    /* U-shaped wall - left side, right side, floor - open at the top,
+     * the shape a player drags a brush along to build a vessel. */
+    gunpowder_basin_wall_run(s, ix0 - 1, iy0 - 4, iy1 + 4, true);
+    gunpowder_basin_wall_run(s, ix1,     iy0 - 4, iy1 + 4, true);
+    gunpowder_basin_wall_run(s, iy1,     ix0 - 4, ix1 + 4, false);
+
+    const int fx = ix0 + GUNPOWDER_BASIN_INT_W / 2;
+    const int fy = iy0;
+
+    /* Fill the interior with dry gunpowder - a real pour floods the
+     * whole vessel, notches and bulges alike, which is exactly why the
+     * wall discs above are drawn FIRST and this fill is allowed to
+     * overwrite whatever bulged into the interior. The fire cell is
+     * placed after, not overwritten. */
+    for (int y = iy0; y < iy1; y++) {
+        for (int x = ix0; x < ix1; x++) {
+            if (x == fx && y == fy) {
+                continue;
+            }
+            sand_set(s, x, y, GUNPOWDER_CELL(0));
+        }
+    }
+    sand_set(s, fx, fy, FIRE);
+
+    /* A SHELF UNDER EACH OUTSIDE STACK, drawn before they are painted.
+     * Without it the stacks stand on nothing: 900 of their 1,800 cells
+     * are liquid, so the window's first third times a waterfall landing
+     * alongside the detonation it exists to measure. */
+    gunpowder_basin_wall_run(s, iy1, ix0 - 26, ix0, false);
+    gunpowder_basin_wall_run(s, iy1, ix1, ix1 + 26, false);
+
+    /* Outside, left of the vessel: water, then sand, then dirt, each
+     * close enough for a breached wall or a flung ember to reach. */
+    for (int y = iy0; y < iy0 + 15; y++)
+        for (int x = ix0 - 25; x < ix0 - 5; x++)
+            sand_set(s, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+    for (int y = iy0 + 15; y < iy0 + 30; y++)
+        for (int x = ix0 - 25; x < ix0 - 5; x++)
+            sand_set(s, x, y, SAND_FIRST_SHADE);
+    for (int y = iy0 + 30; y < iy1; y++)
+        for (int x = ix0 - 25; x < ix0 - 5; x++)
+            sand_set(s, x, y, CELL_MAKE(MAT_DIRT, 0));
+
+    /* Outside, right of the vessel: oil and wood - fuel for escaping
+     * fire to spread into - then acid. */
+    for (int y = iy0; y < iy0 + 15; y++)
+        for (int x = ix1 + 5; x < ix1 + 25; x++)
+            sand_set(s, x, y, CELL_MAKE(MAT_OIL, MASS_MAX));
+    for (int y = iy0 + 15; y < iy0 + 30; y++)
+        for (int x = ix1 + 5; x < ix1 + 25; x++)
+            sand_set(s, x, y, CELL_MAKE(MAT_WOOD, 0));
+    for (int y = iy0 + 30; y < iy1; y++)
+        for (int x = ix1 + 5; x < ix1 + 25; x++)
+            sand_set(s, x, y, CELL_MAKE(MAT_ACID, MASS_MAX));
+
+    /* Above the open mouth: a metal slab, sitting in the path of the
+     * updraft of fire and thrown material a blast near the top of the
+     * pile sends upward. KIND_STATIC, so resting in open air is not a
+     * physics error - metal never falls in this simulation. */
+    for (int y = iy0 - 25; y < iy0 - 10; y++)
+        for (int x = fx - 10; x < fx + 10; x++)
+            sand_set(s, x, y, MATX(MATX_METAL));
+}
+
+/* THE MEASURED WINDOW: 90 steps, no settling. Fire touches gunpowder
+ * from step one, so the scene is already at its busiest the instant it
+ * is painted - the same reasoning the thermal shock lattice and the
+ * gas screens give for skipping a settle allowance. */
+
+/* 90 SPLITS INTO HONEST THIRDS. Activity = lit + fire + in-flight
+ * impulses per step, the thermal shock lattice's own "new work"
+ * reasoning for its cullet metric. Measured: steps 1-30 carry 50.5% of
+ * the window's activity, 31-60 carry 34.3%, 61-90 carry 15.2%. */
+
+/* THAT CLEARS the same >=15%-per-third bar the thermal shock lattice's
+ * own window was chosen against - see that scene's comment
+ * (build_thermal_shock_scene, above) for the precedent this follows. */
+
+/* SMALLER WINDOWS (checked down to 9) balance more evenly on that
+ * metric, but end too early to mean anything: by step 50 all 7 of
+ * this seed's detonations have fired - fuse_blast_wait stops
+ * returning to its post-burst ceiling - so a short window shows only
+ * fuse-and-blast, never the aftermath. */
+
+/* 90 IS THE SHORTEST ROUND NUMBER past that point whose last third
+ * still clears 15% - and it reaches real aftermath: wood burning goes
+ * 0 (step 20) -> 83 (step 90), steam 0 -> 3, oil already down by more
+ * than half (300 painted -> 136). */
+
+/* LARGER WINDOWS WERE CHECKED TOO: 105 dips the last third to 14.9%,
+ * under the bar, before a later wave of ordinary fire pulls it back up
+ * past 120 - not a reason to prefer the larger window, since 90
+ * already clears the bar honestly. */
+/* GUNPOWDER_BASIN_MEASURED_STEPS moved to suite_sand_scenes.h - the
+ * frame-budget test in suite_sand_perf.c needs it too. */
+
+/* This scene really does reach the reactions it claims, checked the
+ * way this file's other scene tests are: build it through the same
+ * function the device test uses, step it the same number of times,
+ * and count. FIVE INDEPENDENT SIGNALS, one per claimed path. */
+
+/* MULTIPLE BURSTS, not one pop, proves the chain-detonation this scene
+ * measures is a real CHAIN, not a single pile-wide pop -
+ * SAND_GUNPOWDER_BLAST_COOLDOWN (sand_reactions.c) exists to spread
+ * bursts out, and this is the check that it is doing so here. */
+
+/* fuse_blast_wait ONLY EVER reads its post-burst ceiling (8) on the
+ * exact step a burst fires, so counting the steps where it reads 8
+ * counts real, distinct detonations rather than a per-step sample
+ * that could miss one entirely (see this scene's own git history). */
+
+/* THE PILE NEARLY CONSUMED proves the chain ran through most of the
+ * interior, not just the cells nearest the ignition point. FIRE
+ * OUTSIDE THE VESSEL proves the blast reaches past the brush-drawn
+ * walls - the reason this scene places fuel outside them at all. */
+
+/* WOOD BURNING AND STEAM prove the aftermath cascade is real: escaping
+ * fire reached the wood band, and something reached the water band
+ * hard enough to boil some of it. NO PLANTS is the same pin the lava
+ * stress, thermal shock, boiler and wet earth scenes each make above. */
+static void test_the_gunpowder_basin_scene_reaches_the_reactions_it_claims(void)
+{
+    uint8_t   *big      = malloc((size_t)REAL_W * REAL_H);
+    uint8_t   *blocks   = malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
+                                  ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
+    impulse_t *impulses = malloc((size_t)GUNPOWDER_BASIN_IMPULSE_MAX * sizeof *impulses);
+    const bool have_all = (big != NULL && blocks != NULL && impulses != NULL);
+    if (!have_all) {
+        free(big);
+        free(blocks);
+        free(impulses);
+        TEST_FAIL_MESSAGE("need a grid, a block map and an impulse buffer "
+                           "for the gunpowder basin scene, and at least "
+                           "one of the three failed to allocate");
+    }
+
+    sand_t s;
+    sand_init(&s, big, REAL_W, REAL_H, 61u);
+    sand_enable_sleeping(&s, blocks);
+    sand_set_scatter(&s, SAND_SCATTER_PER_MATERIAL);
+    sand_set_decay(&s, SAND_DECAY_PER_MATERIAL);
+    sand_set_mobility(&s, SAND_MOBILITY_PER_MATERIAL);
+    sand_enable_impulses(&s, impulses, GUNPOWDER_BASIN_IMPULSE_MAX);
+
+    build_gunpowder_basin_scene(&s);
+
+    /* The painted state, before a single step has run - what the
+     * builder claims to have placed. */
+    int painted_dry = 0, painted_fire = 0, painted_oil = 0, painted_acid = 0;
+    for (int y = 0; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            const cell_t c = sand_at(&s, x, y);
+            if (cell_is_gunpowder(c)) {
+                painted_dry++;
+            }
+            const int m = CELL_MATERIAL(c);
+            if (m == MAT_FIRE) painted_fire++;
+            else if (m == MAT_OIL) painted_oil++;
+            else if (m == MAT_ACID) painted_acid++;
+        }
+    }
+
+    /* Every burst resets fuse_blast_wait to its post-burst ceiling (8) -
+     * see this test's own top comment for why that makes it a reliable,
+     * once-per-burst signal rather than something a per-step sample
+     * could miss. */
+    int burst_count = 0;
+    for (int step = 1; step <= GUNPOWDER_BASIN_MEASURED_STEPS; step++) {
+        sand_step(&s, 0, 1000, 0);
+        if (s.fuse_blast_wait == 8) {
+            burst_count++;
+        }
+    }
+
+    const int ix0 = GUNPOWDER_BASIN_INT_X0;
+    const int ix1 = GUNPOWDER_BASIN_INT_X0 + GUNPOWDER_BASIN_INT_W;
+    const int iy0 = GUNPOWDER_BASIN_INT_Y0;
+    const int iy1 = GUNPOWDER_BASIN_INT_Y0 + GUNPOWDER_BASIN_INT_H;
+    int dry = 0, fire_outside = 0, woodburn = 0, steam = 0, oil = 0, acid = 0;
+    int extended_nonmetal = 0;
+    for (int y = 0; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            const cell_t c = sand_at(&s, x, y);
+            if (cell_is_gunpowder(c) && cell_code(c) != GUNPOWDER_LIT) {
+                dry++;
+            }
+            const int m = CELL_MATERIAL(c);
+            const bool inside = (x >= ix0 && x < ix1 && y >= iy0 && y < iy1);
+            if (m == MAT_FIRE && !inside) fire_outside++;
+            else if (m == MAT_WOOD && cell_is_burning(c)) woodburn++;
+            else if (m == MAT_STEAM) steam++;
+            else if (m == MAT_OIL) oil++;
+            else if (m == MAT_ACID) acid++;
+            if (cell_is_extended(c) && CELL_VARIANT(c) != MATX_METAL) {
+                extended_nonmetal++;
+            }
+        }
+    }
+
+    free(big);
+    free(blocks);
+    free(impulses);
+
+    char why[192];
+    snprintf(why, sizeof why,
+             "the basin's gunpowder must be poured full and lit at "
+             "exactly one fixed cell before a single step runs - got "
+             "%d dry cells and %d fire cells painted", painted_dry,
+             painted_fire);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(GUNPOWDER_BASIN_INT_W * GUNPOWDER_BASIN_INT_H - 1,
+        painted_dry, why);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, painted_fire, why);
+
+    snprintf(why, sizeof why,
+             "the pile must chain-detonate across SEVERAL bursts, not "
+             "pop once and go quiet - got %d over the measured window",
+             burst_count);
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(3, burst_count, why);
+
+    snprintf(why, sizeof why,
+             "the chain must have consumed nearly the whole interior by "
+             "the end of the window - %d dry cells are still unlit "
+             "out of %d painted", dry,
+             GUNPOWDER_BASIN_INT_W * GUNPOWDER_BASIN_INT_H - 1);
+    TEST_ASSERT_LESS_OR_EQUAL_INT_MESSAGE(50, dry, why);
+
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, fire_outside,
+        "fire must reach past the brush-drawn walls - if none did, "
+        "this scene is not exercising the aftermath cascade it claims "
+        "to place fuel outside the vessel for");
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, woodburn,
+        "escaping fire must have reached the wood band outside the "
+        "vessel and set some of it alight");
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, steam,
+        "something must have reached the water band hard enough to "
+        "boil at least a little of it to steam");
+
+    snprintf(why, sizeof why,
+             "the oil band must show real consumption by fire, not "
+             "merely be present - %d cells left of %d painted", oil,
+             painted_oil);
+    TEST_ASSERT_LESS_THAN_MESSAGE(painted_oil, oil, why);
+
+    snprintf(why, sizeof why,
+             "the acid band must show it genuinely took part in "
+             "something over the window, not sit inert - %d cells "
+             "against %d painted", acid, painted_acid);
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(painted_acid, acid, why);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, extended_nonmetal,
+        "the gunpowder basin scene should not be growing any plants - "
+        "if it is, the device test's frame budget is no longer "
+        "measuring the scene it claims to (the metal slab is the only "
+        "extended-static cell this scene paints on purpose)");
+}
+
 void run_sand_scenes_suite(void)
 {
     RUN_TEST(test_the_mixed_scene_puts_every_material_pair_in_contact);
@@ -1740,6 +2055,7 @@ void run_sand_scenes_suite(void)
     RUN_TEST(test_the_boiler_scene_keeps_boiling_across_the_window);
     RUN_TEST(test_the_wet_earth_scene_keeps_percolating_across_the_window);
     RUN_TEST(test_the_water_over_lava_scene_reaches_the_quench_cooloff_and_burst_paths_it_claims);
+    RUN_TEST(test_the_gunpowder_basin_scene_reaches_the_reactions_it_claims);
 }
 
 SUITE_REGISTER(run_sand_scenes_suite);

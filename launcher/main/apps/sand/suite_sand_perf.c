@@ -1464,6 +1464,74 @@ void sand_host_probe_run_water_over_lava(void)
 }
 #endif
 
+/* The gunpowder basin scene (build_gunpowder_basin_scene(),
+ * suite_sand_scenes.c), shared with the coverage test that proves the
+ * chain-detonation really spans several bursts and reaches fuel
+ * outside the vessel. Closes half of bd esp32c6-4d9. */
+
+/* NINETY STEPS, NO SETTLING - matching the coverage test exactly, so
+ * this times the same run already proved to reach every path it
+ * claims to. See GUNPOWDER_BASIN_MEASURED_STEPS's own comment
+ * (suite_sand_scenes.c) for the timeline that window came from. */
+
+/* MEASURED 31,399 us per step on device, 2026-09-06, first clean run of
+ * this row (capture_ref_gunpowder-basin-benchmark_20260906_213221.md).
+ * Budget is that x 0.9 = 28,259, rounded DOWN to 28,200 so the target is
+ * never looser than the convention. */
+
+/* SO THIS ROW FAILS BY DESIGN, like every other budget in this section:
+ * a reduction target, not a regression guard. Re-peg only from a fresh
+ * capture, never to make it green. */
+static void test_the_gunpowder_basin_scene_fits_in_the_frame_budget(void)
+{
+    uint8_t   *big      = malloc((size_t)REAL_W * REAL_H);
+    uint8_t   *blocks   = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    impulse_t *impulses = malloc((size_t)GUNPOWDER_BASIN_IMPULSE_MAX * sizeof *impulses);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+    TEST_ASSERT_NOT_NULL(impulses);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 61u);
+    sand_enable_sleeping(&real, blocks);
+    sand_set_scatter(&real, SAND_SCATTER_PER_MATERIAL);
+    sand_set_decay(&real, SAND_DECAY_PER_MATERIAL);
+    sand_set_mobility(&real, SAND_MOBILITY_PER_MATERIAL);
+    sand_enable_impulses(&real, impulses, GUNPOWDER_BASIN_IMPULSE_MAX);
+
+    build_gunpowder_basin_scene(&real);
+
+    const int64_t start = esp_timer_get_time();
+    const int steps = GUNPOWDER_BASIN_MEASURED_STEPS;
+    for (int i = 0; i < steps; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+    const int64_t per_step = (esp_timer_get_time() - start) / steps;
+
+    ESP_LOGI("device_tests", "gunpowder basin scene, %dx%d: %lld us per step",
+             REAL_W, REAL_H, (long long)per_step);
+
+    free(big);
+    free(blocks);
+    free(impulses);
+
+    TEST_ASSERT_LESS_THAN_MESSAGE(28200, (int)per_step,
+        "a chain detonation in a brush-drawn stone vessel, with the "
+        "aftermath reaching fuel outside it, should cost less per step "
+        "than the 31,399us first measured on 2026-09-06 - this is a "
+        "reduction target at measured x 0.9, so failing means the work "
+        "is not done yet, not that something broke");
+}
+
+#ifdef SAND_HOST_PROBE
+/* Host-only timing probe - the gunpowder basin scene (see the
+ * full-step control's own wrapper for the pattern). */
+void sand_host_probe_run_gunpowder_basin(void)
+{
+    test_the_gunpowder_basin_scene_fits_in_the_frame_budget();
+}
+#endif
+
 /* --- gfx_present() cost against real sand scenes ------------------------
  *
  * Every frame-budget test above times sand_step() alone, with no drawing at
@@ -2234,6 +2302,7 @@ void run_sand_perf_suite(void)
     RUN_TEST(test_the_boiler_scene_fits_in_the_frame_budget);
     RUN_TEST(test_the_wet_earth_scene_fits_in_the_frame_budget);
     RUN_TEST(test_the_water_over_lava_scene_fits_in_the_frame_budget);
+    RUN_TEST(test_the_gunpowder_basin_scene_fits_in_the_frame_budget);
 
     RUN_TEST(test_present_cost_against_a_falling_sand_scene);
     RUN_TEST(test_present_cost_against_the_lava_stress_scene);
