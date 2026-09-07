@@ -66,49 +66,21 @@ static uint16_t gas_mask(void)
  *-------------------------------------------------------------------------*/
 
 /* One gas grain's turn - the same dispatch step_one_grain() runs for a
- * powder (try to fall/rise, then try the two slides), but with an explicit
- * wake, since this pass gets none of step_one_block()'s own moved_here ->
- * BLOCK_ACTIVE bookkeeping (it is not walked by step_one_block() at all).
- *
- * Unlike a powder, the whole attempt is gated behind material.h's
- * `mobility` roll first (jostle == 0 only - shaking bypasses it, same as
- * every other resistance here): a grain that misses the roll just sits
- * this step, decay tick aside, which is what makes gas rise at a lazy
- * drift instead of sand's instant one-cell-per-step. */
-/* A BUBBLE: a gas cell trading places with the LIQUID directly above it.
- *
- * This is the one movement in the whole simulation that runs against
- * can_enter()'s rule rather than through it, and it needs to, because that
- * rule cannot express mobility. can_enter() only ever lets a DENSER mover
- * displace a LIGHTER target - which is right for sand sinking through
- * water, and exactly backwards for steam rising through it. Worse, a
- * liquid never consults can_enter() at all: room_in() (sand_liquid.c)
- * refuses any cell holding a different material outright, so water will
- * not fall into a steam cell either. Between the two rules, a gas cell
- * underneath standing liquid had NO legal move in either direction and
- * simply sat there forever - a bubble frozen mid-pour, which is what this
- * fixes.
- *
- * Deliberately NOT solved by touching can_enter(). That predicate is the
- * hottest thing in the project, read several times per cell per step from
- * the main sweep, and a mobility special case there would be paid for by
- * every falling grain of sand on the board forever. Here it costs one
- * comparison, only for gas cells, only in a pass already gated behind
- * may_have_gas, and only on the cells whose ordinary rise was already
- * blocked.
- *
- * Why the swap is safe with respect to sweep order, which is the usual
- * hazard for anything that moves two cells at once: this pass sweeps so
- * that the rise destination is territory it has ALREADY visited, so the
- * liquid that lands at (x, y) cannot be picked up again by this pass. The
- * liquid passes (sand_step_liquids(), and move_liquid_grain() inside the
- * main sweep) both ran EARLIER in this same sand_step(), so they are done
- * for the step too. The displaced liquid therefore gets exactly one move,
- * the same guarantee every other move in this file has.
- *
- * Mass is conserved by construction - this is a swap of two whole cells,
- * and the liquid keeps its own variant nibble (its amount) untouched as it
- * moves. Nothing is split, so nothing can round away. */
+ * powder (fall/rise, then the two slides), but with an explicit wake,
+ * since this pass gets none of step_one_block()'s own moved_here ->
+ * BLOCK_ACTIVE bookkeeping. Unlike a powder, the whole attempt is gated
+ * behind material.h's `mobility` roll first (jostle == 0 only): a grain
+ * that misses the roll just sits this step, which is what makes gas rise
+ * at a lazy drift instead of sand's instant one-cell-per-step. */
+
+/* A BUBBLE: a gas cell trading places with the LIQUID above it - the one
+ * move that runs against can_enter()'s rule rather than through it.
+ * can_enter() only lets a DENSER mover displace a LIGHTER target
+ * (backwards for steam rising through water); room_in() refuses a liquid
+ * falling into a different material. A gas cell under standing liquid had
+ * NO legal move either way - frozen mid-pour. Not fixed in can_enter():
+ * read per cell per step by the sweep, costing every falling grain
+ * forever. */
 static bool try_bubble(sand_t *s, uint8_t *row, uint8_t *prow, int x, int y,
                        int w, int rdx, int rdy, cell_t grain, uint8_t density)
 {
@@ -137,6 +109,12 @@ static bool try_bubble(sand_t *s, uint8_t *row, uint8_t *prow, int x, int y,
                          * would just sit, which is the correct answer */
     }
 
+    /* Safe with respect to sweep order: this pass sweeps so the rise
+     * destination is territory already visited, and the liquid's own
+     * passes (sand_step_liquids(), move_liquid_grain()) both ran earlier
+     * this same sand_step(), so the displaced liquid gets exactly one
+     * move. Mass is conserved by construction - a swap of two whole
+     * cells, the liquid keeping its own variant nibble untouched. */
     prow[nx] = grain;
     row[x]   = target;
 
@@ -212,21 +190,20 @@ static bool step_one_gas_row(sand_t *s, int y, int w, int rdx, int rdy,
     const int x_from = (rx_step > 0) ? 0 : w - 1;
     const int x_to   = (rx_step > 0) ? w : -1;
 
-    /* Presence, not movement: a gas cell that neither moves nor decays this
-     * step (jammed solid, roll not hit) still exists, and may_have_gas must
-     * stay set for it - the same reason equalise_gas_one_row_cell() below
-     * counts a cell as found the moment it is gas, before it even attempts
-     * to move it. Getting this wrong meant a trapped, motionless pocket of
-     * gas could clear may_have_gas while still physically on the grid -
-     * harmless before decay existed (it just sat inert), but with decay it
-     * would strand that gas immortal, since sand_step_gas() early-returns
-     * on !may_have_gas and decay only ever rolls from inside this loop. */
     bool any = false;
     for (int x = x_from; x != x_to; x += rx_step) {
         const cell_t c = row[x];
         if (CELL_IS_EMPTY(c) || material_of(c)->kind != KIND_GAS) {
             continue;
         }
+        /* Presence, not movement: a gas cell that neither moves nor decays
+         * this step (jammed solid, roll not hit) still exists, and
+         * may_have_gas must stay set for it. Getting this wrong meant a
+         * trapped, motionless pocket of gas could clear may_have_gas
+         * while still physically on the grid - harmless before decay
+         * existed, but with decay it would strand that gas immortal,
+         * since sand_step_gas() early-returns on !may_have_gas and decay
+         * only ever rolls from inside this loop. */
         any = true;
         step_one_gas_grain(s, row, prow, arow, brow, x, y, w, rdx, rdy,
                            rslide_a, rslide_b, rload_dx, rload_dy, jostle,
@@ -242,8 +219,8 @@ static bool step_one_gas_row(sand_t *s, int y, int w, int rdx, int rdy,
  *-------------------------------------------------------------------------*/
 
 /* Mirrors has_room_below() in sand_liquid.c: if this grain still has
- * somewhere to rise THIS step, sub-pass 1 above already moved it (or will,
- * being swept before this runs) - one comparison, and it is what keeps
+ * somewhere to rise THIS step, sub-pass 1 above already moved it (or
+ * will, being swept before this runs) - one comparison, and it keeps
  * this search off the bill for the common case of a gas pocket still
  * mostly rising rather than pooled under something. */
 static inline bool has_room_above(const sand_t *s, int x, int y, int rdx,
@@ -258,30 +235,13 @@ static inline bool has_room_above(const sand_t *s, int x, int y, int rdx,
 }
 
 /* Whether the immediate neighbour along (px, py) is worth searching past:
- * truly empty, OR the same gas - unlike a wall or a denser material, which
- * really does mean "nothing to do here, don't bother searching further".
- *
- * The earlier version only returned true for CELL_IS_EMPTY, mirroring
- * neighbour_is_lower()'s own fast path too closely: for a liquid that
- * fast path is correct, because "immediate neighbour holds the same
- * liquid" can still be a real level imbalance worth transferring mass
- * over. For a whole-grain gas there is no level to compare, so the old
- * check treated "touching another gas cell" exactly like "touching a
- * wall" - never even calling find_nearest_empty() (which already happily
- * passes through same-gas cells looking for room) to find out whether
- * real space existed two cells further out.
- *
- * Note this pass still resolves most single-row runs the SAME way either
- * version does, because equalise_gas_one_row() sweeps in the direction it
- * is giving to, so a cell that moves clears the way for the very next
- * cell processed in the same pass - the same cascading equalise_liquids()
- * relies on. Where this actually matters is what that cascade cannot
- * reach: a dense 2D pour under a ceiling is many INDEPENDENT rows (this
- * pass never crosses rows for straight-down gravity), and a row still
- * mid-pour gets new grains added faster than one pass resolves - this
- * check is what lets each of those rows use real nearby space the moment
- * it is asked, rather than waiting on a lucky sweep direction or another
- * grain moving first. */
+ * truly empty, OR the same gas - unlike a wall or denser material. The
+ * earlier version returned true only for CELL_IS_EMPTY, mirroring the
+ * liquid fast path too closely: gas has no level to compare, so it
+ * treated another gas cell like a wall, never calling find_nearest_empty()
+ * for real space further out. Matters for a 2D pour under a ceiling: many
+ * INDEPENDENT rows, a row mid-pour getting grains faster than one pass
+ * resolves. */
 static inline bool neighbour_is_open(const sand_t *s, int x, int y, int px,
                                      int py, uint8_t gas_id)
 {
@@ -294,27 +254,13 @@ static inline bool neighbour_is_open(const sand_t *s, int x, int y, int px,
     return CELL_IS_EMPTY(n) || CELL_MATERIAL(n) == gas_id;
 }
 
-/* Mirrors find_shallowest(): the nearest open cell along (px, py) within
- * `sight` cells, or 0 if none. Passes through other gas cells the same way
- * find_shallowest() passes through the same liquid - flow stops at
- * anything else (a wall, a different material), same as water's own
- * search does.
- *
- * On a screen already saturated with one gas this walk is the single
- * biggest cost in the whole gas step: every cell drags its material's
- * whole `sight` through identical neighbours before giving up.
- * equalise_gas_one_cell() avoids re-walking the same cells on the very
- * next cell processed - see gas_run_t's own comment for the geometry that
- * makes that safe - but only when THIS scan was the expensive kind:
+/* Mirrors find_shallowest(): nearest open cell along (px, py) within
+ * `sight`, or 0 if none. Passes through gas cells the way find_shallowest()
+ * passes through the same liquid; flow stops at anything else. On a
+ * saturated screen this walk is the single biggest cost in the gas step.
  * `*run_len_out` is written - always to `sight` - only when the loop runs
- * every one of `sight` cells without finding an empty or a blocker. It is
- * left untouched otherwise: when an empty was found (the caller resets its
- * run to nothing regardless, so the value is moot), and when the loop
- * instead breaks off the edge of the grid or on a wall/different material.
- * Those two breaks are cheap by construction - they stop within a cell or
- * two - so they are not worth reporting; see equalise_gas_one_cell's own
- * comment for what it cost the one time this file tried remembering them
- * anyway. */
+ * every `sight` cell without finding an empty or blocker; only then can
+ * equalise_gas_one_cell() skip re-walking next cell (see gas_run_t). */
 static inline int find_nearest_empty(const sand_t *s, int x, int y, int px,
                                      int py, int sight, uint8_t gas_id,
                                      int *run_len_out)
@@ -337,38 +283,14 @@ static inline int find_nearest_empty(const sand_t *s, int x, int y, int px,
     return 0;
 }
 
-/* equalise_gas_one_row() sweeps each row with x_step = -px (see
- * equalise_gas() below: x_step is -1 when px > 0, +1 when px < 0) - the
- * sweep always advances by exactly one cell OPPOSITE the ray direction.
- * That means the cell processed right after x, which sits at x - px,
- * casts a ray along (px, py) that starts by revisiting x, then x + px,
- * x + 2*px, ... - exactly the same cells x's own ray just walked, shifted
- * out by one. So whatever find_nearest_empty() just established about x's
- * ray - "the next N cells are all this same gas, with no empty among
- * them" - is ALSO true of x - px's ray, once cell x itself (known, right
- * here, to hold that gas and not have moved) is counted at the near end.
- * Reusing that fact is what lets the row sweep skip a full `sight`-length
- * re-walk of a packed gas pocket on almost every cell: only the newest
- * cell needs to be looked at, not the whole tail again.
- *
- * `id` is the material the verified run is made of, or -1 if nothing is
- * currently verified - the reset value whenever an empty/non-gas cell was
- * just crossed, a grain just moved and changed what lies ahead, or the
- * last real scan found an empty and so proved nothing about a longer run.
- * `len` is how many cells starting one ray-step from the CURRENT cell are
- * already confirmed to hold `id` with no empty among them - always at
- * least `sight` once `id` is valid, since a run is only ever armed from a
- * scan that walked the whole of `sight` (see find_nearest_empty's own
- * comment) and only ever grows from there.
- *
- * The whole argument rests on the sweep advancing by exactly -px, which is
- * only guaranteed when py == 0: with a tilted perpendicular (py != 0,
- * diagonal gravity) the next cell's ray is a diagonal step away, not a
- * copy of this cell's ray shifted by one, and none of the above holds.
- * equalise_gas_one_cell() only ever writes a real id/len when carry_ok is
- * true, so `id` simply stays -1 for the whole pass and the skip check
- * below never fires when it is not - cheaper than adding a branch to strip
- * valid state back out on every cell. */
+/* equalise_gas_one_row() sweeps with x_step = -px, so the cell after x
+ * sits at x - px and casts a ray revisiting x's ray shifted by one. What
+ * find_nearest_empty() found about x's ray is also true of x - px's,
+ * once x is counted at the near end - this lets the sweep skip a full
+ * sight-length re-walk of a packed pocket on almost every cell. `id`/`len`
+ * hold the verified run's material and length. Valid only when py == 0;
+ * equalise_gas_one_cell() writes them only when carry_ok, so id stays -1
+ * otherwise. */
 typedef struct {
     int id;
     int len;
@@ -377,35 +299,9 @@ typedef struct {
 /* One cell's share of spread: hops the whole grain to the nearest open
  * cell along (px, py), if sub-pass 1 could not already move it and a real
  * gap exists. No mass to split - a grain either moves the whole way, or
- * not at all.
- *
- * `run` carries gas_run_t's verified-run state between cells of the same
- * row sweep (see that struct's own comment for the geometry) and
- * `carry_ok` is that carry's on/off switch, true only when py == 0. Two
- * things can happen to `run` here:
- *   - the grain moved: the cells ahead just changed, so nothing about them
- *     can be trusted any more - `run->id` resets to -1;
- *   - the grain did not move: if `run` already described this same
- *     material, it is folded forward by one to also cover this cell, seen
- *     from the next one down the sweep. If it described something else (or
- *     nothing), it is left exactly as it stood - NOT restarted against
- *     this cell.
- *
- * That last case used to restart the run here too: any cell that did not
- * move and did not already match got armed at length one against whatever
- * material it held - even a cell that never scanned at all, blocked before
- * it got the chance. Measured against a smoke/steam screen that alternates
- * the two gases cell by cell - a scene that never holds a long run of one
- * gas, so the memo above never once pays off - that arm-from-nothing cost
- * +4.4% all by itself: every cell paid to write a length-one run that the
- * very next cell, almost always the other gas, would throw away unread
- * without ever reaching the `len >= sight` the skip check needs. Leaving
- * `run` alone here instead is still safe with no fresh arm to replace it: a
- * gas cell of a different material is never empty, so it always blocks a
- * same-ray scan cast from any earlier cell in the sweep, regardless of
- * which stale material `run` still names - which is exactly the answer
- * the skip check below gives when it fires on stale data. Do not re-add
- * that branch - it was tried, it cost real time, and it bought nothing. */
+ * not at all. `run` carries gas_run_t's verified-run state between cells
+ * of the same row sweep (see that struct's own comment for the geometry)
+ * and `carry_ok` is that carry's on/off switch, true only when py == 0. */
 static inline bool equalise_gas_one_cell(sand_t *s, uint8_t *row, int x,
                                          int y, int px, int py, int rdx,
                                          int rdy, int sight, uint8_t gas_id,
@@ -432,13 +328,13 @@ static inline bool equalise_gas_one_cell(sand_t *s, uint8_t *row, int x,
 
             at = find_nearest_empty(s, x, y, px, py, sight, gas_id,
                                     &scan_len);
+            /* Only a scan that paid the full `sight` walk is worth
+             * remembering - see find_nearest_empty's own comment for why
+             * the two early-break cases (the edge of the grid, a wall or
+             * a different material) are left alone instead: they are
+             * already cheap, so caching them would cost more than just
+             * repeating them next time. */
             if (carry_ok && at == 0 && scan_len == sight) {
-                /* Only a scan that paid the full `sight` walk is worth
-                 * remembering - see find_nearest_empty's own comment for
-                 * why the two early-break cases (the edge of the grid, a
-                 * wall or a different material) are left alone instead:
-                 * they are already cheap, so caching them would cost more
-                 * than just repeating them next time. */
                 run->id  = (int)gas_id;
                 run->len = scan_len;
             }
@@ -451,6 +347,15 @@ static inline bool equalise_gas_one_cell(sand_t *s, uint8_t *row, int x,
         }
     }
 
+    /* If moved, `run->id` resets to -1. If not moved and `run` already
+     * named this material, it folds forward by one. If it named
+     * something else, it is left AS-IS, NOT restarted: restarting was
+     * tried and cost +4.4% on a smoke/steam screen alternating gases
+     * cell by cell, every cell paying to write a length-one run the next
+     * threw away unread. Leaving `run` alone is safe: a
+     * different-material gas cell is never empty, so it blocks a
+     * same-ray scan regardless of stale material. Do not re-add that
+     * branch. */
     if (moved) {
         run->id = -1;
     } else if (run->id == (int)gas_id) {
@@ -514,8 +419,8 @@ static inline bool equalise_gas_one_row_cell(sand_t *s, uint8_t *row, int x,
     }
 
     /* Per-material now, not a pass-wide constant - see material.h's own
-     * comment on `sight` for why: two materials can share this pass
-     * (gas, fire) and disperse by different amounts. material_of(c), not
+     * comment on `sight` for why: two materials can share this pass (gas,
+     * fire) and disperse by different amounts. material_of(c), not
      * material_by_id(id): `c` is the cell this `id` was just extracted
      * from, and only material_of() finds the right row for every cell
      * byte, gunpowder included, now that nibble 15 is two rows. */
@@ -547,9 +452,9 @@ static bool equalise_gas_one_row(sand_t *s, int y, int w, int x_from,
 
     /* carry_ok gates the whole run-skipping scheme off the moment gravity
      * is not axis-aligned - see gas_run_t's own comment for why the sweep
-     * geometry it relies on only holds when py == 0. Computed once per row
-     * (it is really constant for the whole equalise_gas() call, since px
-     * and py do not change mid-pass) rather than re-checked per cell. */
+     * geometry it relies on only holds when py == 0. Computed once per
+     * row (constant for the whole equalise_gas() call, since px and py do
+     * not change mid-pass) rather than re-checked per cell. */
     const bool carry_ok = (py == 0);
 
     /* Reset at the start of every row: a run only ever describes cells
@@ -622,23 +527,13 @@ void sand_step_gas(sand_t *s, int gx, int gy, int dx, int dy,
     const int rx_step  = -x_step;
 
     /* driven_by_gravity()'s descent = m . g dot product is against real
-     * gravity - feeding it gas's reversed slide vectors together with the
-     * main sweep's own forward (gx, gy) would make descent negative for
-     * every gas slide, unconditionally, so they would never fire. Built
-     * fresh here against the reversed vector instead - cheap enough
-     * (MATERIAL_MAX is 16) that duplicating compute_driven()'s own loop
-     * shape inline is simpler than sharing it.
-     *
-     * MATERIAL_MAX (16), not MATERIAL_ROWS (32), and indexed below by the
-     * plain material nibble (`mat_id`, step_one_gas_grain()'s own local),
-     * not a row: this is only ever built and read for KIND_GAS cells, and
-     * no gas material lives in the extended range (MAT_EXTENDED, nibble
-     * 15) that MATERIAL_ROWS's twin-row split exists for in the first
-     * place - fire, smoke, steam and gas are all ordinary ids well under
-     * it. Nothing here ever needs to tell a gunpowder row from a static
-     * one, so the plain per-id table sand.c's own step_one_grain() moved
-     * away from (see its own driven_row comment) is still the right shape
-     * here. */
+     * gravity - feeding it gas's reversed slide vectors together with
+     * the main sweep's forward (gx, gy) would make descent negative for
+     * every gas slide, unconditionally, so they'd never fire. Built
+     * fresh here against the reversed vector instead. MATERIAL_MAX (16),
+     * not MATERIAL_ROWS (32): this is only ever built/read for KIND_GAS
+     * cells, and no gas material lives in MAT_EXTENDED's twin-row
+     * range. */
     bool driven_gas[MATERIAL_MAX][2];
     for (int m = 0; m < MATERIAL_MAX; m++) {
         const int repose = material_by_id((material_id_t)m)->repose;

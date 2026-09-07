@@ -20,22 +20,14 @@
 
 static const char *TAG = "post";
 
-/* Below this the board is genuinely starved and later contiguous
- * allocations start failing in confusing ways, so it is worth catching
- * here where the message is clear. Checked against
- * heap_caps_get_largest_free_block(MALLOC_CAP_DMA), not total free heap -
- * see check_memory() and beads esp32c6-8h2.
- *
- * DELIBERATELY WELL BELOW what the sand app's 41,216-byte grid needs, and
- * this is not the check that guards it. POST runs early, before the boot
- * animation and the shell's own tasks, so at this moment a healthy image
- * still has around 50 KiB contiguous (measured 2026-09-06: dev 50,176,
- * diagnostics predicted ~42,576). Pegging this at grid size would leave a
- * diagnostics image a kilobyte or so from reporting a fault while being
- * perfectly well - a false alarm at boot on a healthy board, which is
- * worse than useless. Whether the grid still fits is answered at build
- * time by tools/check_static_ram.py and at open time by the sand app's
- * own allocation failure, both of which can say so precisely. */
+/* Below this the board is starved and later contiguous allocations
+ * start failing confusingly, worth catching here where the message is
+ * clear. Checked against heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
+ * not total free heap - see esp32c6-8h2. DELIBERATELY WELL BELOW what
+ * the sand app's grid needs, and this is not the check that guards it:
+ * pegging this at grid size would false-alarm a healthy diagnostics
+ * image only a kilobyte or so above it - the grid's fit is checked
+ * precisely elsewhere. */
 #define MIN_LARGEST_DMA_BLOCK (32 * 1024)
 
 #define EXPECTED_FLASH_BYTES (16 * 1024 * 1024)
@@ -88,11 +80,12 @@ void post_run_before_display(void)
 
     ESP_LOGI(TAG, "power-on self test (storage)");
 
-    /* The SD slot and the display are wired to different pins on the one SPI2
-     * controller, so only one can hold the bus. Testing the card here - before
-     * gfx_init() takes SPI2 - means genuinely mounting it, with no teardown and
-     * nothing to restore afterwards. Once the display is up this is impossible
-     * without tearing it down again. */
+    /* The SD slot and the display are wired to different pins on the
+     * one SPI2 controller, so only one can hold the bus. Testing the
+     * card here - before gfx_init() takes SPI2 - means genuinely
+     * mounting it, with no teardown and nothing to restore afterwards.
+     * Once the display is up this is impossible without tearing it
+     * down again. */
     const esp_err_t err = bsp_sdcard_mount();
 
     if (err == ESP_OK && bsp_sdcard != NULL) {
@@ -114,11 +107,10 @@ void post_run_before_display(void)
     }
 }
 
-/* Re-tests the card while the shell is running, by borrowing SPI2 from the
- * display and giving it straight back.
- *
- * This is the experiment the board notes described but had not measured: the
- * claim was that resuming without re-sending the panel's init sequence costs
+/* Re-tests the card while the shell is running, by borrowing SPI2 from
+ * the display and giving it straight back. This is the experiment the
+ * board notes described but had not measured: the claim was that
+ * resuming without re-sending the panel's init sequence costs
  * single-digit milliseconds. The timings are logged so the note can be
  * replaced with a fact. */
 static void check_sdcard_live(void)
@@ -191,12 +183,12 @@ static void check_flash(void)
 
 static void check_memory(void)
 {
-    /* free and largest must come from the SAME pool or their difference is
-     * meaningless: esp_get_free_heap_size() sums a second, physically
+    /* free and largest must come from the SAME pool or their difference
+     * is meaningless: esp_get_free_heap_size() sums a second, physically
      * separate ~11 KiB DMA region (the ROM-stack area) that is never
-     * contiguous with the main heap, so comparing it against heap_caps_
-     * get_largest_free_block()'s single-region answer invents a
-     * "fragmentation" gap that was never real. Both sides here are
+     * contiguous with the main heap, so comparing it against
+     * heap_caps_get_largest_free_block()'s single-region answer invents
+     * a "fragmentation" gap that was never real. Both sides here are
      * MALLOC_CAP_DMA. See beads esp32c6-8h2. */
     const size_t free_dma = heap_caps_get_free_size(MALLOC_CAP_DMA);
     const size_t largest_dma = heap_caps_get_largest_free_block(MALLOC_CAP_DMA);

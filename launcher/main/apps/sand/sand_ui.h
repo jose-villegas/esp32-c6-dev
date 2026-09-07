@@ -61,21 +61,14 @@
  * sand_ui.c) and read by app_sand.c's handle_pour_input(). */
 typedef enum { BRUSH_POUR, BRUSH_SPAWN } brush_mode_t;
 
-/* PAINT / ERASE / DETONATE - PWR cycles it, independently of `brush` and of
- * brush_mode_t above. This is a DIFFERENT axis from brush_mode_t: that one
- * says how the SELECTED MATERIAL gets applied (poured, or left as a
- * standing source); this one says what the finger does at all, and a
- * material is only one of its three answers.
- *
- * DETONATE is TEMPORARY EVALUATION SCAFFOLDING for
- * docs/Sand/Explosion-Plan.md - a way to fire sand_explode() with a finger
- * before any material or trigger owns it, so the mechanic can be judged on
- * its own. It rides on the same cycle as ERASE rather than sitting in
- * brush_mode_t or brushes[] because it is not a material: nothing paints an
- * explosion, so it has no cell to remember and no tile of its own in the
- * palette. It can be deleted outright the day the plan's questions are
- * answered, without touching sand.c/sand.h at all - see
- * app_sand.c's DETONATE branch of handle_pour_input(). */
+/* PAINT / ERASE / DETONATE - PWR cycles it, independent of brush_mode_t
+ * above: that says how the SELECTED MATERIAL is applied, this says what
+ * the finger does at all. DETONATE is TEMPORARY SCAFFOLDING for
+ * docs/Sand/Explosion-Plan.md - fires sand_explode() before any
+ * material or trigger owns it. Rides on ERASE's cycle, not
+ * brush_mode_t/brushes[], since it is not a material: no cell to
+ * remember, no palette tile. Deletable once the plan is answered - see
+ * app_sand.c's DETONATE branch. */
 typedef enum { SAND_MODE_PAINT, SAND_MODE_ERASE, SAND_MODE_DETONATE } sand_mode_t;
 #define SAND_MODE_COUNT 3
 
@@ -107,15 +100,13 @@ typedef struct {
     sand_mode_t mode;        /* PAINT/ERASE/DETONATE - PWR cycles it */
 
     /* Set by open_palette() when a finger is already down as the panel
-     * opens. Cleared by sand_ui_step() itself, the first SAND_UI_PALETTE
-     * frame it sees input->down go false - a genuine lift, not any
-     * particular click - rather than by whichever click happens to arrive
-     * next: a click is no longer something this module ever sees directly
-     * (see this file's own top comment on "WHO HIT-TESTS AND WHO DECIDES"),
-     * so the guard can no longer key off consuming one. While armed,
-     * sand_ui_tile_clicked() ignores whatever tile it is told was clicked.
-     * See both functions' own comments in sand_ui.c for what this guards
-     * against. */
+     * opens. Cleared by sand_ui_step(), the first SAND_UI_PALETTE frame
+     * it sees input->down go false - a genuine lift, not any particular
+     * click - rather than whichever click arrives next: a click is no
+     * longer something this module sees directly (see this file's top
+     * comment on "WHO HIT-TESTS AND WHO DECIDES"), so the guard can't
+     * key off consuming one. While armed, sand_ui_tile_clicked() ignores
+     * whatever tile it is told was clicked. */
     bool     swallow_release;
 
     /* The brush and its mode at the moment the panel opened - recorded on
@@ -126,39 +117,21 @@ typedef struct {
     uint8_t  opened_mode;
 } sand_ui_t;
 
-/* One frame's input. Returns a bitmask of sand_ui_action_t for the caller to
- * carry out; this module itself draws nothing and touches no hardware - see
- * this file's own top comment.
- *
- * No longer hit-tests a palette tap itself - see "WHO HIT-TESTS AND WHO
- * DECIDES" above. While SAND_UI_PALETTE, this reads only input->boot.released
- * (closes the panel) and input->down (disarms `swallow_release` on a genuine
- * lift); selecting or toggling a tile happens through sand_ui_tile_clicked()
- * below instead, called by the caller once microui says which tile, if any,
- * was actually clicked this frame. */
+/* One frame's input. Returns a bitmask of sand_ui_action_t for the
+ * caller to carry out; this module draws nothing and touches no
+ * hardware. No longer hit-tests a palette tap itself - see "WHO
+ * HIT-TESTS AND WHO DECIDES" above. While SAND_UI_PALETTE, this reads
+ * only input->boot.released (closes the panel) and input->down (disarms
+ * `swallow_release` on a genuine lift); selecting or toggling a tile
+ * happens through sand_ui_tile_clicked() below instead. */
 unsigned sand_ui_step(sand_ui_t *ui, const input_t *input);
 
-/* What a click on palette tile `index` means, once the caller's own hit-test
- * - a real mu_button() per tile now, see draw_palette() in app_sand.c - has
- * already decided a click landed on it. Applies exactly the rule this used
- * to apply itself while reading a raw touch release:
- *
- *   - the already-selected tile toggles its mode between BRUSH_POUR and
- *     BRUSH_SPAWN, but only when material_can_emit() says the brush is
- *     eligible to be a source at all - an ineligible tile has no mode to
- *     toggle into, so this does nothing rather than flip a bit nothing
- *     ever reads;
- *   - any OTHER tile is selected instead: `mode` resets to SAND_MODE_PAINT
- *     (choosing a material means you want to place it, not erase or blow
- *     up whatever is already there), and that tile's own remembered
- *     BRUSH_POUR/BRUSH_SPAWN mode is left exactly as it was;
- *   - and while `swallow_release` is armed, this does nothing at all and
- *     returns 0 - see that field's own comment on sand_ui_t.
- *
- * `index` is caller-guaranteed to be a real tile: draw_palette() only ever
- * calls this from inside its own per-tile loop, at that tile's own index, so
- * there is no "index hits nothing" case left for this function to handle -
- * that former case is dispositioned entirely by microui's hit-test not
- * calling this at all, the same way an unclicked mu_button() never runs the
- * caller's `if` body. */
+/* What a click on palette tile `index` means, once the caller's hit-test
+ * (a real mu_button() per tile) decided a click landed on it. The
+ * already-selected tile toggles BRUSH_POUR/BRUSH_SPAWN, only when
+ * material_can_emit() says it's eligible - ineligible does nothing
+ * rather than flip a bit nothing reads. Any OTHER tile is selected
+ * instead: `mode` resets to SAND_MODE_PAINT, its remembered pour/spawn
+ * mode left as-is. While `swallow_release` is armed, returns 0. `index`
+ * is caller-guaranteed real. */
 unsigned sand_ui_tile_clicked(sand_ui_t *ui, int index);

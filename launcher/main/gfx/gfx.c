@@ -627,6 +627,14 @@ void gfx_fill_rect_blend(int x, int y, int w, int h, gfx_color_t color,
     mark_band(y0, y1);
 }
 
+/* Cheap by construction, not by luck: alpha is one value for the whole
+ * call, and the Bayer pattern repeats every 4 pixels, so the per-pixel
+ * decision collapses to four booleans per row - a fully-covered row is a
+ * plain memcpy, an untouched row costs nothing. Phase-locked to absolute
+ * panel coordinates like every other dithered draw in gfx.h, so
+ * overlapping dithered shapes stay in register with each other. First
+ * user: the boot animation's photograph crossfade (boot_anim.c's
+ * draw_image()). */
 void gfx_blit_dither(int x, int y, int w, int h, const gfx_color_t *src,
                      int src_stride, uint8_t alpha)
 {

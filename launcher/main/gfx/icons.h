@@ -61,41 +61,14 @@ typedef struct {
 
 #define ICON_CHECK_BITMAP_SIZE 16
 
-/* The check mark, hand-drawn at 16x16 - one row of bits per line, the same
- * convention font8x8_basic.h uses for its glyphs, so the shape is readable
- * directly in the array below rather than only on screen. Bit 15 (MSB) is
- * column 0 (left); bit 0 (LSB) is column 15 (right) - read each literal
- * left-to-right and it matches this picture exactly:
- *
- *     ................
- *     .............#..
- *     ............##..
- *     ...........##...
- *     ...........##...
- *     ..........##....
- *     .........###....
- *     ..##.....##.....
- *     ...##...##......
- *     ...###.###......
- *     ....#####.......
- *     .....####.......
- *     .....###........
- *     ......##........
- *     ................
- *     ................
- *
- * A short limb (rows 7-9) descends left-to-right to a vertex around row 10,
- * then a long limb rises from there past row 1 - about a third the length of
- * the long limb, and finishing well above where the short limb started (row
- * 1 against row 7), which is what reads as a check rather than a V or a
- * plain diagonal tick. The stroke is 2-3px through the body; the one free
- * end that is not anchored at the vertex (the long limb's top-right tip,
- * row 1) tapers to a single pixel rather than ending square, which is what
- * keeps a small check from reading as a blunt slab at its point. 1-2px of
- * margin surrounds the shape on every side so it does not run into whatever
- * border is drawn around its box - app_sand.c's badge draws this box right
- * up against its own 2px border, which is exactly where an edge-to-edge
- * glyph would have collided with it. */
+/* The check mark, hand-drawn at 16x16 - one row of bits per line, same
+ * convention font8x8_basic.h uses. Bit 15 (MSB) is column 0 (left); bit
+ * 0 (LSB) is column 15 (right). A short limb descends left-to-right to
+ * a vertex, then a long limb rises past it about a third again as far,
+ * well above where the short limb started - reads as a check, not a V
+ * or a plain diagonal tick. The long limb's free tip tapers to a single
+ * pixel rather than ending square, keeping a small check from reading
+ * as a blunt slab. */
 static const uint16_t icon_check_bitmap[ICON_CHECK_BITMAP_SIZE] = {
     0b0000000000000000,
     0b0000000000000100,
@@ -116,50 +89,13 @@ static const uint16_t icon_check_bitmap[ICON_CHECK_BITMAP_SIZE] = {
 };
 
 /* The blocks that make up icon_check_bitmap, scaled to fill and centred
- * within the box (0, 0, w, h).
- *
- * SCALE
- *
- * The bitmap is scaled by the largest INTEGER factor that fits the box's
- * smaller side, minimum 1 - the same rule gfx_text_scaled() uses for the 8x8
- * font, and for the same reason: a fractional scale needs interpolation this
- * device has no budget for, and would blur a glyph this small into mush
- * anyway. At app_sand.c's 18px badge (PALETTE_BADGE_SIZE) that is scale 1 -
- * the badge is barely bigger than the bitmap's own 16px, so there is no room
- * for 2x. At the checkbox icon rect mu_checkbox() draws (64x64 - see
- * suite_icons.c's own comment on where that number comes from) it is scale
- * 4, landing exactly on 64 with nothing left over.
- *
- * A box smaller than 16px (scale would otherwise be 0) still gets scale 1
- * rather than nothing, so this module's effective floor is 16px - smaller
- * than that and the glyph will not fit, though nothing here has ever asked
- * for smaller than the 18px badge.
- *
- * CENTRING
- *
- * The glyph does not fill its 16x16 bitmap - see the margin the picture
- * above already leaves - so scaling and centring the full 16x16 box would
- * off-centre the visible content by however wide that margin is. Instead
- * this scans the bitmap's own CONTENT bounding box (scanned fresh each call
- * rather than hand-computed, so it can never drift out of step with
- * icon_check_bitmap if that ever changes) and centres THAT within (0, 0, w,
- * h), which is what keeps the drawn mark centred in its box rather than the
- * mark's invisible margin being centred instead.
- *
- * RECTS, NOT PIXELS
- *
- * Each bitmap row is run-length encoded once, at native (unscaled)
- * resolution, into however many contiguous horizontal runs it has - almost
- * always one, twice in the three rows where both limbs are present at once
- * (see the picture above, rows 7-9). Each run becomes exactly one output
- * rect, scaled and positioned, rather than one rect per output pixel or per
- * output row - scaling changes a run's size, never how many runs there are,
- * so the block count is bounded by the native bitmap's own 16 runs
- * regardless of scale. That bound is ICON_CHECK_MAX_BLOCKS.
- *
- * Returns how many blocks were written to `out`, never more than
- * ICON_CHECK_MAX_BLOCKS and never more than `max` - a `max` smaller than
- * ICON_CHECK_MAX_BLOCKS truncates the shape rather than overflowing `out`. */
+ * within the box (0, 0, w, h). Scaled by the largest INTEGER factor
+ * that fits the box's smaller side, minimum 1 - the same rule
+ * gfx_text_scaled() uses, for the same reason: a fractional scale needs
+ * interpolation this device has no budget for. At app_sand.c's 18px
+ * badge that is scale 1; at the 64x64 checkbox icon rect it is scale
+ * 4, landing exactly with nothing left over. A box smaller than 16px
+ * still gets scale 1 rather than 0. */
 static inline int icon_check_blocks(int w, int h, icon_rect_t *out, int max)
 {
     const int side  = (w < h) ? w : h;
@@ -168,8 +104,13 @@ static inline int icon_check_blocks(int w, int h, icon_rect_t *out, int max)
         scale = 1;
     }
 
-    /* The glyph's content bounding box in native pixels - inclusive on both
-     * ends (a set bit at column max_x, row max_row counts as inside it). */
+    /* The glyph does not fill its 16x16 bitmap, so scaling and centring
+     * the full box would off-centre the visible content by however
+     * wide that margin is. Scans the bitmap's own CONTENT bounding box
+     * fresh each call, rather than hand-computed, so it can never drift
+     * out of step with icon_check_bitmap if that changes - inclusive on
+     * both ends (a set bit at column max_x, row max_row counts as
+     * inside it). */
     int min_x = ICON_CHECK_BITMAP_SIZE, max_x = -1;
     int min_row = ICON_CHECK_BITMAP_SIZE, max_row = -1;
     for (int y = 0; y < ICON_CHECK_BITMAP_SIZE; y++) {
@@ -190,14 +131,23 @@ static inline int icon_check_blocks(int w, int h, icon_rect_t *out, int max)
     const int content_w = max_x - min_x + 1;
     const int content_h = max_row - min_row + 1;
 
-    /* Where native (0, 0) lands once the content box above is centred in
-     * (0, 0, w, h) at `scale`. Never negative: `scale` was chosen so
-     * ICON_CHECK_BITMAP_SIZE * scale <= both w and h, and content_w/content_h
-     * are each at most ICON_CHECK_BITMAP_SIZE, so content_w * scale <= w and
-     * content_h * scale <= h follow directly. */
+    /* Where native (0, 0) lands once the content box above is centred
+     * in (0, 0, w, h) at `scale`. Never negative: `scale` was chosen so
+     * ICON_CHECK_BITMAP_SIZE * scale <= both w and h, and
+     * content_w/content_h are each at most ICON_CHECK_BITMAP_SIZE, so
+     * content_w * scale <= w and content_h * scale <= h follow
+     * directly. */
     const int origin_x = (w - content_w * scale) / 2 - min_x * scale;
     const int origin_y = (h - content_h * scale) / 2 - min_row * scale;
 
+    /* Each bitmap row is run-length encoded once, at native (unscaled)
+     * resolution, into however many contiguous horizontal runs it has -
+     * almost always one, twice in the three rows where both limbs are
+     * present at once. Each run becomes exactly one output rect, scaled
+     * and positioned, rather than one rect per pixel or row - scaling
+     * changes a run's size, never how many runs there are, so the block
+     * count is bounded by the native bitmap's own 16 runs regardless of
+     * scale. That bound is ICON_CHECK_MAX_BLOCKS. */
     int n = 0;
     for (int y = 0; y < ICON_CHECK_BITMAP_SIZE && n < max; y++) {
         const uint16_t row = icon_check_bitmap[y];
@@ -219,6 +169,10 @@ static inline int icon_check_blocks(int w, int h, icon_rect_t *out, int max)
             n++;
         }
     }
+    /* Returns how many blocks were written to `out`, never more than
+     * ICON_CHECK_MAX_BLOCKS and never more than `max` - a `max` smaller
+     * than ICON_CHECK_MAX_BLOCKS truncates the shape rather than
+     * overflowing `out`. */
     return n;
 }
 

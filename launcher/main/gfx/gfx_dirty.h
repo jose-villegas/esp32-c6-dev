@@ -47,59 +47,47 @@
 #define STRIP_HEIGHT 64
 #define STRIP_COUNT  (GFX_DIRTY_HEIGHT / STRIP_HEIGHT)
 
-/* The screen as a fixed grid of cells, ROWS tall bands x COLS wide columns.
- * Both dimensions are a fixed partition, not just rows with an adaptive box
- * inside: two separate clusters of activity in the same row but different
- * columns get to skip the gap between them instead of one box being forced
- * to span both. 368 / 4 = 92 and 448 / 64 = 7, both exact.
- *
- * One bit per cell in cell_dirty: set means "this cell changed and must be
- * considered for sending". The panel refreshes from its own GRAM, so
- * anything not sent simply stays on screen. */
+/* The screen as a fixed grid of cells, ROWS tall bands x COLS wide
+ * columns. Both dimensions are a fixed partition, not just rows with an
+ * adaptive box inside: two separate clusters of activity in the same row
+ * but different columns get to skip the gap between them instead of one
+ * box being forced to span both. One bit per cell in cell_dirty: set
+ * means "this cell changed and must be considered for sending". The
+ * panel refreshes from its own GRAM, so anything not sent simply stays
+ * on screen. */
 #define GRID_COLS  4
 #define COL_WIDTH  (GFX_DIRTY_WIDTH / GRID_COLS)
 #define CELL_COUNT (STRIP_COUNT * GRID_COLS)
 static uint32_t cell_dirty;
 
 /* Set once dirty_mark_all() has run this frame, cleared alongside
- * cell_dirty by dirty_frame_sent(). Every cell is already claimed at that
- * point, so any further mark_band()/dirty_mark() call this frame can only
- * ever repeat work already done - real for an app that clears then draws
- * many small primitives on top (microui, the cube renderer): each one
- * otherwise pays the per-cell intersection math for a result gfx_clear()
- * already decided. */
+ * cell_dirty by dirty_frame_sent(). Every cell is already claimed at
+ * that point, so any further mark_band()/dirty_mark() call this frame
+ * can only ever repeat work already done - real for an app that clears
+ * then draws many small primitives on top (microui, the cube
+ * renderer). */
 static bool all_dirty;
 
 /* Per cell, the (x0,x1) x (y0,y1) box actually known to be dirty this
- * frame, in absolute panel pixels, not cell-relative.
- *
- * Anything that marks a row dirty without knowing which pixels changed
- * (mark_band(), below) has to claim every cell in that row, each full width
- * for its own column, or a caller that really did only touch a few pixels
- * could leave someone else's stale pixels unsent beside them. Only
- * dirty_mark() - used by callers that DO know a real box - is allowed to
- * narrow a cell, and narrowing is always a min/max union against whatever
- * is already there, never an overwrite: that is what makes the two ways of
- * marking a cell order-independent within one frame, whichever runs
- * first. */
+ * frame, in absolute panel pixels, not cell-relative. Anything marking a
+ * row dirty without knowing which pixels changed (mark_band(), below)
+ * has to claim every cell in that row, full width. Only dirty_mark() -
+ * callers that DO know a real box - may narrow a cell, and narrowing is
+ * always a min/max union, never an overwrite: that is what makes the two
+ * ways of marking a cell order-independent within one frame. */
 static int cell_x0[CELL_COUNT];
 static int cell_x1[CELL_COUNT];
 static int cell_y0[CELL_COUNT];
 static int cell_y1[CELL_COUNT];
 
-/* A second, finer level underneath the cell grid above: each cell is also
- * split into a fixed 4x4 grid of LEAF_W x LEAF_H leaves - 92/4=23 and
- * 64/4=16, both exact, which is why this stops at one extra level rather
- * than recursing further: 23 is prime, so nothing below it divides evenly.
- *
- * Unlike the cell boxes above, leaf geometry is never stored, only derived
- * (col * LEAF_W, etc.) - a leaf is already small enough that tracking a
- * tighter box inside one buys nothing. One bit per leaf is enough to know
- * whether it needs to be considered when narrowing a send.
- *
- * LEAF_COLS is 16, so one row of leaves - spanning all 4 cells in a grid
- * row - fits exactly in one uint16_t; no further indexing math is needed
- * to test "which leaf columns are dirty in this grid row". */
+/* A second, finer level underneath the cell grid above: each cell is
+ * also split into a fixed 4x4 grid of LEAF_W x LEAF_H leaves - 23 is
+ * prime, so nothing divides evenly, which is why this stops at one
+ * extra level. Unlike the cell boxes above, leaf geometry is never
+ * stored, only derived - a leaf is already small enough that tracking a
+ * tighter box inside one buys nothing. LEAF_COLS is 16, so one row of
+ * leaves fits exactly in one uint16_t; no further indexing math is
+ * needed. */
 #define LEAF_SUB   4
 #define LEAF_W     (COL_WIDTH / LEAF_SUB)
 #define LEAF_H     (STRIP_HEIGHT / LEAF_SUB)
@@ -118,14 +106,12 @@ static uint16_t leaf_dirty[STRIP_COUNT * LEAF_SUB];
                                     same status GATHER_MAX_PIXELS had. */
 
 /* Sets exactly the leaf bits an already-narrowed box spans, in every leaf
- * row it touches. No descent, no recursion - one loop bounded by how many
- * leaf rows the box's own height covers.
- *
- * Only ever called from dirty_mark(), never from mark_band() - this is the
- * "optional" half of the tracking: a caller that only knows a whole band
- * (mark_band()) never pays for this, only one that hands over a real box
- * does. See dirty_mark()'s own comment for the correctness invariant this
- * depends on. */
+ * row it touches. No descent, no recursion - one loop bounded by how
+ * many leaf rows the box's own height covers. Only ever called from
+ * dirty_mark(), never from mark_band() - this is the "optional" half of
+ * the tracking: a caller that only knows a whole band never pays for
+ * this. See dirty_mark()'s own comment for the correctness invariant
+ * this depends on. */
 static inline void mark_leaves(int x0, int y0, int x1, int y1)
 {
     const int col_first = x0 / LEAF_W;
@@ -151,27 +137,13 @@ typedef struct {
  * not a hand-counted number. */
 #define LEAF_RECTS_PER_ROW_MAX (LEAF_COLS * LEAF_SUB)
 
-/* Enumerates the dirty leaves of strip `row` that intersect [x0,x1) x
- * [y0,y1), as absolute-pixel rects into `out`, capped at `max_out`. Returns
- * how many were written. Backs the leaf debug-overlay layer in gfx.c
- * (drawn straight into what gets sent, so it needs real rects, not just a
- * bitmask) and is exercised directly by suite_gfx_dirty.c.
- *
- * One rect per dirty leaf, never merged into runs - merging adjacent leaves
- * would hide the very subdivision this layer exists to show. Each rect
- * starts at the leaf's own full LEAF_W x LEAF_H extent, then is clipped to
- * the caller's box: a leaf only partly inside the box yields a clipped
- * rect, a leaf entirely outside yields nothing. Leaf bits are only ever set
- * by dirty_mark() (see mark_leaves()) - a row marked solely by mark_band()
- * has no leaf information, so this legitimately returns nothing for it;
- * that is a consequence of the design, not a bug to fix here.
- *
- * static inline, not plain static: every other function in this file is
- * used unconditionally by gfx.c, but every call site of this one is inside
- * an `#if CONFIG_LAUNCHER_DEVELOPMENT` block, so a release build's gfx.c
- * includes this header and never calls it - the one case in this file the
- * file header's "some static inline" already allows for. Plain static
- * would warn -Wunused-function in exactly that build. */
+/* Enumerates strip `row`'s dirty leaves intersecting [x0,x1)x[y0,y1), as
+ * rects into `out`. Backs gfx.c's leaf debug overlay. One rect per leaf,
+ * never merged into runs - merging would hide the subdivision this layer
+ * exists to show. A row marked solely by mark_band() has no leaf info, so
+ * this returns nothing for it - by design, not a bug. static inline, not
+ * plain static: every call site is inside `#if CONFIG_LAUNCHER_DEVELOPMENT`,
+ * so plain static would warn -Wunused-function in a release build. */
 static inline int dirty_leaf_rects(int row, int x0, int y0, int x1, int y1,
                                    dirty_leaf_rect_t *out, int max_out)
 {
@@ -208,15 +180,13 @@ static inline int dirty_leaf_rects(int row, int x0, int y0, int x1, int y1,
     return n;
 }
 
-/* Marks every cell spanned by an ALREADY-CLIPPED row range, full width and
- * full strip height - mark_band() gets no x information at all, so every
- * column in the affected rows has to be assumed dirty across its own full
- * width, which collectively covers the row exactly as the old per-strip
- * version did.
- *
- * Unguarded on purpose beyond the all_dirty/empty-range checks - see the
- * file header comment for why this has to stay inlinable. STRIP_HEIGHT is
- * a power of two, so the divisions become shifts. */
+/* Marks every cell spanned by an ALREADY-CLIPPED row range, full width
+ * and full strip height - mark_band() gets no x information at all, so
+ * every column in the affected rows has to be assumed dirty across its
+ * own full width. Unguarded on purpose beyond the all_dirty/empty-range
+ * checks - see the file header comment for why this has to stay
+ * inlinable. STRIP_HEIGHT is a power of two, so the divisions become
+ * shifts. */
 static inline void mark_band(int y0, int y1)
 {
     if (all_dirty || y0 >= y1) {
@@ -283,22 +253,13 @@ static inline void union_cell_y(int idx, int y0, int y1, int row)
     if (part_y1 > cell_y1[idx]) { cell_y1[idx] = part_y1; }
 }
 
-/* gfx_mark_dirty()'s implementation. Unlike mark_band(), this one knows a
- * real box - callers that draw a shape smaller than a whole cell can say
- * so, in either dimension, and gfx_present() may then send only what
- * actually changed instead of a whole row. Still safe if a caller passes
- * the full width and a whole strip's height like the old callers all did:
- * that just claims every cell in the row, same as before this existed.
- *
- * Also the only place that ever narrows leaf_dirty (see mark_leaves()) -
- * which is what makes "does this cell's box still equal its own full
- * extent" a reliable test of "was this cell touched only by mark_band()
- * this frame, never by a real box": mark_band() always claims a cell at
- * its full COL_WIDTH x STRIP_HEIGHT extent, this union can only ever
- * shrink that towards a real box, and whenever it does, it always narrows
- * the matching leaves in the same call. A cell strictly smaller than its
- * full extent therefore has leaf bits that are always trustworthy for it,
- * with nothing extra to track to know that. */
+/* gfx_mark_dirty()'s implementation. Unlike mark_band(), this knows a
+ * real box, so gfx_present() may send only what changed. The only place
+ * that ever narrows leaf_dirty (see mark_leaves()): mark_band() always
+ * claims a cell at its full COL_WIDTH x STRIP_HEIGHT extent, this union
+ * can only shrink that toward a real box, and whenever it does, it
+ * narrows the matching leaves too. So a cell strictly smaller than its
+ * full extent always has trustworthy leaf bits. */
 static inline void dirty_mark(int x, int y, int w, int h)
 {
     if (all_dirty) {
@@ -370,11 +331,11 @@ static inline bool dirty_row_is_dirty(int row)
 }
 
 /* Collects the contiguous set bits of `mask` (bits 0..width-1) into
- * [start,end) ranges - shared by the cell-level and leaf-level run finders
- * below, same shape, different width and mask. Returns how many runs were
- * found, or -1 if there would have been more than `max_runs` - the caller
- * can then tell "fits" from "too fragmented to be worth it" without a
- * second pass. */
+ * [start,end) ranges - shared by the cell-level and leaf-level run
+ * finders below, same shape, different width and mask. Returns how many
+ * runs were found, or -1 if there would have been more than `max_runs` -
+ * the caller can then tell "fits" from "too fragmented to be worth it"
+ * without a second pass. */
 static int collect_runs_from_mask(uint32_t mask, int width, int *start,
                                   int *end, int max_runs)
 {
@@ -399,15 +360,13 @@ static int collect_runs_from_mask(uint32_t mask, int width, int *start,
     return n;
 }
 
-/* Collects row's dirty columns into contiguous runs - [start,end) column
- * ranges - so cells that are actually adjacent merge into one transaction
- * instead of paying per-transaction overhead once per cell, while a
- * genuine gap of clean columns between two dirty regions keeps them
- * separate rather than gathering a box that spans the untouched middle for
- * no reason. GRID_COLS columns bound this at GRID_COLS/2 runs at most - a
- * run needs at least one gap column to separate it from the next, so the
- * -1 "too fragmented" case from collect_runs_from_mask can never actually
- * trigger here with max_runs == GRID_COLS. */
+/* Collects row's dirty columns into contiguous runs so adjacent cells
+ * merge into one transaction instead of paying per-cell overhead, while
+ * a genuine gap of clean columns keeps two dirty regions separate rather
+ * than gathering a box spanning the untouched middle. GRID_COLS columns
+ * bound this at GRID_COLS/2 runs at most - a run needs at least one gap
+ * column to separate it from the next, so the -1 "too fragmented" case
+ * from collect_runs_from_mask can never trigger here. */
 static int collect_dirty_runs(int row, int *run_start, int *run_end)
 {
     const uint32_t bits = (cell_dirty >> (row * GRID_COLS)) &
@@ -417,13 +376,13 @@ static int collect_dirty_runs(int row, int *run_start, int *run_end)
     return (n < 0) ? 0 : n;
 }
 
-/* True only if no cell in [col_first,col_last) of `row` is at its own full
- * COL_WIDTH x STRIP_HEIGHT extent - see dirty_mark()'s comment for why
- * that is both necessary and sufficient to know the leaf bits under this
- * run are trustworthy. Deliberately conservative: one coarse cell in the
- * run disables refinement for the whole run, not just that cell - a run
- * mixing coarse and tight cells is rare in practice, and getting this
- * simple and always-correct matters more than squeezing out that case. */
+/* True only if no cell in [col_first,col_last) of `row` is at its own
+ * full COL_WIDTH x STRIP_HEIGHT extent - see dirty_mark()'s comment for
+ * why that is both necessary and sufficient to know the leaf bits under
+ * this run are trustworthy. Deliberately conservative: one coarse cell
+ * in the run disables refinement for the whole run - a run mixing coarse
+ * and tight cells is rare, and getting this simple and always-correct
+ * matters more than squeezing out that case. */
 static bool run_is_leaf_eligible(int row, int col_first, int col_last)
 {
     for (int col = col_first; col < col_last; col++) {
