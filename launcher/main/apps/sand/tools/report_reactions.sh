@@ -88,7 +88,8 @@ OUT_BIN="$BUILD_DIR/dump_reactions"
 
 # shellcheck disable=SC2086
 "$CC_BIN" $CFLAGS -I "$MAIN_DIR" -I "$SAND_DIR" \
-    "$SCRIPT_DIR/dump_reactions.c" "$SAND_DIR/material.c" -o "$OUT_BIN"
+    "$SCRIPT_DIR/dump_reactions.c" "$SAND_DIR/material.c" \
+    "$SAND_DIR/material_palette.c" -o "$OUT_BIN"
 
 # MinGW appends .exe; elsewhere the plain name is produced.
 [ -x "$OUT_BIN" ] || OUT_BIN="$OUT_BIN.exe"

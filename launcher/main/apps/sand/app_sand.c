@@ -52,6 +52,7 @@
 #include "../../gfx/gfx.h"
 #include "../../input/imu.h"
 #include "../../ui/ui.h"
+#include "material_palette.h"
 #include "palette.h"
 #include "row_runs.h"
 #include "sand.h"
