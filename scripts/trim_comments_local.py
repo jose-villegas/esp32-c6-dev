@@ -26,6 +26,19 @@ review found the old approach bloating files with dated tuning journeys and,
 once, an outright fabricated number - see the "Hard rules" in PROMPT below
 for the fabrication guard this earned.)
 
+`--via hybrid` tries OmniRoute first, in parallel across every comment in
+the file, and verifies each answer before trusting it (see
+`response_problems()`): over the ceiling, meta-commentary, a number the
+original text never stated, or - the shape a wholesale hallucinated reply
+takes - no word in common with what was actually asked about. Anything that
+fails falls back to the local model, one comment at a time as usual. The
+point is not "OmniRoute is fine now" - the same corruption shapes this
+guards against were observed directly, repeatedly, in this file's own
+history - it is that OmniRoute can reach reasoning this machine cannot run
+locally, and an automated check plus a reliable local fallback is cheaper
+than either trusting it blindly or refusing to use it at all. `--review`
+afterward is still the real check for meaning, whichever backend answered.
+
 A comment over `--skip-over` is left untouched rather than attempted at all -
 a single automated rewrite of something this large tends to miss whichever
 one sentence in it is still load-bearing, however careful the prompt. These
@@ -45,20 +58,31 @@ Options:
   --skip-over N   don't even attempt a comment past this length - it needs
                   manual splitting, not compression (default 1500, 0 to
                   disable and attempt everything)
-  --model NAME    ollama model (default qwen2.5-coder:32b-instruct-q4_K_M),
-                  or an OmniRoute combo name when --via omniroute is set
-                  (default docs-update-free)
-  --via WHERE     ollama (default, local) or omniroute (routes to a free
-                  remote model via the `omniroute` CLI - no local GPU
-                  contention, confirmed $0 cost against the docs-update-free
-                  combo). CAUTION: the combo auto-selects a different
-                  underlying model per request, and at least one of them
-                  (gpt-oss:20b) has been observed replying with meta-
-                  commentary ("Your next reply should...") instead of the
-                  rewrite - short enough to pass the length check and easy
-                  to mistake for a real answer. Not used for the sand app's
-                  own trim runs for this reason; review its output harder
-                  than the local model's, or pin a single combo member.
+  --model NAME    ollama model (default qwen2.5-coder:32b-instruct-q4_K_M) -
+                  the LOCAL model, used directly under --via ollama and as
+                  the fallback generator under --via hybrid
+  --via WHERE     ollama (default, local, sequential - see hybrid below for
+                  why this stays the fallback rather than the first try),
+                  omniroute (routes every comment to a free remote model via
+                  the `omniroute` CLI - no local GPU contention, confirmed $0
+                  cost, but the combo auto-selects a different underlying
+                  model per request and has been observed replying with
+                  meta-commentary, a bare acknowledgement, an echo of this
+                  script's own prompt text, or - worst - fully unrelated
+                  hallucinated content instead of a real rewrite, on the
+                  generative path specifically; its DELETE-or-keep judgment
+                  has stayed reliable through every one of those incidents),
+                  or hybrid (below).
+  --omniroute-model NAME   OmniRoute combo (default docs-update-free) - only
+                  read under --via hybrid, where it is the first attempt for
+                  every comment, run in parallel (see --workers). --model
+                  above is unaffected: it stays the local fallback.
+  --workers N     hybrid's OmniRoute first pass runs this many requests
+                  concurrently (default 6) - OmniRoute has no local GPU to
+                  contend for, unlike local Ollama, which gets slower under
+                  concurrency on this hardware (measured: 4 parallel
+                  requests took longer than sequential) and is never run in
+                  parallel by this script for that reason.
   --retries N     attempts per comment before giving up (default 3)
   --banners       also rewrite file/section header banners (off: their `====`
                   rules do not survive re-wrapping)
@@ -96,7 +120,9 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from check_comment_length import code_only, scan  # noqa: E402
@@ -156,12 +182,23 @@ Reply with nothing but the prose.
 """
 
 
+LOG_LOCK = threading.Lock()
+
+
 def ask(model, prompt, log, via="ollama"):
     """`model` is an Ollama model name for via="ollama", or an OmniRoute
     combo name for via="omniroute" - the two aren't interchangeable, callers
-    pick one deliberately (see --via/--combo)."""
+    pick one deliberately (see --via/--combo).
+
+    Safe to call from multiple threads at once (hybrid's parallel OmniRoute
+    first pass does exactly that) - LOG_LOCK keeps one call's write from
+    interleaving with another's in the shared transcript file. A failed or
+    empty subprocess (a flaky free-tier route that never returned) becomes
+    an empty string here rather than an exception; the caller's own
+    trustworthiness check is what decides whether that needs a fallback.
+    """
     started = time.time()
-    with open(log, "a", encoding="utf-8") as f:
+    with LOG_LOCK, open(log, "a", encoding="utf-8") as f:
         f.write(f"\n===== {time.strftime('%H:%M:%S')} ===== [{via}:{model}]\n"
                 f"{prompt}\n")
     if via == "omniroute":
@@ -176,7 +213,7 @@ def ask(model, prompt, log, via="ollama"):
             errors="replace",
         )
     out = clean(r.stdout or "")
-    with open(log, "a", encoding="utf-8") as f:
+    with LOG_LOCK, open(log, "a", encoding="utf-8") as f:
         f.write(f"----- {time.time() - started:.1f}s -----\n{out}\n")
     return out
 
@@ -247,6 +284,107 @@ def looks_like_meta_reply(prose):
     reply - forces a retry rather than being accepted."""
     return bool(META_REPLY.search(prose) or BARE_ACK.match(prose.strip())
                 or PROMPT_ECHO.search(prose))
+
+
+DIGIT = re.compile(r"\d+")
+WORD = re.compile(r"[A-Za-z]{4,}")
+
+
+def fabricates_number(old, new):
+    """A digit in `new` that appears nowhere in `old` - the hard rule this
+    script's own PROMPT states ("never invent, compute, or round a number")
+    but a model does not reliably follow, confirmed directly: "under a
+    second" rounded into a literal "~1s", and a "chance/256"-style field
+    comment (no digit at all for the probability) rewritten with an
+    invented "1/256". Presence-only, not context-aware - it also catches
+    "moisture 1" in one clause licensing a fabricated "1 in 256" in
+    another, which a naive digit-set check misses - but it does not verify
+    a correctly-reused digit is attached to the same fact twice; that part
+    still needs a human read of the pair.
+    """
+    return bool(DIGIT.findall(new)) and \
+        not set(DIGIT.findall(new)) <= set(DIGIT.findall(old))
+
+
+def shares_vocabulary(old, new):
+    """False only for a reply with NOT ONE word of four-plus letters in
+    common with what was actually asked about - the shape wholesale
+    hallucinated content takes (observed verbatim via OmniRoute: "I gnaw
+    nerves, whisper agony. You feel me, I devour." for a comment about
+    foam dithering). A real rewrite, however aggressively cut, keeps at
+    least one identifier or word from its own subject; this is a floor,
+    not a meaning check. Skipped (returns True) for an original too short
+    to have real vocabulary to lose, so a terse source comment cannot
+    trip this on a legitimate paraphrase.
+    """
+    old_words = {w.lower() for w in WORD.findall(old)}
+    if len(old_words) < 3:
+        return True
+    return bool(old_words & {w.lower() for w in WORD.findall(new)})
+
+
+def response_problems(original, prose, ceiling):
+    """Automated defects in a candidate rewrite, regardless of which
+    backend produced it - the concrete failure shapes OmniRoute corruption
+    has actually taken in this repo, not a meaning check (review() and a
+    human still do that). Used both to decide whether an OmniRoute first
+    answer can be trusted without falling back to the local model, and, in
+    the retry loop, whether ANY answer (local or remote) needs another
+    attempt.
+    """
+    problems = []
+    if len(prose) > ceiling:
+        problems.append("over ceiling")
+    if looks_like_meta_reply(prose):
+        problems.append("meta-reply")
+    if fabricates_number(original, prose):
+        problems.append("fabricated number")
+    if not shares_vocabulary(original, prose):
+        problems.append("no shared vocabulary")
+    return problems
+
+
+def trustworthy(original, wants_delete, prose, ceiling):
+    """Whether a first-pass OmniRoute answer is safe to use as-is. A DELETE
+    decision is trusted unconditionally: across every OmniRoute corruption
+    incident this repo has hit, the binary delete-or-keep judgment stayed
+    reliable even when the SAME run's generative rewrites did not - only
+    the "produce real prose" path has ever gone wrong. Everything else
+    goes through response_problems().
+    """
+    if wants_delete:
+        return True
+    return bool(prose) and not response_problems(original, prose, ceiling)
+
+
+def try_omniroute_batch(targets, opts, log):
+    """Hybrid's first pass: attempt every target via OmniRoute at once.
+
+    Run in a thread pool rather than sequentially because OmniRoute is a
+    remote call with no local GPU to contend for - unlike local Ollama,
+    which this script never parallelizes (measured on this hardware: 4
+    concurrent local requests took LONGER than sequential, single-GPU
+    serialization). A slow, failed, or empty individual request just comes
+    back as one untrustworthy result; nothing here retries or blocks on
+    it, since the sequential fallback loop after this handles that comment
+    properly on the local model regardless.
+    """
+    results = {}
+
+    def attempt(i, com):
+        raw = ask(opts["omniroute_model"],
+                  PROMPT.format(limit=opts["limit"], length=com.length,
+                                text=com.text), log, via="omniroute")
+        wants_delete, prose = split_delete(raw)
+        return i, wants_delete, prose
+
+    with ThreadPoolExecutor(max_workers=opts["workers"]) as ex:
+        futures = [ex.submit(attempt, i, com)
+                   for i, com in enumerate(targets)]
+        for fut in as_completed(futures):
+            i, wants_delete, prose = fut.result()
+            results[i] = (wants_delete, prose)
+    return results
 
 
 def rewrap(comment, prose, width, source):
@@ -326,16 +464,37 @@ def trim_file(path, opts, log, results):
     if not targets:
         return 0
 
+    # HYBRID: attempt every target via OmniRoute at once, in parallel, before
+    # the sequential loop below even starts - see try_omniroute_batch()'s own
+    # comment for why that's safe to do blind (nothing here trusts a first
+    # answer without trustworthy() re-checking it per comment, right where
+    # the fallback to the local model actually happens).
+    first_pass = try_omniroute_batch(targets, opts, log) \
+        if opts["via"] == "hybrid" else {}
+
     edits = []
-    for com in targets:
+    for i, com in enumerate(targets):
         if opts["max"] and results["attempted"] >= opts["max"]:
             break
         results["attempted"] += 1
         original = com.text
-        prose = ask(opts["model"],
-                    PROMPT.format(limit=opts["limit"], length=com.length,
-                                  text=original), log, via=opts["via"])
-        wants_delete, prose = split_delete(prose)
+
+        from_omniroute = opts["via"] == "hybrid" and i in first_pass and \
+            trustworthy(original, *first_pass[i], opts["ceiling"])
+        if from_omniroute:
+            wants_delete, prose = first_pass[i]
+            via, model = "omniroute", opts["omniroute_model"]
+            results["hybrid_from_omniroute"] = \
+                results.get("hybrid_from_omniroute", 0) + 1
+        else:
+            via = "ollama" if opts["via"] == "hybrid" else opts["via"]
+            model = opts["model"]
+            if opts["via"] == "hybrid":
+                results["hybrid_fell_back"] = \
+                    results.get("hybrid_fell_back", 0) + 1
+            prose = ask(model, PROMPT.format(limit=opts["limit"],
+                        length=com.length, text=original), log, via=via)
+            wants_delete, prose = split_delete(prose)
 
         if com.own_line and wants_delete:
             row = {"path": path, "line": com.line, "before": com.length,
@@ -348,16 +507,16 @@ def trim_file(path, opts, log, results):
 
         tries = 1
         while prose and tries < opts["retries"] and \
-                (len(prose) > opts["limit"] or looks_like_meta_reply(prose)):
-            prose = ask(opts["model"],
-                        RETRY.format(got=len(prose), limit=opts["limit"],
-                                     text=prose), log, via=opts["via"])
+                (len(prose) > opts["limit"] or
+                 response_problems(original, prose, opts["ceiling"])):
+            prose = ask(model, RETRY.format(got=len(prose),
+                        limit=opts["limit"], text=prose), log, via=via)
             tries += 1
 
-        if prose and looks_like_meta_reply(prose):
-            # Retries exhausted and it's STILL talking about the task instead
-            # of doing it - discard rather than risk writing this into a
-            # live comment (observed once, via OmniRoute's free routing).
+        if prose and response_problems(original, prose, opts["ceiling"]):
+            # Retries exhausted and it's still a bad answer by one of the
+            # concrete measures response_problems() checks - discard rather
+            # than risk writing this into a live comment.
             prose = ""
 
         row = {"path": path, "line": com.line, "before": com.length,
@@ -544,7 +703,18 @@ def write_report(path, results, opts, seconds):
     saved = sum(r["before"] - r["after"] for r in t)
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write("# Comment trim (local model)\n\n")
-        f.write(f"- model: `{opts['model']}`\n")
+        if opts["via"] == "hybrid":
+            f.write(f"- model: `{opts['omniroute_model']}` (OmniRoute, first "
+                    f"pass, {opts['workers']} parallel) falling back to "
+                    f"`{opts['model']}` (local)\n")
+            fo = results.get("hybrid_from_omniroute", 0)
+            fb = results.get("hybrid_fell_back", 0)
+            total = fo + fb
+            f.write(f"- resolved from OmniRoute's first pass: **{fo}**"
+                    f"{f' ({100*fo/total:.0f}%)' if total else ''},"
+                    f" fell back to local: {fb}\n")
+        else:
+            f.write(f"- model: `{opts['model']}`\n")
         f.write(f"- aim: {opts['limit']} characters,"
                 f" ceiling: {opts['ceiling']} characters\n")
         f.write(f"- ran: {time.strftime('%Y-%m-%d %H:%M')}"
@@ -593,6 +763,7 @@ def write_report(path, results, opts, seconds):
 
 def main(argv):
     opts = {"limit": 300, "ceiling": 500, "model": None, "via": "ollama",
+            "omniroute_model": DEFAULT_COMBO, "workers": 6,
             "retries": 3, "banners": False, "max": 0, "dry_run": False,
             "review_model": DEFAULT_REVIEW_MODEL, "skip_over": 1500}
     report = "scripts/results/comment-trim.md"
@@ -611,12 +782,16 @@ def main(argv):
             opts["skip_over"] = int(next(it))
         elif arg == "--via":
             opts["via"] = next(it)
-            if opts["via"] not in ("ollama", "omniroute"):
-                print(f"unknown --via: {opts['via']!r} (want ollama or "
-                      f"omniroute)", file=sys.stderr)
+            if opts["via"] not in ("ollama", "omniroute", "hybrid"):
+                print(f"unknown --via: {opts['via']!r} (want ollama, "
+                      f"omniroute, or hybrid)", file=sys.stderr)
                 return 2
         elif arg == "--model":
             opts["model"] = next(it)
+        elif arg == "--omniroute-model":
+            opts["omniroute_model"] = next(it)
+        elif arg == "--workers":
+            opts["workers"] = int(next(it))
         elif arg == "--retries":
             opts["retries"] = int(next(it))
         elif arg == "--max":

@@ -290,7 +290,12 @@ over-long comments the same local-Ollama way, but hands the model one
 comment's PROSE and never a line of code — the rewrite goes back into that
 comment's own span, so a bad generation can only produce a bad sentence, and
 a file that ends up differing in anything but comments is discarded. A
-comment it cannot get under the limit keeps its original text. `--review`
+comment it cannot get under the limit keeps its original text. `--via
+hybrid` tries a free OmniRoute model first, in parallel across the whole
+file, for reasoning this machine cannot run locally at no local-GPU cost —
+but only after an automated check (dropped facts, a fabricated number,
+wholesale unrelated content, all seen for real from OmniRoute here);
+anything that fails falls back to the local model. `--review`
 then checks each rewrite for dropped numbers, dropped named functions and
 dropped negations (no model needed for those — that check alone caught every
 known-bad rewrite in the trial that chose this design), before asking a
