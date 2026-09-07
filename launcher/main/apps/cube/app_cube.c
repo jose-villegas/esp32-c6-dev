@@ -62,16 +62,12 @@ static S3L_Scene   scene;
 static uint32_t    elapsed_ms;
 
 /* The toggle this file exists to demonstrate: whether cube_frame() clears
- * the whole framebuffer every frame (like every other app) or only the
- * pixels the cube actually touches, using gfx_mark_dirty() instead of
- * relying on gfx_clear()'s implicit "everything changed". On by default -
- * the partial-clear path this enables is what the cube app is meant to
- * showcase. Flipped from inside draw_menu(), not directly by BOOT any
- * more - see menu_open below and cube_frame().
- *
- * Exposed (suite_cube_perf.c forces this true in its fixture, so a stray
- * BOOT-menu toggle left over from manual testing can never silently skew
- * a perf run). */
+ * the whole framebuffer every frame or only the pixels the cube touches,
+ * via gfx_mark_dirty() instead of gfx_clear()'s implicit "everything
+ * changed". On by default - the partial-clear path is what this app
+ * showcases. Flipped from inside draw_menu(), not directly by BOOT any
+ * more. Exposed so suite_cube_perf.c can force this true in its fixture,
+ * so a stray leftover toggle can never silently skew a perf run. */
 bool partial_updates = true;
 
 /* Whether the BOOT-opened menu (draw_menu()) is showing instead of the
@@ -88,11 +84,11 @@ static bool menu_open;
 static int frame_x0, frame_y0, frame_x1, frame_y1;
 
 /* On-screen framerate readout - the other half of what makes the toggle
- * above worth having: main.c's own report_fps() only ever reaches a serial
- * console, so seeing partial_updates actually change anything used to mean
- * a laptop plugged in next to the board. Windowed on dt_ms rather than
- * esp_timer_get_time() like report_fps() does, so this needs nothing beyond
- * what cube_frame() is already handed. */
+ * above worth having: main.c's own report_fps() only ever reaches a
+ * serial console, so seeing partial_updates actually change anything
+ * used to mean a laptop plugged in next to the board. Windowed on dt_ms
+ * rather than esp_timer_get_time() like report_fps() does, so this needs
+ * nothing beyond what cube_frame() is already handed. */
 #define FPS_WINDOW_MS 500
 static uint32_t fps_frame_count;
 static uint32_t fps_window_elapsed_ms;
@@ -110,16 +106,14 @@ static inline uint8_t clamp_to_byte(S3L_Unit v)
     return (uint8_t)v;
 }
 
-/* Called by small3dlib for every pixel a triangle covers - the equivalent of a
- * fragment shader, running on the CPU.
- *
- * pixel->barycentric holds three weights summing to S3L_F that say how close
- * this pixel is to each corner, so using them to average the corner colours
- * produces a smooth gradient: Gouraud shading.
- *
- * Writes straight into the framebuffer rather than going through gfx_pixel(),
- * because this runs tens of thousands of times per frame and the coordinates
- * are already guaranteed on-screen by the rasterizer. */
+/* Called by small3dlib for every pixel a triangle covers - the equivalent
+ * of a fragment shader, running on the CPU. pixel->barycentric holds
+ * three weights summing to S3L_F that say how close this pixel is to
+ * each corner, so averaging corner colours with them produces a smooth
+ * gradient: Gouraud shading. Writes straight into the framebuffer rather
+ * than through gfx_pixel(): this runs tens of thousands of times per
+ * frame, and coordinates are already guaranteed on-screen by the
+ * rasterizer. */
 static inline void shade_pixel(S3L_PixelInfo *pixel)
 {
     const S3L_Index *corners = cube_triangles + pixel->triangleIndex * 3;
@@ -138,11 +132,11 @@ static inline void shade_pixel(S3L_PixelInfo *pixel)
         gfx_rgb(((uint32_t)r << 16) | ((uint32_t)g << 8) | bl);
 
     /* Only tracked in partial_updates mode - cube_frame() is the sole
-     * reader, and there is no reason to pay for it on every one of the tens
-     * of thousands of pixels a frame otherwise covers. cube_frame() is also
-     * where the gfx_mark_dirty() call these bounds feed into lives - see its
-     * own comment on why writing gfx_framebuffer() directly, as this does,
-     * requires one. */
+     * reader, and there is no reason to pay for it on every one of the
+     * tens of thousands of pixels a frame otherwise covers. cube_frame()
+     * is also where the gfx_mark_dirty() call these bounds feed into
+     * lives - see its own comment on why writing gfx_framebuffer()
+     * directly, as this does, requires one. */
     if (partial_updates) {
         if (pixel->x < frame_x0)     { frame_x0 = pixel->x; }
         if (pixel->x + 1 > frame_x1) { frame_x1 = pixel->x + 1; }
@@ -172,9 +166,9 @@ void cube_enter(void)
     /* The framebuffer is whatever the previous app left in it - the very
      * first frame back in this app, in either mode, has to clear in full.
      * gfx_invalidate() ensures the partial clear cache starts fresh.
-     * partial_updates itself is deliberately left alone: a developer toggle
-     * that reset every visit would defeat the point of it, same as
-     * show_orientation in app_diagnostics.c. */
+     * partial_updates itself is deliberately left alone: a developer
+     * toggle that reset every visit would defeat the point of it, same
+     * as show_orientation in app_diagnostics.c. */
     gfx_invalidate();
 
     /* Unlike partial_updates, the readout itself starts over every visit -
@@ -189,20 +183,22 @@ void cube_enter(void)
      * 0 here instead of leaving it wherever a past visit left it. */
     menu_open = false;
 
-    /* Baseline for the orientation check in cube_frame() - without this, a
-     * rotation that happened while some OTHER app was showing would read as
-     * "changed since last frame" on the very first frame back in the cube,
-     * forcing a clear that bbox_valid's own false above already forces. Not
-     * wrong, just redundant with a clearer reason already stated. */
+    /* Baseline for the orientation check in cube_frame() - without this,
+     * a rotation that happened while some OTHER app was showing would
+     * read as "changed since last frame" on the very first frame back in
+     * the cube, forcing a clear that bbox_valid's own false above already
+     * forces. Not wrong, just redundant with a clearer reason already
+     * stated. */
     last_layout_generation = ui_layout_generation();
 }
 
 /* mu_Color from a 0xRRGGBB value, opaque - same reason and same shape as
- * app_sand.c's own mu_color_hex(): every colour handed to a microui drawing
- * call crosses from this file's plain hex constants into mu's 8-bit form
- * exactly once, here. Kept as its own copy rather than shared - see
- * ORIENTATION_GRAVITY_X/Y's comment in app_diagnostics.c for why a small,
- * independent copy like this is not worth a shared header of its own. */
+ * app_sand.c's own mu_color_hex(): every colour handed to a microui
+ * drawing call crosses from this file's plain hex constants into mu's
+ * 8-bit form exactly once, here. Kept as its own copy rather than shared
+ * - see ORIENTATION_GRAVITY_X/Y's comment in app_diagnostics.c for why a
+ * small, independent copy like this is not worth a shared header of its
+ * own. */
 static mu_Color mu_color_hex(uint32_t rgb)
 {
     return mu_color((int)((rgb >> 16) & 0xFF), (int)((rgb >> 8) & 0xFF),
@@ -218,44 +214,21 @@ static mu_Rect draw_overlay_box(mu_Context *ctx, int w, int h)
 
 /* The persistent HUD: the cube and, over it, the fps line - nothing else
  * renders while the menu is closed (see cube_frame()). Drawn via
- * ui.c/microui exactly as app_diagnostics.c's own toggle page is - the
- * point of this app is proving that pairing ports unchanged to a renderer
- * that has nothing else in common with a settings screen.
- *
- * UI_NO_BACKGROUND is what lets the spinning cube show through everywhere
- * this window doesn't itself paint - see app_sand.c's draw_palette() for
- * the precedent. Unlike that panel's frozen sand, the cube keeps moving
- * underneath every frame, which is exactly the case ui_end()'s own comment
- * calls out: it repaints whenever "something else has already dirtied the
- * screen", so the fps line stays correctly composited over a background
- * that never stops changing, with no special handling needed here for that.
- *
- * BUT: mu_text() draws only its own ink, no background of its own. Under a
- * full gfx_clear() every frame that is invisible, because the whole screen
- * is blank before it ever draws. Under partial_updates it is not:
- * cube_frame() only erases the CUBE's own last bounding box, never this
- * box's, so when the fps line repaints - it changes shape every
- * FPS_WINDOW_MS as the digits do - whatever of the old digits the new ones
- * do not happen to overdraw was left on screen. draw_overlay_box() is the
- * fix: an opaque box behind the text, painted through the same mu command
- * list this whole module already hashes to skip unneeded repaints, so it
- * costs nothing on the (large majority of) frames where the fps value did
- * not actually change.
- *
- * UI_TEXT_OUTLINED is app_sand.c's palette-label fix for the same reason it
- * was built for: a label with no halo of its own would wash out against
- * whichever of the cube's shifting corner colours happens to sit behind it.
- * Left in place even with the box's own opaque backing - a NO_BACKGROUND
- * window is still one BOOT tap away whenever partial_updates is off, and
- * the halo costs nothing extra when the backing is already opaque. */
-/* Exposed for performance testing (suite_cube_perf.c) - timed as its own
- * phase there, separate from the cube's own clear/rotate/rasterize work,
- * so the suite can compare the frame budget with and without the HUD
- * text. */
+ * ui.c/microui exactly as app_diagnostics.c's own toggle page is. Exposed
+ * for performance testing (suite_cube_perf.c) - timed as its own phase
+ * there, separate from the cube's own clear/rotate/rasterize work, so the
+ * suite can compare the frame budget with and without the HUD text. */
 void draw_fps(const input_t *input)
 {
     mu_Context *ctx = ui_context();
     ui_begin(input);
+    /* UI_TEXT_OUTLINED is app_sand.c's palette-label fix for the same
+     * reason it was built for: a label with no halo of its own would
+     * wash out against whichever of the cube's shifting corner colours
+     * happens to sit behind it. Left in place even with the box's own
+     * opaque backing - a NO_BACKGROUND window is still one BOOT tap away
+     * whenever partial_updates is off, and the halo costs nothing extra
+     * when the backing is already opaque. */
     ui_set_text_style(UI_TEXT_OUTLINED);
 
     if (ui_begin_screen(ctx, "Cube HUD",
@@ -265,7 +238,15 @@ void draw_fps(const input_t *input)
         snprintf(fps_line, sizeof fps_line, "%.1f fps", fps_value);
         const int tw = gfx_text_width(fps_line, -1);
         const int th = gfx_text_height() + 4;
-        
+
+        /* BUT: mu_text() draws only its own ink, no background of its
+         * own. Under partial_updates, cube_frame() only erases the
+         * CUBE's own last bounding box, never this box's, so when the
+         * fps line repaints - it changes shape every FPS_WINDOW_MS as
+         * digits change - old digits the new ones don't overdraw stay on
+         * screen. draw_overlay_box() fixes this: an opaque box behind
+         * the text, painted through the same mu command list already
+         * hashed, costing nothing on frames where fps did not change. */
         mu_Rect box = draw_overlay_box(ctx, tw + 8, th);
         mu_layout_set_next(ctx, box, 0);
         mu_text(ctx, fps_line);
@@ -273,6 +254,14 @@ void draw_fps(const input_t *input)
         mu_end_window(ctx);
     }
 
+    /* UI_NO_BACKGROUND is what lets the spinning cube show through
+     * everywhere this window doesn't itself paint - see app_sand.c's
+     * draw_palette() for the precedent. Unlike that panel's frozen sand,
+     * the cube keeps moving underneath every frame, which is exactly the
+     * case ui_end()'s own comment calls out: it repaints whenever
+     * "something else has already dirtied the screen", so the fps line
+     * stays correctly composited over a background that never stops
+     * changing, with no special handling needed here. */
     ui_end(UI_NO_BACKGROUND);
 }
 
@@ -280,32 +269,20 @@ void draw_fps(const input_t *input)
 #define MENU_BTN_H UI_ROW_HEIGHT
 #define MENU_BTN_GAP 20
 
-/* The BOOT-opened menu - currently just the partial_updates toggle, as one
- * centered bezel button, but the place any future option belongs rather
- * than growing the persistent HUD in draw_fps(). See cube_frame() for why
- * BOOT opens this instead of flipping the toggle directly, and menu_open's
- * own comment for the one-button-one-screen-level-concern precedent this
- * follows.
- *
- * Modeled on app_sand.c's own draw_menu(): one full-screen OPAQUE window
- * (ui_end(BACKGROUND_RGB), not UI_NO_BACKGROUND), because cube_frame() does
- * not draw the cube at all while menu_open is true - see there. That is
- * what makes this simpler than draw_fps(): no spinning cube underneath to
- * stay composited over, so none of that function's ghosting/ordering
- * concerns apply here.
- *
- * ui_set_button_style(UI_BUTTON_BEZEL) is required, not automatic - ui_begin()
- * resets the button style to UI_BUTTON_FLAT every frame (see ui.h), so a
- * bezelled button needs asking for on every frame that draws one, the same
- * as ui_launcher.c's own menu does. Both the button and the hint below it
- * are placed via mu_layout_set_next() at an absolute rect rather than
- * through mu_layout_row()'s normal top-down flow, the same reason and the
- * same trick app_sand.c's own two-button boot menu uses: a single small
- * control centered mid-screen has no natural row to sit in. */
+/* The BOOT-opened menu - currently just the partial_updates toggle, as
+ * one centered bezel button, but the place any future option belongs
+ * rather than growing the persistent HUD in draw_fps(). See cube_frame()
+ * for why BOOT opens this instead of flipping the toggle directly, and
+ * menu_open's own comment for the one-button-one-screen-level-concern
+ * precedent this follows. */
 static void draw_menu(const input_t *input)
 {
     mu_Context *ctx = ui_context();
     ui_begin(input);
+    /* ui_set_button_style(UI_BUTTON_BEZEL) is required, not automatic -
+     * ui_begin() resets the button style to UI_BUTTON_FLAT every frame
+     * (see ui.h), so a bezelled button needs asking for on every frame
+     * that draws one, the same as ui_launcher.c's own menu does. */
     ui_set_button_style(UI_BUTTON_BEZEL);
 
     if (ui_begin_screen(ctx, "Cube Menu",
@@ -319,6 +296,11 @@ static void draw_menu(const input_t *input)
         snprintf(label, sizeof label, "PARTIAL UPDATES: %s",
                  partial_updates ? "ON" : "OFF");
 
+        /* Both the button and the hint below it are placed via
+         * mu_layout_set_next() at an absolute rect rather than through
+         * mu_layout_row()'s normal top-down flow, the same trick
+         * app_sand.c's own two-button boot menu uses: a single small
+         * control centered mid-screen has no natural row to sit in. */
         mu_layout_set_next(ctx,
                            ui_centered_rect(ui_width(), MENU_BTN_W, MENU_BTN_H, top),
                            0);
@@ -340,19 +322,15 @@ static void draw_menu(const input_t *input)
         mu_end_window(ctx);
     }
 
+    /* Modeled on app_sand.c's own draw_menu(): one full-screen OPAQUE
+     * window (ui_end(BACKGROUND_RGB), not UI_NO_BACKGROUND), because
+     * cube_frame() does not draw the cube at all while menu_open is
+     * true. That is what makes this simpler than draw_fps(): no
+     * spinning cube underneath to stay composited over, so none of that
+     * function's ghosting/ordering concerns apply here. */
     ui_end(BACKGROUND_RGB);
 }
 
-/* The three phases below are exposed (suite_cube_perf.c) so the perf suite
- * can time each on its own without ever touching small3dlib itself.
- * small3dlib.h defines real, non-static functions when included with
- * S3L_PIXEL_FUNCTION etc. set - not just declarations - so only the
- * translation unit that already includes it (this one) can call
- * S3L_newFrame()/S3L_drawScene() at all; a second #include from
- * suite_cube_perf.c would redefine those same symbols and fail to link.
- * cube_frame() below is just these three calls plus draw_fps(), so the
- * suite's with_hud runs exercise the exact same code, not a hand copy of
- * it that could drift out of sync. */
 void cube_update_rotation(uint32_t dt_ms)
 {
     elapsed_ms += dt_ms;
@@ -371,6 +349,14 @@ void cube_clear_frame(void)
     gfx_clear(gfx_rgb(BACKGROUND_RGB));
 }
 
+/* The three phases below are exposed (suite_cube_perf.c) so the perf
+ * suite can time each without touching small3dlib itself. small3dlib.h
+ * defines real, non-static functions when included with
+ * S3L_PIXEL_FUNCTION etc. set - so only this translation unit can call
+ * S3L_newFrame()/S3L_drawScene() at all; a second #include from
+ * suite_cube_perf.c would redefine those symbols and fail to link.
+ * cube_frame() is just these three calls plus draw_fps(), exercising the
+ * exact same code. */
 void cube_rasterize_frame(void)
 {
     if (partial_updates) {
@@ -399,8 +385,8 @@ static void cube_frame(uint32_t dt_ms, const input_t *input)
     /* BOOT opens/closes the menu now, rather than flipping partial_updates
      * directly - the toggle moved onto its own bezel button inside
      * draw_menu(). Invalidation on open and close resets partial clear
-     * tracking for the same reasons: opening replaces the framebuffer with
-     * the menu's opaque screen, and closing repaints the cube from
+     * tracking for the same reasons: opening replaces the framebuffer
+     * with the menu's opaque screen, and closing repaints the cube from
      * scratch. */
     if (input->boot.pressed) {
         menu_open = !menu_open;
@@ -428,14 +414,14 @@ static void cube_frame(uint32_t dt_ms, const input_t *input)
         return;
     }
 
-    /* fps_value only actually changes once a window closes, so it reads as
-     * a settled average rather than jittering with every frame's own dt_ms -
-     * the same reason report_fps() in main.c windows instead of reporting
-     * per frame. An occasional dt_ms of 0 (two frames landing in the same
-     * millisecond) is harmless: fps_frame_count keeps counting them and the
-     * window still closes once the rest add up. Only every single frame
-     * landing under 1 ms, sustained, would stall it - not a real risk for a
-     * scene this heavy to rasterize. */
+    /* fps_value only actually changes once a window closes, so it reads
+     * as a settled average rather than jittering with every frame's own
+     * dt_ms - same reason report_fps() in main.c windows instead of
+     * reporting per frame. An occasional dt_ms of 0 (two frames landing
+     * in the same millisecond) is harmless: fps_frame_count keeps
+     * counting them and the window still closes once the rest add up.
+     * Only every frame under 1 ms, sustained, would stall it - not a
+     * real risk for a scene this heavy to rasterize. */
     fps_frame_count++;
     fps_window_elapsed_ms += dt_ms;
     if (fps_window_elapsed_ms >= FPS_WINDOW_MS) {
