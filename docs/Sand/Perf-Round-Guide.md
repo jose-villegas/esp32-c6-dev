@@ -258,20 +258,18 @@ floor entirely: two builds of byte-identical source produce byte-identical
 counts, so a real change shows up as a real difference and a no-op window
 shows up as exact equality, not "probably nothing."
 
-`sand_liquid.c`'s cross-flow path carries this instrumentation
-(`sand_work_counters.h`/`.c`), gated behind its own Kconfig option,
-`CONFIG_LAUNCHER_SAND_WORK_COUNTERS` (Kconfig.projbuild) - opt-in on top of
-`CONFIG_LAUNCHER_DEVELOPMENT` (which it `select`s), not merely
-development-only, because leaving it on by default would silently shift
-every timing capture taken on `build.diag` - see the option's own help text
-and `sand_work_counters.h`'s header comment. A release or ordinary
-development build never compiles a single increment.
-`tools/perf_probe/compare_counters.py` is the driver: point it at two refs
-and it `git archive`s each into a scratch tree (never checking out over a
-worktree), carries the current counters and a small standalone scene
-driver into both, builds, runs the water scene, and prints a per-counter
-delta table - no device, no capture, and it bisects for free the way a
-timed capture never could (~8 minutes each on device vs. two host builds).
+`sand_liquid.c` itself carries none of this instrumentation - counting is
+injection, not an in-tree opt-in. `sand_work_counters.h`/`.c` live as tool
+assets in `tools/perf_probe/`, and `tools/perf_probe/compare_counters.py` is
+the driver: point it at two refs and it `git archive`s each into a scratch
+tree (never checking out over a worktree), carries the current counters and
+a small standalone scene driver into both, injects the `SAND_WORK_COUNT()`
+call sites into each scratch tree's own `sand_liquid.c` at verified text
+anchors, builds, runs the water scene, and prints a per-counter delta table
+- no device, no capture, and it bisects for free the way a timed capture
+never could (~8 minutes each on device vs. two host builds). A release or
+ordinary development build never sees a single increment, because the
+source they compile never carries one.
 
 ```sh
 python launcher/main/apps/sand/tools/perf_probe/compare_counters.py <ref> [<ref>]
@@ -423,11 +421,12 @@ to confound the comparison — the failure mode four separate images cannot
 avoid, since each one draws its own flash-layout ticket. Default true at
 runtime (every pass on), gated behind its own Kconfig option,
 `CONFIG_LAUNCHER_SAND_PASS_GATES` — opt-in on top of
-`CONFIG_LAUNCHER_DEVELOPMENT` the same as the counters and for the same
-reason (a plain `build.diag` should not carry either), and kept as a
-separate option from `CONFIG_LAUNCHER_SAND_WORK_COUNTERS` so measuring one
-never perturbs the other. They cost release nothing and, with the option
-on, are available in a diagnostics build.
+`CONFIG_LAUNCHER_DEVELOPMENT`, for the same reason a plain `build.diag`
+should not silently carry them: they measure TIME on device, and the counters
+(injected by `compare_counters.py`, not an in-tree option) measurably perturb
+codegen, so the two are kept apart to make sure measuring one never perturbs
+the other. The gates cost release nothing and, with the option on, are
+available in a diagnostics build.
 
 Open items, as of this file's writing:
 

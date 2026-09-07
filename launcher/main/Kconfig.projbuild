@@ -76,31 +76,6 @@ menu "Launcher"
             sdkconfig.defaults.diag_autorun on top of sdkconfig.defaults.diag
             for exactly that reason.
 
-    config LAUNCHER_SAND_WORK_COUNTERS
-        bool "Sand: per-pass work counters for the liquid cross-flow path"
-        default n
-        select LAUNCHER_DEVELOPMENT
-        help
-            Compiles in sand_work_counters.h/.c: exact, deterministic
-            per-pass work counts for sand_liquid.c's cross-flow path (calls,
-            rows walked, blocks/cells examined, transfers). Host wall-clock
-            timing carries a 7-15% cross-binary noise floor that can swamp
-            a real effect, while these counters are bit-for-bit reproducible
-            between two builds of the same source - so
-            tools/perf_probe/compare_counters.py can bisect a regression
-            from two host builds and no device capture at all. That is how
-            the water regression (bd esp32c6-8zx) was attributed to a single
-            commit without spending one device capture.
-
-            Off by default even though it selects LAUNCHER_DEVELOPMENT.
-            build.diag is the build every frame-budget capture is taken on,
-            and this campaign chases 2-3% effects; measured against the
-            real RISC-V toolchain, the counters cost sand_step_liquids +39
-            instructions and +120 bytes, which is enough to silently shift
-            every future timing capture if left on by default. Count with
-            these; never time with them - turn LAUNCHER_SAND_PASS_GATES on
-            instead for that.
-
     config LAUNCHER_SAND_PASS_GATES
         bool "Sand: per-pass volatile gates for sand_step()"
         default n
@@ -119,14 +94,14 @@ menu "Launcher"
             comparison. Four separately-built stub-each-pass images would
             each draw their own flash-layout ticket instead.
 
-            A separate option from LAUNCHER_SAND_WORK_COUNTERS, on purpose:
-            the gates exist to measure TIME on device, a five-way pass
-            decomposition in one capture, and the counters measurably
-            perturb codegen (see that option's help). Compiling both into
-            the same gate build would perturb exactly the timings the gates
-            exist to produce, so one combined option would make that
-            mistake easy and silent. Off by default for the same reason as
-            the counters: build.diag is what every frame-budget capture is
+            Deliberately NOT paired with the sand work counters, which live
+            in tools/perf_probe/ and are injected into a scratch build by
+            compare_counters.py rather than compiled from this tree. The
+            gates measure TIME on device; the counters cost sand_step_liquids
+            +39 instructions and +120 bytes, measured against the real
+            toolchain, so building both together would perturb exactly the
+            timings the gates exist to produce. Off by default because
+            build.diag is what every frame-budget capture is
             taken on, and this campaign chases effects too small to risk
             shifting by default.
 

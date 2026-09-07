@@ -176,7 +176,7 @@ def overlay_current_support_files(tree: Path) -> None:
     perf_probe = app_sand / "tools" / "perf_probe"
     perf_probe.mkdir(parents=True, exist_ok=True)
     for name in ("sand_work_counters.h", "sand_work_counters.c"):
-        shutil.copyfile(APP_SAND / name, app_sand / name)
+        shutil.copyfile(HERE / name, app_sand / name)
     shutil.copyfile(HERE / "counters_scene_main.c",
                      perf_probe / "counters_scene_main.c")
 
