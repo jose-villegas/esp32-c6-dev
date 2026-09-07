@@ -614,8 +614,8 @@ tick_decay(sand_t* s, uint8_t* row, int x, int y, cell_t* grain, const material_
 /* OPT-IN, for the reason sand_work_counters.h spells out: development
  * alone puts these in build.diag, the capture build, and an instrument
  * that shifts every measurement is worse than none. CONFIG_LAUNCHER_
- * SAND_PASS_GATES already `select`s LAUNCHER_DEVELOPMENT, so the guard
- * checks only this option. Kept separate from the work counters: the
+ * SAND_PASS_GATES cannot be set without LAUNCHER_DEVELOPMENT, so the
+ * guard checks only this option. Kept separate from the work counters: the
  * gates measure TIME, the counters measurably perturb codegen, so one
  * option covering both would perturb exactly what the gates measure. */
 #if CONFIG_LAUNCHER_SAND_PASS_GATES
