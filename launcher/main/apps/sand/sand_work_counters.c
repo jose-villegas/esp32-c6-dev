@@ -1,6 +1,6 @@
 #include "sand_work_counters.h"
 
-#if CONFIG_LAUNCHER_DEVELOPMENT
+#if SAND_WORK_COUNTERS && CONFIG_LAUNCHER_DEVELOPMENT
 
 sand_work_counters_t sand_work_counters;
 

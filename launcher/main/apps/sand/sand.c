@@ -2030,7 +2030,7 @@ static void step_impulses(sand_t *s, int dx, int dy)
     }
 }
 
-#if CONFIG_LAUNCHER_DEVELOPMENT
+#if SAND_PASS_GATES && CONFIG_LAUNCHER_DEVELOPMENT
 /* Declared extern in sand_priv.h, next to the SAND_STEP_GATE()/
  * SAND_STEP_GATED() macros sand_step() below uses them through - see that
  * declaration's own comment for what these buy and why they are safe to
