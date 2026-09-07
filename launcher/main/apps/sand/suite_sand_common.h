@@ -17,6 +17,7 @@
  *===========================================================================*/
 #pragma once
 
+#include "material_palette.h"
 #include "sand.h"
 
 /* Big enough for every case here, small enough to write out by hand. */

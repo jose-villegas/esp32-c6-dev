@@ -24,6 +24,7 @@
 #include "unity.h"
 #include "suites.h"
 
+#include "material_palette.h"
 #include "sand.h"
 #include "sand_priv.h"
 #include "util/intmath.h"

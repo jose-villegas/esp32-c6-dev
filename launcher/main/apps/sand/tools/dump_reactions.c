@@ -71,6 +71,7 @@
 #endif
 
 #include "material.h"
+#include "material_palette.h"
 
 /* Not defined anywhere in this codebase today (checked) - every other array
  * here is either sized by a named constant or walked with sizeof/pointer

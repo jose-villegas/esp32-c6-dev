@@ -95,7 +95,9 @@ undefined behaviour.
 The 256-entry colour palette (`material_palette()`) is built the same way -
 16 shades per material, interpolated at compile time into another `const`
 table, so drawing a cell is one array index and zero colour maths at
-runtime.
+runtime. It lives in `material_palette.c`/`.h`, split from `material.c`/`.h`
+for the same reason `sand.c`/`sand_liquid.c` are two files below - colour is
+a different concern from identity and behaviour.
 
 ## Movement: one rule, and one invariant that has to be right
 
@@ -812,18 +814,19 @@ actually produces the wandering, forking shape a root system is supposed
 to have. The difference was qualitative, not a rounding error.
 
 **Shade follows structure, not age.** A root darkens from the fresh tan
-toward a wood-like brown (`ROOT_OLD`, `material.c`) as more root grows
-around it: the painter hands `material_colours()` the count of root
+toward a wood-like brown (`ROOT_OLD`, `material_palette.c`) as more root
+grows around it: the painter hands `material_colours()` the count of root
 neighbours in the `depth` slot only a liquid's interior otherwise reads
-(`material_root_neighbours()`, `material.h`), and that count picks one of
-`ROOT_SHADES` steps. A tip touching one other root wears the fresh colour;
-a cell that has put out children steps darker; the collar, touched on most
-sides, wears the darkest. Not a lifetime, on purpose and not only because
-a root has nowhere to store one: an age would darken the tips too, and the
-tips are the part meant to stay fresh. Lose a child to rot or lava and the
-parent lightens again. The eating rule above is what makes this visible at
-all - a straight column is almost entirely two-neighbour cells, while a
-branching system is full of the junctions the darker steps are keyed to.
+(`material_root_neighbours()`, `material_palette.h`), and that count picks
+one of `ROOT_SHADES` steps. A tip touching one other root wears the fresh
+colour; a cell that has put out children steps darker; the collar, touched
+on most sides, wears the darkest. Not a lifetime, on purpose and not only
+because a root has nowhere to store one: an age would darken the tips too,
+and the tips are the part meant to stay fresh. Lose a child to rot or lava
+and the parent lightens again. The eating rule above is what makes this
+visible at all - a straight column is almost entirely two-neighbour cells,
+while a branching system is full of the junctions the darker steps are
+keyed to.
 
 **Measured, before and after** (60 wide, 70 tall; stone floor; 20 rows of
 saturated dirt; one seed on the surface; the 13 cells around the collar
