@@ -21,14 +21,12 @@
 # Examples:
 #   ./build_probe.sh out/probe
 #
-# sand_work_counters.c/.h (bd esp32c6-8zx) is what a round needing host-only
-# call counters now reaches for - the placeholder once sketched here
-# (-DSAND_PERF_COUNTERS, never wired to anything) is superseded by it. Unlike
-# everything else this probe already turns on below, the counters are OPT-IN
-# on top of CONFIG_LAUNCHER_DEVELOPMENT (Kconfig.projbuild's
-# LAUNCHER_SAND_WORK_COUNTERS, see sand_work_counters.h for why): pass
-# EXTRA_DEFS=-DCONFIG_LAUNCHER_SAND_WORK_COUNTERS=1 to reach them;
-# probe_main.c's own --counters flag is what reads them out.
+# A round needing host-only call counters reaches for
+# tools/perf_probe/compare_counters.py (bd esp32c6-8zx) instead of this probe
+# - it injects SAND_WORK_COUNT() calls into a scratch copy of sand_liquid.c
+# at verified text anchors, rather than this binary carrying counters of its
+# own. See sand_work_counters.h (this directory) and compare_counters.py's
+# own header for why.
 #
 # For an interleaved best-of-N run across several scenes, see run_probe.py
 # in this same directory rather than looping this script by hand.
@@ -108,7 +106,6 @@ $APP_SAND/sand.c
 $APP_SAND/sand_liquid.c
 $APP_SAND/sand_gas.c
 $APP_SAND/sand_reactions.c
-$APP_SAND/sand_work_counters.c
 $APP_SAND/material.c
 $APP_SAND/palette.c
 $APP_SAND/row_runs.c

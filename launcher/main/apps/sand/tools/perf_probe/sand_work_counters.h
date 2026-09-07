@@ -13,23 +13,21 @@
  * not a per-step average: reset once before a scene and dump once after: the
  * caller divides by its own step count for a rate.
  *
- * OPT-IN, AND NOT MERELY DEVELOPMENT-ONLY: CONFIG_LAUNCHER_SAND_WORK_COUNTERS
- * (Kconfig.projbuild), not CONFIG_LAUNCHER_DEVELOPMENT alone. Development
- * alone would compile these into build.diag - the build every frame-budget
- * capture is taken on. Measured with codegen_diff.py against the real
- * RISC-V toolchain: the counters cost sand_step_liquids +39 instructions
- * and +120 bytes when compiled in. This campaign chases 2-3% effects, so an
- * instrument that silently shifts every future capture is worse than no
- * instrument. A plain diag build is byte-identical to one built without
- * this option.
+ * NOT IN THE SHIPPED TREE AT ALL: these files are a tool asset under
+ * tools/perf_probe/, never in launcher/main/apps/sand/ proper, and
+ * sand_liquid.c never includes this header - tools/perf_probe/
+ * compare_counters.py injects the SAND_WORK_COUNT() call sites into a
+ * scratch copy of sand_liquid.c at build time instead (see that script's
+ * own header). CONFIG_LAUNCHER_SAND_WORK_COUNTERS below is a plain
+ * compiler define compare_counters.py passes to its own private scratch
+ * build, not a Kconfig option - a release or development build of the
+ * real firmware never defines it and never sees this file at all.
  *
- * The Kconfig option `select`s LAUNCHER_DEVELOPMENT, so turning this on
- * always brings development along and a release build cannot enable it
- * even by accident - the guard below checks only this option, not
- * development too, since that would just be two conditions to keep in
- * step with one relationship Kconfig already enforces. codegen_diff.py
- * proves the off case: release and diag both come out at 1,184
- * instructions, 0 differing lines.
+ * Measured with codegen_diff.py against the real RISC-V toolchain: the
+ * counters cost sand_step_liquids +39 instructions and +120 bytes when
+ * compiled in, which is why compare_counters.py never leaves them on a
+ * device build's own compile - see docs/Sand/Perf-Round-Guide.md's
+ * "Count, do not time" section for the full reasoning.
  *===========================================================================*/
 #pragma once
 
