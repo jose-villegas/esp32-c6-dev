@@ -177,9 +177,9 @@ static void test_a_blast_inside_a_sealed_vessel_stays_inside_it(void)
  * cells away) sits well inside the annulus and the farthest (x=6, three
  * cells away) still does. Every wall cell this radius reaches gets its own
  * independent density roll (see queue_flying_grain()'s own comment in
- * sand.c) - stone's chance is 55-in-256 (~21%) per cell, and enough of the
- * box wall falls inside this annulus that at least one succeeding is the
- * expected outcome, not a coin flip on a single cell.
+ * sand_impulse.c) - stone's chance is 74-in-256 (~29%) per cell, and enough
+ * of the box wall falls inside this annulus that at least one succeeding is
+ * the expected outcome, not a coin flip on a single cell.
  *
  * CHECKED AGAINST THE WALL'S OWN ORIGINAL CELLS, not "did anything land
  * outside the box" - a dislodged KIND_STATIC entry now ALSO falls under

@@ -126,6 +126,17 @@ static void queue_outward_impulse(sand_t *s, int cx, int cy, int dx, int dy,
                        SAND_IMPULSE_SPEED_RAMP);
 }
 
+/* Ordinary materials each have their own materials[] row, so density()
+ * already differs per material; every extended static (ice, metal, plant,
+ * leaf, root, ...) shares ONE row instead (cell >> 3 - see
+ * MATERIAL_ROW's own comment), so reaction_t.dislodge_density is the only
+ * way one of them can be tougher or more brittle than the rest. */
+static int dislodge_density(cell_t cell)
+{
+    const uint8_t override = reaction_of(cell)->dislodge_density;
+    return override != 0 ? override : material_of(cell)->density;
+}
+
 /* SHARED IMPLEMENTATION behind sand_impulse() and sand_explode()'s own
  * annulus seeding, so the bounds/empty/buffer-full checks stay in one
  * place. `allow_dislodge_static` and `ramp` (speed decay) differ per
@@ -159,8 +170,9 @@ static void queue_flying_grain(sand_t *s, int x, int y, int dir, int speed,
 
     /* WALL CANNOT BE THROWN BY DEFAULT, any more than one can be entered -
      * can_impulse_enter() gates the DESTINATION, this gates the SOURCE.
-     * `allow_dislodge_static` uses `255 - density` for chance: LOWER
-     * density means HIGHER chance. */
+     * `allow_dislodge_static` uses `255 - dislodge_density()` for chance:
+     * LOWER density means HIGHER chance - see that helper's own comment
+     * for why an extended static needs its own override. */
     if (material_of(cell)->kind == KIND_STATIC) {
         if (!allow_dislodge_static) {
             return;
@@ -169,7 +181,7 @@ static void queue_flying_grain(sand_t *s, int x, int y, int dir, int speed,
          * sand_impulse_dislodge()'s caller, which wants a KIND_STATIC
          * target moved unconditionally rather than toughness-scaled. */
         if (!guaranteed_dislodge) {
-            const int chance = 255 - (int)material_of(cell)->density;
+            const int chance = 255 - dislodge_density(cell);
             if ((int)(rng_next(&s->rng) & 0xFF) >= chance) {
                 return;   /* the roll failed - the wall holds, same as always */
             }

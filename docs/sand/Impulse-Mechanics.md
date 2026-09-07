@@ -138,8 +138,33 @@ accident:
 | Path | KIND_STATIC (wall) behaviour |
 |---|---|
 | `sand_impulse()` | Hard refusal, unconditional. A wall has no leverage to move a flying grain BY, and none to be moved WITH either. |
-| `sand_displace()`/`sand_explode()` | Density-scaled chance (`255 - density` in 256): stone/glass (~21%) resist far more than wood (~41%) - "tougher, harder to dislodge," not equally fragile. |
+| `sand_displace()`/`sand_explode()` | Density-scaled chance (`255 - dislodge_density()` in 256, `sand_impulse.c`) - "tougher, harder to dislodge," not equally fragile. See the fragility table below. |
 | `sand_impulse_dislodge()` | Bypasses the roll entirely - a guaranteed dislodge for a caller that has already decided the wall gives way. |
+
+**Every solid has its own toughness**, ordinary materials via
+`materials[]`'s own `density` field, extended statics (which otherwise
+share one `materials[]` row - see `MATERIAL_ROW`'s own comment) via
+`reaction_t.dislodge_density`, which overrides it:
+
+All eight sit on one curve, `density = 221 - 20 * rank` (rank 1 = toughest
+through 8 = softest) - a single knob instead of eight independently-tuned
+numbers, the same idiom `SAND_IMPULSE_SPEED_RAMP` uses for the speed decay
+elsewhere in this file:
+
+| Rank | Material | Density | Chance | |
+|---|---|---|---|---|
+| 1 | Metal | 201 | 54/256 ≈ 21% | toughest - even stone gives way to it |
+| 2 | Stone | 181 | 74/256 ≈ 29% | |
+| 3 | Root | 161 | 94/256 ≈ 37% | embedded, tougher than even wood |
+| 4 | Wood | 141 | 114/256 ≈ 45% | |
+| 5 | Glass | 121 | 134/256 ≈ 52% | brittle - more easily dislodged than wood |
+| 6 | Ice | 101 | 154/256 ≈ 60% | shatters |
+| 7 | Plant | 81 | 174/256 ≈ 68% | |
+| 8 | Leaf | 61 | 194/256 ≈ 76% | softest thing on the board |
+
+The curve is a fit to hand-chosen target percentages (game balance, not a
+measurement), not derived from anything physical - see each material's own
+`density`/`dislodge_density` comment in `material.c` for the exact rank.
 
 A dislodged glass pane converts to cullet as it's queued
 (`queue_flying_grain()`), not a flying pane - see `MAT_CULLET`'s own notes
