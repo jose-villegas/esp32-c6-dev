@@ -227,7 +227,8 @@ def build(tree: Path, cc: str, out: Path) -> None:
     # times anything.
     cmd = [cc, "-std=c11", "-Wall", "-Wextra", "-Wno-unused-parameter",
            "-O2", "-g",
-           "-DCONFIG_LAUNCHER_DEVELOPMENT=1", "-DSAND_WORK_COUNTERS=1",
+           "-DCONFIG_LAUNCHER_DEVELOPMENT=1",
+           "-DCONFIG_LAUNCHER_SAND_WORK_COUNTERS=1",
            "-I", str(main_dir), "-I", str(app_sand),
            *[str(s) for s in sources],
            "-o", str(out)]

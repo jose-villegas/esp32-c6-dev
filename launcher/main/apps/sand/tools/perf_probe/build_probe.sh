@@ -23,9 +23,11 @@
 #
 # sand_work_counters.c/.h (bd esp32c6-8zx) is what a round needing host-only
 # call counters now reaches for - the placeholder once sketched here
-# (-DSAND_PERF_COUNTERS, never wired to anything) is superseded by it. The
-# counters are CONFIG_LAUNCHER_DEVELOPMENT-gated like everything else this
-# probe already turns on below, so no extra flag is needed to reach them;
+# (-DSAND_PERF_COUNTERS, never wired to anything) is superseded by it. Unlike
+# everything else this probe already turns on below, the counters are OPT-IN
+# on top of CONFIG_LAUNCHER_DEVELOPMENT (Kconfig.projbuild's
+# LAUNCHER_SAND_WORK_COUNTERS, see sand_work_counters.h for why): pass
+# EXTRA_DEFS=-DCONFIG_LAUNCHER_SAND_WORK_COUNTERS=1 to reach them;
 # probe_main.c's own --counters flag is what reads them out.
 #
 # For an interleaved best-of-N run across several scenes, see run_probe.py

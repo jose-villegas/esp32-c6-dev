@@ -111,7 +111,7 @@ find_scene(const char* name) {
     return NULL;
 }
 
-#if SAND_WORK_COUNTERS && CONFIG_LAUNCHER_DEVELOPMENT
+#if CONFIG_LAUNCHER_SAND_WORK_COUNTERS
 static void
 print_counter_line(const char* name, uint32_t value) {
     printf("%s %u\n", name, (unsigned)value);
@@ -133,11 +133,12 @@ main(int argc, char** argv) {
         counters_mode = true;
         first_arg = 2;
     }
-#if !(SAND_WORK_COUNTERS && CONFIG_LAUNCHER_DEVELOPMENT)
+#if !CONFIG_LAUNCHER_SAND_WORK_COUNTERS
     if (counters_mode) {
         fprintf(stderr, "probe --counters: built without "
-                "-DSAND_WORK_COUNTERS=1, so the counters do not exist. "
-                "Rebuild with EXTRA_DEFS=-DSAND_WORK_COUNTERS=1\n");
+                "-DCONFIG_LAUNCHER_SAND_WORK_COUNTERS=1, so the counters do "
+                "not exist. Rebuild with "
+                "EXTRA_DEFS=-DCONFIG_LAUNCHER_SAND_WORK_COUNTERS=1\n");
         return 1;
     }
 #endif
@@ -161,7 +162,7 @@ main(int argc, char** argv) {
                 fprintf(stderr, "probe: unknown scene '%s' (try --list)\n", argv[a]);
                 return 1;
             }
-#if SAND_WORK_COUNTERS && CONFIG_LAUNCHER_DEVELOPMENT
+#if CONFIG_LAUNCHER_SAND_WORK_COUNTERS
             if (counters_mode) {
                 sand_work_counters_reset();
                 suite_run_test_timed(scene->fn, scene->name, 0);

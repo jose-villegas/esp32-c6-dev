@@ -259,10 +259,13 @@ counts, so a real change shows up as a real difference and a no-op window
 shows up as exact equality, not "probably nothing."
 
 `sand_liquid.c`'s cross-flow path carries this instrumentation
-(`sand_work_counters.h`/`.c`), compile-time gated behind
-`CONFIG_LAUNCHER_DEVELOPMENT` like every other profiling counter in this
-tree - see Kconfig.projbuild's own "no profiling counters" line - so a
-release or ordinary build never compiles a single increment.
+(`sand_work_counters.h`/`.c`), gated behind its own Kconfig option,
+`CONFIG_LAUNCHER_SAND_WORK_COUNTERS` (Kconfig.projbuild) - opt-in on top of
+`CONFIG_LAUNCHER_DEVELOPMENT` (which it `select`s), not merely
+development-only, because leaving it on by default would silently shift
+every timing capture taken on `build.diag` - see the option's own help text
+and `sand_work_counters.h`'s header comment. A release or ordinary
+development build never compiles a single increment.
 `tools/perf_probe/compare_counters.py` is the driver: point it at two refs
 and it `git archive`s each into a scratch tree (never checking out over a
 worktree), carries the current counters and a small standalone scene
@@ -417,9 +420,14 @@ esp32c6-8zx), not four separately-built stub-each-pass images: one binary,
 five configurations (all passes on, then each disabled in turn) in ONE
 device capture, so there is zero layout difference between configurations
 to confound the comparison — the failure mode four separate images cannot
-avoid, since each one draws its own flash-layout ticket. Default enabled,
-`CONFIG_LAUNCHER_DEVELOPMENT`-gated the same as the counters, so they cost
-release nothing and are always available in a diagnostics build.
+avoid, since each one draws its own flash-layout ticket. Default true at
+runtime (every pass on), gated behind its own Kconfig option,
+`CONFIG_LAUNCHER_SAND_PASS_GATES` — opt-in on top of
+`CONFIG_LAUNCHER_DEVELOPMENT` the same as the counters and for the same
+reason (a plain `build.diag` should not carry either), and kept as a
+separate option from `CONFIG_LAUNCHER_SAND_WORK_COUNTERS` so measuring one
+never perturbs the other. They cost release nothing and, with the option
+on, are available in a diagnostics build.
 
 Open items, as of this file's writing:
 
