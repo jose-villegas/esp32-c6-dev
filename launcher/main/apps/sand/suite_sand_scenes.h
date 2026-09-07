@@ -56,6 +56,19 @@ int all_pairs_material_at(int x, int y, int first, int n_mats);
  * the ordering. */
 cell_t all_pairs_spawn_cell(int index);
 
+/* Paints the tiling plus the deliberate gunpowder patches (see
+ * suite_sand_scenes.c) into an already-initialised sand_t - one copy,
+ * shared by the timed device scene and the host coverage test, so neither
+ * can drift from what the other actually builds. */
+void build_all_pairs_scene(sand_t *s);
+
+/* Same reasoning as WATER_LAVA_IMPULSE_MAX/GUNPOWDER_BASIN_IMPULSE_MAX
+ * below. Without an impulse buffer sand_explode() has nowhere to write, so
+ * Gunpowder.explodes cannot fire no matter how the patches are placed - a
+ * caller wanting them to detonate must sand_enable_impulses() with this
+ * ceiling first. */
+#define ALL_PAIRS_IMPULSE_MAX 2048
+
 void build_four_liquid_scene(sand_t *s);
 void build_lava_stress_scene(sand_t *s);
 void build_smoke_and_steam_scene(sand_t *s);
