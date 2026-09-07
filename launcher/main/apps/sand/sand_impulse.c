@@ -21,41 +21,56 @@
 
 #include "sand_priv.h"
 
-/* Integer floor(sqrt(v)) for exact_disc_count() - Newton's method, converges
- * quickly (v ≤ grid dimension squared, a few hundred thousand). Not the same
- * as tilt.c's isqrt64(), which is static and for int64_t accelerometer
- * readings. A smaller, local version is more efficient. */
-static int isqrt_floor(int v)
+/* Exact number of lattice cells inside a disc of radius r - every cell with
+ * dx*dx + dy*dy <= r*r. displace_disc() wants it only as a scalar, to size
+ * `keep` against the room left in the impulse buffer.
+ *
+ * A TABLE, because it is a pure function of one small integer and every radius
+ * a caller can reach is bounded: water's splash decays from 20, gunpowder
+ * blasts at 20, lava bursts at 12, and the app's own detonate reaches 25 at
+ * ULTRA quality. So the lookup answers every call the tree can make today in a
+ * single load. */
+#define DISC_COUNT_MAX_RADIUS 32
+
+static const uint16_t disc_counts[DISC_COUNT_MAX_RADIUS + 1] = {
+       1,    5,   13,   29,   49,   81,  113,  149,
+     197,  253,  317,  377,  441,  529,  613,  709,
+     797,  901, 1009, 1129, 1257, 1373, 1517, 1653,
+    1793, 1961, 2121, 2289, 2453, 2629, 2821, 3001,
+    3209,
+};
+
+/* The out-of-range path, and the reason this file no longer carries an integer
+ * square root at all. As |dy| grows the widest x can only shrink, so ONE
+ * monotone walk finds every row's half-width using multiplies and compares -
+ * no division, no sqrt - and x steps down at most `radius` times across the
+ * whole loop. sand_displace() is public, so a radius past the table is
+ * reachable even though nothing in the tree does it. */
+static int disc_count_walk(int radius)
 {
-    if (v <= 0) {
-        return 0;
+    const int r2 = radius * radius;
+    int count = 0;
+    int x = radius;
+
+    for (int dy = 0; dy <= radius; dy++) {
+        while (x > 0 && x * x + dy * dy > r2) {
+            x--;
+        }
+        const int row = 2 * x + 1;
+        count += (dy == 0) ? row : 2 * row;   /* +dy and -dy are symmetric */
     }
-    int x = v;
-    int y = (x + 1) / 2;
-    while (y < x) {
-        x = y;
-        y = (x + v / x) / 2;
-    }
-    return x;
+    return count;
 }
 
-/* Exact lattice cell count inside a disc radius r; sum of 2*floor(sqrt(r*r -
- * dy*dy)) + 1 for each row dy from -r to r, in O(r) integer square roots. */
-static int exact_disc_count(int radius)
+int sand_disc_count(int radius)
 {
     if (radius < 0) {
         return 0;
     }
-    const int r2 = radius * radius;
-    int count = 0;
-    for (int dy = -radius; dy <= radius; dy++) {
-        const int rem = r2 - dy * dy;
-        if (rem < 0) {
-            continue;
-        }
-        count += 2 * isqrt_floor(rem) + 1;
+    if (radius <= DISC_COUNT_MAX_RADIUS) {
+        return disc_counts[radius];
     }
-    return count;
+    return disc_count_walk(radius);
 }
 
 /* Forward-declared: the shared implementation behind both sand_impulse()
@@ -239,14 +254,14 @@ static void displace_disc(sand_t *s, int cx, int cy, int radius,
      * SEQUENCE cells are offered in, never which cells qualify. */
     const int r2 = radius * radius;
 
-    /* `disc_count` is exact_disc_count()'s own EXACT count, not a safe
+    /* `disc_count` is sand_disc_count()'s own EXACT count, not a safe
      * over-estimate - fine for sizing the buffer itself, but an overshoot
      * would compute `keep` too low for small discs. `keep` is sized
      * against `room`, not `s->impulse_max` - DO NOT simplify: a second
      * displacement mid-arc would otherwise size its density as if the
      * whole buffer were free - see
      * test_two_overlapping_blasts_share_the_buffer_evenly. */
-    const int disc_count = exact_disc_count(radius);
+    const int disc_count = sand_disc_count(radius);
     const int room = s->impulse_max - s->impulse_count;
     const int keep = (disc_count < room) ? disc_count : room;
     int accum = 0;

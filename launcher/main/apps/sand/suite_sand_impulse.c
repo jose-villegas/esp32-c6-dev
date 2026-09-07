@@ -41,6 +41,47 @@
  * exercise it (which uses its own, deliberately tiny buffer instead). */
 static impulse_t impulse_buf[W * H];
 
+/* THE ONLY CHECK THE BAKED DISC-COUNT TABLE GETS, and deliberately by a
+ * different algorithm: this counts lattice points one cell at a time instead
+ * of restating the closed form the table was generated from. A table checked
+ * against its own generator's arithmetic proves only that the arithmetic was
+ * copied. Runs past DISC_COUNT_MAX_RADIUS so the division-free walk that
+ * answers out-of-range radii is covered too. */
+static void test_the_disc_count_table_matches_a_direct_lattice_count(void)
+{
+    int first_bad = -1;
+    int expected_there = 0, got_there = 0;
+
+    for (int r = 0; r <= 40; r++) {
+        int expect = 0;
+        for (int dy = -r; dy <= r; dy++) {
+            for (int dx = -r; dx <= r; dx++) {
+                if (dx * dx + dy * dy <= r * r) {
+                    expect++;
+                }
+            }
+        }
+        const int got = sand_disc_count(r);
+        if (got != expect && first_bad < 0) {
+            first_bad = r;
+            expected_there = expect;
+            got_there = got;
+        }
+    }
+
+    /* Reported as the RADIUS, not the count - "Expected -1 Was 17" names the
+     * entry to go and look at, which a mismatched cell total would not. */
+    TEST_ASSERT_EQUAL_INT_MESSAGE(-1, first_bad,
+        "sand_disc_count() disagrees with a direct lattice count at this "
+        "radius - the value printed as 'Was' is the radius that failed");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(expected_there, got_there,
+        "and these are the counts it disagreed by, at that radius");
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, sand_disc_count(-1),
+        "a negative radius encloses no cells - displace_disc() leans on this "
+        "instead of guarding its own caller");
+}
+
 /* Written FIRST, because it is what the plan calls out as forcing the actual
  * design decision: "stop when blocked" (what this implements) versus a
  * radial line-of-sight raycast from the centre (the obvious first instinct
@@ -4219,6 +4260,7 @@ static void test_shaking_spreads_a_pile_sideways(void)
 
 void run_sand_impulse_suite(void)
 {
+    RUN_TEST(test_the_disc_count_table_matches_a_direct_lattice_count);
     RUN_TEST(test_a_blast_inside_a_sealed_vessel_stays_inside_it);
     RUN_TEST(test_a_strong_close_blast_can_breach_a_wall);
     RUN_TEST(test_a_dislodged_wall_keeps_falling_even_if_its_first_push_roll_fails);

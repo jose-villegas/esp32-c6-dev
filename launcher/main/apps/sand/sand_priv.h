@@ -673,6 +673,11 @@ void sand_step_reactions(sand_t* s);
  * stage of step_one_reacting_row()'s (sand_reactions.c) per-cell dispatch,
  * called across the file boundary the same way sand_step_reactions() above
  * is called from sand.c. */
+/* Exact lattice-cell count for a disc of radius r (sand_impulse.c). Declared
+ * here rather than left static so the suite can check the shipped table
+ * against a direct count, which is the only way that table is verified. */
+int sand_disc_count(int radius);
+
 bool step_one_falling_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r);
 bool step_one_conducting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r);
 bool step_one_rooting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r);
