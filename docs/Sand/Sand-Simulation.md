@@ -1034,6 +1034,11 @@ within one file is. Confirmed on device rather than assumed: the
 frame-budget tests above are what would have caught it if splitting the
 file had cost anything.
 
+The same reasoning later split `sand_impulse.c` out of `sand.c` too: queued
+explosions, thrown debris and splash pushback move OUTWARD rather than
+gravity-ward, so `step_impulses()` is called from `sand_step()` exactly
+once, the same seam `sand_step_liquids()` and `sand_step_gas()` use.
+
 ## The sweep and the cross-flow pass, broken down further
 
 134 and 85 are still well over Sonar's *default* line, which is 15, not the
