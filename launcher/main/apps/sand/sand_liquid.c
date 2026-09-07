@@ -14,6 +14,7 @@
  *===========================================================================*/
 
 #include "sand_priv.h"
+#include "sand_work_counters.h"
 
 #include "util/fixed.h"
 
@@ -457,6 +458,8 @@ bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
                        const int *slide_a, const int *slide_b,
                        cell_t grain, uint8_t mat_id)
 {
+    SAND_WORK_COUNT(move_liquid_grain_calls);
+
     const int w = s->w;
     int mass = CELL_VARIANT(grain);
     bool moved = false;
@@ -674,6 +677,8 @@ static inline int find_shallowest(const sand_t *s, int x, int y, int px,
     int k_at = 0;
 
     for (int k = 1; k <= sight; k++) {
+        SAND_WORK_COUNT(find_shallowest_iters);
+
         const int sx = x + px * k;
         const int sy = y + py * k;
 
@@ -726,6 +731,8 @@ static inline bool equalise_one_cell(sand_t *s, uint8_t *row, int x, int y,
                                      int bias_q8,
                                      bool *stayed_in_row, int *touched_x)
 {
+    SAND_WORK_COUNT(equalise_one_cell_calls);
+
     if (has_room_below(s, x, y, dx, dy, id)) {
         return false;
     }
@@ -739,6 +746,7 @@ static inline bool equalise_one_cell(sand_t *s, uint8_t *row, int x, int y,
                          * "runny" looks like */
     }
 
+    SAND_WORK_COUNT(find_shallowest_calls);
     int lowest, at;
     const int drop_q8 = find_shallowest(s, x, y, px, py, sight, id, mass,
                                         bias_q8, &lowest, &at);
@@ -772,6 +780,7 @@ static inline bool equalise_one_cell(sand_t *s, uint8_t *row, int x, int y,
         return false;
     }
 
+    SAND_WORK_COUNT(transfers);
     const int tx = x + px * at;
     const int ty = y + py * at;
     const int w  = s->w;
@@ -836,6 +845,7 @@ static inline bool equalise_one_row_cell(sand_t *s, uint8_t *row, int x, int y,
     if (((is_liquid >> id) & 1u) == 0) {
         return false;
     }
+    SAND_WORK_COUNT(cells_passing_mask);
 
     /* Which of the two rays this cell levels along - resolved HERE, past the
      * two checks above, and not in the block loop that calls this: most of
@@ -889,6 +899,7 @@ static inline bool equalise_one_block(sand_t *s, uint8_t *row, int y,
     const int pat_step = x_major ? ((x_step > 0) ? q_q8 : -q_q8) : 0;
 
     for (int x = cx_from; x != cx_to; x += x_step) {
+        SAND_WORK_COUNT(cells_examined);
         const bool diagonal = (pat < q_q8);
         pat = (pat + pat_step) & 255;
         if (equalise_one_row_cell(s, row, x, y, diagonal, r,
@@ -943,9 +954,11 @@ static bool equalise_one_row(sand_t *s, int y, int w, int x_step,
     const int bx_to   = (x_step > 0) ? s->block_cols : -1;
 
     for (int bx = bx_from; bx != bx_to; bx += x_step) {
+        SAND_WORK_COUNT(blocks_considered);
         if (brow != NULL && (brow[bx] & BLOCK_LIQUID_NEAR) == 0) {
             continue;
         }
+        SAND_WORK_COUNT(blocks_examined);
         const int lo = bx * SAND_BLOCK_W;
         const int hi = (lo + SAND_BLOCK_W < w) ? lo + SAND_BLOCK_W : w;
         if (equalise_one_block(s, row, y,
@@ -1002,6 +1015,8 @@ static void equalise_liquids(sand_t *s, const xflow_t *f, int sight,
 {
     bool found_any = false;
 
+    SAND_WORK_COUNT(xflow_calls);
+
     if (s->block_state != NULL) {
         mark_liquid_neighbourhoods(s);
     }
@@ -1044,6 +1059,7 @@ static void equalise_liquids(sand_t *s, const xflow_t *f, int sight,
      * blocks. Nothing is charged per move. See
      * docs/Sand/Performance-Tuning-Attempts.md. */
     for (int y = y_from; y != y_to; y += y_step) {
+        SAND_WORK_COUNT(rows_walked);
         if (equalise_one_row(s, y, w, x_step, f, dx, dy,
                              sight, is_liquid)) {
             found_any = true;

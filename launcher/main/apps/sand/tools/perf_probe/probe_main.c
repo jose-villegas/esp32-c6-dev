@@ -28,25 +28,35 @@
  * string instead.
  *
  * Usage:
- *   probe                    run every scene, in table order
- *   probe --list             print scene names, one per line, and exit
- *   probe SCENE [SCENE...]   run exactly the named scenes, in the order
- *                            given (repeats allowed) - what
- *                            launcher/main/apps/sand/tools/perf_probe/
- *                            run_probe.py drives, one child process per
- *                            (scene, round) pair, for interleaved best-of-N
- *                            timing.
+ *   probe                       run every scene, in table order
+ *   probe --list                print scene names, one per line, and exit
+ *   probe SCENE [SCENE...]      run exactly the named scenes, in the order
+ *                               given (repeats allowed) - what
+ *                               launcher/main/apps/sand/tools/perf_probe/
+ *                               run_probe.py drives, one child process per
+ *                               (scene, round) pair, for interleaved best-of-N
+ *                               timing.
+ *   probe --counters SCENE...   reset sand_work_counters (bd esp32c6-8zx)
+ *                               before each named scene and dump it after -
+ *                               "scene NAME" then one "counter value" line
+ *                               per field. Counting, not timing: exact and
+ *                               deterministic, so tools/perf_probe/
+ *                               compare_counters.py can bisect a regression
+ *                               without a device. See sand_work_counters.h.
  *
  * Each scene reports its own per-step microsecond figure via the same
  * ESP_LOGI() line the device build prints (see suite_sand.c) - this driver
  * does not re-time anything itself. run_probe.py parses that line back out
  * of captured stdout.
  *===========================================================================*/
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "timing.h"
 #include "unity.h"
+
+#include "apps/sand/sand_work_counters.h"
 
 void
 setUp(void) {}
@@ -101,6 +111,13 @@ find_scene(const char* name) {
     return NULL;
 }
 
+#if CONFIG_LAUNCHER_DEVELOPMENT
+static void
+print_counter_line(const char* name, uint32_t value) {
+    printf("%s %u\n", name, (unsigned)value);
+}
+#endif
+
 int
 main(int argc, char** argv) {
     if (argc == 2 && strcmp(argv[1], "--list") == 0) {
@@ -110,21 +127,48 @@ main(int argc, char** argv) {
         return 0;
     }
 
+    bool counters_mode = false;
+    int first_arg = 1;
+    if (argc >= 2 && strcmp(argv[1], "--counters") == 0) {
+        counters_mode = true;
+        first_arg = 2;
+    }
+#if !CONFIG_LAUNCHER_DEVELOPMENT
+    if (counters_mode) {
+        fprintf(stderr, "probe --counters: built without "
+                "CONFIG_LAUNCHER_DEVELOPMENT, counters do not exist\n");
+        return 1;
+    }
+#endif
+    if (counters_mode && first_arg == argc) {
+        fprintf(stderr, "probe --counters: needs at least one scene name\n");
+        return 1;
+    }
+
     UNITY_BEGIN();
 
-    if (argc == 1) {
+    if (!counters_mode && argc == 1) {
         /* No scenes named: run everything, table order - the old fixed
          * behaviour every per-round probe_main.c used to hardcode. */
         for (int i = 0; i < SCENE_COUNT; i++) {
             suite_run_test_timed(SCENES[i].fn, SCENES[i].name, 0);
         }
     } else {
-        for (int a = 1; a < argc; a++) {
+        for (int a = first_arg; a < argc; a++) {
             const probe_scene_t* scene = find_scene(argv[a]);
             if (!scene) {
                 fprintf(stderr, "probe: unknown scene '%s' (try --list)\n", argv[a]);
                 return 1;
             }
+#if CONFIG_LAUNCHER_DEVELOPMENT
+            if (counters_mode) {
+                sand_work_counters_reset();
+                suite_run_test_timed(scene->fn, scene->name, 0);
+                printf("scene %s\n", scene->name);
+                sand_work_counters_dump(print_counter_line);
+                continue;
+            }
+#endif
             suite_run_test_timed(scene->fn, scene->name, 0);
         }
     }
