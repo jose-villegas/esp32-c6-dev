@@ -62,47 +62,132 @@ int all_pairs_material_at(int x, int y, int first, int n_mats)
     return first + ((x * stride + y) % n_mats);
 }
 
-/* Every pair of materials really is adjacent somewhere in that scene.
- *
- * The property the scene exists for, and until now it was a number somebody
- * measured by hand once and wrote in a comment - "66 of 66" - taken on
- * faith through two subsequent materials. It is derived from MAT_COUNT, so
- * it should survive adding one, but "should" is what a test is for: a
- * tiling that quietly lost coverage would leave the worst case measuring
- * less than it claims while still passing its own budget.
- *
- * Host-side, because coverage is a property of the pattern and needs no
- * clock. Only the timing has to happen on the chip.
- *
- * GUNPOWDER IS NOT, AND CANNOT BE, ONE OF THE PAIRS THIS COVERS -
- * all_pairs_material_at() enumerates material_id_t values, and gunpowder
- * is not one: it is a byte range inside MAT_EXTENDED's own nibble
- * (GUNPOWDER_BASE, material.h), so every slot this tiling assigns to
- * m == MAT_EXTENDED paints plain ice (CELL_MAKE(MAT_EXTENDED, 0)), never
- * gunpowder. Its own contact with fire, lava, conducted heat, water and
- * acid is exercised directly instead - see this suite's own gunpowder
- * section - rather than forcing an awkward second identity onto a
- * tiling keyed by id, which would also perturb
- * test_a_gravity_flip_on_every_material_at_once_stays_sane's calibrated
- * device budget for a scene this test doesn't touch. */
+/* Maps a tiling index to the cell spec sand_spawn_cell() should place:
+ * ordinary materials first, then the extended statics MATX_ICE..MATX_ROOT
+ * (not the three spare, unclaimed MATERIAL_EXTENDED_COUNT slots), then
+ * gunpowder. One copy, shared by the timed device scene and the host
+ * coverage test, so the two cannot tile different sets. */
+cell_t all_pairs_spawn_cell(int index)
+{
+    if (index < ALL_PAIRS_ORDINARY_COUNT) {
+        /* Skipping one id keeps the 19 indices contiguous, so the tiling
+         * sees a gap-free 0..n-1 and its stride argument still holds. */
+        material_id_t m = (material_id_t)(MAT_EMPTY + 1 + index);
+        if (m >= ALL_PAIRS_SKIPPED_ORDINARY) {
+            m = (material_id_t)(m + 1);
+        }
+        return CELL_MAKE(m, 0);
+    }
+    index -= ALL_PAIRS_ORDINARY_COUNT;
+    if (index < ALL_PAIRS_EXTENDED_COUNT) {
+        return MATX(index);
+    }
+    return GUNPOWDER_CELL(0);
+}
+
+/* The tiling scatters gunpowder as one isolated cell in nineteen, which
+ * can never form the fuse's fully-lit 2x2, so Gunpowder.explodes never
+ * fires here. A fire cell is planted beside each patch rather than left
+ * to the tiling's luck - build_gunpowder_basin_scene proved that pairing
+ * reliable at scale. A handful, fixed and deterministic, not a field. */
+typedef struct {
+    int x, y;
+} all_pairs_patch_t;
+
+#define ALL_PAIRS_PATCH_SIZE 3
+
+static const all_pairs_patch_t all_pairs_gunpowder_patches[] = {
+    {40, 100},
+    {120, 180},
+};
+#define ALL_PAIRS_PATCH_COUNT \
+    (int)(sizeof(all_pairs_gunpowder_patches) / sizeof(all_pairs_gunpowder_patches[0]))
+
+/* Paints the tiling, then overwrites the patches above - both device timing
+ * and the host coverage test below call this one function, so they can
+ * never see two different grids. */
+void build_all_pairs_scene(sand_t *s)
+{
+    const int first  = 0;
+    const int n_mats = ALL_PAIRS_SPAWN_COUNT;
+    const int top    = (REAL_H * EMPTY_SHARE_PERCENT) / 100;
+
+    for (int y = top; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            const int idx = all_pairs_material_at(x, y, first, n_mats);
+            /* sand_spawn_cell() with radius 0 rather than sand_set(): see
+             * the device test's own comment (suite_sand_perf.c) for why. */
+            sand_spawn_cell(s, x, y, 0, all_pairs_spawn_cell(idx));
+        }
+    }
+
+    for (int p = 0; p < ALL_PAIRS_PATCH_COUNT; p++) {
+        const int px = all_pairs_gunpowder_patches[p].x;
+        const int py = all_pairs_gunpowder_patches[p].y;
+        for (int dy = 0; dy < ALL_PAIRS_PATCH_SIZE; dy++) {
+            for (int dx = 0; dx < ALL_PAIRS_PATCH_SIZE; dx++) {
+                sand_set(s, px + dx, py + dy, GUNPOWDER_CELL(0));
+            }
+        }
+        sand_set(s, px + ALL_PAIRS_PATCH_SIZE, py, FIRE);
+    }
+}
+
+/* The exact inverse of all_pairs_spawn_cell() above: buckets a real cell
+ * back into the tiling's own species index. Reading the grid this way,
+ * rather than re-deriving what the tiling formula WOULD have painted, is
+ * what lets the coverage test below see the patches overwriting cells -
+ * the formula has no idea they exist. */
+static int all_pairs_species_of(cell_t c)
+{
+    if (cell_is_gunpowder(c)) {
+        return ALL_PAIRS_SPAWN_COUNT - 1;
+    }
+    if (cell_is_extended(c)) {
+        return ALL_PAIRS_ORDINARY_COUNT + (c & 0x07);
+    }
+    const int m = CELL_MATERIAL(c);
+    return (m < ALL_PAIRS_SKIPPED_ORDINARY) ? m - 1 : m - 2;
+}
+
+/* Every pair of materials really is adjacent somewhere in that scene - a
+ * property of the ACTUAL BUILT GRID, not the tiling formula: this test
+ * used to compute adjacency from all_pairs_material_at() directly, which
+ * cannot see a patch overwriting a cell and would keep reporting full
+ * coverage even if one destroyed the only place two materials touched.
+ * Host-side: coverage needs no clock. */
 static void test_the_mixed_scene_puts_every_material_pair_in_contact(void)
 {
-    const int first  = MAT_EMPTY + 1;
-    const int n_mats = MAT_COUNT - first;
+    const int n_mats = ALL_PAIRS_SPAWN_COUNT;
     const int top    = (REAL_H * EMPTY_SHARE_PERCENT) / 100;
     const int want   = (n_mats * (n_mats - 1)) / 2;
 
-    /* One bit per unordered pair. */
-    static bool seen[MATERIAL_MAX][MATERIAL_MAX];
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
+                              ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t s;
+    sand_init(&s, big, REAL_W, REAL_H, 23u);
+    sand_enable_sleeping(&s, blocks);
+
+    build_all_pairs_scene(&s);
+
+    /* One bit per unordered pair, sized to the tiling's own index range -
+     * no longer MATERIAL_MAX, since an index past
+     * ALL_PAIRS_ORDINARY_COUNT names an extended static or gunpowder, not
+     * a material_id_t value. */
+    static bool seen[ALL_PAIRS_SPAWN_COUNT][ALL_PAIRS_SPAWN_COUNT];
     memset(seen, 0, sizeof seen);
 
     int found = 0;
     for (int y = top; y < REAL_H; y++) {
         for (int x = 0; x < REAL_W; x++) {
-            const int m = all_pairs_material_at(x, y, first, n_mats);
+            const int m = all_pairs_species_of(sand_at(&s, x, y));
             const int nb[2] = {
-                x + 1 < REAL_W ? all_pairs_material_at(x + 1, y, first, n_mats) : m,
-                y + 1 < REAL_H ? all_pairs_material_at(x, y + 1, first, n_mats) : m,
+                x + 1 < REAL_W ? all_pairs_species_of(sand_at(&s, x + 1, y)) : m,
+                y + 1 < REAL_H ? all_pairs_species_of(sand_at(&s, x, y + 1)) : m,
             };
             for (int k = 0; k < 2; k++) {
                 const int a = m < nb[k] ? m : nb[k];
@@ -115,7 +200,10 @@ static void test_the_mixed_scene_puts_every_material_pair_in_contact(void)
         }
     }
 
-    char why[160];
+    free(big);
+    free(blocks);
+
+    char why[200];
     snprintf(why, sizeof why,
              "the mixed-material scene must put all %d pairs of %d "
              "materials in contact - it reached %d, so some reaction it "
