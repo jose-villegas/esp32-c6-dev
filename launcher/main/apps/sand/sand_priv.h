@@ -384,6 +384,15 @@ covered_at(const sand_t *s, int x, int y, int w, int h, uint8_t density)
     return cover_mask(s, x, y, w, h, density) == COVER_LID;
 }
 
+/* One cullet grain, at a random shade from sand's reserved band. Shared by
+ * every path that breaks glass - a crack, and a pane knocked loose by an
+ * impulse - so they cannot drift apart on which band they land in. */
+static inline cell_t cullet_cell(sand_t *s)
+{
+    return CELL_MAKE(MAT_SAND,
+                     (uint8_t)(SAND_CULLET_BASE + rng_below(&s->rng, SAND_CULLET_SHADES)));
+}
+
 static inline uint8_t impulse_drag_of(cell_t displaced)
 {
     const material_t *m = material_of(displaced);
