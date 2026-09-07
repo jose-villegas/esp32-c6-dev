@@ -568,6 +568,7 @@ static size_t causes_count;
  * column would be. */
 static const char *const causes_expected[] = {
     "shatters_to",
+    "soaks_to",
     "spoils_to",
 };
 
@@ -2002,9 +2003,9 @@ static void emit_wet(const reaction_t *r, uint8_t cell)
              * nothing for a reader to picture; "enough" says the same
              * true thing (there is a threshold) without it. */
             printf("- It *soaks up* any %s it touches%s, and turns into "
-                   "%s once it has soaked up enough.\n",
+                   "%s once it has soaked up enough - %s.\n",
                    wetting_liquids, rate_gap(adverb_child("soaks", r->soaks)),
-                   mat_span_v(r->soaks_to));
+                   mat_span_v(r->soaks_to), cause_marked("soaks_to", 0));
         } else {
             /* The old parenthetical "(its own moisture rises)" and the
              * trailing "rather than changing into anything" were both
@@ -3263,7 +3264,9 @@ static void emit_anatomy(void)
         seg_rate_gap(segs, &n, adverb("soaks", row->r->soaks));
         seg_glue(segs, &n, ", becoming ");
         seg_material(segs, &n, soaks_color, soaks_name);
-        seg_glue(segs, &n, " once it takes a unit in.");
+        seg_glue(segs, &n, " once it takes a unit in - ");
+        seg_mark(segs, &n, MARK_CAUSE, cause_at("soaks_to", 0));
+        seg_glue(segs, &n, ".");
         print_example("Wet - GRP_WET: soaks, soaks_to, wetting_liquids "
                        "(emit_wet)", segs, n);
     }
