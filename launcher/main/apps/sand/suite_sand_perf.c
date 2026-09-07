@@ -163,6 +163,24 @@ void sand_host_probe_run_full_step_control(void)
  * configurations: a disabled pass leaves a different grid behind, so
  * reusing one scene would have each configuration measuring a board the
  * previous one shaped. */
+/* The board both water_scene_us_per_step() and water_scene_single_step_us()
+ * below measure, factored out so the two timing techniques cannot drift into
+ * quietly measuring different scenes. `real` must already be default-
+ * constructed storage; this does the sand_init()/sand_enable_sleeping() too. */
+static void build_water_scene(sand_t *real, uint8_t *big, uint8_t *blocks)
+{
+    sand_init(real, big, REAL_W, REAL_H, 11u);
+    sand_enable_sleeping(real, blocks);
+
+    /* Half a screen of water, dropped in as an uneven slab so it is genuinely
+     * flowing rather than already settled - the expensive case. */
+    for (int y = 0; y < REAL_H / 2; y++) {
+        for (int x = REAL_W / 4; x < (REAL_W * 3) / 4; x++) {
+            sand_set(real, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+        }
+    }
+}
+
 static int64_t water_scene_us_per_step(void)
 {
     uint8_t *big    = malloc(REAL_W * REAL_H);
@@ -171,16 +189,7 @@ static int64_t water_scene_us_per_step(void)
     TEST_ASSERT_NOT_NULL(blocks);
 
     sand_t real;
-    sand_init(&real, big, REAL_W, REAL_H, 11u);
-    sand_enable_sleeping(&real, blocks);
-
-    /* Half a screen of water, dropped in as an uneven slab so it is genuinely
-     * flowing rather than already settled - the expensive case. */
-    for (int y = 0; y < REAL_H / 2; y++) {
-        for (int x = REAL_W / 4; x < (REAL_W * 3) / 4; x++) {
-            sand_set(&real, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
-        }
-    }
+    build_water_scene(&real, big, blocks);
 
     const int64_t start = esp_timer_get_time();
     const int steps = 20;
@@ -297,6 +306,106 @@ static void test_the_water_scene_decomposes_by_pass(void)
                              sand_step_gate_cross_flow &&
                              sand_step_gate_gas && sand_step_gate_reactions &&
                              sand_step_gate_xflow_body,
+        "every gate must be back on before the next test in this binary "
+        "runs - a gate left off silently changes every measurement after it");
+}
+
+/* The decomposition above is wrong for the main sweep: held off for all 20
+ * steps, the scene DIVERGES - nothing moves, the board settles and sleeps,
+ * later steps go nearly free. 264us describes a frozen scene, not the
+ * pass's real cost. Below instead: warm up with every gate on, THEN disable
+ * one gate for a single step - valid because the scene builder and RNG are
+ * deterministic, so warmup reproduces the same board and reading a
+ * volatile gate costs no RNG draw. */
+#define MAIN_SWEEP_WARMUP_STEPS 10
+
+/* Builds and warms up an identical water board, disables `gate` (or leaves
+ * every gate on if NULL) for exactly one sand_step(), and returns its
+ * duration. Takes the min over 3 repeats of the whole build+warmup+step: the
+ * work is deterministic, so repeats measure identical work and the spread
+ * between them is pure measurement noise - min, not average, is the right
+ * estimator for that. */
+static int64_t water_scene_single_step_us(volatile bool *gate)
+{
+    const int repeats = 3;
+    int64_t   best    = -1;
+
+    for (int r = 0; r < repeats; r++) {
+        uint8_t *big    = malloc(REAL_W * REAL_H);
+        uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+        TEST_ASSERT_NOT_NULL(big);
+        TEST_ASSERT_NOT_NULL(blocks);
+
+        sand_t real;
+        build_water_scene(&real, big, blocks);
+        for (int i = 0; i < MAIN_SWEEP_WARMUP_STEPS; i++) {
+            sand_step(&real, 0, 1000, 0);
+        }
+
+        if (gate != NULL) {
+            *gate = false;
+        }
+        const int64_t start = esp_timer_get_time();
+        sand_step(&real, 0, 1000, 0);
+        const int64_t took = esp_timer_get_time() - start;
+        if (gate != NULL) {
+            *gate = true;
+        }
+
+        free(big);
+        free(blocks);
+
+        if (best < 0 || took < best) {
+            best = took;
+        }
+    }
+    return best;
+}
+
+/* Which pass owns a live main sweep's time - the main-sweep-specific
+ * counterpart to test_the_water_scene_decomposes_by_pass above, using the
+ * single-step technique because that test's 20-step measurement is only
+ * valid for gas/reactions (see water_scene_single_step_us()'s own comment
+ * for why the main sweep needs this instead). Prints rather than asserts:
+ * inventing a budget would peg a number nobody has argued for. */
+static void test_the_main_sweep_decomposes_by_pass(void)
+{
+    static const char *const names[] = {
+        "every pass on",      "main sweep off", "sweep body off (walk only)",
+        "cross-flow off",     "reactions off",
+    };
+    volatile bool *const gates[] = {
+        NULL,
+        &sand_step_gate_main_sweep,
+        &sand_step_gate_sweep_body,
+        &sand_step_gate_cross_flow,
+        &sand_step_gate_reactions,
+    };
+
+    int64_t whole = 0;
+    for (size_t i = 0; i < sizeof(gates) / sizeof(gates[0]); i++) {
+        const int64_t us = water_scene_single_step_us(gates[i]);
+
+        if (i == 0) {
+            whole = us;
+            ESP_LOGI("device_tests",
+                     "main sweep decomposition: %s: %lld us", names[i],
+                     (long long)us);
+        } else {
+            const int64_t saved = whole - us;
+            ESP_LOGI("device_tests",
+                     "main sweep decomposition: %s: %lld us (%lld us, %lld%% "
+                     "of the whole)", names[i], (long long)us,
+                     (long long)saved,
+                     whole > 0 ? (long long)((saved * 100) / whole) : 0);
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(sand_step_gate_main_sweep &&
+                             sand_step_gate_cross_flow &&
+                             sand_step_gate_gas && sand_step_gate_reactions &&
+                             sand_step_gate_xflow_body &&
+                             sand_step_gate_sweep_body,
         "every gate must be back on before the next test in this binary "
         "runs - a gate left off silently changes every measurement after it");
 }
@@ -2340,6 +2449,7 @@ void run_sand_perf_suite(void)
     RUN_TEST(test_a_screen_of_water_fits_in_the_frame_budget);
 #if CONFIG_LAUNCHER_SAND_PASS_GATES
     RUN_TEST(test_the_water_scene_decomposes_by_pass);
+    RUN_TEST(test_the_main_sweep_decomposes_by_pass);
 #endif
     RUN_TEST(test_a_gravity_flip_on_every_material_at_once_stays_sane);
     RUN_TEST(test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget);
