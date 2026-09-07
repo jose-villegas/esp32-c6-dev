@@ -47,16 +47,11 @@ static const char *TAG = "shell";
 #if CONFIG_LAUNCHER_DEVELOPMENT
 #include "esp_heap_caps.h"
 
-/* BOOT HEAP TRACE (bd esp32c6-8h2). Free heap has never predicted whether
- * the next big allocation fits: the framebuffer (322 KiB) and the sand
- * grid (41 KiB) each need ONE CONTIGUOUS block, and about 20 KiB of the
- * free heap has been sitting outside the largest one with nothing saying
- * where it went. Printing both numbers at each boot phase says which phase
- * loses it, which is the question two on-device OOM incidents both had to
- * answer by guesswork.
- *
- * Development builds only, and only at boot - a handful of log lines
- * before the frame loop exists, not something any hot path pays for. */
+/* Free heap alone never predicts whether the next big allocation fits:
+ * the framebuffer and the sand grid each need ONE CONTIGUOUS block, and
+ * free space can sit outside the largest one with nothing saying where
+ * it went. Printing both numbers at each boot phase says which phase
+ * loses it. */
 static void heap_mark(const char *where)
 {
     ESP_LOGI(TAG, "HEAPMARK %-18s free %6u largest %6u", where,
@@ -67,30 +62,12 @@ static void heap_mark(const char *where)
 #define heap_mark(where) ((void)0)
 #endif
 
-/* Leaving an app is a swipe up from the bottom edge, the same gesture the
- * board's stock firmware used. It replaced a small back button, which was fine
- * to aim at with a mouse and miserable with a fingertip. The recognition
- * itself lives in gesture.c, where it is covered by host tests.
- *
- * A thin bar near the bottom hinting the gesture exists, in the manner of a
- * phone's home indicator. Cheap, unobtrusive, and it does not steal a row of
- * the app's screen the way a title bar does. */
 #define HOME_HINT_WIDTH   120
 #define HOME_HINT_HEIGHT  4
 #define HOME_HINT_MARGIN  10
 #define HOME_HINT_RGB     0x4A5268
 
-/* How often orientation is resampled, not every frame.
- *
- * The render loop reaches several hundred fps once partial updates are
- * doing their job, and imu_read() is an I2C transaction - real bus time, not
- * a memory read. A quarter-turn decision needs nothing like frame-rate
- * resolution, and display.h's hysteresis wants a dwell between samples
- * anyway, not a reading every 2-4 ms it would have to filter through.
- *
- * 10 Hz (100 ms) is plenty: a genuine reorientation is caught within a
- * tenth of a second, far below what a human notices as lag, and it leaves
- * the overwhelming majority of frames untouched. */
+/* 10 Hz: sufficient for reorientation without lag. */
 #define DISPLAY_SAMPLE_MS 100
 
 /* --- app registry ------------------------------------------------------- */
@@ -113,67 +90,23 @@ void app_register(const app_t *app)
 const app_t *const *app_list(void) { return apps; }
 int app_list_count(void) { return apps_registered; }
 
-/* --- display orientation -------------------------------------------------
- *
- * Owned here, not by any one app - see display.h's top comment for why.
- * main.c samples gravity, feeds display_update(), and on a change pushes the
- * new quarter into ui_set_transform() so the launcher, every boot menu and
- * every app UI rotate together instead of each deciding for itself. */
-
-/* Sensor axes to screen axes - a board-layout fact, found by experiment, not
- * derivable from the datasheet; see app_sand.c's own copy of this mapping
- * for the full explanation of which axis is which and why the negation is
- * there.
- *
- * Duplicated rather than shared: this is now the SECOND reader of the IMU,
- * alongside app_sand.c's, and unifying the two is deliberately out of scope
- * here. Two small, independent readers of a sensor that only ever answers
- * "which way is down" is a fine place to leave that, at least for now;
- * forcing them to share a single reader is a separate piece of work with its
- * own tradeoffs (whose polling rate wins? whose smoothing?) that this task
- * does not need to settle. */
+/* Board layout fact; see app_sand.c. Duplicated for clarity. Sharing not
+ * covered. */
 #define DISPLAY_GRAVITY_X(s)  (-(s)->ay)
 #define DISPLAY_GRAVITY_Y(s)  ( (s)->ax)
 
-/* The shell's one display_t - see display.h's top comment on why the module
- * itself stays a plain struct-and-functions decision function with no
- * singleton of its own, and display_shell_quarter()'s own comment for why
- * the accessor is declared there but defined here. */
 static display_t shell_display;
 
 int display_shell_quarter(void) { return display_quarter(&shell_display); }
 
-/* Which edge the exit gesture (and its hint bar) live on, for the shell's
- * current quarter turn.
- *
- * The rule is content-driven, not a fixed physical reference: the exit
- * gesture lives on whichever PHYSICAL edge the CONTENT's own logical bottom
- * currently maps to - the same edge a button pinned to the bottom of the
- * logical canvas would render against, tracking rotation exactly the way
- * ui_transform_rect() already makes buttons and text do (see ui.c's
- * draw_command() TEXT case). An earlier version of this function instead put
- * the exit edge opposite wherever the USB connector sits, on the reasoning
- * that a cable might occupy that edge - ergonomically plausible, but wrong
- * in practice: tested on the board, Portrait needs the exit gesture at the
- * physical BOTTOM, not the USB-opposite LEFT that rule produced.
- *
- * The table below is not hand-derived - hand-derivation is exactly how the
- * USB-opposite rule went wrong. It comes from mapping a thin strip along the
- * logical canvas's bottom edge, { 0, logical_h - 4, logical_w, 4 }, through
- * ui_transform_quarter_turn(quarter, GFX_WIDTH, GFX_HEIGHT) and
- * ui_transform_rect() (the same pair the exhaustive sweep already proved
- * exact) and reading off which physical edge the mapped rect landed against:
- *
- *   0  Portrait               -> exit edge BOTTOM
- *   1  Landscape               -> exit edge LEFT
- *   2  Portrait, upside down   -> exit edge TOP
- *   3  Landscape, upside down  -> exit edge RIGHT
- *
- * Each step advances the edge by one quarter turn (BOTTOM -> LEFT -> TOP ->
- * RIGHT -> BOTTOM), which is what rotating a single fixed edge through four
- * 90-degree content turns should produce, and matches quarter 0 needing no
- * correction at all - identity transform, logical bottom is physical
- * bottom. */
+/* Content-driven, not a fixed physical reference: the exit gesture lives
+ * on whichever PHYSICAL edge the content's logical bottom maps to,
+ * tracking rotation the same way ui_transform_rect() makes buttons/text
+ * do. An earlier USB-opposite-edge rule tested wrong on device (Portrait
+ * needs BOTTOM, not the LEFT that rule produced) - not hand-derived any
+ * more: this table maps a strip along the logical canvas's bottom edge
+ * through the same transform pipeline the exhaustive sweep already
+ * proved exact. */
 static gesture_edge_t exit_edge_for_quarter(int quarter)
 {
     static const gesture_edge_t edge_for_quarter[4] = {
@@ -185,8 +118,6 @@ static gesture_edge_t exit_edge_for_quarter(int quarter)
     return edge_for_quarter[quarter];
 }
 
-/* Sorted so the menu order is stable. Without this it follows link order,
- * which changes when a file is added and makes the list jump around. */
 static void sort_apps(void)
 {
     for (int i = 1; i < apps_registered; i++) {
@@ -204,13 +135,6 @@ static void sort_apps(void)
 
 static void draw_home_hint(gesture_edge_t edge)
 {
-    /* TOP/BOTTOM keep the strip horizontal (WIDTH wide, HEIGHT tall),
-     * centred across the screen's width. LEFT/RIGHT need it turned - the
-     * strip becomes vertical (HEIGHT wide, WIDTH tall - the two constants
-     * swap, the same way content's own width/height swap under a quarter
-     * turn elsewhere in this shell), centred down the screen's height
-     * instead. In every case it sits HOME_HINT_MARGIN in from whichever
-     * edge the gesture currently lives on. */
     int x = 0, y = 0, w = 0, h = 0;
 
     switch (edge) {
@@ -240,11 +164,6 @@ static void draw_home_hint(gesture_edge_t edge)
         break;
     }
 
-    /* Identical every frame (for a given edge), so it only needs redrawing
-     * where the app has already disturbed it. Drawing unconditionally would
-     * mark the band dirty on every frame and force it to be sent - a
-     * seventh of the frame's bus time, spent on pixels that did not
-     * change. */
     if (!gfx_region_dirty(x, y, w, h)) {
         return;
     }
@@ -252,9 +171,8 @@ static void draw_home_hint(gesture_edge_t edge)
     gfx_fill_rect(x, y, w, h, gfx_rgb(HOME_HINT_RGB));
 }
 
-/* Holds the failing checks on screen long enough to be read, or until the
- * screen is touched. Deliberately blocking: a board with dead hardware should
- * not scroll past its own diagnosis into a launcher that looks normal. */
+/* Holds failing checks until touch. Prevents dead hardware diagnosis from
+ * scrolling to launcher. */
 static void show_post_failures(void)
 {
     ESP_LOGE(TAG, "POST failed - showing report");
@@ -268,55 +186,32 @@ static void show_post_failures(void)
     gfx_text_scaled(10, y + 12, "touch to continue", gfx_rgb(0x8A93A8), 1);
     gfx_present();
 
-    /* Touch is not running yet at this point in boot, so this is a plain
-     * timeout. Long enough to read and photograph, short enough that an
-     * unattended board still reaches the launcher. */
+    /* Long timeout for manual action, short for unattended use. */
     vTaskDelay(pdMS_TO_TICKS(8000));
 }
 
 /* --- main --------------------------------------------------------------- */
 
-/* Common tail of leaving whichever app is running, however the decision to
- * leave was made - the swipe gesture below, or an opted-out app's own PWR
- * fallback. */
 static void leave_app(const app_t **current, input_t *input,
                       gesture_edge_t exit_edge)
 {
     ESP_LOGI(TAG, "Leaving %s", (*current)->name);
     (*current)->exit();
     *current = NULL;
-    /* The app's output is still in the framebuffer, so the launcher must
-     * repaint even though its own description has not changed. */
+    /* Launcher must repaint due to framebuffer output. */
     ui_invalidate();
     /* Draw it immediately, so the frame presented below is the home screen
      * rather than the app's last one. */
     ui_launcher_frame(input);
-    /* ui_invalidate() just forced ui_launcher_frame() to repaint its whole
-     * rect from the background colour up, which paints over the hint strip's
-     * band along with everything else - draw_home_hint() has to run again
-     * this same frame to put it back. Left out, the strip stayed missing
-     * indefinitely: draw_home_hint() only draws when gfx_region_dirty()
-     * already says its band is dirty for some OTHER reason, which the idle
-     * launcher's own unchanging menu never gives it, on this frame or any
-     * later one - the exact way an app is left is not something the idle
-     * branch in step_app() below sees again to retry. */
+    /* ui_launcher_frame() just repainted its whole rect over the hint
+     * strip's band, so this has to run again to put it back - dirty
+     * tracking alone will not retry it, since nothing else marks that
+     * band dirty on a later frame. */
     draw_home_hint(exit_edge);
 }
 
-/* Whichever of the launcher or the current app owns this frame, and the
- * transitions between them: choosing an app from the launcher, or swiping
- * home to leave one. */
 static void step_app(const app_t **current, input_t *input, uint32_t dt_ms)
 {
-    /* Which edge the gesture lives on tracks the board's current
-     * orientation - see exit_edge_for_quarter()'s own comment - so it is
-     * recomputed each call rather than cached, the same as display_shell_quarter()
-     * itself is cheap enough to call freely (it only reads a struct field).
-     * Needed by both branches below: the strip is chrome the shell shows
-     * wherever it's drawing, not a hint that only exists once there is an
-     * app open to swipe away from - a board sitting on the launcher should
-     * still show the same edge, so the affordance reads consistently no
-     * matter what's on screen. */
     const gesture_edge_t exit_edge = exit_edge_for_quarter(display_shell_quarter());
 
     if (*current == NULL) {
@@ -331,27 +226,21 @@ static void step_app(const app_t **current, input_t *input, uint32_t dt_ms)
         return;
     }
 
-    /* Opt-in per app - see app_t's own comment on home_gesture. An app that
-     * leaves it unset gets no swipe detection and no hint strip; it must
-     * provide its own way back to the launcher. */
+    /* See app_t.home_gesture. Unset apps get no swipe detection or hint
+     * strip. */
     if ((*current)->home_gesture &&
         gesture_is_home_swipe(input, exit_edge, GFX_WIDTH, GFX_HEIGHT)) {
         leave_app(current, input, exit_edge);
         return;
     }
 
-    /* A HELD PWR is a temporary, shell-level fallback for an app that opted
-     * out of the swipe gesture - today, only app_sand.c, whose own comment
-     * on home_gesture promises "a deliberate control of its own" still to
-     * come. Held, not a plain press: app_sand.c's own handle_brush_input()
-     * already reads input->power.pressed to cycle brush mode (erase,
-     * explosion, ...), and a short press is how the PMU reports that same
-     * cycling gesture everywhere else in this shell too - stealing it here
-     * would silence that cycling the instant this fallback existed. held
-     * fires from the PMU's own separate long-press interrupt (see buttons.h),
+    /* HELD, not a plain press: app_sand.c's own handle_brush_input()
+     * already reads a short press to cycle brush mode, and stealing it
+     * here would silence that everywhere else in this shell too. `held`
+     * fires from the PMU's own separate long-press interrupt (buttons.h),
      * so the two are independent presses, not the same edge read twice.
-     * Checked before frame() runs, the same as the swipe check above, so
-     * app_sand.c never sees the hold that just exited it. */
+     * Checked before frame() runs, so the app never sees the hold that
+     * just exited it. */
     if (!(*current)->home_gesture && input->power.held) {
         leave_app(current, input, exit_edge);
         return;
@@ -364,15 +253,7 @@ static void step_app(const app_t **current, input_t *input, uint32_t dt_ms)
 }
 
 #if CONFIG_LAUNCHER_DEVELOPMENT
-/* Report throughput on a TIMER, not every N frames: an idle launcher repaints
- * nothing and runs at the tick ceiling, so counting frames alone lets the
- * report interval swing with load - and a log line costs several
- * milliseconds of UART, enough to throttle the very thing it is measuring.
- *
- * Gated on CONFIG_LAUNCHER_DEVELOPMENT: nobody downstream reads a frame
- * counter, so per docs/Testing-Guide.md's "Development-only instrumentation
- * is its own flag, not SELFTEST" section this is pure cost in a release
- * image and must not ship in one. */
+/* Report throughput on TIMER, not frames. CONFIG_LAUNCHER_DEVELOPMENT only */
 static void report_fps(int64_t now_us, int64_t *window_start, uint32_t *frames)
 {
     (*frames)++;
@@ -389,8 +270,7 @@ void app_main(void)
 {
     heap_mark("boot");
 
-    /* Before the display: the SD card shares SPI2 with the panel, so this is
-     * the one moment it can be tested without tearing anything down. */
+    /* Test SD card during panel use. */
     post_run_before_display();
     heap_mark("after sd probe");
 
@@ -403,98 +283,44 @@ void app_main(void)
 
     heap_mark("after gfx_init");
 #if CONFIG_LAUNCHER_DEVELOPMENT
-    /* The one full block map of the boot, taken at the moment that matters:
-     * the framebuffer is placed, every driver that runs before it has had
-     * its say, and nothing since has moved. Reading it beside the marks
-     * above is what turns "20 KiB is missing" into "20 KiB is sitting at
-     * this address, below the framebuffer, left by this phase". */
     heap_caps_dump(MALLOC_CAP_DMA);
 #endif
 
-    /* The rest of the health check, now that the display is up and can be
-     * reported on. Ships in every build, release included: "is this board
-     * working" stays worth knowing in the field.
-     *
-     * Silent when healthy - a device should boot, not announce that it is
-     * fine. Only a failure gets the screen, because that is the case where
-     * nobody may have a serial cable attached and the information is
-     * actionable. The full report is always available from the Diagnostics
-     * app. */
     if (!post_run_after_display()) {
         show_post_failures();
     }
     heap_mark("after post");
 
 #if CONFIG_LAUNCHER_SELFTEST && CONFIG_LAUNCHER_SELFTEST_AUTORUN
-    /* Diagnostics build only - a default build compiles none of this. The
-     * suites draw to the framebuffer and drive the panel, so they run before
-     * the shell paints anything of its own. A failure is reported rather than
-     * fatal: the harness reads the result from the console, and a board that
-     * still boots is easier to investigate than one that does not.
-     *
-     * Nested behind a second flag, not just CONFIG_LAUNCHER_SELFTEST: this
-     * used to run unconditionally whenever the suites were compiled in,
-     * which made every diagnostics build pay the full suite's wall-clock
-     * cost - hundreds of tests, including device-only perf-budget tests
-     * that run full-grid simulations - on every boot, regardless of whether
-     * the visit had anything to do with testing. LAUNCHER_SELFTEST_AUTORUN
-     * is what an automated harness like tools/report_test_results.sh turns
-     * on; ordinary interactive --diag use leaves it off and triggers the
-     * suite on demand from the Diagnostics app instead. This stays a
-     * compile-time #if, not a runtime check, because it is a boot-time cost
-     * question: the point is to not even pay for the decision at boot. */
     if (selftest_run() != 0) {
         ESP_LOGE(TAG, "self test reported failures");
     }
 #endif
 
-    /* The startup animation. After the health checks, so a board with a fault
-     * says so before it does anything decorative, and before touch starts,
-     * because there is nothing yet for a tap to reach. */
     boot_anim_run();
     heap_mark("after boot anim");
 
     touch_start();
     buttons_start();
 #if CONFIG_LAUNCHER_DEVELOPMENT
-    /* A release build has nobody watching the serial console to type
-     * SCREENSHOT into - see util/screenshot.c's own top comment and
-     * docs/Testing-Guide.md's "Development-only instrumentation" section
-     * for why this is CONFIG_LAUNCHER_DEVELOPMENT rather than left ungated
-     * or tied to CONFIG_LAUNCHER_SELFTEST (it is not a test, and does not
-     * need the Diagnostics app's bench-only side effects either). */
     screenshot_start();
 #endif
 
-    /* Not fatal if this fails - the display sampling below just finds
-     * imu_ready() false forever after and the shell stays upright, the same
-     * graceful fallback app_sand.c's own imu_init() failure gets. */
     if (!imu_init()) {
         ESP_LOGW(TAG, "No IMU - display orientation stays upright");
     }
     display_init(&shell_display);
 
-    /* display_init() leaves quarter at a neutral 0 on purpose - see its own
-     * comment. DISPLAY_DEFAULT_QUARTER is what THIS shell actually boots
-     * into, a fact about this one board, and main.c is where that belongs.
-     * Set directly rather than through display_update(): quarter is a
-     * plain field on a struct main.c already owns, and there is no prior
-     * gravity reading to synthesise here - this is the state before the
-     * first sample, not a transition from one orientation to another. */
     shell_display.quarter = DISPLAY_DEFAULT_QUARTER;
 
     ui_launcher_init();
     heap_mark("shell ready");
 
-    /* ui_init() (inside ui_launcher_init() above) resets the transform to
-     * identity - it has to, so a stale transform from a previous run of a
-     * host test or a future warm-restart path can never leak in - which
-     * means the DISPLAY_DEFAULT_QUARTER just set above is not actually in
-     * force yet. Apply it now, once, before the frame loop below ever
-     * builds a UI frame or maps a touch through it, so the very first
-     * thing drawn is already in the board's normal held orientation
-     * instead of starting upright and visibly turning into place once the
-     * loop's own periodic sample confirms what was already decided. */
+    /* ui_init() above already reset the transform to identity (it has to,
+     * so a stale one from a previous host test can never leak in), so
+     * DISPLAY_DEFAULT_QUARTER is not actually in force yet - apply it
+     * once here before the first frame is built, or the board would
+     * start upright and visibly turn into place. */
     ui_set_transform(ui_transform_quarter_turn(
         display_quarter(&shell_display), GFX_WIDTH, GFX_HEIGHT));
 
@@ -520,14 +346,7 @@ void app_main(void)
         }
 
 #if CONFIG_LAUNCHER_SELFTEST
-        /* A RUNSUITE request from the host over the console - see
-         * util/screenshot.c's own "WHY THE RESULT COMES BACK THROUGH A FLAG"
-         * section for why this cannot just call suites_run_one() directly
-         * from the listener task: that task and this loop both draw and
-         * present to the one framebuffer, with no lock between them. Checked
-         * before this iteration's own step_app()/gfx_present() below, so the
-         * suite's own many frames of drawing/clearing/presenting never
-         * interleave with the shell's. */
+        /* See util/screenshot.c for framebuffer contention explanation. */
         char runsuite_name[64];
         if (screenshot_take_runsuite_request(runsuite_name, sizeof runsuite_name)) {
             if (!suites_run_one(runsuite_name)) {
@@ -539,13 +358,6 @@ void app_main(void)
         touch_read(&input);
         buttons_read(&input.boot, &input.power);
 
-        /* Resampled at DISPLAY_SAMPLE_MS, not every frame - see that
-         * constant's own comment. Ahead of step_app(), so a transform change
-         * this iteration is already in force before anything below builds a
-         * UI frame or maps this frame's touch through it - draw_palette() in
-         * app_sand.c used to have to get this same ordering right locally
-         * for exactly the same reason; now it is main.c's job once, for
-         * everything. */
         if (now_us >= next_display_sample_us) {
             next_display_sample_us = now_us + (int64_t)DISPLAY_SAMPLE_MS * 1000;
 
@@ -563,13 +375,6 @@ void app_main(void)
         step_app(&current, &input, dt_ms);
 
 #if CONFIG_LAUNCHER_DEVELOPMENT
-        /* A capture requested from the host over the console - see
-         * util/screenshot.c's own top comment for why that arrives as a
-         * flag rather than a direct call from the listener task. Checked
-         * after the frame is drawn but before it is sent, so what is
-         * streamed off is exactly what gfx_present() below is about to put
-         * on screen, regardless of which app (or the launcher) just drew
-         * it. */
         if (screenshot_take_request()) {
             screenshot_dump(&input, current);
         }
