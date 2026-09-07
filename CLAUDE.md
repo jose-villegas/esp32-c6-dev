@@ -105,13 +105,11 @@ if [ -f "$f" ] && command -v python >/dev/null 2>&1; then python "$f"; else exit
 
 The guard is not cosmetic: `python <missing file>` exits 2, and 2 is the code
 that blocks the edit, so an unguarded user-level entry would refuse every
-write in every other project. As of 2026-09-06, after a first local-model
-trim wave (296 shortened, 71 of those reverted on review for losing real
-reasoning - automated one-shot compression is the wrong tool for a comment
-bundling several distinct points, which needs manual splitting instead), the
-tree holds 1,736 comments over the 300 aim (1,084 over the 500 ceiling), 79%
-of them in the sand app; `--comments-only <ref>` proves a bulk trim moved no
-code.
+write in every other project. As of 2026-09-07, after re-cutting sand.c,
+sand.h, sand_reactions.c, material.c, material.h and app_sand.c to the
+WHY-only standard (this section's own rule, above), the tree holds 1,394
+comments over the 300 aim (748 over the 500 ceiling), 67% of them in the
+sand app; `--comments-only <ref>` proves a bulk trim moved no code.
 
 Requires a **host** compiler (not the ESP32 toolchain) for the host tests:
 Windows `winget install BrechtSanders.WinLibs.POSIX.UCRT`, Debian/Ubuntu
