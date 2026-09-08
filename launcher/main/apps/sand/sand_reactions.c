@@ -77,6 +77,7 @@
 #define PAIR_IGNITABLE       (1u << 2) /* theirs has a nonzero flammability - try_ignite()'s own first reject */
 #define PAIR_QUENCHES        (1u << 3) /* theirs is a liquid that is neither fuel nor a heat source - neighbor_quenches() */
 #define PAIR_DISSOLVABLE     (1u << 4) /* theirs has a nonzero dissolvable - step_one_dissolver_cell()'s own reject */
+#define PAIR_CONDUCTS        (1u << 5) /* theirs has a nonzero conducts - conduct_heat()'s own reject */
 static uint8_t pair_bits[MATERIAL_MAX][MATERIAL_MAX];
 
 /* Reads theirs-only bits. Used by try_heat_transform(), step_one_cold_cell(),
@@ -862,17 +863,34 @@ conduct_heat(sand_t* s, int x, int y, int w, int h) {
         if ((unsigned)rx >= (unsigned)w || (unsigned)ry >= (unsigned)h) {
             continue;
         }
-        if (CELL_IS_EMPTY(s->cells[(size_t)ry * (size_t)w + (size_t)rx])) {
+        const cell_t first = s->cells[(size_t)ry * (size_t)w + (size_t)rx];
+        if (CELL_IS_EMPTY(first)) {
             continue;
         }
-        if (reaction_of(s->cells[(size_t)ry * (size_t)w + (size_t)rx])->conducts == 0) {
-            continue; /* Early-out - most neighbours not conductors */
+        /* Early-out - most neighbours are not conductors. Reading the bit
+         * table rather than reaction_of()->conducts keeps the reject in
+         * SRAM: reactions[] is flash-resident DROM behind the i-cache and
+         * its 61-byte stride costs a multiply, which measured as 18% of a
+         * fire step for four rejects that do nothing. */
+        if ((pair_theirs_bits(CELL_MATERIAL(first)) & PAIR_CONDUCTS) == 0) {
+            continue;
         }
 
         bool got_through = false;
         for (int depth = 0; depth < CONDUCT_REACH; depth++) {
             const cell_t here = s->cells[(size_t)ry * (size_t)w + (size_t)rx];
-            const int c = (s->conduction >= 0) ? s->conduction : reaction_of(here)->conducts;
+            /* The bit table folds all sixteen extended variants into one
+             * MAT_EXTENDED slot, so the reject above passes any extended
+             * cell once metal sets the bit. Re-testing here keeps that
+             * approximation from reaching the roll below, which would spend
+             * an RNG draw the exact test never spent. Dead for depth > 0:
+             * the loop only advances into cells it has already found to
+             * conduct. */
+            const int own = reaction_of(here)->conducts;
+            if (own == 0) {
+                break;
+            }
+            const int c = (s->conduction >= 0) ? s->conduction : own;
             if ((int)(rng_next(&s->rng) & 0xFF) >= c) {
                 break; /* heat stops inside this cell of the run */
             }
@@ -1141,8 +1159,12 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
     const bool lit_state = rx->burn_decay != 0;
     const int burn_rate = (s->decay >= 0) ? s->decay : rx->burn_decay;
 
-    if (lit_state ? !tick_decay_at(s, row, x, y, &grain, rx, burn_rate)
-                  : !tick_decay(s, row, x, y, &grain, mat, mat_id)) {
+    bool burnt_out = false;
+    SAND_STEP_GATE(burn_decay) {
+        burnt_out = lit_state ? !tick_decay_at(s, row, x, y, &grain, rx, burn_rate)
+                              : !tick_decay(s, row, x, y, &grain, mat, mat_id);
+    }
+    if (burnt_out) {
         if (rx->explodes != 0) {
             REACTION_DOC(
                 explodes,
@@ -1224,7 +1246,8 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
 
     /* Covered_at checks lid with cover_mask. */
 
-    if (mat->kind != KIND_LIQUID && rx->explodes == 0 && smothered(s, x, y, w, h, mat->density)) {
+    if (SAND_STEP_GATED(burn_smother, mat->kind != KIND_LIQUID && rx->explodes == 0)
+        && smothered(s, x, y, w, h, mat->density)) {
         row[x] = lit_state ? cell_with_code(grain, 0) : CELL_EMPTY;
         mark_rows(s, y, y);
         wake_block_and_neighbors(s, x, y);
@@ -1271,6 +1294,7 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
                                  ? ((s->lava_cooloff >= 0) ? s->lava_cooloff : SAND_LAVA_COOLOFF_CHANCE)
                                  : 0;
     const uint8_t* my_pair_row = pair_bits[mat_id];
+    SAND_STEP_GATE(burn_pair)
     for (int d = 0; d < 4; d++) {
         const int nx = x + reaction_dirs[d][0];
         const int ny = y + reaction_dirs[d][1];
@@ -1313,11 +1337,14 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
         }
     }
 
-    if (conduct_heat(s, x, y, w, h)) {
+    if (SAND_STEP_GATED(burn_conduct, conduct_heat(s, x, y, w, h))) {
         acted = true;
     }
 
-    if (try_flare(s, x, y, w, h, mat, reaction_of(grain)->flare)) {
+    /* rx, not a second reaction_of(grain): decay only ever rewrites the code
+     * nibble, so the row is the same one and re-deriving it costs a flash
+     * dereference per burning cell for nothing. */
+    if (SAND_STEP_GATED(burn_flare, try_flare(s, x, y, w, h, mat, rx->flare))) {
         acted = true;
     }
 
@@ -1446,7 +1473,13 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
             r = &reactions[mat];
             stage = material_first_stage[mat];
         }
-        goto* stage_labels[stage];
+        /* With the gate off the walk above is still paid in full and only
+         * the stage bodies are skipped. Compiled out, SAND_STEP_GATE() is
+         * empty and the continue below is simply unreachable. */
+        SAND_STEP_GATE(reactions_body) {
+            goto* stage_labels[stage];
+        }
+        continue;
 
     stage_burn_always:
         found |= FOUND_BURNING;
@@ -1622,6 +1655,9 @@ sand_step_reactions(sand_t* s) {
         if (r->dissolvable != 0) {
             theirs_bits[m] |= PAIR_DISSOLVABLE;
         }
+        if (r->conducts != 0) {
+            theirs_bits[m] |= PAIR_CONDUCTS;
+        }
     }
     /* MATERIAL_EXTENDED_CODES (16), not _COUNT (8): a probe only knows a
      * cell is MAT_EXTENDED, never which of the sixteen codes, so
@@ -1638,6 +1674,9 @@ sand_step_reactions(sand_t* s) {
         }
         if (r->dissolvable != 0) {
             theirs_bits[MAT_EXTENDED] |= PAIR_DISSOLVABLE;
+        }
+        if (r->conducts != 0) {
+            theirs_bits[MAT_EXTENDED] |= PAIR_CONDUCTS;
         }
     }
     for (int mine = 0; mine < MATERIAL_MAX; mine++) {

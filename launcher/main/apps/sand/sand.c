@@ -1049,6 +1049,12 @@ volatile bool sand_step_gate_xflow_body = true;
 volatile bool sand_step_gate_sweep_body = true;
 volatile bool sand_step_gate_gas_rise     = true;
 volatile bool sand_step_gate_gas_equalise = true;
+volatile bool sand_step_gate_reactions_body = true;
+volatile bool sand_step_gate_burn_decay     = true;
+volatile bool sand_step_gate_burn_smother   = true;
+volatile bool sand_step_gate_burn_pair      = true;
+volatile bool sand_step_gate_burn_conduct   = true;
+volatile bool sand_step_gate_burn_flare     = true;
 #endif
 
 /* Pinned to a cache-line boundary so this function's placement is not a

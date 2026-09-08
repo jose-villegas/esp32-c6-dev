@@ -397,7 +397,10 @@ static int64_t water_scene_single_step_us(volatile bool *gate)
 /* Fire's twin of water_scene_single_step_us() - see that function for why one
  * timed step from a rebuilt board is valid where twenty steps with a pass
  * disabled is not. */
-static int64_t fire_scene_single_step_us(volatile bool *gate)
+/* Takes a SET of gates, not one: the burning cell's phase split below wants a
+ * floor configuration with all five off at once, and one-gate-at-a-time can
+ * never produce it. */
+static int64_t fire_scene_single_step_multi_us(volatile bool *const *off, size_t n)
 {
     int64_t best = -1;
 
@@ -413,14 +416,14 @@ static int64_t fire_scene_single_step_us(volatile bool *gate)
             sand_step(&real, 0, 1000, 0);
         }
 
-        if (gate != NULL) {
-            *gate = false;
+        for (size_t g = 0; g < n; g++) {
+            *off[g] = false;
         }
         const int64_t start = esp_timer_get_time();
         sand_step(&real, 0, 1000, 0);
         const int64_t took = esp_timer_get_time() - start;
-        if (gate != NULL) {
-            *gate = true;
+        for (size_t g = 0; g < n; g++) {
+            *off[g] = true;
         }
 
         free(big);
@@ -433,6 +436,14 @@ static int64_t fire_scene_single_step_us(volatile bool *gate)
     return best;
 }
 
+static int64_t fire_scene_single_step_us(volatile bool *gate)
+{
+    if (gate == NULL) {
+        return fire_scene_single_step_multi_us(NULL, 0);
+    }
+    return fire_scene_single_step_multi_us(&gate, 1);
+}
+
 /* WHERE THE APP'S MOST EXPENSIVE SCENE SPENDS ITS TIME. Every pass gate this
  * project has, pointed at fire rather than water - reactions are 1% of a water
  * step and presumed to dominate here, which is exactly the kind of assumption
@@ -443,6 +454,7 @@ static void test_the_fire_scene_decomposes_by_pass(void)
         "every pass on",  "main sweep off", "sweep body off (walk only)",
         "cross-flow off", "gas off",        "reactions off",
         "gas rise off",   "gas equalise off",
+        "reactions body off (walk only)",
     };
     volatile bool *const gates[] = {
         NULL,
@@ -453,6 +465,7 @@ static void test_the_fire_scene_decomposes_by_pass(void)
         &sand_step_gate_reactions,
         &sand_step_gate_gas_rise,
         &sand_step_gate_gas_equalise,
+        &sand_step_gate_reactions_body,
     };
 
     int64_t whole = 0;
@@ -476,7 +489,54 @@ static void test_the_fire_scene_decomposes_by_pass(void)
                              sand_step_gate_reactions &&
                              sand_step_gate_sweep_body &&
                              sand_step_gate_gas_rise &&
-                             sand_step_gate_gas_equalise,
+                             sand_step_gate_gas_equalise &&
+                             sand_step_gate_reactions_body,
+        "every gate must be back on before the next test in this binary runs");
+}
+
+/* The next question down from "reactions bodies own 55% of a fire step": four
+ * of the burning cell's five phases are separate four-neighbour walks over the
+ * same four addresses, which is the shape a structural fix would attack - but
+ * only if the walks, and not the decay roll, hold the time.
+ *
+ * The all-five row is the FLOOR, not an upper bound on one phase: what a
+ * burning cell costs reaching only its prologue. Prints; asserts no budget. */
+static void test_the_burning_cell_decomposes_by_phase(void)
+{
+    volatile bool *const decay   = &sand_step_gate_burn_decay;
+    volatile bool *const smother = &sand_step_gate_burn_smother;
+    volatile bool *const pair    = &sand_step_gate_burn_pair;
+    volatile bool *const conduct = &sand_step_gate_burn_conduct;
+    volatile bool *const flare   = &sand_step_gate_burn_flare;
+
+    volatile bool *const all_five[] = { decay, smother, pair, conduct, flare };
+
+    static const char *const names[] = {
+        "every phase on", "decay off", "smother off", "pair walk off",
+        "conduct off",    "flare off", "all five off (prologue only)",
+    };
+    volatile bool *const *const sets[] = {
+        NULL, &decay, &smother, &pair, &conduct, &flare, all_five,
+    };
+    static const size_t counts[] = { 0, 1, 1, 1, 1, 1, 5 };
+
+    int64_t whole = 0;
+    for (size_t i = 0; i < sizeof(sets) / sizeof(sets[0]); i++) {
+        const int64_t us = fire_scene_single_step_multi_us(sets[i], counts[i]);
+        if (i == 0) {
+            whole = us;
+            ESP_LOGI("device_tests", "burning cell: %s: %lld us",
+                     names[i], (long long)us);
+        } else {
+            const int64_t saved = whole - us;
+            ESP_LOGI("device_tests",
+                     "burning cell: %s: %lld us (%lld us, %lld%% of the whole)",
+                     names[i], (long long)us, (long long)saved,
+                     whole > 0 ? (long long)((saved * 100) / whole) : 0);
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(*decay && *smother && *pair && *conduct && *flare,
         "every gate must be back on before the next test in this binary runs");
 }
 
@@ -2712,6 +2772,7 @@ void run_sand_perf_suite(void)
     RUN_TEST(test_the_water_scene_decomposes_by_pass);
     RUN_TEST(test_the_main_sweep_decomposes_by_pass);
     RUN_TEST(test_the_fire_scene_decomposes_by_pass);
+    RUN_TEST(test_the_burning_cell_decomposes_by_phase);
 #endif
     /* Ungated: the two gas movers compare through sand_set_gas_walk(), an
      * ordinary API, so this runs in every diagnostics build. */
