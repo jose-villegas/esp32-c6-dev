@@ -43,8 +43,10 @@ reference for it):
 
 ## Related
 
-- [`../plans/`](../plans) — not-yet-built plans that touch this app
-  (`Metal-Smelting-Plan.md`, `Reaction-Doc-Generator-Plan.md`).
+- [`../plans/`](../plans) — plans that touch this app.
+  `Reaction-Doc-Generator-Plan.md`'s brush-blurb phase is the only
+  unbuilt one; `Metal-Smelting-Plan.md` shipped and is kept for the
+  numbers tables the code cites.
 - [`../notes/README.md`](../notes/README.md) — the hardware constraints
   (no PSRAM, the memory budget) this app's numbers are shaped by.
 - [`../Testing-Guide.md`](../Testing-Guide.md) — how any of this gets

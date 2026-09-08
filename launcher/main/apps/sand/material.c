@@ -678,9 +678,16 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_CODES] = {
              * Adjust device. */
             .conducts = 248,
 
-            /* Metal's acid resistance set to 110 for balance. Future
-             * adjustments possible. */
+            /* Acid barely touches it - the one axis on which metal beats
+             * both other walls (stone 60, glass immune but melts). */
             .dissolvable = 1,
+
+            /* NO heats_to, deliberately. Metal has no variant to ramp, so
+             * the only way to melt it would be a memoryless roll - which
+             * would make a metal wall beside lava randomly turn into lava.
+             * Heatproof instead, so the three walls differ on one axis
+             * each: stone survives heat and dissolves slowly, glass melts
+             * but is acid-immune, metal survives both and conducts best. */
 
             /* THE FRAGILITY CURVE every solid's toughness sits on:
              * density = 221 - 20*rank, rank 1 (toughest) to 8 (softest).
