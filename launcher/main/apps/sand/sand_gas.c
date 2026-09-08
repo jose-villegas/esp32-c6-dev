@@ -381,15 +381,19 @@ static bool step_one_gas_row(sand_t *s, int y, int w, int rdx, int rdy,
  * will, being swept before this runs) - one comparison, and it keeps
  * this search off the bill for the common case of a gas pocket still
  * mostly rising rather than pooled under something. */
-static inline bool has_room_above(const sand_t *s, int x, int y, int rdx,
-                                  int rdy)
+/* BOTH PROBES TAKE THEIR ROW, not a y to multiply. The target row is fixed
+ * for a whole equalise row - the cell above is always y + rdy, the
+ * perpendicular neighbour always y + py - so recomputing ny * w + nx per
+ * cell paid a multiply and a vertical bounds test 41,216 times for two
+ * pointers the row loop could hand down. dest_row() returning NULL is the
+ * vertical bounds test, done once. */
+static inline bool has_room_above(const uint8_t *arow, int x, int rdx, int w)
 {
     const int fx = x + rdx;
-    const int fy = y + rdy;
-    if ((unsigned)fx >= (unsigned)s->w || (unsigned)fy >= (unsigned)s->h) {
+    if (arow == NULL || (unsigned)fx >= (unsigned)w) {
         return false;
     }
-    return CELL_IS_EMPTY(s->cells[(size_t)fy * (size_t)s->w + (size_t)fx]);
+    return CELL_IS_EMPTY(arow[fx]);
 }
 
 /* Whether the immediate neighbour along (px, py) is worth searching past:
@@ -400,15 +404,14 @@ static inline bool has_room_above(const sand_t *s, int x, int y, int rdx,
  * for real space further out. Matters for a 2D pour under a ceiling: many
  * INDEPENDENT rows, a row mid-pour getting grains faster than one pass
  * resolves. */
-static inline bool neighbour_is_open(const sand_t *s, int x, int y, int px,
-                                     int py, uint8_t gas_id)
+static inline bool neighbour_is_open(const uint8_t *nrow, int x, int px,
+                                     int w, uint8_t gas_id)
 {
     const int nx = x + px;
-    const int ny = y + py;
-    if ((unsigned)nx >= (unsigned)s->w || (unsigned)ny >= (unsigned)s->h) {
+    if (nrow == NULL || (unsigned)nx >= (unsigned)w) {
         return false;
     }
-    const cell_t n = s->cells[(size_t)ny * (size_t)s->w + (size_t)nx];
+    const cell_t n = nrow[nx];
     return CELL_IS_EMPTY(n) || CELL_MATERIAL(n) == gas_id;
 }
 
@@ -460,7 +463,9 @@ typedef struct {
  * not at all. `run` carries gas_run_t's verified-run state between cells
  * of the same row sweep (see that struct's own comment for the geometry)
  * and `carry_ok` is that carry's on/off switch, true only when py == 0. */
-static inline bool equalise_gas_one_cell(sand_t *s, uint8_t *row, int x,
+static inline bool equalise_gas_one_cell(sand_t *s, uint8_t *row,
+                                         const uint8_t *arow,
+                                         const uint8_t *nrow, int x,
                                          int y, int px, int py, int rdx,
                                          int rdy, int sight, uint8_t gas_id,
                                          cell_t grain, bool *stayed_in_row,
@@ -470,8 +475,8 @@ static inline bool equalise_gas_one_cell(sand_t *s, uint8_t *row, int x,
     bool moved = false;
     int  tx = 0, ty = 0;
 
-    if (!has_room_above(s, x, y, rdx, rdy) &&
-        neighbour_is_open(s, x, y, px, py, gas_id)) {
+    if (!has_room_above(arow, x, rdx, s->w) &&
+        neighbour_is_open(nrow, x, px, s->w, gas_id)) {
         int at;
 
         /* Known, without looking, to return 0: `run` already covers every
@@ -553,7 +558,9 @@ static inline void gas_union_touched_x(bool *touched, int *x0, int *x1,
     *touched = true;
 }
 
-static inline bool equalise_gas_one_row_cell(sand_t *s, uint8_t *row, int x,
+static inline bool equalise_gas_one_row_cell(sand_t *s, uint8_t *row,
+                                             const uint8_t *arow,
+                                             const uint8_t *nrow, int x,
                                              int y, int px, int py, int rdx,
                                              int rdy, uint16_t is_gas,
                                              bool *touched, int *touched_x0,
@@ -587,8 +594,8 @@ static inline bool equalise_gas_one_row_cell(sand_t *s, uint8_t *row, int x,
     bool stayed_in_row = false;
     int  tx = 0;
     if (SAND_STEP_GATED(gas_eq_body,
-                        equalise_gas_one_cell(s, row, x, y, px, py, rdx, rdy, sight, id, c,
-                                              &stayed_in_row, &tx, carry_ok, run))
+                        equalise_gas_one_cell(s, row, arow, nrow, x, y, px, py, rdx, rdy,
+                                              sight, id, c, &stayed_in_row, &tx, carry_ok, run))
         && stayed_in_row) {
         gas_union_touched_x(touched, touched_x0, touched_x1,
                             x < tx ? x : tx, x > tx ? x : tx);
@@ -605,6 +612,9 @@ static bool equalise_gas_one_row(sand_t *s, int y, int w, int x_from,
                                  int rdx, int rdy, uint16_t is_gas)
 {
     uint8_t *row = s->cells + (size_t)y * (size_t)w;
+    /* Both fixed for the whole row - see has_room_above()'s comment. */
+    const uint8_t *const arow = dest_row(s, y + rdy);
+    const uint8_t *const nrow = dest_row(s, y + py);
     bool any_gas = false;
     bool touched = false;
     int  touched_x0 = 0, touched_x1 = 0;
@@ -622,7 +632,7 @@ static bool equalise_gas_one_row(sand_t *s, int y, int w, int x_from,
     gas_run_t run = { .id = -1, .len = 0 };
 
     for (int x = x_from; x != x_to; x += x_step) {
-        if (equalise_gas_one_row_cell(s, row, x, y, px, py, rdx, rdy,
+        if (equalise_gas_one_row_cell(s, row, arow, nrow, x, y, px, py, rdx, rdy,
                                       is_gas, &touched, &touched_x0,
                                       &touched_x1, carry_ok, &run)) {
             any_gas = true;
