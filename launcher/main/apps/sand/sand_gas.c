@@ -586,9 +586,10 @@ static inline bool equalise_gas_one_row_cell(sand_t *s, uint8_t *row, int x,
 
     bool stayed_in_row = false;
     int  tx = 0;
-    if (equalise_gas_one_cell(s, row, x, y, px, py, rdx, rdy, sight, id, c,
-                              &stayed_in_row, &tx, carry_ok, run) &&
-        stayed_in_row) {
+    if (SAND_STEP_GATED(gas_eq_body,
+                        equalise_gas_one_cell(s, row, x, y, px, py, rdx, rdy, sight, id, c,
+                                              &stayed_in_row, &tx, carry_ok, run))
+        && stayed_in_row) {
         gas_union_touched_x(touched, touched_x0, touched_x1,
                             x < tx ? x : tx, x > tx ? x : tx);
     }
