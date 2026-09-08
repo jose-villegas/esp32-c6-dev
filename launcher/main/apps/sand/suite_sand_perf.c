@@ -37,6 +37,8 @@
 #include "util/intmath.h"
 #include "suite_sand_common.h"
 #include "suite_sand_scenes.h"
+#include "tilt.h"      /* TILT_TAU_*_MS - the turn below follows the real
+                       * filter shape rather than a straight line */
 
 /* build_water_over_lava_scene()/WATER_LAVA_IMPULSE_MAX and
  * test_the_water_over_lava_scene_reaches_the_quench_cooloff_and_burst_paths_
@@ -939,6 +941,178 @@ static void test_turning_a_settled_pool_to_landscape_fits_in_the_frame_budget(vo
         "grid width, so the cross-flow search is the thing to suspect, and "
         "a host pass map agrees at ~48%. A reduction target at measured x "
         "0.9, so failing means the work is not done yet");
+}
+
+/* THE SHAPE OF A REAL TURN, shared by the two gas tilt scenes below.
+ *
+ * tilt.c does not sweep gravity linearly - approach() is an exponential
+ * moving average, current + (target - current) * dt / (tau + dt), with tau
+ * interpolating between TILT_TAU_MOVING_MS and TILT_TAU_STILL_MS. At a ~24 ms
+ * frame and the moving tau that is alpha ~ 0.375 per frame, so a real turn is
+ * most of the way over in about five frames and settled in twelve.
+ *
+ * That decides what gets timed. A linear sweep puts its biggest per-step
+ * gravity change in the MIDDLE of the turn; the real filter puts it in the
+ * first two or three frames, which is where the simulation has the most to
+ * do. The moving tau is used rather than the still one because turning the
+ * device IS movement, and because it is the demanding case - the largest
+ * gravity delta per frame.
+ *
+ * Returns the mean and writes the worst single step: a rotation's cost is not
+ * flat across the turn, and a mean alone is the shape of number that hides a
+ * spike. */
+static int64_t time_a_quarter_turn(sand_t *real, int steps, int64_t *worst_out)
+{
+    const int dt_ms  = 24;
+    const int tau_ms = TILT_TAU_MOVING_MS;
+
+    int32_t gx_q8 = 0;
+    int32_t gy_q8 = 1000 * 256;
+
+    int64_t worst = 0;
+    const int64_t start = esp_timer_get_time();
+    for (int i = 0; i < steps; i++) {
+        gx_q8 += (int32_t)(((int64_t)(1000 * 256 - gx_q8) * dt_ms) / (tau_ms + dt_ms));
+        gy_q8 += (int32_t)(((int64_t)(0 - gy_q8) * dt_ms) / (tau_ms + dt_ms));
+
+        const int64_t t0 = esp_timer_get_time();
+        sand_step(real, gx_q8 / 256, gy_q8 / 256, 0);
+        const int64_t took = esp_timer_get_time() - t0;
+        if (took > worst) {
+            worst = took;
+        }
+    }
+    const int64_t per_step = (esp_timer_get_time() - start) / steps;
+    *worst_out = worst;
+    return per_step;
+}
+
+/* THE GAS PASSES UNDER A TILTED BOARD, which nothing else here measured.
+ *
+ * WHY NOT test_a_screen_of_smoke_and_steam ABOVE, which uses the same field:
+ * that one runs at gravity (0, 1000), so it only ever sees an axis-aligned
+ * sweep. equalise_gas() takes its spread direction from ring_dir(i_stable + 2),
+ * so an axis-aligned board gives py == 0 and a diagonal one does not, and the
+ * two take genuinely different paths - down to whether gas_run_t's carry runs
+ * at all, since carry_ok IS py == 0. Four of the eight ring directions are
+ * diagonal, half the orientations this device can be held in, and none of them
+ * had a scene.
+ *
+ * THIS ONE IS THE DIAGNOSTIC EXTREME, not a scene anyone plays: a completely
+ * packed screen, where no gas can go anywhere because there is nowhere to go.
+ * It bounds the worst case and exercises the row-skip path, which needs packed
+ * rows to fire at all. The half-screen scene below is its realistic
+ * counterpart, and the PAIR is the point - a number from this one alone would
+ * flatter any optimisation aimed at packed rows. */
+static void test_turning_a_packed_screen_of_gas_fits_in_the_frame_budget(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 31u);
+    sand_enable_sleeping(&real, blocks);
+
+    build_smoke_and_steam_scene(&real);
+    const int total = REAL_W * REAL_H;
+
+    int64_t worst = 0;
+    const int64_t per_step = time_a_quarter_turn(&real, 24, &worst);
+
+    ESP_LOGI("device_tests", "quarter turn on a PACKED screen of gas, %dx%d: "
+                             "%lld us per step, worst single step %lld us",
+             REAL_W, REAL_H, (long long)per_step, (long long)worst);
+
+    /* Read before the frees, asserted after - Unity longjmps out of a failing
+     * assert, so an assert ahead of free() would leak ~41 KB on this device's
+     * no-PSRAM heap. */
+    const int count = sand_count(&real);
+
+    free(big);
+    free(blocks);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(total, count,
+        "turning the board must move gas, not create or destroy it - a packed "
+        "screen stays packed however the board is held");
+
+    /* MEASURED 143,165 us per step on device, worst single step 148,093
+     * (capture_ref_68034bf_20260908_233819.md). Budget is that x 0.9 = 128,848, rounded DOWN to
+     * 128,800 so the target is never looser than the convention.
+     *
+     * SIX FRAMES A STEP, and that is the point of the row: it is the ceiling
+     * a completely packed board imposes, not a number anyone plays at. The
+     * half-screen row below costs 2.8x less on the same turn - judge changes
+     * by that one, and use this to bound the worst case. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(128800, (int)per_step,
+        "a quarter turn on a fully packed screen of gas is the worst case the "
+        "gas passes can be handed - a reduction target at measured x 0.9, so "
+        "failing means the work is not done yet");
+}
+
+/* THE SAME TURN ON A SCENE SOMEONE COULD ACTUALLY PRODUCE, and the one to
+ * trust for whether a change helps real play.
+ *
+ * Gas rises, so its counterpart to the settled pool's 40% resting on the floor
+ * is 40% resting against the CEILING, settled there before the board turns so
+ * the turn starts from a body at rest rather than mid-pour. The rest of the
+ * grid is open, and that is the difference that matters: a packed screen makes
+ * every row skippable and every scan hopeless, while here most rows hold both
+ * gas and space, so the passes do their ordinary work. */
+static void test_turning_a_half_screen_of_gas_fits_in_the_frame_budget(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 31u);
+    sand_enable_sleeping(&real, blocks);
+
+    /* 40% of the grid, full width, against the ceiling - where gas ends up. */
+    for (int y = 0; y < (REAL_H * 2) / 5; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            sand_set(&real, x, y, CELL_MAKE(MAT_GAS, 0));
+        }
+    }
+
+    /* Settle first: the turn should start from a body at rest, not from a
+     * field still finding its own shape. */
+    for (int i = 0; i < 60; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+    const int before = sand_count(&real);
+
+    int64_t worst = 0;
+    const int64_t per_step = time_a_quarter_turn(&real, 24, &worst);
+
+    ESP_LOGI("device_tests", "quarter turn on a HALF screen of gas, %dx%d: "
+                             "%lld us per step, worst single step %lld us",
+             REAL_W, REAL_H, (long long)per_step, (long long)worst);
+
+    const int after = sand_count(&real);
+
+    free(big);
+    free(blocks);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(before, after,
+        "turning the board must move gas, not create or destroy it - decay is "
+        "off by default, so the cell count is conserved across the turn");
+
+    /* MEASURED 51,320 us per step on device, worst single step 62,138
+     * (capture_ref_68034bf_20260908_233819.md). Budget is that x 0.9 = 46,188, rounded DOWN to
+     * 46,100.
+     *
+     * 2.8x CHEAPER THAN THE PACKED ROW ABOVE on the identical turn, which is
+     * why both exist. A change aimed at packed rows will look roughly three
+     * times better there than it is worth here, and here is where the board
+     * spends its time. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(46100, (int)per_step,
+        "a quarter turn on a settled half screen of gas is the realistic "
+        "tilted case - a reduction target at measured x 0.9, so failing "
+        "means the work is not done yet");
 }
 
 #ifdef SAND_HOST_PROBE
@@ -2826,6 +3000,8 @@ void run_sand_perf_suite(void)
     RUN_TEST(test_four_liquids_reacting_at_once_fits_in_the_frame_budget);
     RUN_TEST(test_the_lava_stress_scene_fits_in_the_frame_budget);
     RUN_TEST(test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget);
+    RUN_TEST(test_turning_a_packed_screen_of_gas_fits_in_the_frame_budget);
+    RUN_TEST(test_turning_a_half_screen_of_gas_fits_in_the_frame_budget);
     RUN_TEST(test_the_thermal_shock_scene_fits_in_the_frame_budget);
     RUN_TEST(test_the_boiler_scene_fits_in_the_frame_budget);
     RUN_TEST(test_the_wet_earth_scene_fits_in_the_frame_budget);
