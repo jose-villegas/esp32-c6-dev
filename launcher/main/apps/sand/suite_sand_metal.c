@@ -618,6 +618,43 @@ static void test_heat_through_a_stone_wall_smelts_the_dirt_beyond_it(void)
         "smelting itself, never for an ordinary wall");
 }
 
+/* Guards conduct_heat()'s depth-0 re-test of `conducts`. All sixteen extended
+ * variants share one MAT_EXTENDED slot in the PAIR_CONDUCTS table, so metal's
+ * bit makes every extended cell pass the cheap reject - root included, which
+ * conducts nothing.
+ *
+ * Fire and root are re-placed each step so neither burn-out nor root's
+ * `withers` can end the scene early and retire the assertion quietly. */
+static void test_a_non_conducting_extended_cell_passes_no_heat_beyond_itself(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_conduction(&s, 255);
+    sand_set_mobility(&s, 0);   /* fire is a gas - pin it beside the root */
+
+    const int y = H / 2;
+    sand_set(&s, 4, y, WOOD);
+
+    for (int i = 0; i < 8; i++) {
+        sand_set(&s, 2, y, FIRE);
+        sand_set(&s, 3, y, MATX(MATX_ROOT));
+        sand_step(&s, 0, 1000, 0);
+
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_ROOT), sand_at(&s, 3, y),
+            "the root must survive each step - if it burns or withers away "
+            "the fire is touching the wood directly and this test can no "
+            "longer tell a conducted ignition from a contact one");
+        /* Byte-exact, not CELL_MATERIAL: wood's `ignites_to` is MAT_WOOD, so
+         * lit wood keeps its own material nibble and only the code changes -
+         * a material-only assertion here reads PASS on an ignited cell. */
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(WOOD, sand_at(&s, 4, y),
+            "wood two cells from the fire, behind a root that conducts "
+            "nothing, must never ignite - conduct_heat() reaching it means "
+            "the PAIR_CONDUCTS reject let an extended cell through and "
+            "nothing re-tested its real `conducts` before the roll");
+    }
+}
+
 /* Regression guard for the wet-dirt branch just added to
  * try_heat_transform(): sand has no `dries` at all, so `r->dries != 0`
  * must gate the new branch out entirely and sand -> glass must be
@@ -1385,6 +1422,7 @@ void run_sand_metal_suite(void)
     RUN_TEST(test_dry_dirt_smelting_reaches_both_metal_and_stone);
     RUN_TEST(test_a_held_flame_smelts_dirt_as_lava_does);
     RUN_TEST(test_heat_through_a_stone_wall_smelts_the_dirt_beyond_it);
+    RUN_TEST(test_a_non_conducting_extended_cell_passes_no_heat_beyond_itself);
     RUN_TEST(test_sand_still_becomes_glass_beside_the_new_dirt_branch);
     RUN_TEST(test_a_metal_run_conducts_further_than_a_stone_one);
     RUN_TEST(test_the_rod_terminates_at_conduct_reach_not_the_far_wall);

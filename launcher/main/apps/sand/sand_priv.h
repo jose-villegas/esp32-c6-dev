@@ -645,6 +645,26 @@ extern volatile bool sand_step_gate_sweep_body;
 extern volatile bool sand_step_gate_gas_rise;
 extern volatile bool sand_step_gate_gas_equalise;
 
+/* Splits the reaction ladder: everything up to choosing a stage - the cell
+ * load, the empty test, the material decode and the two table lookups - still
+ * runs, and only the stage BODIES are skipped. Reactions are ~53% of a full
+ * screen of fire once the gas walk landed, and nothing has measured whether
+ * that is the dispatch or the chemistry. */
+extern volatile bool sand_step_gate_reactions_body;
+
+/* Splits step_one_burning_cell() into the five phases it runs back to back,
+ * four of which are separate four-neighbour walks. Off, a phase's work is
+ * skipped but the cell still reaches every later phase - so these are upper
+ * bounds on one phase each, never a partition of the whole. burn_decay is
+ * the loosest of the five: a cell that would have burnt out and returned
+ * instead survives into the phases below it, so "decay off" can pay MORE
+ * tail work than "decay on", not less. */
+extern volatile bool sand_step_gate_burn_decay;
+extern volatile bool sand_step_gate_burn_smother;
+extern volatile bool sand_step_gate_burn_pair;
+extern volatile bool sand_step_gate_burn_conduct;
+extern volatile bool sand_step_gate_burn_flare;
+
 /* Wraps a pass's call site in `if (sand_step_gate_<name>)` when compiled in,
  * and in nothing at all otherwise - a release build's sand_step() has no
  * extra branch to fold away, because there was never a branch there to
