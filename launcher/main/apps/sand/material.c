@@ -670,7 +670,7 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_CODES] = {
                                       * story as dissolvable above */
         },
 
-    /* METAL. See docs/plans/Metal-Smelting-Plan.md. Low nibble is identity, no
+    /* METAL. See docs/sand/Metal.md. Low nibble is identity, no
      * glow, heat, or melt. Focuses on heat movement. */
     [MATX_METAL] =
         {

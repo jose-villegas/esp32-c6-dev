@@ -31,7 +31,7 @@
 
 /* ===================================================================
  * Metal: dirt smelted by sustained heat - see
- * docs/plans/Metal-Smelting-Plan.md, which every test below follows.
+ * docs/sand/Metal.md, which every test below follows.
  * =================================================================== */
 
 /* Mirrors sand_reactions.c's own HEAT_FLAW_CLUMP, which is private to
@@ -760,7 +760,7 @@ static int steps_to_boil_through(int wall_len, cell_t wall_cell, int budget)
 /* The performance-relevant claim the plan itself flags as the one thing
  * no benchmark scene would catch: metal's `conducts` (248) makes the
  * conduction walk reach roughly CONDUCT_REACH cells on average, against
- * stone and glass's 220 - see Metal-Smelting-Plan.md's own attenuation
+ * stone and glass's 220 - see Metal.md's own attenuation
  * table. This is the minimum host guard the plan asks for before merge:
  * heat must cross a 20-cell metal run comfortably inside a short shared
  * budget where a 20-cell stone run - real per-material figures, nothing
@@ -788,7 +788,7 @@ static void test_a_metal_run_conducts_further_than_a_stone_one(void)
 }
 
 /* "A lava source grows its own 32-cell metal rod out of a dirt bed and
- * then stops" - Metal-Smelting-Plan.md's own description of the
+ * then stops" - Metal.md's own description of the
  * self-growing rod, and "the thing most likely to surprise someone".
  * Dirt at the far side of a metal conductor run smelts via
  * conduct_heat()'s walk exactly as dirt directly against lava smelts via
@@ -996,7 +996,7 @@ static int steps_for_acid_to_clear(uint8_t counted_id, cell_t floor_cell,
 /* Balance revision, 2026-08-30: metal now RESISTS acid (dissolvable 1,
  * not immune at 0 - see that field's own comment in material.c) instead
  * of being acid's intended counter (previously 110, deliberately above
- * stone's 60) - see Metal-Smelting-Plan.md's own numbers table for the
+ * stone's 60) - see Metal.md's own numbers table for the
  * full account. This test's name is now backwards from what it checks;
  * left as-is pending a rename in a future balance pass rather than
  * touched here alongside the value itself. */

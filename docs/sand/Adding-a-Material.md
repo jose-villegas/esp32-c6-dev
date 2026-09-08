@@ -511,7 +511,7 @@ field the table never had - not a behaviour this fold took away.
 Wood's current row still has no `conducts`, which is simply consistent
 with what ember's row always was. Dirt and metal are the newest
 arrivals - see
-[`Metal-Smelting-Plan.md`](../plans/Metal-Smelting-Plan.md).
+[`Metal.md`](Metal.md).
 
 ---
 
