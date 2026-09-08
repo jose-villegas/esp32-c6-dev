@@ -679,6 +679,12 @@ extern volatile bool sand_step_gate_gas_decay;
 extern volatile bool sand_step_gate_gas_move;
 extern volatile bool sand_step_gate_gas_wake;
 
+/* Splits equalise_gas() the way xflow_body splits cross-flow: off, the row
+ * scan still runs in full - cell load, gas-mask test, sight lookup - and only
+ * the transfer it finds is suppressed. Against "gas equalise off" it says
+ * whether that pass costs what it DOES or what it LOOKS AT. */
+extern volatile bool sand_step_gate_gas_eq_body;
+
 /* Wraps a pass's call site in `if (sand_step_gate_<name>)` when compiled in,
  * and in nothing at all otherwise - a release build's sand_step() has no
  * extra branch to fold away, because there was never a branch there to
