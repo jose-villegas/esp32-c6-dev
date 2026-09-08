@@ -44,7 +44,7 @@ purpose:
 - **Transient** (`decay != 0`, e.g. gas, fire, steam, ember): *life
   remaining*, counting down to nothing. Reusing the nibble is what makes
   that free instead of needing its own byte - see [Gas: the same
-  primitives, upside down](#gas-the-same-primitives-upside-down),
+  biased random walk](#gas-a-biased-random-walk),
   [Fire chemistry: wood, embers, steam, and a working
   boiler](#fire-chemistry-wood-embers-steam-and-a-working-boiler), and
   [`Adding-a-Material.md`](Adding-a-Material.md) for how each of these
@@ -106,7 +106,7 @@ that, try the two directions either side of it. Angle of repose, heaps that
 collapse when undermined, sand pouring through a gap - none of that is
 modelled explicitly. It all falls out of those three attempts. (Gas is the
 one exception - the same rule, run against a negated direction, from its
-own pass - see "Gas: the same primitives, upside down" below.)
+own pass - see "Gas: a biased random walk" below.)
 
 **The sweep order is the one thing that cannot be wrong.** A grain only ever
 moves into a cell in the gravity-ward half of its neighbourhood, so sweeping
@@ -227,186 +227,138 @@ alone is enough - see the fourteenth attempt in
 [`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md) for the
 full derivation and what it cost to buy back.
 
-## Gas: the same primitives, upside down
+## Gas: a biased random walk
 
-The fourth material (`MAT_GAS`/`KIND_GAS`, `sand_gas.c`) rises and
-disperses - literally the water model's shape, reflected: instead of
-"falls, then spreads across the surface it lands on", gas is "rises,
-then spreads across the ceiling it hits". It reuses the exact same
-`try_fall_or_scatter()`/`try_slide()` primitives sand's own gravity-ward
-move already used, called with the direction negated, rather than a
-parallel set of gas-specific movement functions.
+`MAT_GAS`/`KIND_GAS` (`sand_gas.c`) rises. Each cell takes **one draw and
+one probe per step**, regardless of how boxed in it is.
 
-**Why it needs a second pass, the same reason cross-flow does.** The main
-sweep's no-double-move guarantee depends on sweeping *against* the
-direction something moves - correct for gravity-ward materials, exactly
-backwards for something moving *against* gravity. `sand_step_gas()` is
-its own pass, called after the main sweep, swept in the reverse row/
-column order, so a rising move lands in already-visited territory
-instead of teleporting to the ceiling in one step.
+The draw picks an offset around the ring direction pointing away from
+gravity, weighted out of 256:
 
-**Getting the shared code onto both paths cheaply took three attempts,**
-the same "measure on device, don't assume" discipline as
-`SAND_LIQUID_SIGHT` above - full story, exact numbers, and why it matters
-generally (a `static` function turning `extern` silently loses inlining;
-inlining a large call graph into *two* hot call sites can cost more in
-flash-cache pressure than it saves) in
-[`Simulation-Lessons.md`](Simulation-Lessons.md).
+| pick | weight | |
+|---|---:|---|
+| straight up, and its two diagonals | 216 | the bias |
+| straight down | 24 | why a plume churns instead of streaming |
+| the two sides | 8 each | drift |
 
-See [`Adding-a-Material.md`](Adding-a-Material.md) for the practical
-walkthrough of building this material end to end - the design questions
-that came up, and the mechanical checklist for adding the next one.
+Nothing is spent on the five downward-ish directions: a particle that
+drifts down does so bluntly, and giving most of the ring a downward
+component reads as smoke *sinking* rather than swirling.
+
+**Why a walk rather than the inverted powder mover.** Gas used to reuse
+`try_fall_or_scatter()`/`try_slide()` with the direction negated - the
+water model reflected. That mover is exhaustive: it tries each candidate
+in turn, so its cost rises exactly when the grid is full and every
+candidate is blocked. The walk is O(1) per cell and looks better, since
+real hot gas is chaotic rather than uniformly upward. The exhaustive
+mover is still reachable through `sand_set_gas_walk(false)` so the two
+can be compared, which is the only thing that still uses it.
+
+**Buoyancy is part of the walk, not a separate pass.** A blocked upward
+pick whose blocker is a liquid *less dense* than the gas swaps through
+it, so gas rises inside a body of water instead of sitting trapped in
+it. Sideways and downward picks never bubble: a bubble rises, and a
+downward swap would also break the sweep's one-move-per-cell guarantee.
+
+**Why it needs its own pass.** The main sweep's no-double-move guarantee
+depends on sweeping *against* the direction things move - right for
+gravity-ward materials, exactly backwards for anything moving against
+gravity. `sand_step_gas()` runs after the main sweep in reverse row and
+column order, so a rising move lands in already-visited territory rather
+than teleporting to the ceiling in one step.
+
+**`equalise_gas()`** is gas's counterpart to the liquid cross-flow pass,
+for the same reason: rising alone piles gas against a ceiling without
+ever spreading it along one.
+
+See [`Adding-a-Material.md`](Adding-a-Material.md) for the end-to-end
+walkthrough of building a material like this.
 
 ## Fire chemistry: wood, embers, steam, and a working boiler
 
-Fire's own reactions - ignition, extinguishing, smothering, burn-out -
-live in `sand_reactions.c` and are driven by a second table,
-`reaction_t reactions[]` (`material.h`), kept deliberately separate from
-`materials[]`. The reasoning is the same one that keeps `material_t`
-itself small: every field of `materials[]` is read several times per
-cell per step from the main sweep, and fire chemistry is read only by
-the cold reactions pass, gated behind `may_have_burning`. Paying for
-`flammability`, `ignites_to`, `burns`, `conducts`, `smoke`, `quench_to`
-and `flare` in the hot table's stride would be paying for nothing on
-every step that never touches fire at all.
+Fire's reactions live in `sand_reactions.c`, driven by a second table -
+`reaction_t reactions[]` (`material.h`) - kept separate from
+`materials[]`. `materials[]` is read several times per cell per step by
+the main sweep; fire chemistry is read only by the reactions pass, gated
+behind `may_have_burning`. Folding `flammability`, `ignites_to`,
+`conducts`, `quench_to` and the rest into the hot table would widen its
+stride for every step that never touches fire.
 
-**Wood catches slowly, and chars into an ember rather than a flame.**
-The obvious design - wood ignites straight to `MAT_FIRE`, the same way
-gas does - does not work, and the reason is worth understanding before
-touching either material. Fire is `KIND_GAS`, so a wood cell that became
-fire would float away on the very next `sand_step_gas()` pass, leaving a
-hole where the log was; a log would dissolve into rising flames that
-drift off, often before they get a turn to ignite the next log along.
-Burning wood fixes this by splitting the two jobs fire was doing at once.
-A lit log is `KIND_STATIC` and stays exactly where it was - it keeps
-igniting neighbours, keeps counting down, and eventually burns out, all
-without moving - while the flame licking up off it (`reaction_t.flare`) is
-ordinary, separate `MAT_FIRE`, purely for looks and for reaching fuel
-stacked above. "Wood burning below, flame above" falls out of two simple
-things, not one material trying to be a heat source and a moving flame at
-the same time.
+**Being alight is a state, not a material.** A lit cell keeps its own
+material and records the fact in its variant nibble
+(`reaction_t.burn_decay`). That is what makes "water puts a log out"
+expressible: the log is still there, just no longer alight.
 
-Being alight is a STATE of the wood (`reaction_t.burn_decay`), held in its
-variant, rather than a second material. It was `MAT_EMBER` for a long time
-and behaved identically; folding it back in freed a slot and made "water
-puts a log out" expressible - the log is still there, just no longer
-alight, which an ember could never be because the ember *was* the fire. Wood's own
-`flammability` (6 in 256) makes catching a slow negotiation rather than
-an instant flash - roughly 43 steps of contact with a single flame
-before it takes, so a log has to actually burn rather than vanish on
-first touch.
+**Lit wood does not become fire.** `MAT_FIRE` is `KIND_GAS`, so a wood
+cell that turned into it would float away on the next `sand_step_gas()`,
+leaving a hole where the log was - a log would dissolve into drifting
+flames, often before igniting the next log along. Instead a lit log is
+`KIND_STATIC` and stays put, igniting neighbours and counting down,
+while the flame licking off it (`reaction_t.flare`) is ordinary separate
+`MAT_FIRE`, there for looks and for reaching fuel stacked above.
+"Burning below, flame above" falls out of two simple things rather than
+one material trying to be a heat source and a moving flame at once.
 
-Ember is essentially never `smothered()` the way fire can be: that
-predicate needs all four cardinal neighbours *strictly* denser, and at
-density 150 only stone (200) qualifies - burying a log in sand will not
-put it out. That is an accepted limitation, not a bug to chase: only
-decay, or water, ends an ember.
+Wood's `flammability` of 6 in 256 makes catching a negotiation - roughly
+43 steps of contact with a single flame - so a log burns rather than
+vanishing on first touch. A lit log is essentially never `smothered()`:
+that predicate needs all four cardinal neighbours *strictly* denser, and
+at density 150 only stone (200) qualifies, so burying one in sand will
+not put it out. Only decay or water ends it.
 
-**Fire has two exhausts, and they are deliberately different
-materials.** A burning cell touched by water still goes out in one
-touch, but now becomes `MAT_STEAM` instead of simply vanishing, and the
-water that quenched it pays a unit of its own mass for the privilege -
-steam is a byproduct, not a free lunch, and a pot boiled dry should
-eventually run dry rather than boiling forever for nothing. A burning
-cell that just runs out of life leaves `MAT_SMOKE` instead
-(`reaction_t.smoke`), no water involved:
+**Two exhausts, deliberately different materials.**
 
 | | what it is | where it comes from |
 |---|---|---|
 | `MAT_STEAM` | water that got hot | boiled through a conductor, or flashed off a quenched fire |
-| `MAT_SMOKE` | fuel that burned out | a fire or an ember reaching the end of its life |
+| `MAT_SMOKE` | fuel that burned out | a fire or a lit log reaching the end of its life |
 
-These were **one** material at first, and the reasoning for sharing a
-row was good: both are a light gas that rises, spreads and fades, their
-`materials[]` rows are nearly identical even now, and this document's
-own top section is a sustained argument for making one thing do two
-jobs when the two jobs have the same shape. It was still wrong, and the
-way it was wrong is the useful part. The overlap was real in the
-*physics* and false in the *picture*: a lone fire burning out in
-mid-air, nowhere near water, puffing bright white kettle-steam reads as
-a bug to anyone watching, because the player can see for themselves
-there was nothing there to boil. Nothing in the simulation or its tests
-could surface that - only looking at it could.
+Quenching costs the water a unit of its own mass, so a pot boiled dry
+eventually runs dry. The two rows are nearly identical in `materials[]`
+and the split is really about palettes: steam is cool and bright, smoke
+warm and dim, and a fresh puff of smoke tops out dimmer than a dying
+wisp of steam so they stay separable where they overlap. The reason to
+keep them apart is visual, not physical - a lone fire burning out in
+mid-air, nowhere near water, puffing bright kettle-steam reads as a bug
+to anyone watching. `test_quenching_makes_steam_but_burning_out_makes_smoke`
+guards against re-merging them on the correct observation that their
+rows look the same.
 
-So the split is not really two materials, it is two *palettes* that
-happen to need a material each: steam is cool and bright, smoke is warm
-and dim, and a fresh puff of smoke tops out dimmer than a dying wisp of
-steam so the two stay separable even where they overlap. The small
-differences in `decay`, `mobility` and `sight` are flavour on top - if
-you find yourself re-merging these rows on the entirely correct
-observation that they are nearly identical,
-`test_quenching_makes_steam_but_burning_out_makes_smoke` is there to
-stop you.
+**Gas under standing liquid needs buoyancy to escape.** `can_enter()`
+displaces in one direction only - denser displaces lighter - so steam
+(density 5) cannot enter water (30) above it; and a liquid never
+consults `can_enter()` at all, while `room_in()` (`sand_liquid.c`)
+refuses any cell holding a different material, so the water will not
+fall into the steam either. Between the two rules a gas cell under
+standing liquid has no legal move in either direction.
 
-**Gas under standing liquid, and the bubble that gets it out.**
-`can_enter()`'s displacement rule is one-directional - denser only ever
-displaces lighter - and steam (density 5) sits below water (30), so
-steam cannot *enter* the water above it. The reverse does not save it
-either: a liquid never consults `can_enter()` at all, and `room_in()`
-(`sand_liquid.c`) refuses any cell holding a different material, so
-water will not fall into a steam cell. Between the two rules a gas cell
-underneath standing liquid had **no legal move in either direction** and
-sat frozen there forever. On the device that read exactly as what it
-was: a boiler that produced steam and then held onto it.
+Both movers therefore carry a buoyancy case: `gas_walk_once()` handles
+it inline for the walk, `try_bubble()` for the exhaustive mover. Each is
+a two-cell swap gated on `KIND_GAS` and an *inverted* density test, so
+only something lighter than the liquid rises through it, and water mass
+is conserved exactly because a swap carries the liquid's variant nibble
+across untouched.
 
-`try_bubble()` (`sand_gas.c`) is the fix - a plain two-cell swap between
-a gas cell and the liquid directly above it, gated on `KIND_GAS` and an
-*inverted* density test (only something lighter than the liquid rises
-through it). Measured at one cell per step, with water mass conserved
-exactly, since a swap moves the liquid's variant nibble across untouched
-rather than splitting it.
+It is deliberately not in `can_enter()`. That predicate is the hottest
+thing in the project, read several times per cell per step by the main
+sweep; a mobility special case there would be paid by every falling
+grain of sand forever. In the gas pass it costs one comparison, only for
+gas cells, only in a pass already gated behind `may_have_gas`, and only
+where the ordinary rise was already blocked. Sweep order makes it safe
+for free: the gas pass sweeps so the destination is already-visited
+territory, and both liquid passes ran earlier in the same `sand_step()`,
+so the displaced liquid still gets exactly one move.
 
-Two things about where it lives are the interesting part:
-
-- **It is deliberately not in `can_enter()`.** That predicate is the
-  hottest thing in the project, read several times per cell per step
-  from the main sweep; a mobility special case there would be paid for
-  by every falling grain of sand on the board forever. In the gas pass
-  it costs one comparison, only for gas cells, only in a pass already
-  gated behind `may_have_gas`, and only on cells whose ordinary rise was
-  already blocked.
-- **It is safe with respect to sweep order for free.** The gas pass
-  sweeps so the rise destination is already-visited territory, so the
-  displaced liquid cannot be picked up again by it; and both liquid
-  passes ran earlier in the same `sand_step()`. The liquid gets exactly
-  one move, the same guarantee every other move has.
-
-**Boiling happens at the heat source**, converting the very cell
-`conduct_heat()` reaches - the one touching the hot conductor - and the
-steam climbs out by itself from there. A pot on a hot stone reads as a
-column of bubbles rising off its base.
-
-It did not always. The first version walked *against gravity* through
-the liquid run and boiled the cell at the **surface** instead, purely
-because of the trapping described above: before bubbling existed, steam
-made at the bottom of a pool stayed there forever, so boiling anywhere
-else produced nothing anyone could see. That walk needed a gravity
-vector, which is the only reason this pass ever took one. Bubbling
-dissolved the constraint, and the walk, its `BOIL_REACH` cap and the
-whole `(gx, gy)` plumbing came back out with it.
-
-Worth keeping as a general habit: **a workaround built on a limitation
-should be re-examined the moment that limitation is lifted.** Left
-alone, it quietly outlives its reason and starts reading as a deliberate
-design choice - and the code carries a parameter nobody can justify.
+**Boiling happens at the heat source** - `conduct_heat()` converts the
+very cell touching the hot conductor, and the steam climbs out from
+there by itself. A pot on a hot stone reads as a column of bubbles
+rising off its base.
 
 **Building one in the app:** a wood floor, a stone basin over it as
-thick as a single drag of the pour brush produces, water poured into the
-basin, and a spark to light the wood. The wood catches, chars into an
-ember, and the ember's own heat conducts up through the basin floor,
-boiling the water inside it and sending steam up out of the basin - all
-without the fire or the ember ever leaving the space below the stone.
-
-The general lesson, worth keeping past this one feature: a rule that is
-clean in the abstract can be unreachable through the very UI that has to
-produce the scene it depends on, and the material and reaction tables
-are not where anyone finds that out.
-
-See [`Adding-a-Material.md`](Adding-a-Material.md) for the `place_reacted()`
-lesson this feature's own design surfaced - a material whose reaction
-changes its *kind* (fuel igniting into a gas, a liquid boiling into one)
-has to latch that kind's `may_have_*` flag, and getting it wrong is
-invisible to almost every other test.
+thick as one drag of the pour brush, water poured in, and a spark. The
+wood catches, chars, and its heat conducts up through the basin floor,
+boiling the water above - all without the fire ever leaving the space
+below the stone.
 
 **Gunpowder has a fuse, not a detonator - it catches and burns like wood,
 and it is the burning-out that can end in a blast.** A flame or hot lava
@@ -562,25 +514,20 @@ over time rather than needing a fully sealed cell to ever do anything.
 
 #### The shared "am I covered" primitive
 
-The first version of this feature (`cover_count()`, retired) counted the
-four SCREEN-fixed cardinal neighbours, and was wrong twice over: what is
-BELOW a cell supports it rather than covering it, so the eligible set has
-to rotate with gravity; and because it was built on `neighbor_smothers()`
-(which never counts a liquid neighbour, on purpose - `smothered()` needs
-that exemption too, for the identical reason a big pocket of fire must
-not smother itself from the inside out), an interior cell of a pool wider
-than one cell had at most ONE neighbour that could ever count - the cell
-directly above it - so a wide pool sealed by a crust could never reach
-the threshold no matter how complete the seal was. Only an isolated lava
-cell sitting in its own solid pocket could ever burst.
-
 `cover_mask()`/`covered_at()` (`sand_priv.h`, beside
-`ring_dir()`/`ring_of()`) fix both problems and are meant as a general
-"is there a lid over this cell" primitive, not a burst-private helper - the
-confined-gas ignition check is a candidate to migrate onto it later (the
-vent machinery's own `covered_from_above()`, the other candidate this
-paragraph used to name, no longer exists - removed once the burst above
-replaced it). The lid is the **three cells centred on anti-gravity**: the
+`ring_dir()`/`ring_of()`) are a general "is there a lid over this cell"
+primitive, not a burst-private helper; the confined-gas ignition check is
+a candidate to migrate onto it.
+
+Two constraints shape it. The eligible set has to rotate with gravity,
+because what is BELOW a cell supports it rather than covering it. And it
+cannot be built on `neighbor_smothers()`, which never counts a liquid
+neighbour on purpose - `smothered()` needs that exemption so a big pocket
+of fire does not smother itself from the inside out - because then an
+interior cell of a pool wider than one cell has at most one neighbour
+that can ever count, and no seal however complete would register.
+
+The lid is the **three cells centred on anti-gravity**: the
 cell directly opposite gravity and the two diagonals either side of it,
 and a cell is covered when **all three** are covering (non-liquid,
 strictly denser, in bounds - the board edge is never a container). What is
@@ -967,20 +914,14 @@ estimated:
 | Water cross-flow + rebound, worst case | up to ~15 ms | 16 ms |
 | Full-screen panel blit | **~17 ms** | (fixed hardware cost) |
 
-The blit figure was carried as ~9.6 ms here for a long time; it is wrong,
-and `gfx.h`'s own comment has had the right numbers for a while (16.5 ms
-theoretical at the 40 MHz the panel actually runs, 17.6 ms measured). A
-2026-08-28 device test settled it directly by timing one raw
-`esp_lcd_panel_draw_bitmap()` of the whole framebuffer against a full
-`gfx_present()`: **16,998 us of bus time against 18,147 us total, so the
-dirty-tracking path's own overhead is 1,149 us - 6% - and the frame is
-94% bus-bound.** 80 MHz would halve it and has been tried twice; it
-produces real visual artifacts on this panel, so 17 ms is the floor.
+The blit dominates. One raw `esp_lcd_panel_draw_bitmap()` of the whole
+framebuffer measures **16,998 us of bus time against 18,147 us for a full
+`gfx_present()`** - the dirty-tracking path's own overhead is 1,149 us,
+6%, and the frame is **94% bus-bound**. 80 MHz would halve it but
+produces visual artifacts on this panel, so 17 ms is the floor.
 
-Water, not sand, is the actual bottleneck whenever a body of it is moving -
-see the correction in `docs/sand/Simulation-Lessons.md`'s "A note on
-measurement noise", which used to say the opposite before water existed as
-a material.
+Water, not sand, is the bottleneck whenever a body of it is moving - see
+`docs/sand/Simulation-Lessons.md`'s "A note on measurement noise".
 
 Three techniques account for most of the gap between "walk every cell every
 step" and the numbers above:
@@ -988,11 +929,10 @@ step" and the numbers above:
 - **Block sleeping.** A block that produced no movement under the current
   gravity direction, and none of whose neighbours moved either, is skipped
   entirely next step (`block_state`, in `sand.c`). Motionless sand costs
-  roughly 1,000x less than the same sand while it is actually falling. This
-  was row-shaped originally (`row_state`); see
-  [Performance-Tuning-Attempts.md](Performance-Tuning-Attempts.md)'s fourth
-  and sixth attempts for why it became block-shaped and how the block
-  dimensions were chosen.
+  roughly 1,000x less than the same sand while it is actually falling. See
+  [Performance-Tuning-Attempts.md](Performance-Tuning-Attempts.md) for why
+  it is block-shaped rather than row-shaped, and how the block dimensions
+  were chosen.
 - **Not every skip structure earns its keep.** The liquid pass had one of
   its own for a long time - `ROW_NO_LIQUID`, a per-row "scanned and found
   dry" flag - and it was deleted in the ninth attempt after the device

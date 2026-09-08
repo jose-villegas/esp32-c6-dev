@@ -175,7 +175,13 @@ what the material is meant to look like: reusing them gets you rising/
 falling plus diagonal sliding under friction, but **not** flat spreading
 - that is what `equalise_liquids()`/`equalise_gas()`'s own *second* sub-pass
 does, and skipping it (assuming the reused primitives are the whole
-story) is exactly the mistake gas's own design almost made. If the
+story) is exactly the mistake gas's own design almost made.
+
+Note that gas no longer takes this route itself: it moves by a biased
+random walk (see [`Sand-Simulation.md`](Sand-Simulation.md)), because the
+exhaustive primitives cost more exactly when the grid is full and every
+candidate is blocked. The primitives are still the right first question
+for a new material - just not the answer gas settled on. If the
 existing primitives genuinely do not fit the movement shape at all, a
 new material needs its own logic - at which point think hard about
 whether it is really a new `KIND`, or a variant of an existing one.
@@ -391,6 +397,17 @@ SHADES(lo,hi)"]
    `is_acid_rain_material`. Get this wrong and the failure is silent: no
    test goes red, the material simply never reacts, because dispatch
    jumps clean past the stage that would have handled it.
+
+   **A new `reaction_t` field costs a byte of padding and a doc row.**
+   The struct is padded to a 64-byte stride (`stride_pad0..2`) so
+   `reaction_of()`'s index is one shift instead of four ALU ops, and a
+   `_Static_assert` holds the size at 64 - so a new field must consume
+   one of those pad bytes, not grow the struct. It also needs its own
+   row in `field_docs[]` (`tools/dump_reactions.c`), which asserts that
+   every byte of `reaction_t` is claimed by exactly one documented field
+   and walks the offsets to prove there are no gaps or repeats. Both
+   failures are loud, at compile time. Deleting a pad row without
+   shrinking the pad, or vice versa, trips the same assert.
 
    See `material.h`'s own comment on `reaction_t` for why this is a
    second table rather than more fields on `materials[]` - the short
