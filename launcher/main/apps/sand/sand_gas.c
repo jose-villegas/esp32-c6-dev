@@ -551,10 +551,13 @@ void sand_step_gas(sand_t *s, int gx, int gy, int dx, int dy,
 
     bool found_any = false;
     const int w = s->w;
-    for (int y = y_from; y != y_to; y += y_step) {
-        if (step_one_gas_row(s, y, w, rdx, rdy, rslide_a, rslide_b, rx_step,
-                             rload_dx, rload_dy, jostle, driven_gas)) {
-            found_any = true;
+    SAND_STEP_GATE(gas_rise) {
+        for (int y = y_from; y != y_to; y += y_step) {
+            if (step_one_gas_row(s, y, w, rdx, rdy, rslide_a, rslide_b,
+                                 rx_step, rload_dx, rload_dy, jostle,
+                                 driven_gas)) {
+                found_any = true;
+            }
         }
     }
 
@@ -562,7 +565,9 @@ void sand_step_gas(sand_t *s, int gx, int gy, int dx, int dy,
      * liquid's cross-flow does (see sand_step_liquids() in sand_liquid.c).
      * Kept on its own flip flag rather than sharing liquid_flip, so gas's
      * alternation is not coupled to whether water also moved this step. */
-    if (equalise_gas(s, s->gas_flip ? perp_a : perp_b, rdx, rdy)) {
+    if (SAND_STEP_GATED(gas_equalise,
+                        equalise_gas(s, s->gas_flip ? perp_a : perp_b,
+                                     rdx, rdy))) {
         found_any = true;
     }
     s->gas_flip = !s->gas_flip;

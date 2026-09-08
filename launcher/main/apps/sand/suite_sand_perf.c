@@ -439,6 +439,7 @@ static void test_the_fire_scene_decomposes_by_pass(void)
     static const char *const names[] = {
         "every pass on",  "main sweep off", "sweep body off (walk only)",
         "cross-flow off", "gas off",        "reactions off",
+        "gas rise off",   "gas equalise off",
     };
     volatile bool *const gates[] = {
         NULL,
@@ -447,6 +448,8 @@ static void test_the_fire_scene_decomposes_by_pass(void)
         &sand_step_gate_cross_flow,
         &sand_step_gate_gas,
         &sand_step_gate_reactions,
+        &sand_step_gate_gas_rise,
+        &sand_step_gate_gas_equalise,
     };
 
     int64_t whole = 0;
@@ -468,7 +471,9 @@ static void test_the_fire_scene_decomposes_by_pass(void)
     TEST_ASSERT_TRUE_MESSAGE(sand_step_gate_main_sweep &&
                              sand_step_gate_cross_flow && sand_step_gate_gas &&
                              sand_step_gate_reactions &&
-                             sand_step_gate_sweep_body,
+                             sand_step_gate_sweep_body &&
+                             sand_step_gate_gas_rise &&
+                             sand_step_gate_gas_equalise,
         "every gate must be back on before the next test in this binary runs");
 }
 
