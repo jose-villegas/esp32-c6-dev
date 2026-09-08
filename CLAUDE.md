@@ -268,7 +268,7 @@ don't read all of them per session:
 | [`docs/notes/README.md`](docs/notes/README.md) | Index into board-specific hardware notes (memory budget, panel/touch gotchas, flashing/recovery, optimization playbook) |
 | [`docs/Testing-Guide.md`](docs/Testing-Guide.md) | Host/device test suites, why release builds carry no test code |
 | [`docs/Autana-Rendering-Roadmap.md`](docs/Autana-Rendering-Roadmap.md) | Proposal: the rendering/engine roadmap (band-mode framebuffer, span rasterizer, raycaster, the three target games, S3 port) |
-| [`docs/plans/`](docs/plans) | Not-yet-built plans: `Settings-App-Plan.md`, `Log-Level-Plan.md`, `Metal-Smelting-Plan.md`, `Reaction-Doc-Generator-Plan.md` |
+| [`docs/plans/`](docs/plans) | Not-yet-built: `Settings-App-Plan.md`, `Log-Level-Plan.md`, and `Reaction-Doc-Generator-Plan.md`'s brush-blurb phase. `Metal-Smelting-Plan.md` shipped and is kept only for the numbers tables the code cites |
 | [`docs/workflows/Model-Delegation-Workflow.md`](docs/workflows/Model-Delegation-Workflow.md) | Delegating a feature's implementation to a local model, review kept on the driving session |
 
 `scripts/` also has local-Ollama-backed doc/code audit automation --
