@@ -1040,6 +1040,8 @@ volatile bool sand_step_gate_gas        = true;
 volatile bool sand_step_gate_reactions  = true;
 volatile bool sand_step_gate_xflow_body = true;
 volatile bool sand_step_gate_sweep_body = true;
+volatile bool sand_step_gate_gas_rise     = true;
+volatile bool sand_step_gate_gas_equalise = true;
 #endif
 
 /* Pinned to a cache-line boundary so this function's placement is not a

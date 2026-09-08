@@ -638,6 +638,13 @@ extern volatile bool sand_step_gate_xflow_body;
  * the compiler prove the walk unreachable and delete it too. */
 extern volatile bool sand_step_gate_sweep_body;
 
+/* Splits the gas pass, which the fire-scene decomposition put at 56% of the
+ * app's most expensive scene (bd esp32c6-dp8) while being 1 us on water. Gas
+ * has two halves like the liquid passes do - a rise sweep and an equalise -
+ * and nothing has ever measured which one costs. */
+extern volatile bool sand_step_gate_gas_rise;
+extern volatile bool sand_step_gate_gas_equalise;
+
 /* Wraps a pass's call site in `if (sand_step_gate_<name>)` when compiled in,
  * and in nothing at all otherwise - a release build's sand_step() has no
  * extra branch to fold away, because there was never a branch there to
