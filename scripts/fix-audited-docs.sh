@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# Runs audit-docs.sh, then asks OmniRoute's free "docs-update-free" combo to
-# turn each finding into a small, exact find/replace patch (not a full-file
-# rewrite -- keeps this cheap and bounded no matter how big the doc is).
-# Patches are verified against the real file content before being applied;
-# anything that doesn't match exactly is skipped and reported, not forced.
+# Runs audit-docs.sh, then asks a local Ollama model to turn each finding
+# into a small, exact find/replace patch (not a full-file rewrite -- keeps
+# this cheap and bounded no matter how big the doc is). Patches are verified
+# against the real file content before being applied; anything that doesn't
+# match exactly is skipped and reported, not forced.
 #
-# Optionally review the proposed patches with a paid model before applying:
-#   scripts/fix-audited-docs.sh --review claude/claude-sonnet-5
-#   scripts/fix-audited-docs.sh --review codex/gpt-5.5
-# Without --review, every patch the free model proposes (that verifies
+# Optionally review the proposed patches with a second local model before
+# applying (a different model family than the fixer, for a real second
+# opinion rather than the same model checking its own work):
+#   scripts/fix-audited-docs.sh --review mistral-nemo:latest
+# Without --review, every patch the fixer model proposes (that verifies
 # against the file) is applied directly. Pushes a branch for you either way
 # -- never touches main.
 #
@@ -26,32 +27,25 @@
 # `git push` -- the branch/worktree is left for you to inspect and push
 # yourself when ready.
 #
-# --local skips OmniRoute (including its own "docs-update-free" combo used
-# by audit-docs.sh's tier-2 cross-check, forwarded --local there too) and
-# calls Ollama directly (`ollama run`) for every model call this makes, so
-# the whole run makes zero network calls to any cloud provider. See Model-
-# Delegation-Workflow.md's "Route local through the Ollama CLI directly, not
-# OmniRoute" -- OmniRoute's own ollama-local provider has no working
-# connection pool. Uses mistral-nemo:latest by default (~7GB weights, fits a
-# 16GB card easily; LOCAL_MODEL env var to override); if you also pass
-# --review with --local, REVIEW_MODEL is treated as a local Ollama tag too,
-# not a cloud model id. If local Ollama runs are freezing the machine
-# regardless of model choice, see Model-Delegation-Workflow.md's "A global
-# Ollama setting can make picking a 'small enough' model pointless" -- a
-# stuck 262144 Context Length setting in the Ollama app itself overrides
-# every model's context and is the far more likely culprit.
+# This makes zero network calls to any cloud provider -- every model call,
+# including audit-docs.sh's own cross-check, goes through the Ollama CLI
+# (`ollama run`). Uses mistral-nemo:latest by default (~7GB weights, fits a
+# 16GB card easily; LOCAL_MODEL env var to override). If local Ollama runs
+# are freezing the machine regardless of model choice, see Model-Delegation-
+# Workflow.md's "A global Ollama setting can make picking a 'small enough'
+# model pointless" -- a stuck 262144 Context Length setting in the Ollama
+# app itself overrides every model's context and is the far more likely
+# culprit.
 #
-# Usage: scripts/fix-audited-docs.sh [--review <model-id>] [--worktree] [--local] [--no-push] [doc-file ...]
+# Usage: scripts/fix-audited-docs.sh [--review <model-id>] [--worktree] [--no-push] [doc-file ...]
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
-COMBO="docs-update-free"
+LOCAL_MODEL="${LOCAL_MODEL:-mistral-nemo:latest}"
 REVIEW_MODEL=""
 USE_WORKTREE=0
-LOCAL_MODE=0
-LOCAL_MODEL="${LOCAL_MODEL:-mistral-nemo:latest}"
 NO_PUSH=0
 DOC_ARGS=()
 
@@ -65,10 +59,6 @@ while [ "$#" -gt 0 ]; do
       USE_WORKTREE=1
       shift
       ;;
-    --local)
-      LOCAL_MODE=1
-      shift
-      ;;
     --no-push)
       NO_PUSH=1
       shift
@@ -79,7 +69,6 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
-[ "$LOCAL_MODE" = "1" ] && COMBO="$LOCAL_MODEL"
 
 BRANCH="docs-audit-fix-$(date +%Y%m%d-%H%M%S)"
 WORKTREE_DIR=""
@@ -115,10 +104,8 @@ PATCHES="$TMPDIR/patches.json"
 echo "[]" > "$PATCHES"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-AUDIT_EXTRA_ARGS=()
-[ "$LOCAL_MODE" = "1" ] && AUDIT_EXTRA_ARGS+=(--local)
 echo "Running audit-docs.sh..."
-"$SCRIPT_DIR/audit-docs.sh" "${AUDIT_EXTRA_ARGS[@]}" ${DOC_ARGS[@]+"${DOC_ARGS[@]}"} > "$AUDIT_OUT" 2>&1 || true
+"$SCRIPT_DIR/audit-docs.sh" ${DOC_ARGS[@]+"${DOC_ARGS[@]}"} > "$AUDIT_OUT" 2>&1 || true
 cat "$AUDIT_OUT"
 
 if ! grep -q "AUDIT REPORT" "$AUDIT_OUT"; then
@@ -140,20 +127,6 @@ if [ "${#FILES_WITH_FINDINGS[@]}" -eq 0 ]; then
 fi
 
 MAX_DOC_CHARS=80000
-
-# Pulls choices[0].message.content out of an `omniroute --output json chat`
-# response. Finding the first "{" / last "}" is safe here because the only
-# other thing on that line (the "Loaded env" banner) is plain text plus
-# ANSI color codes, and ANSI codes use square brackets, never braces.
-extract_content_js='
-  const fs = require("fs");
-  const text = fs.readFileSync(process.argv[1], "utf8");
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start === -1 || end === -1) { process.exit(1); }
-  const envelope = JSON.parse(text.slice(start, end + 1));
-  process.stdout.write(envelope.choices[0].message.content);
-'
 
 # A model-written find/replace string can itself contain "[" or "]" (e.g.
 # markdown link syntax), so naive indexOf/lastIndexOf on brackets is not
@@ -186,11 +159,9 @@ function extractJsonArray(text) {
 module.exports = { extractJsonArray };
 JSEOF
 
-# chat_call PROMPT_FILE OUT_FILE MODEL_ID MAX_TOKENS [REASONING_EFFORT] --
-# writes the model's raw text response (unwrapped from any provider
-# envelope) to OUT_FILE. LOCAL_MODE=1 calls Ollama directly instead of
-# OmniRoute -- see the --local comment near the top of this file. Returns
-# nonzero on failure.
+# chat_call PROMPT_FILE OUT_FILE MODEL_ID MAX_TOKENS -- writes the model's
+# raw text response to OUT_FILE via the Ollama CLI. Returns nonzero on
+# failure.
 #
 # --think=false is load-bearing, not decoration: confirmed live that
 # reasoning-capable local models (gemma4:26b included, not just the
@@ -200,19 +171,8 @@ JSEOF
 # script scans for. See fix-audited-code.sh's chat_call for the fuller
 # writeup.
 chat_call() {
-  local prompt_file="$1" out_file="$2" model_id="$3" max_tokens="$4" effort="${5:-}"
-  if [ "$LOCAL_MODE" = "1" ]; then
-    ollama run "$model_id" --think=false < "$prompt_file" > "$out_file" 2>/dev/null
-    return $?
-  fi
-  local envelope="$out_file.envelope"
-  local effort_args=()
-  [ -n "$effort" ] && effort_args=(--reasoning-effort "$effort")
-  if ! omniroute --output json chat -m "$model_id" "${effort_args[@]}" --max-tokens "$max_tokens" \
-        --file "$prompt_file" --no-history > "$envelope" 2>&1; then
-    return 1
-  fi
-  node -e "$extract_content_js" "$envelope" > "$out_file" 2>/dev/null
+  local prompt_file="$1" out_file="$2" model_id="$3"
+  ollama run "$model_id" --think=false < "$prompt_file" > "$out_file" 2>/dev/null
 }
 
 for doc in "${FILES_WITH_FINDINGS[@]}"; do
@@ -259,7 +219,7 @@ for doc in "${FILES_WITH_FINDINGS[@]}"; do
     head -c "$MAX_DOC_CHARS" "$doc"
   } > "$FIX_PROMPT"
 
-  if ! chat_call "$FIX_PROMPT" "$FIX_CONTENT" "$COMBO" 2000 low; then
+  if ! chat_call "$FIX_PROMPT" "$FIX_CONTENT" "$LOCAL_MODEL"; then
     echo "  model call failed" >&2
     continue
   fi
@@ -314,7 +274,7 @@ if [ -n "$REVIEW_MODEL" ]; then
     cat "$PATCHES"
   } > "$REVIEW_PROMPT"
 
-  if ! chat_call "$REVIEW_PROMPT" "$REVIEW_CONTENT_FILE" "$REVIEW_MODEL" 4000 low; then
+  if ! chat_call "$REVIEW_PROMPT" "$REVIEW_CONTENT_FILE" "$REVIEW_MODEL"; then
     echo "Review call failed (keeping all patches unreviewed)." >&2
     echo "[]" > "$REVIEW_CONTENT_FILE"
   fi
@@ -385,7 +345,7 @@ fi
 git add $CHANGED_FILES
 REVIEW_NOTE=""
 [ -n "$REVIEW_MODEL" ] && REVIEW_NOTE=", reviewed by $REVIEW_MODEL"
-git commit -m "docs: fix audit findings (via $COMBO$REVIEW_NOTE)"
+git commit -m "docs: fix audit findings (via $LOCAL_MODEL$REVIEW_NOTE)"
 
 if [ "$NO_PUSH" = "1" ]; then
   echo ""

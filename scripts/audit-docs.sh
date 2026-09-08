@@ -8,55 +8,41 @@
 #      Relative #include paths (`../gfx.h`) cannot be checked this way --
 #      there is no fixed root to resolve them against -- so instead their
 #      real-file match is surfaced to tier 2 as something to reason about.
-#   2. OmniRoute's free "docs-update-free" combo cross-checks the doc's own
-#      text against the current content of whatever paths DID resolve --
-#      function/macro names, register addresses, magic numbers, described
-#      behavior, and whether a code example's relative #include depth is
-#      consistent with the file location the doc says to create -- and
-#      flags concrete contradictions.
+#   2. A local Ollama model cross-checks the doc's own text against the
+#      current content of whatever paths DID resolve -- function/macro
+#      names, register addresses, magic numbers, described behavior, and
+#      whether a code example's relative #include depth is consistent with
+#      the file location the doc says to create -- and flags concrete
+#      contradictions.
 # This is a report, not an editor: unlike update-docs.sh it makes no commits
 # and picks no diff window -- it catches doc rot that accumulated over time,
 # not just drift from the latest change.
 #
-# --local skips OmniRoute's "docs-update-free" combo entirely and calls
-# Ollama directly (`ollama run`) for the tier-2 cross-check, so this makes
-# zero network calls to any cloud provider. See Model-Delegation-Workflow.md's
-# "Route local through the Ollama CLI directly, not OmniRoute" -- OmniRoute's
-# own ollama-local provider has no working connection pool. Uses
-# mistral-nemo:latest by default (~7GB weights, fits a 16GB card easily);
-# override with the LOCAL_MODEL env var if you have something else pulled
-# (`ollama list`). If local Ollama runs are freezing the machine regardless
-# of model choice, that's very likely NOT this script -- see Model-
+# Runs entirely through the Ollama CLI (`ollama run`), so this makes zero
+# network calls to any cloud provider. Uses mistral-nemo:latest by default
+# (~7GB weights, fits a 16GB card easily); override with the LOCAL_MODEL env
+# var if you have something else pulled (`ollama list`). If local Ollama
+# runs are freezing the machine regardless of model choice, see Model-
 # Delegation-Workflow.md's "A global Ollama setting can make picking a
 # 'small enough' model pointless" for a stuck 262144 Context Length setting
 # in the Ollama app itself that overrides every model's context.
 #
-# Usage: scripts/audit-docs.sh [--local] [doc-file ...]   (default: all tracked docs)
+# Usage: scripts/audit-docs.sh [doc-file ...]   (default: all tracked docs)
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
-COMBO="docs-update-free"
 SRC_ROOT="launcher"                 # docs refer to main/... relative to here
 MAX_DOC_CHARS=80000                 # cap so even the smallest fallback model fits
 MAX_SRC_CHARS=40000
 MAX_REFS=8
 
-LOCAL_MODE=0
 LOCAL_MODEL="${LOCAL_MODEL:-mistral-nemo:latest}"
-ARGS=()
-for a in "$@"; do
-  case "$a" in
-    --local) LOCAL_MODE=1 ;;
-    *) ARGS+=("$a") ;;
-  esac
-done
-[ "$LOCAL_MODE" = "1" ] && COMBO="$LOCAL_MODEL"
+ARGS=("$@")
 
 # call_model PROMPT_FILE OUT_FILE -- writes the model's raw text response to
-# OUT_FILE (this script never used --output json, so there's no envelope to
-# unwrap either way). Returns nonzero on failure.
+# OUT_FILE. Returns nonzero on failure.
 #
 # --think=false: confirmed live that reasoning-capable local models
 # (gemma4:26b included) print a full "Thinking... ...done thinking."
@@ -65,12 +51,7 @@ done
 # fix-audited-code.sh's chat_call for the fuller writeup.
 call_model() {
   local prompt_file="$1" out_file="$2"
-  if [ "$LOCAL_MODE" = "1" ]; then
-    ollama run "$COMBO" --think=false < "$prompt_file" > "$out_file" 2>/dev/null
-    return $?
-  fi
-  omniroute chat -m "$COMBO" --reasoning-effort low --max-tokens 3000 \
-      --file "$prompt_file" --no-history > "$out_file" 2>&1
+  ollama run "$LOCAL_MODEL" --think=false < "$prompt_file" > "$out_file" 2>/dev/null
 }
 
 if [ "${#ARGS[@]}" -gt 0 ]; then

@@ -1,24 +1,21 @@
 #!/usr/bin/env bash
-# One-command launcher for fix-audited-docs.sh --local --worktree: the audit
-# cross-check (via audit-docs.sh, forwarded --local) and the fix/review
-# passes all run through Ollama (ollama run) instead of OmniRoute, so this
-# makes zero network calls to any cloud provider -- see fix-audited-docs.sh's
-# own --local header comment for why (OmniRoute's own ollama-local provider
-# has no working connection pool).
+# One-command launcher for fix-audited-docs.sh --worktree: the audit
+# cross-check (via audit-docs.sh) and the fix/review passes all run through
+# Ollama (ollama run), so this makes zero network calls to any cloud
+# provider.
 #
 # --app <name> scopes to just that app's own docs (docs/<name>/, e.g.
-# --app sand -> docs/sand/*.md) instead of the default (every tracked
-# doc). See fix-audited-docs-free.sh's own --app comment for why "all docs"
-# stays the default here (docs audits are cheap regardless of scope) and why
-# only some apps (today: just sand) can be targeted this way.
+# --app sand -> docs/sand/*.md) instead of the default (every tracked doc).
+# Only apps with a real docs/<name>/ folder can be targeted this way --
+# today that's just sand; cube and diagnostics don't have dedicated doc
+# folders yet.
 #
 # Any other extra arguments are forwarded to fix-audited-docs.sh as-is, e.g.
 # --no-push to stop short of pushing the resulting branch.
 #
-# No confirmation prompt -- running it IS the confirmation, same as the
-# free-tier launcher, just with a local model instead of a free-tier cloud
-# one. If anything gets fixed, a branch is pushed and a PR compare link is
-# printed; if nothing does, no trace is left.
+# No confirmation prompt -- running it IS the confirmation. If anything gets
+# fixed, a branch is pushed and a PR compare link is printed; if nothing
+# does, no trace is left.
 #
 # Usage: scripts/fix-audited-docs-local.sh [--app <name>] [extra fix-audited-docs.sh args...]
 set -euo pipefail
@@ -61,9 +58,9 @@ if [ -n "$APP" ]; then
 fi
 
 echo "============================================================"
-echo " Local-only docs audit -- $SCOPE_LABEL"
+echo " Local docs audit -- $SCOPE_LABEL"
 echo " No cloud calls -- Isolated worktree, checkout untouched."
 echo "============================================================"
 echo ""
 
-scripts/fix-audited-docs.sh --local --worktree "${DOC_FILE_ARGS[@]}" "${ARGS[@]}"
+scripts/fix-audited-docs.sh --worktree "${DOC_FILE_ARGS[@]}" "${ARGS[@]}"
