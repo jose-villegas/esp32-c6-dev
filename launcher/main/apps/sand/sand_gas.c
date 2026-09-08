@@ -603,6 +603,35 @@ static inline bool equalise_gas_one_row_cell(sand_t *s, uint8_t *row,
     return true;
 }
 
+/* A row with no empty cell in it cannot spread, and knowing that skips its
+ * whole body. Every target equalise_gas_one_cell() can pick lies in this same
+ * row when py == 0 - ty is y, and stayed_in_row is exactly that test - so with
+ * nowhere in the row to go, none of its gas moves however long it looks.
+ *
+ * Pays for itself in both directions: it BREAKS on the first empty cell, so a
+ * sparse row costs a handful of loads and then runs the body as before, while
+ * a packed one costs w loads to skip two probes on every gas cell it holds.
+ * That is the trade the device asked for - the body is 14578 us of a fire step
+ * and its cost is per-cell probes, not the sight scan, which gas_run_t already
+ * carries.
+ *
+ * Reports whether the row held gas on the way past, since the caller needs
+ * that for may_have_gas whether or not the body runs. */
+static inline bool row_is_packed(const uint8_t *row, int w, uint16_t is_gas,
+                                 bool *any_gas)
+{
+    bool gas = false;
+    for (int x = 0; x < w; x++) {
+        const cell_t c = row[x];
+        if (CELL_IS_EMPTY(c)) {
+            return false;
+        }
+        gas |= (((is_gas >> CELL_MATERIAL(c)) & 1u) != 0);
+    }
+    *any_gas = gas;
+    return true;
+}
+
 /* One row's share of spread. Returns whether it held any gas. No
  * ROW_NO_GAS equivalent yet - deferred until real usage patterns exist to
  * measure against, same as every other tunable in this project; may_have_gas
@@ -630,6 +659,13 @@ static bool equalise_gas_one_row(sand_t *s, int y, int w, int x_from,
      * within the same row, and the sweep has not looked at any of them
      * yet. */
     gas_run_t run = { .id = -1, .len = 0 };
+
+    /* Same py == 0 precondition carry_ok rests on, for the same reason: a
+     * tilted sweep's targets leave the row, so this row's contents no longer
+     * decide the answer. */
+    if (carry_ok && row_is_packed(row, w, is_gas, &any_gas)) {
+        return any_gas;
+    }
 
     for (int x = x_from; x != x_to; x += x_step) {
         if (equalise_gas_one_row_cell(s, row, arow, nrow, x, y, px, py, rdx, rdy,
