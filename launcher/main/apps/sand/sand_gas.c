@@ -135,7 +135,11 @@ static bool try_bubble(sand_t *s, uint8_t *row, uint8_t *prow, int x, int y,
  * lower diagonals are deliberately 0 - a particle that drifts down does so
  * bluntly, and giving five of eight directions a downward component read as
  * smoke sinking rather than swirling. */
-static const struct { uint16_t upto; int8_t off; } gas_walk_weights[] = {
+/* THE SPEC, not the lookup: gas_walk_offset[] below is derived from this by
+ * hand and is what the walk reads. Kept in code rather than prose so the
+ * weights stay greppable and reviewable next to the table they define - to
+ * change the distribution, edit these and rewrite that table to match. */
+static const __attribute__((unused)) struct { uint16_t upto; int8_t off; } gas_walk_weights[] = {
     {  72,  0 },   /* straight up          */
     { 144, -1 },   /* up, one side         */
     { 216,  1 },   /* up, the other        */
@@ -143,6 +147,46 @@ static const struct { uint16_t upto; int8_t off; } gas_walk_weights[] = {
     { 248, -2 },   /* sideways             */
     { 256,  2 },   /* sideways, the other  */
 };
+
+/* DERIVED FROM THE WEIGHTS TABLE ABOVE, WHICH STAYS THE SOURCE OF TRUTH.
+ * Every boundary in it is a multiple of 8, so roll >> 3 selects a bucket
+ * exactly and thirty-two entries cover all 256 rolls - the linear search this
+ * replaces cost up to seven iterations, each with its own load and branch.
+ *
+ * Const, so it costs no RAM: the loop was the expense, not the memory, and
+ * this board has 322 KiB of its ~424 KiB under the framebuffer (a 256-entry
+ * version of this table failed check_static_ram by 224 bytes). One cached
+ * load replaces the walk.
+ *
+ * Hand-written, so it must agree with the weights: a single wrong entry moves
+ * the behaviour fingerprint, which was confirmed by mutating one. */
+static const int8_t gas_walk_offset[32] = {
+    0,  0,  0,  0,  0,  0,  0,  0,  0,     /* rolls   0.. 71 - stay on course */
+    -1, -1, -1, -1, -1, -1, -1, -1, -1,    /* rolls  72..143 - one notch left */
+    1,  1,  1,  1,  1,  1,  1,  1,  1,     /* rolls 144..215 - one notch right */
+    4,  4,  4,                             /* rolls 216..239 - straight down */
+    -2,                                    /* rolls 240..247 - side */
+    2,                                     /* rolls 248..255 - side */
+};
+
+/* One bit per materials[] row, so the row filter reads a shift instead of
+ * dereferencing a 12-byte struct in flash for every cell on the grid, gas or
+ * not. Four bytes rather than a 32-byte table, for the same reason. */
+static uint32_t gas_kind_mask;
+static bool gas_tables_ready;
+
+static void build_gas_tables(void)
+{
+    if (gas_tables_ready) {
+        return;
+    }
+    for (int r = 0; r < MATERIAL_ROWS; r++) {
+        if (materials[r].kind == KIND_GAS) {
+            gas_kind_mask |= 1u << r;
+        }
+    }
+    gas_tables_ready = true;
+}
 
 /* BUOYANCY, which move_to() structurally cannot do: can_enter() admits a liquid
  * only to something DENSER, and a gas is lighter by definition - so without this
@@ -192,14 +236,7 @@ static inline bool gas_walk_once(sand_t *s, uint8_t *row, int x, int y, int w,
     const int up   = ring_of(rdx, rdy);
     const int roll = (int)(rng_next(&s->rng) & 0xFF);
 
-    int off = 0;
-    for (size_t i = 0; i < sizeof(gas_walk_weights) / sizeof(gas_walk_weights[0]);
-         i++) {
-        if (roll < (int)gas_walk_weights[i].upto) {
-            off = gas_walk_weights[i].off;
-            break;
-        }
-    }
+    const int off = gas_walk_offset[roll >> 3];
 
     const int *d = ring_dir(up + off);
     if (!move_to(row, dest_row(s, y + d[1]), x, x + d[0], w, grain, density)) {
@@ -224,7 +261,11 @@ static bool step_one_gas_grain(sand_t *s, uint8_t *row, uint8_t *prow,
     const uint8_t mat_id  = CELL_MATERIAL(grain);
     const uint8_t density = mat->density;
 
-    if (!tick_decay(s, row, x, y, &grain, mat, mat_id)) {
+    bool vanished = false;
+    SAND_STEP_GATE(gas_decay) {
+        vanished = !tick_decay(s, row, x, y, &grain, mat, mat_id);
+    }
+    if (vanished) {
         return true;    /* vanished - already woken, nothing left to move */
     }
 
@@ -243,13 +284,13 @@ static bool step_one_gas_grain(sand_t *s, uint8_t *row, uint8_t *prow,
      * it does not consume the mobility roll differently than the branch below;
      * both paths have already drawn it. */
     if (s->gas_walk) {
-        if (try_moving) {
+        if (SAND_STEP_GATED(gas_move, try_moving)) {
             /* gas_walk_once() already falls back to gas_walk_bubble() for
              * an up-ish draw blocked by a lighter-than-gas liquid, so
              * this needs no separate try_bubble() call of its own. */
             moved = gas_walk_once(s, row, x, y, w, rdx, rdy, grain, density);
         }
-        if (moved) {
+        if (SAND_STEP_GATED(gas_wake, moved)) {
             wake_block_and_neighbors(s, x, y);
         }
         return moved;
@@ -308,7 +349,7 @@ static bool step_one_gas_row(sand_t *s, int y, int w, int rdx, int rdy,
     bool any = false;
     for (int x = x_from; x != x_to; x += rx_step) {
         const cell_t c = row[x];
-        if (CELL_IS_EMPTY(c) || material_of(c)->kind != KIND_GAS) {
+        if (CELL_IS_EMPTY(c) || ((gas_kind_mask >> (c >> 3)) & 1u) == 0u) {
             continue;
         }
         /* Presence, not movement: a gas cell that neither moves nor decays
@@ -634,6 +675,7 @@ void sand_step_gas(sand_t *s, int gx, int gy, int dx, int dy,
     if (!s->may_have_gas) {
         return;
     }
+    build_gas_tables();
 
     const int rdx = -dx, rdy = -dy;
     const int rslide_a[2] = { -slide_a[0], -slide_a[1] };

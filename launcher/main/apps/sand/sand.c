@@ -1056,6 +1056,9 @@ volatile bool sand_step_gate_burn_pair      = true;
 volatile bool sand_step_gate_burn_conduct   = true;
 volatile bool sand_step_gate_burn_flare     = true;
 volatile bool sand_step_gate_burn_call      = true;
+volatile bool sand_step_gate_gas_decay      = true;
+volatile bool sand_step_gate_gas_move       = true;
+volatile bool sand_step_gate_gas_wake       = true;
 #endif
 
 /* Pinned to a cache-line boundary so this function's placement is not a
