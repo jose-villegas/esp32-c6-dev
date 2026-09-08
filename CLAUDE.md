@@ -263,12 +263,13 @@ don't read all of them per session:
 | [`docs/sand/Impulse-Mechanics.md`](docs/sand/Impulse-Mechanics.md) | Explosions, thrown chunks, liquid splash - one mechanism, three call sites |
 | [`docs/sand/Adding-a-Material.md`](docs/sand/Adding-a-Material.md) | Checklist for adding a new sand material |
 | [`docs/sand/Reaction-Table.md`](docs/sand/Reaction-Table.md) | Current material-interaction/reaction rules |
+| [`docs/sand/Metal.md`](docs/sand/Metal.md) | Metal: smelted from dirt, and the only material that moves heat a long way |
 | [`docs/sand/Tuning-At-a-Glance.md`](docs/sand/Tuning-At-a-Glance.md) | Sand constants and their current values |
 | [`docs/sand/Perf-Round-Guide.md`](docs/sand/Perf-Round-Guide.md) | Entry point for a fresh session told to run a sand performance round |
 | [`docs/notes/README.md`](docs/notes/README.md) | Index into board-specific hardware notes (memory budget, panel/touch gotchas, flashing/recovery, optimization playbook) |
 | [`docs/Testing-Guide.md`](docs/Testing-Guide.md) | Host/device test suites, why release builds carry no test code |
 | [`docs/Autana-Rendering-Roadmap.md`](docs/Autana-Rendering-Roadmap.md) | Proposal: the rendering/engine roadmap (band-mode framebuffer, span rasterizer, raycaster, the three target games, S3 port) |
-| [`docs/plans/`](docs/plans) | Not-yet-built: `Settings-App-Plan.md`, `Log-Level-Plan.md`, and `Reaction-Doc-Generator-Plan.md`'s brush-blurb phase. `Metal-Smelting-Plan.md` shipped and is kept only for the numbers tables the code cites |
+| [`docs/plans/`](docs/plans) | Not-yet-built plans: `Settings-App-Plan.md`, `Log-Level-Plan.md`, and `Reaction-Doc-Generator-Plan.md`'s brush-blurb phase |
 | [`docs/workflows/Model-Delegation-Workflow.md`](docs/workflows/Model-Delegation-Workflow.md) | Delegating a feature's implementation to a local model, review kept on the driving session |
 
 `scripts/` also has local-Ollama-backed doc/code audit automation --
