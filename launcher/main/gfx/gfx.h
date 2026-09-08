@@ -35,15 +35,28 @@
 #define GFX_HEIGHT  448
 #endif
 
-/* QSPI clock for the panel - the sole thing setting frame transfer time.
- * Vendor/Espressif validate only 40MHz; 80MHz is an undocumented overclock
- * that still produces corner artifacts (re-measured after the
- * per-cell/gathered-run rewrite) - a real panel ceiling, not a
- * stale-prototype issue. Thresholds below are tuned for 40MHz and need
- * re-measuring if this changes. No in-between clock exists: the 80MHz
- * source's integer divider (n>=2 floor) resolves everything here to
- * exactly 40 or 80. */
+/* QSPI clock for the panel - the sole thing setting frame transfer time, and
+ * the largest single cost in a frame: 16.5 ms of bus at 40 MHz against 8.2 at
+ * 80, with a measured full present of 17.6 ms saying there is no software slack
+ * left at this clock. Vendor/Espressif validate only 40.
+ *
+ * NOT, AS THIS COMMENT USED TO SAY, "a real panel ceiling". 80 MHz produces
+ * corner artifacts - corruption at the START of a transfer rather than noise
+ * across the frame - and that was twice taken for a bandwidth limit. Raising the
+ * pads to 40 mA (CONFIG_LAUNCHER_GFX_QSPI_STRONG_PADS) makes them rare rather
+ * than routine, which says the failure is edge rate or setup margin at the
+ * receiver. Rare is not gone, so 80 stays opt-in - see bd esp32c6-kfg.
+ *
+ * No in-between exists: the 80 MHz source's integer divider (n>=2 floor)
+ * resolves to exactly 40 or 80, which is why the option is a bool.
+ *
+ * THE THRESHOLDS BELOW ARE FITTED TO 40 MHz and need re-measuring if the clock
+ * changes - that re-tune is part of any move to 80, not a follow-up. */
+#if defined(CONFIG_LAUNCHER_GFX_QSPI_80MHZ) && CONFIG_LAUNCHER_GFX_QSPI_80MHZ
+#define GFX_QSPI_HZ (80 * 1000 * 1000)
+#else
 #define GFX_QSPI_HZ (40 * 1000 * 1000)
+#endif
 
 /* Glyphs are 8x8 in the font data, drawn at 2x so they are legible on a
  * 368-wide panel. Text metrics elsewhere must agree with these. */
