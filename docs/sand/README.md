@@ -18,6 +18,8 @@ its own set. Ten files, three jobs:
 - **[Reaction-Table.md](Reaction-Table.md)** — generated, current
   material-interaction rules. Regenerate with
   `tools/report_reactions.sh`, don't hand-edit the generated region.
+- **[Metal.md](Metal.md)** — metal: smelted out of dirt by lava, and the
+  only material that moves heat a long way.
 - **[Shading-and-Colour.md](Shading-and-Colour.md)** — how a cell's
   material and variant become a pixel, and the traps specific to that.
 - **[Tuning-At-a-Glance.md](Tuning-At-a-Glance.md)** — sand constants and
@@ -43,10 +45,8 @@ reference for it):
 
 ## Related
 
-- [`../plans/`](../plans) — plans that touch this app.
-  `Reaction-Doc-Generator-Plan.md`'s brush-blurb phase is the only
-  unbuilt one; `Metal-Smelting-Plan.md` shipped and is kept for the
-  numbers tables the code cites.
+- [`../plans/`](../plans) — plans that touch this app. Only
+  `Reaction-Doc-Generator-Plan.md`'s brush-blurb phase is still unbuilt.
 - [`../notes/README.md`](../notes/README.md) — the hardware constraints
   (no PSRAM, the memory budget) this app's numbers are shaped by.
 - [`../Testing-Guide.md`](../Testing-Guide.md) — how any of this gets
