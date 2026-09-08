@@ -124,6 +124,49 @@ static bool try_bubble(sand_t *s, uint8_t *row, uint8_t *prow, int x, int y,
     return true;
 }
 
+
+/* THE WALK, in gravity's frame rather than the screen's. ring_dir() is ordered,
+ * so once `up` is the ring index of the rise direction, up-1 and up+1 are the
+ * two upper diagonals, up+-2 the sides and up+4 straight down - no per-material
+ * rotation table needed.
+ *
+ * Weights are out of 256 and sum to it exactly, so one draw decides everything:
+ * three ways up carry 216 between them, down 24, the two sides 8 each. The
+ * lower diagonals are deliberately 0 - a particle that drifts down does so
+ * bluntly, and giving five of eight directions a downward component read as
+ * smoke sinking rather than swirling. */
+static const struct { uint16_t upto; int8_t off; } gas_walk_weights[] = {
+    {  72,  0 },   /* straight up          */
+    { 144, -1 },   /* up, one side         */
+    { 216,  1 },   /* up, the other        */
+    { 240,  4 },   /* straight down        */
+    { 248, -2 },   /* sideways             */
+    { 256,  2 },   /* sideways, the other  */
+};
+
+/* One draw, one probe, and the cost no longer depends on how boxed in the cell
+ * is - which is the whole reason the exhaustive mover is expensive on a packed
+ * grid. Returns whether the cell moved. */
+static inline bool gas_walk_once(sand_t *s, uint8_t *row, int x, int y, int w,
+                                 int rdx, int rdy, cell_t grain,
+                                 uint8_t density)
+{
+    const int up   = ring_of(rdx, rdy);
+    const int roll = (int)(rng_next(&s->rng) & 0xFF);
+
+    int off = 0;
+    for (size_t i = 0; i < sizeof(gas_walk_weights) / sizeof(gas_walk_weights[0]);
+         i++) {
+        if (roll < (int)gas_walk_weights[i].upto) {
+            off = gas_walk_weights[i].off;
+            break;
+        }
+    }
+
+    const int *d = ring_dir(up + off);
+    return move_to(row, dest_row(s, y + d[1]), x, x + d[0], w, grain, density);
+}
+
 static bool step_one_gas_grain(sand_t *s, uint8_t *row, uint8_t *prow,
                                uint8_t *arow, uint8_t *brow, int x, int y,
                                int w, int rdx, int rdy, const int *rslide_a,
@@ -149,6 +192,21 @@ static bool step_one_gas_grain(sand_t *s, uint8_t *row, uint8_t *prow,
                             (int)(rng_next(&s->rng) & 0xFF) < mobility;
 
     bool moved = false;
+
+    /* The walk replaces only the MOVEMENT half - tick_decay() above still runs,
+     * so fire still burns down at the same rate. It draws its own direction, so
+     * it does not consume the mobility roll differently than the branch below;
+     * both paths have already drawn it. */
+    if (s->gas_walk) {
+        if (try_moving) {
+            moved = gas_walk_once(s, row, x, y, w, rdx, rdy, grain, density);
+        }
+        if (moved) {
+            wake_block_and_neighbors(s, x, y);
+        }
+        return moved;
+    }
+
     if (try_moving && jostle == 0) {
         const int scatter = (s->scatter >= 0) ? s->scatter : mat->scatter;
         /* The _impl, not the public wrapper. Both live in sand_priv.h as
