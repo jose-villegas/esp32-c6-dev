@@ -86,6 +86,14 @@ void build_water_over_lava_scene(sand_t *s);
 /* Same reasoning as WATER_LAVA_IMPULSE_MAX above and DUNE_IMPULSE_MAX
  * (suite_sand_dune_blast.c) - the app's own fixed, device-heap-sized
  * APP_IMPULSE_MAX, not a formula in this scene's own blast radius. */
+/* THE IGNITION IS A BLOCK, NOT A SINGLE CELL, and that is a consequence of the
+ * gas random walk rather than a cosmetic choice. Fire is KIND_GAS, so under the
+ * walk a lone spark drifts away on its own before it can light anything - the
+ * pile then never detonates at all, not merely later (checked: still zero
+ * bursts over a window 6.7x longer). A player lights gunpowder with a brush
+ * stroke, so the scene now ignites it the same way. */
+#define GUNPOWDER_BASIN_SPARK 2
+
 #define GUNPOWDER_BASIN_IMPULSE_MAX 2048
 
 /* The coverage test's own measured window, reused by the frame-budget

@@ -245,6 +245,31 @@ static void test_a_screen_of_water_fits_in_the_frame_budget(void)
         "two - the search across the flow is the thing to suspect");
 }
 
+#ifdef DEVICE_BUILD
+/* A FULL SCREEN OF FIRE, the scene that actually costs the most. Water is
+ * 15 ms a step; this one is 254 ms and the gas cascade beside it 347 ms, both
+ * over budget, and neither has ever been decomposed. Same construction as
+ * test_a_full_screen_of_fire_fits_in_the_frame_budget(), factored so the two
+ * cannot drift. */
+static void build_fire_scene(sand_t *real, uint8_t *big, uint8_t *blocks)
+{
+    sand_init(real, big, REAL_W, REAL_H, 19u);
+    sand_enable_sleeping(real, blocks);
+
+    for (int y = 0; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            sand_set(real, x, y, FIRE);
+        }
+    }
+}
+
+/* FEWER WARMUP STEPS THAN WATER, deliberately: fire BURNS OUT. Ten steps of
+ * warmup would time a board that has already decayed to smoke and empty, which
+ * is not the expensive case anyone is trying to fix. Two keeps it alight. */
+#define FIRE_WARMUP_STEPS 2
+#define FIRE_REPEATS      2
+#endif /* DEVICE_BUILD */
+
 #if defined(DEVICE_BUILD) && CONFIG_LAUNCHER_SAND_PASS_GATES
 /* Which pass owns the water scene's time.
  *
@@ -317,28 +342,6 @@ static void test_the_water_scene_decomposes_by_pass(void)
  * one gate for a single step - valid because the scene builder and RNG are
  * deterministic, so warmup reproduces the same board and reading a
  * volatile gate costs no RNG draw. */
-/* A FULL SCREEN OF FIRE, the scene that actually costs the most. Water is
- * 15 ms a step; this one is 254 ms and the gas cascade beside it 347 ms, both
- * over budget, and neither has ever been decomposed. Same construction as
- * test_a_full_screen_of_fire_fits_in_the_frame_budget(), factored so the two
- * cannot drift. */
-static void build_fire_scene(sand_t *real, uint8_t *big, uint8_t *blocks)
-{
-    sand_init(real, big, REAL_W, REAL_H, 19u);
-    sand_enable_sleeping(real, blocks);
-
-    for (int y = 0; y < REAL_H; y++) {
-        for (int x = 0; x < REAL_W; x++) {
-            sand_set(real, x, y, FIRE);
-        }
-    }
-}
-
-/* FEWER WARMUP STEPS THAN WATER, deliberately: fire BURNS OUT. Ten steps of
- * warmup would time a board that has already decayed to smoke and empty, which
- * is not the expensive case anyone is trying to fix. Two keeps it alight. */
-#define FIRE_WARMUP_STEPS 2
-#define FIRE_REPEATS      2
 
 #define MAIN_SWEEP_WARMUP_STEPS 10
 
@@ -532,6 +535,60 @@ void sand_host_probe_run_water(void)
 #endif /* DEVICE_BUILD */
 
 #ifdef DEVICE_BUILD
+/* NOT behind CONFIG_LAUNCHER_SAND_PASS_GATES, unlike the decompositions
+ * above: this compares the two gas movers through sand_set_gas_walk(), an
+ * ordinary API, so it belongs in every diagnostics build rather than only
+ * in a gated probe one. Placed inside a gated region by mistake first, and
+ * a whole capture printed nothing. */
+/* THE TWO GAS MOVERS ON THE SAME BOARD. Warmup runs with the walk OFF in both
+ * arms, so the timed step sees a byte-identical scene and the only difference
+ * is which mover handles it - the same reason the pass decompositions rebuild
+ * rather than run twenty steps with a pass disabled.
+ *
+ * Prints; asserts nothing. The walk is a deliberate behaviour change as well as
+ * a cost one, so "is it faster" is only half the question and the other half
+ * needs eyes on a screen, not a budget. */
+static void test_the_gas_random_walk_against_the_exhaustive_mover(void)
+{
+    int64_t best[2] = { -1, -1 };
+
+    for (int arm = 0; arm < 2; arm++) {
+        for (int r = 0; r < FIRE_REPEATS; r++) {
+            uint8_t *big    = malloc(REAL_W * REAL_H);
+            uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+            TEST_ASSERT_NOT_NULL(big);
+            TEST_ASSERT_NOT_NULL(blocks);
+
+            sand_t real;
+            build_fire_scene(&real, big, blocks);
+            for (int i = 0; i < FIRE_WARMUP_STEPS; i++) {
+                sand_step(&real, 0, 1000, 0);
+            }
+
+            sand_set_gas_walk(&real, arm == 1);
+            const int64_t start = esp_timer_get_time();
+            sand_step(&real, 0, 1000, 0);
+            const int64_t took = esp_timer_get_time() - start;
+
+            free(big);
+            free(blocks);
+            if (best[arm] < 0 || took < best[arm]) {
+                best[arm] = took;
+            }
+        }
+    }
+
+    ESP_LOGI("device_tests", "gas mover, fire scene: exhaustive %lld us",
+             (long long)best[0]);
+    ESP_LOGI("device_tests", "gas mover, fire scene: random walk %lld us",
+             (long long)best[1]);
+    if (best[0] > 0) {
+        ESP_LOGI("device_tests",
+                 "gas mover, fire scene: walk is %lld%% of the exhaustive cost",
+                 (long long)((best[1] * 100) / best[0]));
+    }
+}
+
 static void test_a_screen_of_settled_sand_costs_almost_nothing(void)
 {
     /* The user-visible complaint this answers: adding lots of sand dropped the
@@ -2656,6 +2713,9 @@ void run_sand_perf_suite(void)
     RUN_TEST(test_the_main_sweep_decomposes_by_pass);
     RUN_TEST(test_the_fire_scene_decomposes_by_pass);
 #endif
+    /* Ungated: the two gas movers compare through sand_set_gas_walk(), an
+     * ordinary API, so this runs in every diagnostics build. */
+    RUN_TEST(test_the_gas_random_walk_against_the_exhaustive_mover);
     RUN_TEST(test_a_gravity_flip_on_every_material_at_once_stays_sane);
     RUN_TEST(test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget);
     RUN_TEST(test_a_full_screen_of_fire_fits_in_the_frame_budget);

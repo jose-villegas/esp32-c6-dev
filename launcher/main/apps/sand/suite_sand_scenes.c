@@ -1893,13 +1893,18 @@ void build_gunpowder_basin_scene(sand_t *s)
      * placed after, not overwritten. */
     for (int y = iy0; y < iy1; y++) {
         for (int x = ix0; x < ix1; x++) {
-            if (x == fx && y == fy) {
+            if (x >= fx && x < fx + GUNPOWDER_BASIN_SPARK &&
+                y >= fy && y < fy + GUNPOWDER_BASIN_SPARK) {
                 continue;
             }
             sand_set(s, x, y, GUNPOWDER_CELL(0));
         }
     }
-    sand_set(s, fx, fy, FIRE);
+    for (int y = fy; y < fy + GUNPOWDER_BASIN_SPARK; y++) {
+        for (int x = fx; x < fx + GUNPOWDER_BASIN_SPARK; x++) {
+            sand_set(s, x, y, FIRE);
+        }
+    }
 
     /* A SHELF UNDER EACH OUTSIDE STACK, drawn before they are painted.
      * Without it the stacks stand on nothing: 900 of their 1,800 cells
@@ -2086,9 +2091,11 @@ static void test_the_gunpowder_basin_scene_reaches_the_reactions_it_claims(void)
              "exactly one fixed cell before a single step runs - got "
              "%d dry cells and %d fire cells painted", painted_dry,
              painted_fire);
-    TEST_ASSERT_EQUAL_INT_MESSAGE(GUNPOWDER_BASIN_INT_W * GUNPOWDER_BASIN_INT_H - 1,
+    TEST_ASSERT_EQUAL_INT_MESSAGE(GUNPOWDER_BASIN_INT_W * GUNPOWDER_BASIN_INT_H
+                                      - GUNPOWDER_BASIN_SPARK * GUNPOWDER_BASIN_SPARK,
         painted_dry, why);
-    TEST_ASSERT_EQUAL_INT_MESSAGE(1, painted_fire, why);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(GUNPOWDER_BASIN_SPARK * GUNPOWDER_BASIN_SPARK,
+                                  painted_fire, why);
 
     snprintf(why, sizeof why,
              "the pile must chain-detonate across SEVERAL bursts, not "
