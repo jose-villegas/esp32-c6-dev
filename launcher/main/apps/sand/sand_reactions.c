@@ -1483,13 +1483,13 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
 
     stage_burn_always:
         found |= FOUND_BURNING;
-        step_one_burning_cell(s, row, x, y, w, h);
+        SAND_STEP_GATE(burn_call) { step_one_burning_cell(s, row, x, y, w, h); }
         continue;
 
     stage_burn_check:
         if (cell_code(c) >= r->lit_from) {
             found |= FOUND_BURNING;
-            step_one_burning_cell(s, row, x, y, w, h);
+            SAND_STEP_GATE(burn_call) { step_one_burning_cell(s, row, x, y, w, h); }
             continue;
         }
         goto stage_dissolve;
@@ -1497,7 +1497,7 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
     stage_burn_any:
         if (cell_is_burning(c)) {
             found |= FOUND_BURNING;
-            step_one_burning_cell(s, row, x, y, w, h);
+            SAND_STEP_GATE(burn_call) { step_one_burning_cell(s, row, x, y, w, h); }
             continue;
         }
 

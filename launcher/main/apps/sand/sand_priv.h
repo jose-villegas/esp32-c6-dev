@@ -665,6 +665,12 @@ extern volatile bool sand_step_gate_burn_pair;
 extern volatile bool sand_step_gate_burn_conduct;
 extern volatile bool sand_step_gate_burn_flare;
 
+/* Skips the CALL, not a phase: against burn_decay..burn_flare all off it
+ * prices what reaching and leaving step_one_burning_cell() costs by itself -
+ * the call, its 128-byte frame and nine callee-saved registers - so effort
+ * aimed at that frame can be sized before it is spent. */
+extern volatile bool sand_step_gate_burn_call;
+
 /* Wraps a pass's call site in `if (sand_step_gate_<name>)` when compiled in,
  * and in nothing at all otherwise - a release build's sand_step() has no
  * extra branch to fold away, because there was never a branch there to

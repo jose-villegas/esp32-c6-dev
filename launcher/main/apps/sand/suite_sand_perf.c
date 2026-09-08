@@ -508,17 +508,19 @@ static void test_the_burning_cell_decomposes_by_phase(void)
     volatile bool *const pair    = &sand_step_gate_burn_pair;
     volatile bool *const conduct = &sand_step_gate_burn_conduct;
     volatile bool *const flare   = &sand_step_gate_burn_flare;
+    volatile bool *const call    = &sand_step_gate_burn_call;
 
     volatile bool *const all_five[] = { decay, smother, pair, conduct, flare };
 
     static const char *const names[] = {
         "every phase on", "decay off", "smother off", "pair walk off",
         "conduct off",    "flare off", "all five off (prologue only)",
+        "the call itself off",
     };
     volatile bool *const *const sets[] = {
-        NULL, &decay, &smother, &pair, &conduct, &flare, all_five,
+        NULL, &decay, &smother, &pair, &conduct, &flare, all_five, &call,
     };
-    static const size_t counts[] = { 0, 1, 1, 1, 1, 1, 5 };
+    static const size_t counts[] = { 0, 1, 1, 1, 1, 1, 5, 1 };
 
     int64_t whole = 0;
     for (size_t i = 0; i < sizeof(sets) / sizeof(sets[0]); i++) {
@@ -536,7 +538,7 @@ static void test_the_burning_cell_decomposes_by_phase(void)
         }
     }
 
-    TEST_ASSERT_TRUE_MESSAGE(*decay && *smother && *pair && *conduct && *flare,
+    TEST_ASSERT_TRUE_MESSAGE(*decay && *smother && *pair && *conduct && *flare && *call,
         "every gate must be back on before the next test in this binary runs");
 }
 

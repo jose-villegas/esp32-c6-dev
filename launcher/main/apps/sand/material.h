@@ -452,7 +452,19 @@ typedef struct {
 
     /* MAT_SAND closes loop; glass to sand when shocked. */
     uint8_t shatters_to;
+
+    /* NEVER READ. Rounds the row to 64 bytes so reaction_of()'s index is one
+     * shift: at 61 GCC strength-reduces the stride into slli/sub/slli/add,
+     * four ALU ops at every call site. Declared rather than left to the
+     * compiler because sizeof(reaction_t) is this table's documentation
+     * contract - dump_reactions.c insists every byte is exactly one
+     * documented field - and silent padding would be an undocumented hole. */
+    uint8_t stride_pad0;
+    uint8_t stride_pad1;
+    uint8_t stride_pad2;
 } reaction_t;
+
+_Static_assert(sizeof(reaction_t) == 64, "reaction_of()'s stride must stay a power of two - resize stride_pad");
 
 /* Zero means acid immune, heat block; check fields. */
 extern const reaction_t reactions[MATERIAL_MAX];
