@@ -2,7 +2,7 @@
  * reaction_doc - REACTION_DOC(field, why): says WHERE a reaction_t field's
  * trigger actually lives, at the read site that decides it.
  *
- * See docs/Sand/Reaction-Doc-Generator-Plan.md ("The cause clause belongs
+ * See docs/plans/Reaction-Doc-Generator-Plan.md ("The cause clause belongs
  * at the read site") for the problem this solves. `shatters_to` fires
  * under a threshold - SAND_SHOCK_COLD, SAND_SHOCK_HEAT - that appears
  * nowhere in reactions[]/extended_reactions[], only in the code that reads

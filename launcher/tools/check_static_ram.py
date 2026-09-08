@@ -11,7 +11,7 @@ on a laptop, before anything is flashed.
 
 WHY THIS EXISTS (beads esp32c6-14a)
 
-DIRAM is one pool behind .data/.bss AND the heap (see docs/Notes/
+DIRAM is one pool behind .data/.bss AND the heap (see docs/notes/
 Board-and-Memory.md, "Static growth taxes the heap too"). The single
 368x448x2 framebuffer (gfx_init(), launcher/main/gfx/gfx.c) must be one
 contiguous DMA allocation at boot, and the sand app's real-size grid (and
@@ -100,7 +100,7 @@ headroom is left):
      exactly the number that failed on-device twice.
 
 If a build fails here: shrink or malloc-on-use the largest offenders
-printed below (see docs/Notes/Optimization-Playbook.md, "Test and debug
+printed below (see docs/notes/Optimization-Playbook.md, "Test and debug
 code shares your production memory budget"), or, if boot allocations
 genuinely changed on purpose, re-peg PRE_FRAMEBUFFER_OVERHEAD_BYTES /
 BOOT_ALLOCATIONS_AND_SEPARATE_REGION_BYTES from a fresh boot log as
@@ -366,7 +366,7 @@ def print_offenders(parsed):
 
     print("")
     print("  what to do: shrink or malloc-on-use the offenders above (see")
-    print("  docs/Notes/Optimization-Playbook.md, \"Test and debug code")
+    print("  docs/notes/Optimization-Playbook.md, \"Test and debug code")
     print("  shares your production memory budget\"). If boot allocations")
     print("  genuinely changed on purpose, re-peg PRE_FRAMEBUFFER_OVERHEAD_")
     print("  BYTES / BOOT_ALLOCATIONS_AND_SEPARATE_REGION_BYTES from a fresh")

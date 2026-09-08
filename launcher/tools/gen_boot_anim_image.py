@@ -24,7 +24,7 @@ boot_anim.c's draw_image() reads this table row-major into a row-major
 framebuffer - the fast case for this chip's cache. Rotating per pixel at
 draw time instead would mean a transposed read on one side of that copy,
 every frame the photo is on screen, which is the thrashing case (see
-docs/Notes/Board-and-Memory.md's own note on sequential vs. random flash-
+docs/notes/Board-and-Memory.md's own note on sequential vs. random flash-
 mapped reads).
 
 THE ROTATION ITSELF

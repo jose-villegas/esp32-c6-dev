@@ -278,6 +278,32 @@ python launcher/main/apps/sand/tools/perf_probe/compare_counters.py <ref> [<ref>
 The second ref defaults to `<ref>^` - the ordinary case is "did this one
 commit change the work."
 
+### A counter delta is a prediction about time, never a result
+
+The section above is about *which commit changed behaviour*, and counters
+answer that exactly. They do not answer *what it costs*. They count work
+items; the device charges cycles, and the exchange rate between the two is
+not something a count can tell you.
+
+bd esp32c6-u2g is the worked example. Restoring cross-flow's pre-attempt-14
+sweep order restored its counters to the digit - `find_shallowest` iterations
+89,734 -> 47,980, transfers 8,535 -> 4,190, exactly the old figures - against
+a scene where the pass decomposition had put cross-flow at 48.4% of device
+cost. That was written up as the water regression recovered. The device then
+gave **-2.5%**: 20,777 -> 20,250 us, about a tenth of the ~5,000 us the
+regression added, and inside that row's own ~5% build-to-build spread. Both
+layout controls came back byte-identical across the pair, so there was no win
+hiding under noise. Those iterations are simply cheap on this chip.
+
+Two things follow. The write-up rule: say "work halved, time unknown until
+measured", and do not name a cause in an issue until a capture has priced it -
+that mis-attribution sat on bd esp32c6-8zx for a day. The instrument rule:
+when the question is *where the time goes*, reach for
+`CONFIG_LAUNCHER_SAND_PASS_GATES` (`main/Kconfig.projbuild`) instead - one
+binary, five configurations, one capture, no layout difference between
+configurations to confound the comparison. Counters find the commit; the gates
+price it.
+
 ### Verify both endpoints of a bisect window are actually measured
 
 Before spending anything INSIDE a window, confirm both ends of it were
@@ -366,6 +392,20 @@ that can re-record its own baseline has no baseline.
   entirely plausibly right up until a conclusion is drawn from it. This
   has cost this campaign real time twice in one session; name the ref you
   expect and confirm the artifact actually says so before trusting it.
+- **The present-cost rows are far noisier than the frame-budget rows, and
+  the controls do not vouch for them.** In the esp32c6-u2g pair, whose two
+  frame-budget controls were byte-identical, the present-cost rows still
+  swung -28.2%, -4.9% and +4.8% - on rows containing no liquid at all,
+  against a one-file change to the liquid sweep. Read a present-cost delta
+  as evidence only when it is large, repeated, and paired with a reason it
+  should have moved.
+- **Size a delta against the row's own history before calling it a win.**
+  Pull the same row out of the last several captures first: water has read
+  20,882 / 21,093 / 21,314 / 21,942 / 20,882 us across nearby builds, a
+  spread near 5%, so a 2.5% improvement on that row is not bankable from
+  one pair however clean the controls look. Identical controls prove the
+  layout did not shift between two builds; they do not shrink the row's
+  historical spread.
 
 ## Budget rules
 

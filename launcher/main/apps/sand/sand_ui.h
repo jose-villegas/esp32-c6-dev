@@ -63,8 +63,8 @@ typedef enum { BRUSH_POUR, BRUSH_SPAWN } brush_mode_t;
 
 /* PAINT / ERASE / DETONATE - PWR cycles it, independent of brush_mode_t
  * above: that says how the SELECTED MATERIAL is applied, this says what
- * the finger does at all. DETONATE is TEMPORARY SCAFFOLDING for
- * docs/Sand/Explosion-Plan.md - fires sand_explode() before any
+ * the finger does at all. DETONATE is TEMPORARY SCAFFOLDING - fires
+ * sand_explode() before any
  * material or trigger owns it. Rides on ERASE's cycle, not
  * brush_mode_t/brushes[], since it is not a material: no cell to
  * remember, no palette tile. Deletable once the plan is answered - see

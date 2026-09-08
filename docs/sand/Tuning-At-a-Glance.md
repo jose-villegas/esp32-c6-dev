@@ -330,7 +330,7 @@ to the microsecond.
 ## The playbook, distilled
 
 The board-agnostic versions live in
-[`../Notes/Optimization-Playbook.md`](../Notes/Optimization-Playbook.md);
+[`../notes/Optimization-Playbook.md`](../notes/Optimization-Playbook.md);
 each row names the attempt that paid for it.
 
 | Rule | Taught by |
@@ -361,7 +361,7 @@ each row names the attempt that paid for it.
   performance round.
 - [`Simulation-Lessons.md`](Simulation-Lessons.md) — how the simulation got
   built.
-- [`../Notes/Optimization-Playbook.md`](../Notes/Optimization-Playbook.md)
+- [`../notes/Optimization-Playbook.md`](../notes/Optimization-Playbook.md)
   — the lessons above, made board-agnostic.
 - [`Architecture.md`](Architecture.md) — how to reproduce any number here
   on real hardware, as one exact command sequence.

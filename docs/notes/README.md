@@ -9,7 +9,7 @@ Living document: correct it when the hardware disagrees with it.
 
 Split into six files, grown out of what was originally one - a seventh,
 the falling-sand app's own discovery narrative, moved out to
-[`../Sand/`](../Sand/) once that folder existed to hold it properly:
+[`../sand/`](../sand/) once that folder existed to hold it properly:
 
 - **[Board-and-Memory.md](Board-and-Memory.md)** — the board's hardware
   inventory, the memory budget with no PSRAM, and the SPI2/SD-card
@@ -40,8 +40,8 @@ the falling-sand app's own discovery narrative, moved out to
 
 - [`../Launcher-Architecture.md`](../Launcher-Architecture.md) — how the
   shell and its apps are built on top of the hardware facts here.
-- [`../Sand/`](../Sand/) — the falling-sand app: how it works today
-  (`Sand-Simulation.md`), the discovery narrative behind it
+- [`../sand/README.md`](../sand/README.md) — the falling-sand app: how it
+  works today (`Sand-Simulation.md`), the discovery narrative behind it
   (`Simulation-Lessons.md`), and how to add a material
   (`Adding-a-Material.md`). Its performance numbers and memory choices
   are shaped directly by the constraints here.

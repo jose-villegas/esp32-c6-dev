@@ -70,7 +70,7 @@
  * Tightened anyway, past even the ~10% headroom this file's other
  * budgets use, to 6000 - about 3.3% over the real measured 5802 us,
  * exactly reproducible across fresh captures on the current build (fixed
- * RNG seed - see docs/Sand/Architecture.md's "Verifying performance on
+ * RNG seed - see docs/sand/Architecture.md's "Verifying performance on
  * real hardware"). That thin a margin is a real bet against the
  * documented flash-cache swing above: if a future rebuild reintroduces
  * it and this starts flaking, that is the known, accepted trade-off of
@@ -158,27 +158,38 @@ void sand_host_probe_run_full_step_control(void)
 }
 #endif
 
-static void test_a_screen_of_water_fits_in_the_frame_budget(void)
+/* THE SCENE THE BUDGET TEST BELOW MEASURES, built fresh per call. Shared
+ * with the pass decomposition after it, which has to rebuild between
+ * configurations: a disabled pass leaves a different grid behind, so
+ * reusing one scene would have each configuration measuring a board the
+ * previous one shaped. */
+/* The board both water_scene_us_per_step() and water_scene_single_step_us()
+ * below measure, factored out so the two timing techniques cannot drift into
+ * quietly measuring different scenes. `real` must already be default-
+ * constructed storage; this does the sand_init()/sand_enable_sleeping() too. */
+static void build_water_scene(sand_t *real, uint8_t *big, uint8_t *blocks)
 {
-    /* Measured separately from sand, because water takes an entirely different
-     * path through the step - and the one part of it that is not local, the
-     * search across the flow, runs per cell. Something has to watch that. */
+    sand_init(real, big, REAL_W, REAL_H, 11u);
+    sand_enable_sleeping(real, blocks);
+
+    /* Half a screen of water, dropped in as an uneven slab so it is genuinely
+     * flowing rather than already settled - the expensive case. */
+    for (int y = 0; y < REAL_H / 2; y++) {
+        for (int x = REAL_W / 4; x < (REAL_W * 3) / 4; x++) {
+            sand_set(real, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+        }
+    }
+}
+
+static int64_t water_scene_us_per_step(void)
+{
     uint8_t *big    = malloc(REAL_W * REAL_H);
     uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
 
     sand_t real;
-    sand_init(&real, big, REAL_W, REAL_H, 11u);
-    sand_enable_sleeping(&real, blocks);
-
-    /* Half a screen of water, dropped in as an uneven slab so it is genuinely
-     * flowing rather than already settled - the expensive case. */
-    for (int y = 0; y < REAL_H / 2; y++) {
-        for (int x = REAL_W / 4; x < (REAL_W * 3) / 4; x++) {
-            sand_set(&real, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
-        }
-    }
+    build_water_scene(&real, big, blocks);
 
     const int64_t start = esp_timer_get_time();
     const int steps = 20;
@@ -187,11 +198,20 @@ static void test_a_screen_of_water_fits_in_the_frame_budget(void)
     }
     const int64_t per_step = (esp_timer_get_time() - start) / steps;
 
-    ESP_LOGI("device_tests", "water flowing on %dx%d: %lld us per step",
-             REAL_W, REAL_H, (long long)per_step);
-
     free(big);
     free(blocks);
+    return per_step;
+}
+
+static void test_a_screen_of_water_fits_in_the_frame_budget(void)
+{
+    /* Measured separately from sand, because water takes an entirely different
+     * path through the step - and the one part of it that is not local, the
+     * search across the flow, runs per cell. Something has to watch that. */
+    const int64_t per_step = water_scene_us_per_step();
+
+    ESP_LOGI("device_tests", "water flowing on %dx%d: %lld us per step",
+             REAL_W, REAL_H, (long long)per_step);
 
     /* Water gets a budget of its own, and a larger one, because it genuinely
      * does more: it moves an amount rather than a cell, and it takes a second
@@ -225,6 +245,284 @@ static void test_a_screen_of_water_fits_in_the_frame_budget(void)
         "two - the search across the flow is the thing to suspect");
 }
 
+#ifdef DEVICE_BUILD
+/* A FULL SCREEN OF FIRE, the scene that actually costs the most. Water is
+ * 15 ms a step; this one is 254 ms and the gas cascade beside it 347 ms, both
+ * over budget, and neither has ever been decomposed. Same construction as
+ * test_a_full_screen_of_fire_fits_in_the_frame_budget(), factored so the two
+ * cannot drift. */
+static void build_fire_scene(sand_t *real, uint8_t *big, uint8_t *blocks)
+{
+    sand_init(real, big, REAL_W, REAL_H, 19u);
+    sand_enable_sleeping(real, blocks);
+
+    for (int y = 0; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            sand_set(real, x, y, FIRE);
+        }
+    }
+}
+
+/* FEWER WARMUP STEPS THAN WATER, deliberately: fire BURNS OUT. Ten steps of
+ * warmup would time a board that has already decayed to smoke and empty, which
+ * is not the expensive case anyone is trying to fix. Two keeps it alight. */
+#define FIRE_WARMUP_STEPS 2
+#define FIRE_REPEATS      2
+#endif /* DEVICE_BUILD */
+
+#if defined(DEVICE_BUILD) && CONFIG_LAUNCHER_SAND_PASS_GATES
+/* Which pass owns the water scene's time.
+ *
+ * Measure-by-deleting, so these are upper bounds, not a partition: with a
+ * pass off the others see a board it never touched, and the five figures
+ * need not sum to the whole.
+ *
+ * Volatile gates rather than five images - a separately-linked image draws
+ * its own flash-layout ticket, and that lottery moves a scene by more than
+ * the differences being read here.
+ *
+ * Prints rather than asserts: inventing a budget would peg a number nobody
+ * has argued for. */
+static void test_the_water_scene_decomposes_by_pass(void)
+{
+    /* The last one is the ceiling test that splits cross-flow: its walk and
+     * mask test still run, only the transfer work they find is suppressed.
+     * Against "cross-flow off" it says whether the pass costs what it DOES or
+     * what it LOOKS AT. */
+    static const char *const names[] = {
+        "every pass on",  "main sweep off", "cross-flow off",
+        "gas off",        "reactions off",  "cross-flow walk only",
+    };
+    volatile bool *const gates[] = {
+        NULL,
+        &sand_step_gate_main_sweep,
+        &sand_step_gate_cross_flow,
+        &sand_step_gate_gas,
+        &sand_step_gate_reactions,
+        &sand_step_gate_xflow_body,
+    };
+
+    int64_t whole = 0;
+    for (size_t i = 0; i < sizeof(gates) / sizeof(gates[0]); i++) {
+        if (gates[i] != NULL) {
+            *gates[i] = false;
+        }
+        const int64_t us = water_scene_us_per_step();
+        if (gates[i] != NULL) {
+            *gates[i] = true;   /* restored before the next configuration, and
+                                 * before any later test in this binary runs */
+        }
+
+        if (i == 0) {
+            whole = us;
+            ESP_LOGI("device_tests", "water pass decomposition: %s: %lld us",
+                     names[i], (long long)us);
+        } else {
+            const int64_t saved = whole - us;
+            ESP_LOGI("device_tests",
+                     "water pass decomposition: %s: %lld us (%lld us, %lld%% "
+                     "of the whole)", names[i], (long long)us,
+                     (long long)saved,
+                     whole > 0 ? (long long)((saved * 100) / whole) : 0);
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(sand_step_gate_main_sweep &&
+                             sand_step_gate_cross_flow &&
+                             sand_step_gate_gas && sand_step_gate_reactions &&
+                             sand_step_gate_xflow_body,
+        "every gate must be back on before the next test in this binary "
+        "runs - a gate left off silently changes every measurement after it");
+}
+
+/* The decomposition above is wrong for the main sweep: held off for all 20
+ * steps, the scene DIVERGES - nothing moves, the board settles and sleeps,
+ * later steps go nearly free. 264us describes a frozen scene, not the
+ * pass's real cost. Below instead: warm up with every gate on, THEN disable
+ * one gate for a single step - valid because the scene builder and RNG are
+ * deterministic, so warmup reproduces the same board and reading a
+ * volatile gate costs no RNG draw. */
+
+#define MAIN_SWEEP_WARMUP_STEPS 10
+
+/* Builds and warms up an identical water board, disables `gate` (or leaves
+ * every gate on if NULL) for exactly one sand_step(), and returns its
+ * duration. Takes the min over 3 repeats of the whole build+warmup+step: the
+ * work is deterministic, so repeats measure identical work and the spread
+ * between them is pure measurement noise - min, not average, is the right
+ * estimator for that. */
+static int64_t water_scene_single_step_us(volatile bool *gate)
+{
+    const int repeats = 3;
+    int64_t   best    = -1;
+
+    for (int r = 0; r < repeats; r++) {
+        uint8_t *big    = malloc(REAL_W * REAL_H);
+        uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+        TEST_ASSERT_NOT_NULL(big);
+        TEST_ASSERT_NOT_NULL(blocks);
+
+        sand_t real;
+        build_water_scene(&real, big, blocks);
+        for (int i = 0; i < MAIN_SWEEP_WARMUP_STEPS; i++) {
+            sand_step(&real, 0, 1000, 0);
+        }
+
+        if (gate != NULL) {
+            *gate = false;
+        }
+        const int64_t start = esp_timer_get_time();
+        sand_step(&real, 0, 1000, 0);
+        const int64_t took = esp_timer_get_time() - start;
+        if (gate != NULL) {
+            *gate = true;
+        }
+
+        free(big);
+        free(blocks);
+
+        if (best < 0 || took < best) {
+            best = took;
+        }
+    }
+    return best;
+}
+
+/* Which pass owns a live main sweep's time - the main-sweep-specific
+ * counterpart to test_the_water_scene_decomposes_by_pass above, using the
+ * single-step technique because that test's 20-step measurement is only
+ * valid for gas/reactions (see water_scene_single_step_us()'s own comment
+ * for why the main sweep needs this instead). Prints rather than asserts:
+ * inventing a budget would peg a number nobody has argued for. */
+/* Fire's twin of water_scene_single_step_us() - see that function for why one
+ * timed step from a rebuilt board is valid where twenty steps with a pass
+ * disabled is not. */
+static int64_t fire_scene_single_step_us(volatile bool *gate)
+{
+    int64_t best = -1;
+
+    for (int r = 0; r < FIRE_REPEATS; r++) {
+        uint8_t *big    = malloc(REAL_W * REAL_H);
+        uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+        TEST_ASSERT_NOT_NULL(big);
+        TEST_ASSERT_NOT_NULL(blocks);
+
+        sand_t real;
+        build_fire_scene(&real, big, blocks);
+        for (int i = 0; i < FIRE_WARMUP_STEPS; i++) {
+            sand_step(&real, 0, 1000, 0);
+        }
+
+        if (gate != NULL) {
+            *gate = false;
+        }
+        const int64_t start = esp_timer_get_time();
+        sand_step(&real, 0, 1000, 0);
+        const int64_t took = esp_timer_get_time() - start;
+        if (gate != NULL) {
+            *gate = true;
+        }
+
+        free(big);
+        free(blocks);
+
+        if (best < 0 || took < best) {
+            best = took;
+        }
+    }
+    return best;
+}
+
+/* WHERE THE APP'S MOST EXPENSIVE SCENE SPENDS ITS TIME. Every pass gate this
+ * project has, pointed at fire rather than water - reactions are 1% of a water
+ * step and presumed to dominate here, which is exactly the kind of assumption
+ * this campaign keeps getting wrong. Prints; asserts no budget. */
+static void test_the_fire_scene_decomposes_by_pass(void)
+{
+    static const char *const names[] = {
+        "every pass on",  "main sweep off", "sweep body off (walk only)",
+        "cross-flow off", "gas off",        "reactions off",
+        "gas rise off",   "gas equalise off",
+    };
+    volatile bool *const gates[] = {
+        NULL,
+        &sand_step_gate_main_sweep,
+        &sand_step_gate_sweep_body,
+        &sand_step_gate_cross_flow,
+        &sand_step_gate_gas,
+        &sand_step_gate_reactions,
+        &sand_step_gate_gas_rise,
+        &sand_step_gate_gas_equalise,
+    };
+
+    int64_t whole = 0;
+    for (size_t i = 0; i < sizeof(gates) / sizeof(gates[0]); i++) {
+        const int64_t us = fire_scene_single_step_us(gates[i]);
+        if (i == 0) {
+            whole = us;
+            ESP_LOGI("device_tests", "fire decomposition: %s: %lld us",
+                     names[i], (long long)us);
+        } else {
+            const int64_t saved = whole - us;
+            ESP_LOGI("device_tests",
+                     "fire decomposition: %s: %lld us (%lld us, %lld%% of "
+                     "the whole)", names[i], (long long)us, (long long)saved,
+                     whole > 0 ? (long long)((saved * 100) / whole) : 0);
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(sand_step_gate_main_sweep &&
+                             sand_step_gate_cross_flow && sand_step_gate_gas &&
+                             sand_step_gate_reactions &&
+                             sand_step_gate_sweep_body &&
+                             sand_step_gate_gas_rise &&
+                             sand_step_gate_gas_equalise,
+        "every gate must be back on before the next test in this binary runs");
+}
+
+static void test_the_main_sweep_decomposes_by_pass(void)
+{
+    static const char *const names[] = {
+        "every pass on",      "main sweep off", "sweep body off (walk only)",
+        "cross-flow off",     "reactions off",
+    };
+    volatile bool *const gates[] = {
+        NULL,
+        &sand_step_gate_main_sweep,
+        &sand_step_gate_sweep_body,
+        &sand_step_gate_cross_flow,
+        &sand_step_gate_reactions,
+    };
+
+    int64_t whole = 0;
+    for (size_t i = 0; i < sizeof(gates) / sizeof(gates[0]); i++) {
+        const int64_t us = water_scene_single_step_us(gates[i]);
+
+        if (i == 0) {
+            whole = us;
+            ESP_LOGI("device_tests",
+                     "main sweep decomposition: %s: %lld us", names[i],
+                     (long long)us);
+        } else {
+            const int64_t saved = whole - us;
+            ESP_LOGI("device_tests",
+                     "main sweep decomposition: %s: %lld us (%lld us, %lld%% "
+                     "of the whole)", names[i], (long long)us,
+                     (long long)saved,
+                     whole > 0 ? (long long)((saved * 100) / whole) : 0);
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(sand_step_gate_main_sweep &&
+                             sand_step_gate_cross_flow &&
+                             sand_step_gate_gas && sand_step_gate_reactions &&
+                             sand_step_gate_xflow_body &&
+                             sand_step_gate_sweep_body,
+        "every gate must be back on before the next test in this binary "
+        "runs - a gate left off silently changes every measurement after it");
+}
+#endif
+
 #ifdef SAND_HOST_PROBE
 /* Host-only timing probe (see the full-step control's own wrapper above,
  * and main/apps/sand/tools/perf_probe/). */
@@ -237,6 +535,60 @@ void sand_host_probe_run_water(void)
 #endif /* DEVICE_BUILD */
 
 #ifdef DEVICE_BUILD
+/* NOT behind CONFIG_LAUNCHER_SAND_PASS_GATES, unlike the decompositions
+ * above: this compares the two gas movers through sand_set_gas_walk(), an
+ * ordinary API, so it belongs in every diagnostics build rather than only
+ * in a gated probe one. Placed inside a gated region by mistake first, and
+ * a whole capture printed nothing. */
+/* THE TWO GAS MOVERS ON THE SAME BOARD. Warmup runs with the walk OFF in both
+ * arms, so the timed step sees a byte-identical scene and the only difference
+ * is which mover handles it - the same reason the pass decompositions rebuild
+ * rather than run twenty steps with a pass disabled.
+ *
+ * Prints; asserts nothing. The walk is a deliberate behaviour change as well as
+ * a cost one, so "is it faster" is only half the question and the other half
+ * needs eyes on a screen, not a budget. */
+static void test_the_gas_random_walk_against_the_exhaustive_mover(void)
+{
+    int64_t best[2] = { -1, -1 };
+
+    for (int arm = 0; arm < 2; arm++) {
+        for (int r = 0; r < FIRE_REPEATS; r++) {
+            uint8_t *big    = malloc(REAL_W * REAL_H);
+            uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+            TEST_ASSERT_NOT_NULL(big);
+            TEST_ASSERT_NOT_NULL(blocks);
+
+            sand_t real;
+            build_fire_scene(&real, big, blocks);
+            for (int i = 0; i < FIRE_WARMUP_STEPS; i++) {
+                sand_step(&real, 0, 1000, 0);
+            }
+
+            sand_set_gas_walk(&real, arm == 1);
+            const int64_t start = esp_timer_get_time();
+            sand_step(&real, 0, 1000, 0);
+            const int64_t took = esp_timer_get_time() - start;
+
+            free(big);
+            free(blocks);
+            if (best[arm] < 0 || took < best[arm]) {
+                best[arm] = took;
+            }
+        }
+    }
+
+    ESP_LOGI("device_tests", "gas mover, fire scene: exhaustive %lld us",
+             (long long)best[0]);
+    ESP_LOGI("device_tests", "gas mover, fire scene: random walk %lld us",
+             (long long)best[1]);
+    if (best[0] > 0) {
+        ESP_LOGI("device_tests",
+                 "gas mover, fire scene: walk is %lld%% of the exhaustive cost",
+                 (long long)((best[1] * 100) / best[0]));
+    }
+}
+
 static void test_a_screen_of_settled_sand_costs_almost_nothing(void)
 {
     /* The user-visible complaint this answers: adding lots of sand dropped the
@@ -1517,7 +1869,7 @@ void sand_host_probe_run_gunpowder_basin(void)
  * function to share it across a translation-unit boundary is the exact
  * shape of change a previous tuning round measured a 26% regression from
  * - not these functions, but try_fall_or_scatter()/try_slide() in sand.c -
- * see the seventh attempt in docs/Sand/Performance-Tuning-Attempts.md, and
+ * see the seventh attempt in docs/sand/Performance-Tuning-Attempts.md, and
  * the eighth for how long it took to notice a "fix" for it was aimed at
  * code the failing benchmark never even ran. So
  * mirror_app_sand_marking() below duplicates the ~15 lines of policy from
@@ -1646,7 +1998,10 @@ static int64_t run_present_against_scene(sand_t *s, const uint8_t *cells,
                                           uint8_t *row_n, int gx, int gy,
                                           int gz, int settle_steps,
                                           int measured_steps, int *full_bands,
-                                          int *gathered, int *partial_bands)
+                                          int *gathered, int *partial_bands,
+                                          int64_t *sim_us_out,
+                                          int64_t *mark_us_out,
+                                          int64_t *present_us_out)
 {
     for (int i = 0; i < settle_steps; i++) {
         sand_step(s, gx, gy, gz);
@@ -1657,20 +2012,37 @@ static int64_t run_present_against_scene(sand_t *s, const uint8_t *cells,
 
     gfx_reset_strip_send_counts();
 
-    int64_t total_us = 0;
+    int64_t sim_us = 0, mark_us = 0, present_us = 0;
     for (int i = 0; i < measured_steps; i++) {
+        const int64_t t0 = esp_timer_get_time();
         sand_step(s, gx, gy, gz);
+        const int64_t t1 = esp_timer_get_time();
         mirror_app_sand_marking(cells, w, h, dirty_rows, row_x0, row_x1,
                                 row_n);
-
-        const int64_t start = esp_timer_get_time();
+        const int64_t t2 = esp_timer_get_time();
         gfx_present();
-        total_us += esp_timer_get_time() - start;
+        const int64_t t3 = esp_timer_get_time();
+
+        sim_us     += t1 - t0;
+        mark_us    += t2 - t1;
+        present_us += t3 - t2;
     }
 
     gfx_get_strip_send_counts(full_bands, gathered, partial_bands);
 
-    return total_us / measured_steps;
+    /* Per-step MEANS, same as the return value below - three phases of the
+     * same measured window, so they share one averaging convention. */
+    if (sim_us_out != NULL) {
+        *sim_us_out = sim_us / measured_steps;
+    }
+    if (mark_us_out != NULL) {
+        *mark_us_out = mark_us / measured_steps;
+    }
+    if (present_us_out != NULL) {
+        *present_us_out = present_us / measured_steps;
+    }
+
+    return present_us / measured_steps;
 }
 
 /* The plain falling-sand case: the same half-screen checkerboard
@@ -1686,6 +2058,30 @@ static int64_t run_present_against_scene(sand_t *s, const uint8_t *cells,
  * reports one span covering nearly the whole row width - despite only half
  * of it actually holding a grain. That wide fallback span, not the true
  * occupied-cell count, is what gfx_present() actually has to move. */
+/* THE SCENE both this test and test_a_real_frame_is_sim_plus_present_on_a_
+ * falling_sand_scene below measure - factored out so the two cannot drift
+ * into quietly timing different boards, the same reason build_water_scene()
+ * exists above. `big`/`dirty_rows`/`row_x0`/`row_x1`/`row_n` must already be
+ * allocated storage; this does the sand_init()/tracking/seeding too. */
+static void build_falling_sand_present_scene(sand_t *real, uint8_t *big,
+                                              uint8_t *dirty_rows,
+                                              uint16_t *row_x0,
+                                              uint16_t *row_x1, uint8_t *row_n)
+{
+    sand_init(real, big, REAL_W, REAL_H, 99u);
+    sand_track_dirty_rows(real, dirty_rows);
+    seed_row_runs_full_width_for_gfx_test(row_x0, row_x1, row_n, REAL_W,
+                                          REAL_H);
+
+    for (int y = 0; y < REAL_H / 2; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            if (((x + y) & 1) == 0) {
+                sand_set(real, x, y, SAND_FIRST_SHADE);
+            }
+        }
+    }
+}
+
 static void test_present_cost_against_a_falling_sand_scene(void)
 {
     uint8_t  *big       = malloc(REAL_W * REAL_H);
@@ -1700,24 +2096,14 @@ static void test_present_cost_against_a_falling_sand_scene(void)
     TEST_ASSERT_NOT_NULL(row_n);
 
     sand_t real;
-    sand_init(&real, big, REAL_W, REAL_H, 99u);
-    sand_track_dirty_rows(&real, dirty_rows);
-    seed_row_runs_full_width_for_gfx_test(row_x0, row_x1, row_n, REAL_W,
-                                          REAL_H);
-
-    for (int y = 0; y < REAL_H / 2; y++) {
-        for (int x = 0; x < REAL_W; x++) {
-            if (((x + y) & 1) == 0) {
-                sand_set(&real, x, y, SAND_FIRST_SHADE);
-            }
-        }
-    }
+    build_falling_sand_present_scene(&real, big, dirty_rows, row_x0, row_x1,
+                                     row_n);
 
     int full_bands = 0, gathered = 0, partial_bands = 0;
     const int measured_steps = 20;
     const int64_t mean_us = run_present_against_scene(&real, big, REAL_W,
         REAL_H, dirty_rows, row_x0, row_x1, row_n, 0, 1, 0, 5, measured_steps,
-        &full_bands, &gathered, &partial_bands);
+        &full_bands, &gathered, &partial_bands, NULL, NULL, NULL);
 
     ESP_LOGI("device_tests", "present cost, falling sand checkerboard, "
                              "%dx%d: mean %lld us/frame over %d frames "
@@ -1776,6 +2162,65 @@ static void test_present_cost_against_a_falling_sand_scene(void)
         "before suspecting the panel");
 }
 
+/* bd esp32c6-e6c: sand_step() budgets exclude present; present tests run
+ * the sim outside their own timer. Neither measures the frame SUM, which
+ * bd esp32c6-91i (overlapping present with the next step) needs before it
+ * can be justified - water's step (15,168 us) now beats a full present
+ * (~17,800 us). PRINTS, no frame budget argued yet. Missing the real pixel
+ * writes (draw_dirty_rows()/paint_row() are static, unreachable here) - a
+ * LOWER BOUND only. */
+static void test_a_real_frame_is_sim_plus_present_on_a_falling_sand_scene(void)
+{
+    uint8_t  *big       = malloc(REAL_W * REAL_H);
+    uint8_t  *dirty_rows = malloc(REAL_H);
+    uint16_t *row_x0    = malloc(REAL_H * ROW_MAX_RUNS * sizeof(uint16_t));
+    uint16_t *row_x1    = malloc(REAL_H * ROW_MAX_RUNS * sizeof(uint16_t));
+    uint8_t  *row_n     = malloc(REAL_H);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(dirty_rows);
+    TEST_ASSERT_NOT_NULL(row_x0);
+    TEST_ASSERT_NOT_NULL(row_x1);
+    TEST_ASSERT_NOT_NULL(row_n);
+
+    sand_t real;
+    build_falling_sand_present_scene(&real, big, dirty_rows, row_x0, row_x1,
+                                     row_n);
+
+    int full_bands = 0, gathered = 0, partial_bands = 0;
+    int64_t sim_us = 0, mark_us = 0, present_us = 0;
+    const int measured_steps = 20;
+    run_present_against_scene(&real, big, REAL_W, REAL_H, dirty_rows, row_x0,
+        row_x1, row_n, 0, 1, 0, 5, measured_steps, &full_bands, &gathered,
+        &partial_bands, &sim_us, &mark_us, &present_us);
+
+    free(big);
+    free(dirty_rows);
+    free(row_x0);
+    free(row_x1);
+    free(row_n);
+
+    const int64_t total_us = sim_us + mark_us + present_us;
+    const int present_pct = total_us > 0
+        ? (int)((present_us * 100) / total_us) : 0;
+
+    ESP_LOGI("device_tests",
+             "frame time, falling sand checkerboard: sim %lld us/frame",
+             (long long)sim_us);
+    ESP_LOGI("device_tests",
+             "frame time, falling sand checkerboard: mark %lld us/frame",
+             (long long)mark_us);
+    ESP_LOGI("device_tests",
+             "frame time, falling sand checkerboard: present %lld us/frame",
+             (long long)present_us);
+    ESP_LOGI("device_tests",
+             "frame time, falling sand checkerboard: total %lld us/frame",
+             (long long)total_us);
+    ESP_LOGI("device_tests",
+             "frame time, falling sand checkerboard: present is %d%% of "
+             "the total",
+             present_pct);
+}
+
 /* The lava stress scene (build_lava_stress_scene() above, shared with
  * test_the_lava_stress_scene_reaches_every_reaction_it_claims and
  * test_the_lava_stress_scene_fits_in_the_frame_budget) - a lava reservoir
@@ -1822,7 +2267,8 @@ static void test_present_cost_against_the_lava_stress_scene(void)
     const int measured_steps = 20;
     const int64_t mean_us = run_present_against_scene(&real, big, REAL_W,
         REAL_H, dirty_rows, row_x0, row_x1, row_n, 0, 1000, 0, 30,
-        measured_steps, &full_bands, &gathered, &partial_bands);
+        measured_steps, &full_bands, &gathered, &partial_bands, NULL, NULL,
+        NULL);
 
     ESP_LOGI("device_tests", "present cost, lava stress scene, %dx%d: mean "
                              "%lld us/frame over %d frames (%d full-band, "
@@ -1901,7 +2347,8 @@ static void test_present_cost_against_the_thermal_shock_scene(void)
     const int measured_steps = 10;
     const int64_t mean_us = run_present_against_scene(&real, big, REAL_W,
         REAL_H, dirty_rows, row_x0, row_x1, row_n, 0, 1000, 0, 0,
-        measured_steps, &full_bands, &gathered, &partial_bands);
+        measured_steps, &full_bands, &gathered, &partial_bands, NULL, NULL,
+        NULL);
 
     ESP_LOGI("device_tests", "present cost, thermal shock lattice, %dx%d: "
                              "mean %lld us/frame over %d frames (%d "
@@ -2261,6 +2708,14 @@ void run_sand_perf_suite(void)
     RUN_TEST(test_turning_a_settled_pool_to_landscape_fits_in_the_frame_budget);
     RUN_TEST(test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget);
     RUN_TEST(test_a_screen_of_water_fits_in_the_frame_budget);
+#if CONFIG_LAUNCHER_SAND_PASS_GATES
+    RUN_TEST(test_the_water_scene_decomposes_by_pass);
+    RUN_TEST(test_the_main_sweep_decomposes_by_pass);
+    RUN_TEST(test_the_fire_scene_decomposes_by_pass);
+#endif
+    /* Ungated: the two gas movers compare through sand_set_gas_walk(), an
+     * ordinary API, so this runs in every diagnostics build. */
+    RUN_TEST(test_the_gas_random_walk_against_the_exhaustive_mover);
     RUN_TEST(test_a_gravity_flip_on_every_material_at_once_stays_sane);
     RUN_TEST(test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget);
     RUN_TEST(test_a_full_screen_of_fire_fits_in_the_frame_budget);
@@ -2274,6 +2729,7 @@ void run_sand_perf_suite(void)
     RUN_TEST(test_the_gunpowder_basin_scene_fits_in_the_frame_budget);
 
     RUN_TEST(test_present_cost_against_a_falling_sand_scene);
+    RUN_TEST(test_a_real_frame_is_sim_plus_present_on_a_falling_sand_scene);
     RUN_TEST(test_present_cost_against_the_lava_stress_scene);
     RUN_TEST(test_present_cost_against_the_thermal_shock_scene);
 #endif

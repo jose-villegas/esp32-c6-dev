@@ -271,7 +271,7 @@ fi
 if [ -z "$(find "$SU_DIR" -maxdepth 1 -name '*.su' -print -quit)" ]; then
     echo "no .su stack-usage files were produced by $CC_BIN - it may not" >&2
     echo "support -fstack-usage. This gate exists to catch test fixtures" >&2
-    echo "that would panic-loop the device (see docs/Sand/" >&2
+    echo "that would panic-loop the device (see docs/sand/" >&2
     echo "Performance-Tuning-Attempts.md); refusing to silently pass." >&2
     exit 1
 fi

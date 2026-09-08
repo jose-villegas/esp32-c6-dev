@@ -366,7 +366,7 @@ static void test_liquid_cross_flow_wakes_only_the_blocks_it_touches_by_range(voi
  * It was written against a specific such mechanism, ROW_NO_LIQUID - a
  * per-row "proved dry" cache that skipped rows, and that was cleared by
  * every move of every material. That cache has since been deleted outright
- * for costing more than it saved (see docs/Sand/Performance-Tuning-
+ * for costing more than it saved (see docs/sand/Performance-Tuning-
  * Attempts.md's ninth attempt), and cross-flow now walks every row every
  * step, which passes this trivially. The test stays anyway: it was the
  * derivation that killed the cache's last proposed narrowing, and anything

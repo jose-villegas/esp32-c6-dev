@@ -21,6 +21,7 @@
 
 #include <string.h>
 
+#include "sand_liquid_move.h"
 #include "util/fixed.h"
 #include "util/intmath.h"
 
@@ -164,6 +165,8 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->soak         = 0;    /* nothing soaks unless asked - see
                              * sand_set_soak() */
     s->mobility     = 255;  /* full speed by default - see sand_set_mobility() */
+    s->gas_walk     = true;   /* random walk, 23% cheaper - see sand_set_gas_walk()
+                                * for the deterministic exhaustive mover */
     s->flammability = SAND_FLAMMABILITY_PER_MATERIAL;  /* see sand_set_flammability() */
     s->conduction   = SAND_CONDUCTION_PER_MATERIAL;    /* see sand_set_conduction() */
     s->boils        = SAND_BOILS_PER_MATERIAL;         /* see sand_set_boils() */
@@ -603,6 +606,11 @@ void sand_set_mobility(sand_t *s, int chance)
     }
 }
 
+void sand_set_gas_walk(sand_t *s, bool on)
+{
+    s->gas_walk = on;
+}
+
 void sand_set_flammability(sand_t *s, int chance)
 {
     if (chance < 0) {
@@ -896,10 +904,12 @@ static void step_one_block(const sweep_ctx_t *ctx, int bx)
          * instead of O(moves). Docs/Sand/Performance-Tuning-Attempts.md ninth
          * attempt advises questioning skip structures before implementation. */
         saw_liquid |= (unsigned)(ctx->is_liquid >> CELL_MATERIAL(c)) & 1u;
-        if (step_one_grain(ctx->s, ctx->row, ctx->prow, ctx->arow, ctx->brow,
-                           x, ctx->y, ctx->w, ctx->dx, ctx->dy, ctx->slide_a,
-                           ctx->slide_b, ctx->load_dx, ctx->load_dy,
-                           ctx->jostle, ctx->driven)) {
+        if (SAND_STEP_GATED(sweep_body,
+                           step_one_grain(ctx->s, ctx->row, ctx->prow,
+                               ctx->arow, ctx->brow, x, ctx->y, ctx->w,
+                               ctx->dx, ctx->dy, ctx->slide_a, ctx->slide_b,
+                               ctx->load_dx, ctx->load_dy, ctx->jostle,
+                               ctx->driven))) {
             moved_here = true;
         }
     }
@@ -1035,6 +1045,10 @@ volatile bool sand_step_gate_main_sweep = true;
 volatile bool sand_step_gate_cross_flow = true;
 volatile bool sand_step_gate_gas        = true;
 volatile bool sand_step_gate_reactions  = true;
+volatile bool sand_step_gate_xflow_body = true;
+volatile bool sand_step_gate_sweep_body = true;
+volatile bool sand_step_gate_gas_rise     = true;
+volatile bool sand_step_gate_gas_equalise = true;
 #endif
 
 /* Pinned to a cache-line boundary so this function's placement is not a

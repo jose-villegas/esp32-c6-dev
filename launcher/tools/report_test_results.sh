@@ -19,7 +19,7 @@
 # partway through.
 #
 # Same Git-Bash/idf.py limitation as build_flash.sh applies here too -
-# see that script's own top comment, or docs/Sand/Architecture.md's
+# see that script's own top comment, or docs/sand/Architecture.md's
 # "The Git Bash trap" section, for the full story.
 
 set -euo pipefail
@@ -122,7 +122,7 @@ python "$SCRIPT_DIR/sweeps/capture_selftest.py" "$RAW_CAPTURE" --port "$COM_PORT
 echo "=== Generating report ==="
 # report_test_results.py exits 1 when the capture contains ANY failing
 # test - a normal, expected outcome (this project has a known baseline
-# of 2 pre-existing failures, see docs/Sand/Architecture.md), not a
+# of 2 pre-existing failures, see docs/sand/Architecture.md), not a
 # failure of THIS script. Read the report to judge that, not this exit
 # code - `|| true` keeps `set -e` from treating it as fatal.
 python "$SCRIPT_DIR/report_test_results.py" "$RAW_CAPTURE" "$OUT_MD" || true

@@ -5,12 +5,20 @@
 #   scripts/capture_ref.sh <git-ref> [--baseline REPORT.md] [--no-restore] \
 #       [--build-only] [COM_PORT]
 #
-#   <git-ref>       any ref git can resolve: branch, tag, or SHA.
+#   <git-ref>       branch, tag, or SHA. NOT HEAD or anything relative to it
+#                   (@, HEAD~1, @{-1}): refs are resolved in the capture
+#                   worktree, where HEAD means the ref last built there, so
+#                   those are refused rather than silently measuring the
+#                   wrong tree - see the check below.
 #   --baseline      forwarded to report_performance.sh's own --baseline -
 #                   prints its verdict line against an earlier report.
 #   --no-restore    forwarded to report_performance.sh's own --no-restore -
 #                   leaves the device on build.diag instead of paying a
-#                   second build+flash to restore build.release.
+#                   second build+flash to restore build.release. WITHOUT it,
+#                   the restore leaves the board on a release build of the ref
+#                   just captured - the capture worktree is what gets rebuilt,
+#                   and it is detached there - so the device ends up running
+#                   the CANDIDATE, not main. The run says so when it finishes.
 #   --build-only    build build.diag in the capture worktree and stop -
 #                   never flashes, never touches a serial port. Useful on
 #                   its own to pre-check that a candidate even LINKS
@@ -64,7 +72,9 @@
 set -eu
 
 usage() {
-    sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'
+    # Stops at the prose section rather than a hard-coded last line: editing
+    # the options above used to truncate --help silently.
+    awk 'NR>=2 && /^# This is glue/{exit} NR>=2' "$0" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 
@@ -118,6 +128,25 @@ if [ -z "$REF" ]; then
     echo "ERROR: a git ref is required." >&2
     usage 2
 fi
+
+# HEAD-RELATIVE REFS ARE REFUSED, not resolved. The ref is checked out in the
+# CAPTURE WORKTREE (capture_worktree_checkout), which sits detached at whatever
+# it last built - so "HEAD" there means that previous ref and the checkout is a
+# no-op. Passing HEAD after committing a candidate silently rebuilds and
+# remeasures the PREVIOUS one, and the report is named after the string typed
+# rather than the tree measured. Refused rather than resolved against the
+# invoking checkout: that would quietly give HEAD a second meaning here, and a
+# capture is the worst place to reinterpret an argument silently.
+case "$REF" in
+    HEAD|@|HEAD~*|HEAD^*|@~*|@^*|*@\{*)
+        echo "ERROR: '$REF' is relative to whichever checkout resolves it, and" >&2
+        echo "this script resolves refs inside the capture worktree - where it" >&2
+        echo "means the ref last built there, not the one you have checked out." >&2
+        echo "Pass an explicit SHA or a branch name instead." >&2
+        exit 2
+        ;;
+esac
+
 COM_PORT="${COM_PORT:-COM3}"
 
 if [ -n "$BASELINE" ] && [ "$BUILD_ONLY" -eq 1 ]; then
@@ -146,7 +175,7 @@ LAUNCHER_DIR_WIN="$(cd "$LAUNCHER_DIR" && pwd -W 2>/dev/null || echo "$LAUNCHER_
 
 if [ "$BUILD_ONLY" -eq 1 ]; then
     # Same three sdkconfig fragments and SDKCONFIG override
-    # report_performance.sh uses (see docs/Sand/Perf-Round-Guide.md,
+    # report_performance.sh uses (see docs/sand/Perf-Round-Guide.md,
     # "Exact commands") - just the build half, with no flash and no
     # capture, so a link failure surfaces in minutes instead of after a
     # flash+18-minute-capture cycle. The stale-sdkconfig removal is the
@@ -183,7 +212,15 @@ fi
 # summarize+verdict. Nothing below duplicates any of that - it only builds
 # the argument list report_performance.sh already understands and picks a
 # report path this script can name back to the caller afterward.
+# NAMED AFTER THE SHA ACTUALLY BUILT, not only the string typed. The report's
+# own body records paths and a timestamp but no ref, so this filename is the
+# only place a capture says which tree it measured - and "check the artifact
+# exists for the SPECIFIC ref" (docs/sand/Perf-Round-Guide.md) is the house rule
+# that depends on it. A branch name alone cannot say which commit it was at.
 REF_SLUG=$(printf '%s' "$REF" | tr -c 'A-Za-z0-9._-' '-')
+if [ "$REF_SLUG" != "$CAPTURE_SHA" ]; then
+    REF_SLUG="${REF_SLUG}-${CAPTURE_SHA}"
+fi
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 RESULTS_DIR="$LAUNCHER_DIR/main/apps/sand/tools/results"
 OUT_MD="$RESULTS_DIR/capture_ref_${REF_SLUG}_${TIMESTAMP}.md"
@@ -196,6 +233,21 @@ set -- "$@" "$COM_PORT" "$OUT_MD"
 echo "=== Handing off to report_performance.sh for $CAPTURE_SHA ==="
 STATUS=0
 sh "$LAUNCHER_DIR/main/apps/sand/tools/report_performance.sh" "$@" || STATUS=$?
+
+# WHAT THE BOARD IS LEFT RUNNING, said out loud. The restore rebuilds
+# build.release inside the CAPTURE WORKTREE, which is detached at the ref just
+# captured - so the device ends up on a release build of the CANDIDATE, not of
+# main, and nothing said so. --no-restore has always warned about the state it
+# leaves; this is the same courtesy for the path that does restore.
+if [ "$NO_RESTORE" -eq 0 ]; then
+    echo
+    echo "=== Device left on a RELEASE build of $CAPTURE_SHA ==="
+    echo "  $(git -C "$WORKTREE" log -1 --format=%s)"
+    echo "That is the ref this run captured, not necessarily main, and a release"
+    echo "image carries no test suites and no dev instrumentation - screenshot.sh"
+    echo "cannot talk to it. Reflash from the checkout you actually want before"
+    echo "treating the board as normal again."
+fi
 
 echo
 echo "Report: $OUT_MD"

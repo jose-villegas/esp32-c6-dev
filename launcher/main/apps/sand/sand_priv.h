@@ -614,8 +614,8 @@ tick_decay(sand_t* s, uint8_t* row, int x, int y, cell_t* grain, const material_
 /* OPT-IN, for the reason sand_work_counters.h spells out: development
  * alone puts these in build.diag, the capture build, and an instrument
  * that shifts every measurement is worse than none. CONFIG_LAUNCHER_
- * SAND_PASS_GATES already `select`s LAUNCHER_DEVELOPMENT, so the guard
- * checks only this option. Kept separate from the work counters: the
+ * SAND_PASS_GATES cannot be set without LAUNCHER_DEVELOPMENT, so the
+ * guard checks only this option. Kept separate from the work counters: the
  * gates measure TIME, the counters measurably perturb codegen, so one
  * option covering both would perturb exactly what the gates measure. */
 #if CONFIG_LAUNCHER_SAND_PASS_GATES
@@ -623,6 +623,27 @@ extern volatile bool sand_step_gate_main_sweep;
 extern volatile bool sand_step_gate_cross_flow;
 extern volatile bool sand_step_gate_gas;
 extern volatile bool sand_step_gate_reactions;
+
+/* Splits cross-flow itself: this one keeps the per-cell WALK and its liquid
+ * mask test and suppresses only the transfer work they lead to, so the walk's
+ * own share can be read against the whole pass. Volatile for the same reason
+ * the others are, and here it is load-bearing - an `#if` would let the
+ * compiler see the work is unreachable and delete the walk with it, which is
+ * how a previous code-skip probe in this campaign measured nothing. */
+extern volatile bool sand_step_gate_xflow_body;
+
+/* Splits the main sweep the way sand_step_gate_xflow_body splits cross-flow:
+ * keeps step_one_block()'s per-cell walk, suppresses only the
+ * step_one_grain() move. Volatile for the same reason - an `#if` would let
+ * the compiler prove the walk unreachable and delete it too. */
+extern volatile bool sand_step_gate_sweep_body;
+
+/* Splits the gas pass, which the fire-scene decomposition put at 56% of the
+ * app's most expensive scene (bd esp32c6-dp8) while being 1 us on water. Gas
+ * has two halves like the liquid passes do - a rise sweep and an equalise -
+ * and nothing has ever measured which one costs. */
+extern volatile bool sand_step_gate_gas_rise;
+extern volatile bool sand_step_gate_gas_equalise;
 
 /* Wraps a pass's call site in `if (sand_step_gate_<name>)` when compiled in,
  * and in nothing at all otherwise - a release build's sand_step() has no
@@ -665,6 +686,11 @@ void sand_step_reactions(sand_t* s);
  * stage of step_one_reacting_row()'s (sand_reactions.c) per-cell dispatch,
  * called across the file boundary the same way sand_step_reactions() above
  * is called from sand.c. */
+/* Exact lattice-cell count for a disc of radius r (sand_impulse.c). Declared
+ * here rather than left static so the suite can check the shipped table
+ * against a direct count, which is the only way that table is verified. */
+int sand_disc_count(int radius);
+
 bool step_one_falling_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r);
 bool step_one_conducting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r);
 bool step_one_rooting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r);
@@ -673,9 +699,6 @@ bool step_one_sprouting_cell(sand_t* s, int x, int y, int w, int h, const reacti
 bool step_one_budding_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r);
 bool step_one_withering_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r);
 bool step_one_growing_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r);
-
-bool move_liquid_grain(sand_t* s, uint8_t* row, uint8_t* prow, int x, int y, int dx, int dy, const int* slide_a,
-                       const int* slide_b, cell_t grain, uint8_t mat_id);
 
 /* A pool's true perpendicular to gravity rarely lines up with a ring
  * direction - bracketed between an axis ray (ax) and the diagonal
@@ -713,7 +736,7 @@ void step_impulses(sand_t *s, int dx, int dy);
  * inlining, or duplicates flash). Shipped: _impl versions stay static
  * inline here; sand_gas.c calls thin non-inline wrappers in sand.c,
  * keeping the hot path inlined, at most two flash copies. See
- * docs/Sand/Simulation-Lessons.md. */
+ * docs/sand/Simulation-Lessons.md. */
 
 /* Static materials never yield regardless of density, so a wall stays a
  * wall - the general "yields to denser" rule below has this one

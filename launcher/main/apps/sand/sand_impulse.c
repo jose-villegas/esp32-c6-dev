@@ -21,41 +21,56 @@
 
 #include "sand_priv.h"
 
-/* Integer floor(sqrt(v)) for exact_disc_count() - Newton's method, converges
- * quickly (v ≤ grid dimension squared, a few hundred thousand). Not the same
- * as tilt.c's isqrt64(), which is static and for int64_t accelerometer
- * readings. A smaller, local version is more efficient. */
-static int isqrt_floor(int v)
+/* Exact number of lattice cells inside a disc of radius r - every cell with
+ * dx*dx + dy*dy <= r*r. displace_disc() wants it only as a scalar, to size
+ * `keep` against the room left in the impulse buffer.
+ *
+ * A TABLE, because it is a pure function of one small integer and every radius
+ * a caller can reach is bounded: water's splash decays from 20, gunpowder
+ * blasts at 20, lava bursts at 12, and the app's own detonate reaches 25 at
+ * ULTRA quality. So the lookup answers every call the tree can make today in a
+ * single load. */
+#define DISC_COUNT_MAX_RADIUS 32
+
+static const uint16_t disc_counts[DISC_COUNT_MAX_RADIUS + 1] = {
+       1,    5,   13,   29,   49,   81,  113,  149,
+     197,  253,  317,  377,  441,  529,  613,  709,
+     797,  901, 1009, 1129, 1257, 1373, 1517, 1653,
+    1793, 1961, 2121, 2289, 2453, 2629, 2821, 3001,
+    3209,
+};
+
+/* The out-of-range path, and the reason this file no longer carries an integer
+ * square root at all. As |dy| grows the widest x can only shrink, so ONE
+ * monotone walk finds every row's half-width using multiplies and compares -
+ * no division, no sqrt - and x steps down at most `radius` times across the
+ * whole loop. sand_displace() is public, so a radius past the table is
+ * reachable even though nothing in the tree does it. */
+static int disc_count_walk(int radius)
 {
-    if (v <= 0) {
-        return 0;
+    const int r2 = radius * radius;
+    int count = 0;
+    int x = radius;
+
+    for (int dy = 0; dy <= radius; dy++) {
+        while (x > 0 && x * x + dy * dy > r2) {
+            x--;
+        }
+        const int row = 2 * x + 1;
+        count += (dy == 0) ? row : 2 * row;   /* +dy and -dy are symmetric */
     }
-    int x = v;
-    int y = (x + 1) / 2;
-    while (y < x) {
-        x = y;
-        y = (x + v / x) / 2;
-    }
-    return x;
+    return count;
 }
 
-/* Exact lattice cell count inside a disc radius r; sum of 2*floor(sqrt(r*r -
- * dy*dy)) + 1 for each row dy from -r to r, in O(r) integer square roots. */
-static int exact_disc_count(int radius)
+int sand_disc_count(int radius)
 {
     if (radius < 0) {
         return 0;
     }
-    const int r2 = radius * radius;
-    int count = 0;
-    for (int dy = -radius; dy <= radius; dy++) {
-        const int rem = r2 - dy * dy;
-        if (rem < 0) {
-            continue;
-        }
-        count += 2 * isqrt_floor(rem) + 1;
+    if (radius <= DISC_COUNT_MAX_RADIUS) {
+        return disc_counts[radius];
     }
-    return count;
+    return disc_count_walk(radius);
 }
 
 /* Forward-declared: the shared implementation behind both sand_impulse()
@@ -111,6 +126,17 @@ static void queue_outward_impulse(sand_t *s, int cx, int cy, int dx, int dy,
                        SAND_IMPULSE_SPEED_RAMP);
 }
 
+/* Ordinary materials each have their own materials[] row, so density()
+ * already differs per material; every extended static (ice, metal, plant,
+ * leaf, root, ...) shares ONE row instead (cell >> 3 - see
+ * MATERIAL_ROW's own comment), so reaction_t.dislodge_density is the only
+ * way one of them can be tougher or more brittle than the rest. */
+static int dislodge_density(cell_t cell)
+{
+    const uint8_t override = reaction_of(cell)->dislodge_density;
+    return override != 0 ? override : material_of(cell)->density;
+}
+
 /* SHARED IMPLEMENTATION behind sand_impulse() and sand_explode()'s own
  * annulus seeding, so the bounds/empty/buffer-full checks stay in one
  * place. `allow_dislodge_static` and `ramp` (speed decay) differ per
@@ -144,8 +170,9 @@ static void queue_flying_grain(sand_t *s, int x, int y, int dir, int speed,
 
     /* WALL CANNOT BE THROWN BY DEFAULT, any more than one can be entered -
      * can_impulse_enter() gates the DESTINATION, this gates the SOURCE.
-     * `allow_dislodge_static` uses `255 - density` for chance: LOWER
-     * density means HIGHER chance. */
+     * `allow_dislodge_static` uses `255 - dislodge_density()` for chance:
+     * LOWER density means HIGHER chance - see that helper's own comment
+     * for why an extended static needs its own override. */
     if (material_of(cell)->kind == KIND_STATIC) {
         if (!allow_dislodge_static) {
             return;
@@ -154,7 +181,7 @@ static void queue_flying_grain(sand_t *s, int x, int y, int dir, int speed,
          * sand_impulse_dislodge()'s caller, which wants a KIND_STATIC
          * target moved unconditionally rather than toughness-scaled. */
         if (!guaranteed_dislodge) {
-            const int chance = 255 - (int)material_of(cell)->density;
+            const int chance = 255 - dislodge_density(cell);
             if ((int)(rng_next(&s->rng) & 0xFF) >= chance) {
                 return;   /* the roll failed - the wall holds, same as always */
             }
@@ -239,14 +266,14 @@ static void displace_disc(sand_t *s, int cx, int cy, int radius,
      * SEQUENCE cells are offered in, never which cells qualify. */
     const int r2 = radius * radius;
 
-    /* `disc_count` is exact_disc_count()'s own EXACT count, not a safe
+    /* `disc_count` is sand_disc_count()'s own EXACT count, not a safe
      * over-estimate - fine for sizing the buffer itself, but an overshoot
      * would compute `keep` too low for small discs. `keep` is sized
      * against `room`, not `s->impulse_max` - DO NOT simplify: a second
      * displacement mid-arc would otherwise size its density as if the
      * whole buffer were free - see
      * test_two_overlapping_blasts_share_the_buffer_evenly. */
-    const int disc_count = exact_disc_count(radius);
+    const int disc_count = sand_disc_count(radius);
     const int room = s->impulse_max - s->impulse_count;
     const int keep = (disc_count < room) ? disc_count : room;
     int accum = 0;
@@ -513,8 +540,8 @@ static void impulse_charge_displacement(sand_t *s, impulse_t *entry,
 /* The flight pass: every entry in s->impulse_buf either moves one cell
  * along its queued direction, waits another turn, or is finally dropped.
  * Called from sand_step(), immediately before finalize_settling() - see
- * docs/Sand/Explosion-Plan.md's "Where the pass runs, and why it must be
- * LAST": running after every pass that can move a cell keeps an entry's
+ * docs/sand/Impulse-Mechanics.md's "Why the flight pass runs LAST": running
+ * after every pass that can move a cell keeps an entry's
  * position honest, and turns a plain outward push into a ballistic arc
  * for free, since gravity has already pulled by the time this runs. */
 

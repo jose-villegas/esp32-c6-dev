@@ -1,7 +1,7 @@
 #!/bin/sh
 #
 # Build and run dump_reactions.c, and splice its markdown into the
-# BEGIN/END GENERATED region of docs/Sand/Reaction-Table.md - generated
+# BEGIN/END GENERATED region of docs/sand/Reaction-Table.md - generated
 # fresh from material.c's own tables so it can never go stale the way a
 # hand-transcribed copy can (see report_performance.sh's own top comment,
 # and this file's sibling dump_reactions.c for why that matters more here:
@@ -19,7 +19,7 @@
 # hand, outside dump_reactions.c's reach, directly in the doc. An earlier
 # version of this script wrote the generator's output over the WHOLE file
 # ("$OUT_BIN" > "$OUT_MD"), which deleted that hand-written material on
-# every regenerate and left docs/Sand/Reaction-Table.md permanently unable
+# every regenerate and left docs/sand/Reaction-Table.md permanently unable
 # to pass --check (either the check fails on the hand-written lines, or
 # regenerating silently destroys them - see the issue for the full story).
 #
@@ -53,7 +53,7 @@ MAIN_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd)
 LAUNCHER_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/../../../.." && pwd)
 REPO_ROOT=$(CDPATH= cd -- "$LAUNCHER_DIR/.." && pwd)
 
-OUT_MD="$REPO_ROOT/docs/Sand/Reaction-Table.md"
+OUT_MD="$REPO_ROOT/docs/sand/Reaction-Table.md"
 BUILD_DIR="$SCRIPT_DIR/build"
 
 # Literal marker text - must match dump_reactions.c's main() exactly
@@ -113,7 +113,7 @@ TMP_MD="$BUILD_DIR/Reaction-Table.generated.md"
 # (this script's own design brief) means in practice.
 if [ ! -f "$OUT_MD" ] || ! grep -qF "$BEGIN_MARK" "$OUT_MD" ||
    ! grep -qF "$END_MARK" "$OUT_MD"; then
-    echo "docs/Sand/Reaction-Table.md is missing, or has no" \
+    echo "docs/sand/Reaction-Table.md is missing, or has no" \
          "'$BEGIN_MARK' / '$END_MARK' markers." >&2
     echo "This script only ever replaces the text BETWEEN those two" \
          "markers - restore them (see dump_reactions.c's main() for the" \
@@ -135,14 +135,14 @@ awk -v b="$BEGIN_MARK" -v e="$END_MARK" '
 if [ "${1:-}" = "--check" ]; then
     if ! diff -u "$CUR_REGION" "$TMP_MD"; then
         echo >&2
-        echo "docs/Sand/Reaction-Table.md's generated region (between" \
+        echo "docs/sand/Reaction-Table.md's generated region (between" \
              "$BEGIN_MARK and $END_MARK) is stale - run" \
              "main/apps/sand/tools/report_reactions.sh and commit the" \
              "result. Hand-written material outside that region is never" \
              "touched by either command." >&2
         exit 1
     fi
-    echo "docs/Sand/Reaction-Table.md's generated region is current."
+    echo "docs/sand/Reaction-Table.md's generated region is current."
     exit 0
 fi
 

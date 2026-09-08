@@ -359,7 +359,7 @@ step_one_conducting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t
     return true;
 }
 
-/* ROOT cell consumes soil moisture with chance, docs/Sand/Sand-Simulation.md */
+/* ROOT cell consumes soil moisture with chance, docs/sand/Sand-Simulation.md */
 
 /* Root does not need stem's machinery. Uses existing resource bound. */
 

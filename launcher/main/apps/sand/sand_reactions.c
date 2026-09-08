@@ -66,7 +66,7 @@
  * and adding three more. */
 
 /* HONESTY: All but PAIR_DENSER use `theirs`. See top comment and
- * docs/Sand/Reaction-Table.md. */
+ * docs/sand/Reaction-Table.md. */
 
 /* Consistent lookup shape for every consumer. PAIR_DENSER is genuinely
  * pairwise. */
@@ -968,7 +968,7 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
     const bool per_material = s->evaporates < 0;
     const int evaporates = per_material ? r->evaporates : s->evaporates;
     if (evaporates != 0 && (int)(rng_next(&s->rng) & 0xFF) < evaporates
-        && (!per_material || (rng_next(&s->rng) % 60) == 0)) {
+        && (!per_material || (rng_next(&s->rng) & 63u) == 0)) {
         const size_t at = (size_t)y * (size_t)w + (size_t)x;
         place_reacted(s, x, y, at, MAT_GAS);
         return true;

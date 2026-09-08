@@ -10,7 +10,7 @@ parallax and 2D lighting.
 
 Every number below that is not marked *estimate* is measured, and its
 source is named. The house rule from
-[Optimization-Playbook.md](Notes/Optimization-Playbook.md) applies to this
+[Optimization-Playbook.md](notes/Optimization-Playbook.md) applies to this
 document too: a plausible explanation of where time goes is not a measured
 one, and every phase ends with a number, not a feeling.
 
@@ -215,7 +215,7 @@ Three things fall out of that table:
    interlacing, no runtime allocation, spans: the C6 can run all of it.
 
 The historical breakdown in
-[Display-and-Rendering.md](Notes/Display-and-Rendering.md#the-cube) says
+[Display-and-Rendering.md](notes/Display-and-Rendering.md#the-cube) says
 the same thing in numbers: clear 5.2 ms, rasterize 28.1 ms, blit 25.0 ms,
 15.5 fps. Those figures predate `-O2` and the 40 MHz retune and have never
 been re-measured; `suite_cube_perf.c` exists to produce the current ones
@@ -946,7 +946,7 @@ the beads issues are the whole contract. Rules for each role:
 1. Read the issue's `bd show` in full, including its notes, then only the
    sections of this document it names, the three rules in
    [Launcher-Architecture.md](Launcher-Architecture.md), and
-   [Optimization-Playbook.md](Notes/Optimization-Playbook.md). Nothing
+   [Optimization-Playbook.md](notes/Optimization-Playbook.md). Nothing
    else is required reading.
 2. The issue's acceptance criteria are the definition of done. If a
    criterion cannot be met, say so in the issue notes and stop; do not
@@ -994,11 +994,11 @@ the beads issues are the whole contract. Rules for each role:
 
 - [Launcher-Architecture.md](Launcher-Architecture.md) — the three rules
   band mode has to respect.
-- [Notes/Display-and-Rendering.md](Notes/Display-and-Rendering.md) — every
+- [notes/Display-and-Rendering.md](notes/Display-and-Rendering.md) — every
   bus and dirty-tracking number cited above, and the parked ideas.
-- [Notes/Optimization-Playbook.md](Notes/Optimization-Playbook.md) — the
+- [notes/Optimization-Playbook.md](notes/Optimization-Playbook.md) — the
   code-shape rules a new renderer will hit.
-- [Notes/Board-and-Memory.md](Notes/Board-and-Memory.md) — the memory
+- [notes/Board-and-Memory.md](notes/Board-and-Memory.md) — the memory
   budget band mode is designed against.
-- [Settings-App-Plan.md](Settings-App-Plan.md) and beads esp32c6-rpt — the
+- [Settings-App-Plan.md](plans/Settings-App-Plan.md) and beads esp32c6-rpt — the
   mode switch the framebuffer geometry lands in.

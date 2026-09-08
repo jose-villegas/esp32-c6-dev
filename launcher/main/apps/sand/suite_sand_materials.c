@@ -867,7 +867,7 @@ static void test_water_falling_onto_water_also_queues_a_small_displacement(void)
      * Stack protection fault and reboot-looped the whole self-test before
      * it could reach any frame-budget test. That is the same bug, in this
      * same file, that the sixth tuning attempt fixed once already - see
-     * docs/Sand/Performance-Tuning-Attempts.md - and the same fix: every
+     * docs/sand/Performance-Tuning-Attempts.md - and the same fix: every
      * other fixture here mallocs, and so must this one. */
     impulse_t *drop_impulse_buf = malloc(4096 * sizeof *drop_impulse_buf);
     TEST_ASSERT_NOT_NULL_MESSAGE(drop_impulse_buf,
@@ -952,7 +952,7 @@ static void test_a_water_splash_actually_opens_a_gap(void)
      * Stack protection fault and reboot-looped the whole self-test before
      * it could reach any frame-budget test. That is the same bug, in this
      * same file, that the sixth tuning attempt fixed once already - see
-     * docs/Sand/Performance-Tuning-Attempts.md - and the same fix: every
+     * docs/sand/Performance-Tuning-Attempts.md - and the same fix: every
      * other fixture here mallocs, and so must this one. */
     impulse_t *buf = malloc(4096 * sizeof *buf);
     TEST_ASSERT_NOT_NULL_MESSAGE(buf,

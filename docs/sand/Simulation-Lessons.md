@@ -3,7 +3,7 @@
 Part of the falling-sand app's own documentation folder - see
 [`README.md`](README.md) for the full set. Sits alongside, and draws on,
 the platform notes for the Waveshare ESP32-C6-Touch-AMOLED-1.8 at
-[`../Notes/README.md`](../Notes/README.md).
+[`../notes/README.md`](../notes/README.md).
 
 This is the discovery narrative for how the simulation itself was
 originally built - the bugs found and the reasoning behind each fix, in
@@ -23,7 +23,7 @@ ends: [`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md).
 
 The automaton runs a 184x224 grid (a cell per 2x2 pixels - a cell per pixel
 would be 165 KB of grid, and the framebuffer has already taken 322 of the
-chip's ~424 KB, see [Board-and-Memory.md](../Notes/Board-and-Memory.md)). Worst case is
+chip's ~424 KB, see [Board-and-Memory.md](../notes/Board-and-Memory.md)). Worst case is
 a grid half full of *falling* grains, where every one attempts a move; a
 settled pile is far cheaper.
 
@@ -48,7 +48,7 @@ unsigned compare.
 ## A variable framerate needs a fixed timestep
 
 Worth writing down, because partial updates *created* this problem (see
-[Display-and-Rendering.md](../Notes/Display-and-Rendering.md)).
+[Display-and-Rendering.md](../notes/Display-and-Rendering.md)).
 
 A grain moves one cell per step, so steps-per-second is literally how fast sand
 falls. Stepping once per frame ties that to the framerate - survivable while the
@@ -63,7 +63,7 @@ still.
 
 The general lesson: **anything whose rate matters must be driven by elapsed
 time, not by frame count.** The tilt filter already was, for the same reason -
-see [Input-and-Sensors.md](../Notes/Input-and-Sensors.md).
+see [Input-and-Sensors.md](../notes/Input-and-Sensors.md).
 
 ---
 
@@ -275,7 +275,7 @@ gravity is**, so the simulation had exactly two speeds: full and stopped. Sand
 poured at the same rate down a 5-degree slope as a vertical one.
 
 `tilt_strength()` supplies the missing dimension - how much of a g lies in the
-plane, which is sin of the tilt (see [Input-and-Sensors.md](../Notes/Input-and-Sensors.md))
+plane, which is sin of the tilt (see [Input-and-Sensors.md](../notes/Input-and-Sensors.md))
 - and the frame loop scales its step rate by it. That is the actual physics (a
 grain on a tray is driven by `g·sin(theta)`), and it means tipping the device
 flat brings the sand smoothly to rest.
@@ -402,10 +402,10 @@ its current numbers.
 - [`Shading-and-Colour.md`](Shading-and-Colour.md) — the same
   discovery-narrative format, for how a material's variant becomes a
   pixel rather than how it moves.
-- [Display-and-Rendering.md](../Notes/Display-and-Rendering.md) — the
+- [Display-and-Rendering.md](../notes/Display-and-Rendering.md) — the
   dirty-tracking machinery this depends on.
-- [Input-and-Sensors.md](../Notes/Input-and-Sensors.md) — the tilt and
+- [Input-and-Sensors.md](../notes/Input-and-Sensors.md) — the tilt and
   shake signals consumed here.
-- [Optimization-Playbook.md](../Notes/Optimization-Playbook.md) — the
+- [Optimization-Playbook.md](../notes/Optimization-Playbook.md) — the
   `static inline`/`objdump` finding above generalised into a
   board-agnostic technique.

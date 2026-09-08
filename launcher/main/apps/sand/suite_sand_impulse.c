@@ -33,13 +33,54 @@
  *
  * sand_explode() throws grains outward one cell per step, in a bounded
  * transient list rather than a per-cell velocity field - see
- * docs/Sand/Explosion-Plan.md, which this whole section implements.
+ * docs/sand/Impulse-Mechanics.md, which this whole section implements.
  */
 
 /* One entry per cell of the 8x8 fixture grid - big enough that no test below
  * needs to think about the cap, except the one written specifically to
  * exercise it (which uses its own, deliberately tiny buffer instead). */
 static impulse_t impulse_buf[W * H];
+
+/* THE ONLY CHECK THE BAKED DISC-COUNT TABLE GETS, and deliberately by a
+ * different algorithm: this counts lattice points one cell at a time instead
+ * of restating the closed form the table was generated from. A table checked
+ * against its own generator's arithmetic proves only that the arithmetic was
+ * copied. Runs past DISC_COUNT_MAX_RADIUS so the division-free walk that
+ * answers out-of-range radii is covered too. */
+static void test_the_disc_count_table_matches_a_direct_lattice_count(void)
+{
+    int first_bad = -1;
+    int expected_there = 0, got_there = 0;
+
+    for (int r = 0; r <= 40; r++) {
+        int expect = 0;
+        for (int dy = -r; dy <= r; dy++) {
+            for (int dx = -r; dx <= r; dx++) {
+                if (dx * dx + dy * dy <= r * r) {
+                    expect++;
+                }
+            }
+        }
+        const int got = sand_disc_count(r);
+        if (got != expect && first_bad < 0) {
+            first_bad = r;
+            expected_there = expect;
+            got_there = got;
+        }
+    }
+
+    /* Reported as the RADIUS, not the count - "Expected -1 Was 17" names the
+     * entry to go and look at, which a mismatched cell total would not. */
+    TEST_ASSERT_EQUAL_INT_MESSAGE(-1, first_bad,
+        "sand_disc_count() disagrees with a direct lattice count at this "
+        "radius - the value printed as 'Was' is the radius that failed");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(expected_there, got_there,
+        "and these are the counts it disagreed by, at that radius");
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, sand_disc_count(-1),
+        "a negative radius encloses no cells - displace_disc() leans on this "
+        "instead of guarding its own caller");
+}
 
 /* Written FIRST, because it is what the plan calls out as forcing the actual
  * design decision: "stop when blocked" (what this implements) versus a
@@ -136,9 +177,9 @@ static void test_a_blast_inside_a_sealed_vessel_stays_inside_it(void)
  * cells away) sits well inside the annulus and the farthest (x=6, three
  * cells away) still does. Every wall cell this radius reaches gets its own
  * independent density roll (see queue_flying_grain()'s own comment in
- * sand.c) - stone's chance is 55-in-256 (~21%) per cell, and enough of the
- * box wall falls inside this annulus that at least one succeeding is the
- * expected outcome, not a coin flip on a single cell.
+ * sand_impulse.c) - stone's chance is 74-in-256 (~29%) per cell, and enough
+ * of the box wall falls inside this annulus that at least one succeeding is
+ * the expected outcome, not a coin flip on a single cell.
  *
  * CHECKED AGAINST THE WALL'S OWN ORIGINAL CELLS, not "did anything land
  * outside the box" - a dislodged KIND_STATIC entry now ALSO falls under
@@ -1489,7 +1530,7 @@ static void test_a_chunk_stacked_on_an_in_flight_chunk_waits_instead_of_settling
  * a solid does not ------------------------------------------------------- */
 
 /* AN ORDINARY, NEVER-THROWN KIND_STATIC CELL gets none of the above - no
- * sand_impulse()/sand_impulse_dislodge() call here at all, so this cell is
+ * sand_impulse()/sand_impulse_dislodge() call on it here at all, so it is
  * never added to s->impulse_buf and step_impulses() never looks at it. The
  * main sweep (sand_step(), sand.c) skips KIND_STATIC outright by design -
  * that is what makes stone or glass hold its shape - so a static cell
@@ -1500,10 +1541,15 @@ static void test_a_chunk_stacked_on_an_in_flight_chunk_waits_instead_of_settling
  * into ordinary movement instead - see the drift block's own comment
  * (step_impulses(), sand.c) for why that generalisation is explicitly not
  * what this feature is. */
-static void test_an_ordinary_static_solid_still_does_not_sink_into_liquid_or_powder(void)
+/* BOTH SWEEP PARITIES, because one proves nothing. sand_step_liquids()
+ * flips s->liquid_flip every step and cross-flow takes its row order from
+ * it, so a scene reaches both orders on a real board; a fixture starting at
+ * the default only ever exercises one. Run with `flip` both ways. */
+static void ordinary_static_solid_scene(bool flip)
 {
     fixture();
     sand_enable_impulses(&s, impulse_buf, W * H);
+    s.liquid_flip = flip;
 
     sand_set(&s, 2, 0, STONE);
     for (int y = 1; y < H; y++) {
@@ -1517,6 +1563,21 @@ static void test_an_ordinary_static_solid_still_does_not_sink_into_liquid_or_pow
 
     for (int i = 0; i < H; i++) {
         sand_step(&s, 0, 1000, 0);
+
+        /* CHECKED EVERY STEP, AND BY KIND, not once at the end against a
+         * count of zero. The water column here spreads, falls and lands on
+         * itself, and water landing on water is exactly what
+         * splash_displace() (sand_liquid.c) queues an impulse for - so the
+         * buffer is legitimately non-empty mid-run whichever way the sweep
+         * runs. What must never appear in it is a KIND_STATIC entry. */
+        for (int q = 0; q < s.impulse_count; q++) {
+            TEST_ASSERT_NOT_EQUAL_MESSAGE(KIND_STATIC,
+                material_of(s.impulse_buf[q].cell)->kind,
+                "nothing static here was ever thrown, so no KIND_STATIC "
+                "cell should ever have been queued into impulse tracking "
+                "- it is IMPULSE that earns the sinking this feature "
+                "adds, not merely being a solid");
+        }
     }
 
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(MAT_STONE,
@@ -1528,9 +1589,12 @@ static void test_an_ordinary_static_solid_still_does_not_sink_into_liquid_or_pow
         CELL_MATERIAL(sand_at(&s, 5, 0)),
         "same for a powder - an ordinary KIND_STATIC cell must still just "
         "sit exactly where it was placed");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(0, s.impulse_count,
-        "nothing here was ever thrown, so nothing should ever have been "
-        "queued into impulse tracking in the first place");
+}
+
+static void test_an_ordinary_static_solid_still_does_not_sink_into_liquid_or_powder(void)
+{
+    ordinary_static_solid_scene(false);
+    ordinary_static_solid_scene(true);
 }
 
 /* --- Rung 1: medium drag on a thrown KIND_STATIC chunk --------------------
@@ -3086,7 +3150,7 @@ static void test_without_a_buffer_explode_does_nothing(void)
  * tracked stone entries total (unchanged - the blast's own dislodge count
  * has nothing to do with how far anything travels afterward), 160 (56.3%)
  * changed direction at least once, 45 (15.8%) at least twice, 3 (1.1%)
- * three times - see docs/Sand/Sand-Simulation.md for the before/after
+ * three times - see docs/sand/Sand-Simulation.md for the before/after
  * table this rung is judged against; a real shift in the >= 1 bucket (150
  * before, 160 now) from entries that used to run out of ramp mid-gap and
  * now cross with speed to spare.
@@ -3141,7 +3205,7 @@ static void ricochet_measure_seed(uint8_t *cells, impulse_t *buf,
     sand_explode(&g, RICOCHET_CX, RICOCHET_CY, RICOCHET_RADIUS);
 
     /* static, not a stack array - see check_stack_usage.py's own gate
-     * (docs/Sand/Performance-Tuning-Attempts.md): this helper runs on the
+     * (docs/sand/Performance-Tuning-Attempts.md): this helper runs on the
      * device's 3584-byte main task stack too (the on-device selftest
      * links every suite), and RICOCHET_MAX_TRACK copies of every array
      * below pushed a stack-local version of this function well past the
@@ -4196,6 +4260,7 @@ static void test_shaking_spreads_a_pile_sideways(void)
 
 void run_sand_impulse_suite(void)
 {
+    RUN_TEST(test_the_disc_count_table_matches_a_direct_lattice_count);
     RUN_TEST(test_a_blast_inside_a_sealed_vessel_stays_inside_it);
     RUN_TEST(test_a_strong_close_blast_can_breach_a_wall);
     RUN_TEST(test_a_dislodged_wall_keeps_falling_even_if_its_first_push_roll_fails);

@@ -33,7 +33,7 @@
 /* Cells per block, on each axis, for the settled-block tracking behind
  * sand_enable_sleeping() - see the comment there. 32x64 is the only shape,
  * of several measured on real hardware, that clears the settled-screen
- * frame budget - see docs/Sand/Simulation-Lessons.md for the sweep. */
+ * frame budget - see docs/sand/Simulation-Lessons.md for the sweep. */
 #define SAND_BLOCK_W 32
 #define SAND_BLOCK_H 64
 
@@ -169,6 +169,7 @@ typedef struct sand_s {
     int      decay;        /* see sand_set_decay() */
     int      evaporates;   /* see sand_set_evaporates() */
     int      mobility;     /* see sand_set_mobility() */
+    bool     gas_walk;     /* see sand_set_gas_walk() */
     int      flammability; /* see sand_set_flammability() */
     int      conduction;   /* see sand_set_conduction() */
     int      boils;        /* see sand_set_boils() */
@@ -202,7 +203,7 @@ void sand_track_dirty_rows(sand_t *s, uint8_t *rows);
 
 /* Skip settled BLOCKS entirely - without this, a settled grain still fails
  * its gravity-ward move and both slides, every step, to conclude nothing;
- * see docs/Sand/Simulation-Lessons.md. `blocks` is caller-owned,
+ * see docs/sand/Simulation-Lessons.md. `blocks` is caller-owned,
  * ceil(w/SAND_BLOCK_W) * ceil(h/SAND_BLOCK_H) bytes, one flag per block.
  * NULL disables sleeping. A shake, a gravity change, or sand landing in a
  * block wakes it. */
@@ -552,6 +553,19 @@ void sand_set_acid_dilute_mass_bias(sand_t *s, int bias);
  * material-specific figures or another value to override for specific drift
  * tests. */
 void sand_set_mobility(sand_t *s, int chance);
+
+/* Swaps gas movement from the exhaustive powder mover to a biased random walk:
+ * mostly toward the three cells "above" it in gravity's frame, a small chance
+ * straight down, a smaller one sideways - hot gas rather than a grain that
+ * falls upward. Off by default, so behaviour is unchanged until asked.
+ *
+ * The point is cost as much as looks. The powder path TRIES each option in turn
+ * - rise, scatter, two slides, bubble - so its worst case is a packed grid,
+ * where nothing succeeds and every option is paid for. A full screen of fire is
+ * exactly that, and the gas sweep is 49% of it. A walk draws one direction and
+ * probes once, so the cost stops depending on how blocked the neighbourhood is.
+ */
+void sand_set_gas_walk(sand_t *s, bool on);
 #define SAND_MOBILITY_PER_MATERIAL (-1)
 
 /* Advance one frame. (gx, gy) is a gravity vector, direction matters. Zero

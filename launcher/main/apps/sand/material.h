@@ -282,7 +282,7 @@ typedef struct {
      * plain fire - see SAND_GUNPOWDER_BLAST_RADIUS for why 16. Earlier
      * versions blasted the instant a spark touched one grain, which
      * measured as gunpowder spending nearly every blast on itself - see
-     * docs/Sand/Explosion-Plan.md. */
+     * docs/sand/Impulse-Mechanics.md. */
     uint8_t explodes;
 
     /* Only what touches air burns. */
@@ -315,6 +315,12 @@ typedef struct {
     uint8_t dissolves;
 
     uint8_t dissolvable;
+
+    /* Overrides materials[]'s shared density for the dislodge-toughness
+     * roll (queue_flying_grain(), sand_impulse.c) - the only place an
+     * extended static's own density matters, since every extended code
+     * otherwise inherits one shared materials[] row. 0 = no override. */
+    uint8_t dislodge_density;
 
     /* Separate from `residue` to avoid overload. Smoke means generic
      * destruction, not steam or acid. */
@@ -460,7 +466,7 @@ typedef enum {
     MATX_PLANT,
     MATX_LEAF,
 
-    /* METAL: see docs/Sand/Metal-Smelting-Plan.md. Slot 5, now 3. 11 slots
+    /* METAL: see docs/plans/Metal-Smelting-Plan.md. Slot 5, now 3. 11 slots
      * remain. */
     MATX_METAL,
 
