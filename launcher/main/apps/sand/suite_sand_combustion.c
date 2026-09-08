@@ -35,6 +35,10 @@
 static void test_gas_rises_straight_up_under_ordinary_gravity(void)
 {
     fixture();
+    sand_set_gas_walk(&s, false);   /* this straight-line guarantee is the
+                                     * exhaustive mover's property now, not
+                                     * gas's in general - the walk (the
+                                     * default) only drifts up on average */
     sand_set(&s, 3, H - 1, GAS);
 
     sand_step(&s, 0, 1000, 0);
@@ -48,6 +52,10 @@ static void test_gas_rises_straight_up_under_ordinary_gravity(void)
 static void test_gas_falls_when_the_board_is_inverted(void)
 {
     fixture();
+    sand_set_gas_walk(&s, false);   /* this straight-line guarantee is the
+                                     * exhaustive mover's property now, not
+                                     * gas's in general - the walk (the
+                                     * default) only drifts down on average */
     sand_set(&s, 3, 0, GAS);
 
     sand_step(&s, 0, -1000, 0);
@@ -62,6 +70,11 @@ static void test_gas_falls_when_the_board_is_inverted(void)
 static void test_gas_rises_diagonally_under_tilted_gravity(void)
 {
     fixture();
+    sand_set_gas_walk(&s, false);   /* this exact-three-cells guarantee is
+                                     * the exhaustive mover's property now,
+                                     * not gas's in general - the walk (the
+                                     * default) only drifts up-and-left on
+                                     * average */
     sand_set(&s, 5, H - 1, GAS);
 
     for (int i = 0; i < 3; i++) {
@@ -76,6 +89,117 @@ static void test_gas_rises_diagonally_under_tilted_gravity(void)
         "with gravity down-and-right, anti-gravity is up-and-left - three "
         "steps of (-1,-1) should land it exactly three columns left and "
         "three rows up from where it started");
+}
+
+/* The walk (the new default) trades away the exhaustive mover's exact
+ * per-step position for a cheaper, stochastic one - 216/256 of its weight
+ * is up-ish, 72/256 straight up (see sand_gas.c). A single cell's path
+ * proves nothing about that; only the MEAN of many cells over many steps
+ * does, which is what these three tests check instead of an exact cell. */
+
+static void test_gas_drifts_upward_under_ordinary_gravity(void)
+{
+    fixture();
+    const int start_row = H / 2;
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, start_row, GAS);
+    }
+
+    for (int i = 0; i < 12; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    int count   = 0;
+    int row_sum = 0;
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_GAS) {
+                count++;
+                row_sum += y;
+            }
+        }
+    }
+
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(2, count,
+        "setup: several gas cells must survive 12 steps, or a mean over "
+        "too few (or none) proves nothing about the walk's drift");
+    TEST_ASSERT_LESS_THAN_INT_MESSAGE(start_row * count, row_sum,
+        "with ordinary gravity, the walk's up-ish bias must pull the MEAN "
+        "row of surviving gas higher (smaller y) than the row it started "
+        "on, even though no single cell's path is deterministic any more");
+}
+
+static void test_gas_drifts_downward_when_the_board_is_inverted(void)
+{
+    fixture();
+    const int start_row = H / 2;
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, start_row, GAS);
+    }
+
+    for (int i = 0; i < 12; i++) {
+        sand_step(&s, 0, -1000, 0);
+    }
+
+    int count   = 0;
+    int row_sum = 0;
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_GAS) {
+                count++;
+                row_sum += y;
+            }
+        }
+    }
+
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(2, count,
+        "setup: several gas cells must survive 12 steps, or a mean over "
+        "too few (or none) proves nothing about the walk's drift");
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(start_row * count, row_sum,
+        "gas always drifts AGAINST gravity - inverted gravity must pull "
+        "the MEAN row of surviving gas lower (larger y) than the row it "
+        "started on");
+}
+
+static void test_gas_drifts_against_tilted_gravity(void)
+{
+    fixture();
+    const int start_row = H / 2;
+    int start_col_sum   = 0;
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, start_row, GAS);
+        start_col_sum += x;
+    }
+
+    for (int i = 0; i < 12; i++) {
+        sand_step(&s, 1000, 1000, 0);
+    }
+
+    int count   = 0;
+    int row_sum = 0;
+    int col_sum = 0;
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_GAS) {
+                count++;
+                row_sum += y;
+                col_sum += x;
+            }
+        }
+    }
+
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(2, count,
+        "setup: several gas cells must survive 12 steps, or a mean over "
+        "too few (or none) proves nothing about the walk's drift");
+    TEST_ASSERT_LESS_THAN_INT_MESSAGE(start_row * count, row_sum,
+        "gravity is down-and-right, so anti-gravity is up-and-left - the "
+        "MEAN row of surviving gas must have risen (smaller y)");
+    /* Cross-multiplied rather than dividing: mean_col_survived <
+     * mean_col_start  <=>  col_sum/count < start_col_sum/W  <=>
+     * col_sum*W < start_col_sum*count (W and count both positive). */
+    TEST_ASSERT_LESS_THAN_INT_MESSAGE(start_col_sum * count, col_sum * W,
+        "up-and-left also means the MEAN column of surviving gas must "
+        "have moved left (smaller x) from where the row started");
 }
 
 static void test_gas_is_blocked_by_a_stone_ceiling(void)
@@ -237,6 +361,9 @@ static void test_rising_gas_wakes_the_blocks_it_passes_through(void)
 static void test_gas_scatter_can_be_disabled(void)
 {
     fixture();
+    sand_set_gas_walk(&s, false);   /* this straight-line guarantee is the
+                                     * exhaustive mover's property now, not
+                                     * gas's in general */
     sand_set_scatter(&s, 0);
     sand_set(&s, 3, H - 1, GAS);
 
@@ -498,6 +625,9 @@ static void test_fire_burns_out_and_disappears_over_time(void)
 static void test_fire_rises_and_disperses_like_gas(void)
 {
     fixture();
+    sand_set_gas_walk(&s, false);   /* this straight-line guarantee is the
+                                     * exhaustive mover's property now, not
+                                     * KIND_GAS's in general */
     sand_set(&s, 3, H - 1, FIRE);
 
     sand_step(&s, 0, 1000, 0);
@@ -714,6 +844,11 @@ static void test_fire_burning_out_marks_its_row_dirty(void)
 static void test_fire_spreads_through_a_connected_pocket_in_one_step(void)
 {
     fixture();
+    sand_set_gas_walk(&s, false);   /* gas runs before reactions in
+                                     * sand_step() - the walk would scatter
+                                     * this line before reactions ever saw
+                                     * it, so the pass is pinned to isolate
+                                     * reaction scan order, not gas motion */
     sand_set(&s, 0, 0, FIRE);
     for (int x = 1; x < W; x++) {
         sand_set(&s, x, 0, GAS);
@@ -1090,6 +1225,9 @@ static void test_acid_quenching_fire_favours_smoke_over_gas(void)
 static void test_steam_rises_and_disperses(void)
 {
     fixture();
+    sand_set_gas_walk(&s, false);   /* this straight-line guarantee is the
+                                     * exhaustive mover's property now, not
+                                     * KIND_GAS's in general */
     sand_set(&s, 3, H - 1, STEAM);
 
     sand_step(&s, 0, 1000, 0);
@@ -1103,6 +1241,10 @@ static void test_steam_rises_and_disperses(void)
 static void test_creating_steam_arms_the_gas_pass(void)
 {
     fixture();
+    sand_set_gas_walk(&s, false);   /* the second half of this test checks
+                                     * steam rises to an EXACT cell - the
+                                     * exhaustive mover's guarantee, not
+                                     * the walk's */
     sand_set_mobility(&s, 0);   /* keep fire from rising away before
                                  * reactions quenches it this same step -
                                  * mirrors test_fire_is_not_smothered_by_gas's
@@ -1509,6 +1651,9 @@ void run_sand_combustion_suite(void)
     RUN_TEST(test_gas_rises_straight_up_under_ordinary_gravity);
     RUN_TEST(test_gas_falls_when_the_board_is_inverted);
     RUN_TEST(test_gas_rises_diagonally_under_tilted_gravity);
+    RUN_TEST(test_gas_drifts_upward_under_ordinary_gravity);
+    RUN_TEST(test_gas_drifts_downward_when_the_board_is_inverted);
+    RUN_TEST(test_gas_drifts_against_tilted_gravity);
     RUN_TEST(test_gas_is_blocked_by_a_stone_ceiling);
     RUN_TEST(test_gas_disperses_across_a_ceiling);
     RUN_TEST(test_sand_sinks_through_gas);

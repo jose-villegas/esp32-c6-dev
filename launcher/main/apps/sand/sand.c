@@ -165,7 +165,8 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->soak         = 0;    /* nothing soaks unless asked - see
                              * sand_set_soak() */
     s->mobility     = 255;  /* full speed by default - see sand_set_mobility() */
-    s->gas_walk     = false;  /* the exhaustive mover - see sand_set_gas_walk() */
+    s->gas_walk     = true;   /* random walk, 23% cheaper - see sand_set_gas_walk()
+                                * for the deterministic exhaustive mover */
     s->flammability = SAND_FLAMMABILITY_PER_MATERIAL;  /* see sand_set_flammability() */
     s->conduction   = SAND_CONDUCTION_PER_MATERIAL;    /* see sand_set_conduction() */
     s->boils        = SAND_BOILS_PER_MATERIAL;         /* see sand_set_boils() */
