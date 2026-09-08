@@ -317,6 +317,29 @@ static void test_the_water_scene_decomposes_by_pass(void)
  * one gate for a single step - valid because the scene builder and RNG are
  * deterministic, so warmup reproduces the same board and reading a
  * volatile gate costs no RNG draw. */
+/* A FULL SCREEN OF FIRE, the scene that actually costs the most. Water is
+ * 15 ms a step; this one is 254 ms and the gas cascade beside it 347 ms, both
+ * over budget, and neither has ever been decomposed. Same construction as
+ * test_a_full_screen_of_fire_fits_in_the_frame_budget(), factored so the two
+ * cannot drift. */
+static void build_fire_scene(sand_t *real, uint8_t *big, uint8_t *blocks)
+{
+    sand_init(real, big, REAL_W, REAL_H, 19u);
+    sand_enable_sleeping(real, blocks);
+
+    for (int y = 0; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            sand_set(real, x, y, FIRE);
+        }
+    }
+}
+
+/* FEWER WARMUP STEPS THAN WATER, deliberately: fire BURNS OUT. Ten steps of
+ * warmup would time a board that has already decayed to smoke and empty, which
+ * is not the expensive case anyone is trying to fix. Two keeps it alight. */
+#define FIRE_WARMUP_STEPS 2
+#define FIRE_REPEATS      2
+
 #define MAIN_SWEEP_WARMUP_STEPS 10
 
 /* Builds and warms up an identical water board, disables `gate` (or leaves
@@ -368,6 +391,87 @@ static int64_t water_scene_single_step_us(volatile bool *gate)
  * valid for gas/reactions (see water_scene_single_step_us()'s own comment
  * for why the main sweep needs this instead). Prints rather than asserts:
  * inventing a budget would peg a number nobody has argued for. */
+/* Fire's twin of water_scene_single_step_us() - see that function for why one
+ * timed step from a rebuilt board is valid where twenty steps with a pass
+ * disabled is not. */
+static int64_t fire_scene_single_step_us(volatile bool *gate)
+{
+    int64_t best = -1;
+
+    for (int r = 0; r < FIRE_REPEATS; r++) {
+        uint8_t *big    = malloc(REAL_W * REAL_H);
+        uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+        TEST_ASSERT_NOT_NULL(big);
+        TEST_ASSERT_NOT_NULL(blocks);
+
+        sand_t real;
+        build_fire_scene(&real, big, blocks);
+        for (int i = 0; i < FIRE_WARMUP_STEPS; i++) {
+            sand_step(&real, 0, 1000, 0);
+        }
+
+        if (gate != NULL) {
+            *gate = false;
+        }
+        const int64_t start = esp_timer_get_time();
+        sand_step(&real, 0, 1000, 0);
+        const int64_t took = esp_timer_get_time() - start;
+        if (gate != NULL) {
+            *gate = true;
+        }
+
+        free(big);
+        free(blocks);
+
+        if (best < 0 || took < best) {
+            best = took;
+        }
+    }
+    return best;
+}
+
+/* WHERE THE APP'S MOST EXPENSIVE SCENE SPENDS ITS TIME. Every pass gate this
+ * project has, pointed at fire rather than water - reactions are 1% of a water
+ * step and presumed to dominate here, which is exactly the kind of assumption
+ * this campaign keeps getting wrong. Prints; asserts no budget. */
+static void test_the_fire_scene_decomposes_by_pass(void)
+{
+    static const char *const names[] = {
+        "every pass on",  "main sweep off", "sweep body off (walk only)",
+        "cross-flow off", "gas off",        "reactions off",
+    };
+    volatile bool *const gates[] = {
+        NULL,
+        &sand_step_gate_main_sweep,
+        &sand_step_gate_sweep_body,
+        &sand_step_gate_cross_flow,
+        &sand_step_gate_gas,
+        &sand_step_gate_reactions,
+    };
+
+    int64_t whole = 0;
+    for (size_t i = 0; i < sizeof(gates) / sizeof(gates[0]); i++) {
+        const int64_t us = fire_scene_single_step_us(gates[i]);
+        if (i == 0) {
+            whole = us;
+            ESP_LOGI("device_tests", "fire decomposition: %s: %lld us",
+                     names[i], (long long)us);
+        } else {
+            const int64_t saved = whole - us;
+            ESP_LOGI("device_tests",
+                     "fire decomposition: %s: %lld us (%lld us, %lld%% of "
+                     "the whole)", names[i], (long long)us, (long long)saved,
+                     whole > 0 ? (long long)((saved * 100) / whole) : 0);
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(sand_step_gate_main_sweep &&
+                             sand_step_gate_cross_flow && sand_step_gate_gas &&
+                             sand_step_gate_reactions &&
+                             sand_step_gate_sweep_body,
+        "every gate must be back on before the next test in this binary runs");
+}
+
 static void test_the_main_sweep_decomposes_by_pass(void)
 {
     static const char *const names[] = {
@@ -2545,6 +2649,7 @@ void run_sand_perf_suite(void)
 #if CONFIG_LAUNCHER_SAND_PASS_GATES
     RUN_TEST(test_the_water_scene_decomposes_by_pass);
     RUN_TEST(test_the_main_sweep_decomposes_by_pass);
+    RUN_TEST(test_the_fire_scene_decomposes_by_pass);
 #endif
     RUN_TEST(test_a_gravity_flip_on_every_material_at_once_stays_sane);
     RUN_TEST(test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget);
