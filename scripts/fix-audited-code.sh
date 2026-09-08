@@ -8,7 +8,7 @@
 #
 # Two differences from the docs script, both requested for code:
 #   1. Bulk parallel: one fixer call per FILE (not per finding, not
-#      sequential) via --pool / --combo, up to --parallel at once.
+#      sequential), up to --parallel at once.
 #   2. Mandatory review loop, not an optional filter: --review's model looks
 #      at a unified diff of each file's proposed patches and verdicts
 #      VALID/INVALID per patch. Any INVALID goes back to the fixer with the
@@ -21,37 +21,20 @@
 # injected text matches .clang-format rather than whatever the model felt
 # like indenting.
 #
-# --pool picks which combo of models does the bulk fixing (--combo <name>
-# overrides it with any combo by name, for one-off experiments):
-#   local        (default) local-coding -- this workspace's Ollama models via
-#                OmniRoute, free and unlimited. MISRA/cppcheck backlogs run
-#                into the hundreds of findings (see misra_check.sh's own
-#                comment), and firing that many fixer calls at a paid cloud
-#                model in parallel is exactly the kind of bulk load local
-#                models exist to absorb -- the --review model only ever sees
-#                a handful of proposed diffs, not the whole backlog.
-#                WARNING: OmniRoute's own ollama-local provider has no
-#                working connection pool as of 2026-08-31 (confirmed: every
-#                model in it times out at 30s regardless of prompt) -- this
-#                pool is likely to just fail right now. Use --local instead
-#                (below), which bypasses OmniRoute for local models entirely
-#                and calls the Ollama CLI directly; re-test with a trivial
-#                `ollama run` / `omniroute_pool_status` before trusting this
-#                pool again if OmniRoute's own config has since changed.
-#   free         code-fix-free -- zero-marginal-cost API-key providers
-#                (ollama-cloud, deepseek, gemini, nvidia free tiers), local
-#                as final fallback. Higher quality than local alone, but
-#                subject to those providers' free-tier rate limits -- lower
-#                --parallel may be needed to avoid 429s, not higher.
-#   subscription code-fix-subscription -- Claude/Codex/Copilot/Kimi-coding,
-#                covered by a subscription you already pay flat-rate for. No
-#                marginal $ per call, but bulk-parallel use does eat into
-#                your personal daily usage quota on those services.
-#   all          code-fix-all -- union of free + subscription plus a couple
-#                more paid API-key providers. Best quality/throughput
-#                ceiling, real per-call cost on the non-subscription entries.
-# --parallel still defaults conservatively (3): tuned for local's single-GPU
-# contention. Reconsider it for free/subscription/all -- see above.
+# Every model call -- fixer and reviewer -- runs through the Ollama CLI
+# (`ollama run`), so this makes zero network calls to any cloud provider.
+# Fixer defaults to qwen2.5:14b, reviewer to mistral-nemo:latest
+# (LOCAL_FIXER_MODEL / LOCAL_REVIEW_MODEL env vars to override with anything
+# else pulled -- see `ollama list`); two different model families so the
+# review step is a real second opinion, not the same model checking its own
+# work. Both defaults are chosen so their weights alone (~9GB / ~7GB) fit a
+# 16GB card; bigger models like gemma4:26b (~18GB) remain available via
+# LOCAL_REVIEW_MODEL for anyone with VRAM headroom. If local Ollama runs are
+# freezing the machine regardless of model choice, see Model-Delegation-
+# Workflow.md's "A global Ollama setting can make picking a 'small enough'
+# model pointless" -- a stuck 262144 Context Length setting in the Ollama
+# app itself overrides every model's context and is the far more likely
+# culprit. --review overrides just the reviewer's model tag.
 #
 # --worktree runs the whole thing in a fresh `git worktree` (sibling
 # directory) instead of checking out the new branch in place, so your
@@ -95,59 +78,27 @@
 # `git push` -- the branch/worktree is left for you to inspect and push
 # yourself when ready.
 #
-# --local bypasses --pool/--combo/OmniRoute entirely (for both the fixer and
-# the reviewer) and calls Ollama directly (`ollama run`) instead, so the
-# whole run makes zero network calls to any cloud provider. This is
-# deliberately a different path from --pool local's "local-coding" combo:
-# that one still goes through OmniRoute's own ollama-local provider, which
-# has no working connection pool (every model in it timed out identically at
-# 30s on a trivial prompt -- see Model-Delegation-Workflow.md's "Route local
-# through the Ollama CLI directly, not OmniRoute"). Fixer defaults to
-# qwen2.5:14b, reviewer to mistral-nemo:latest (LOCAL_FIXER_MODEL /
-# LOCAL_REVIEW_MODEL env vars to override with anything else pulled -- see
-# `ollama list`); two different model families so the review step is a real
-# second opinion, not the same model checking its own work. Both defaults
-# are chosen so their weights alone (~9GB / ~7GB) fit a 16GB card; bigger
-# models like gemma4:26b (~18GB) remain available via LOCAL_REVIEW_MODEL for
-# anyone with VRAM headroom. If local Ollama runs are freezing the machine
-# regardless of model choice, see Model-Delegation-Workflow.md's "A global
-# Ollama setting can make picking a 'small enough' model pointless" -- a
-# stuck 262144 Context Length setting in the Ollama app itself overrides
-# every model's context and is the far more likely culprit. --review is not
-# required when --local is set (defaults to LOCAL_REVIEW_MODEL); passing
-# --review together with --local overrides just the reviewer's model tag.
-#
 # Usage:
-#   scripts/fix-audited-code.sh --review <model-id>
-#       [--pool local|free|subscription|all | --combo <name>]
+#   scripts/fix-audited-code.sh [--review <model-id>]
 #       [--report <path>] [--exclude <prefix>]... [--worktree]
-#       [--local] [--no-push] [--parallel N] [--rounds N]
+#       [--no-push] [--parallel N] [--rounds N]
 #       [build_dir] [file_filter]
 #
 # Examples:
-#   scripts/fix-audited-code.sh --review claude/claude-sonnet-5
-#   scripts/fix-audited-code.sh --review claude/claude-sonnet-5 --pool free
-#   scripts/fix-audited-code.sh --review claude/claude-sonnet-5 --pool free \
+#   scripts/fix-audited-code.sh --worktree
+#   scripts/fix-audited-code.sh --worktree --no-push
+#   scripts/fix-audited-code.sh --review qwen2.5-coder:32b-instruct-q4_K_M \
 #       --exclude main/apps/ --worktree build.dev "*/main/*"
-#   scripts/fix-audited-code.sh --review claude/claude-sonnet-5 --worktree \
+#   scripts/fix-audited-code.sh --worktree \
 #       --report launcher/tools/results/misra___apps_sand___.txt
-#   scripts/fix-audited-code.sh --local --worktree --no-push
-#
-# --review is mandatory here unless --local is set (unlike fix-audited-
-# docs.sh's optional --review): the reviewer is not a bonus quality gate on
-# this script, it's the thing that makes trusting a bulk-parallel free-model
-# fixer sane.
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
-POOL="local"
-COMBO=""
 REVIEW_MODEL=""
 REPORT=""
 USE_WORKTREE=0
-LOCAL_MODE=0
 LOCAL_FIXER_MODEL="${LOCAL_FIXER_MODEL:-qwen2.5:14b}"
 LOCAL_REVIEW_MODEL="${LOCAL_REVIEW_MODEL:-mistral-nemo:latest}"
 NO_PUSH=0
@@ -170,20 +121,8 @@ while [ "$#" -gt 0 ]; do
       EXCLUDES+=("$2")
       shift 2
       ;;
-    --pool)
-      POOL="$2"
-      shift 2
-      ;;
-    --combo)
-      COMBO="$2"
-      shift 2
-      ;;
     --worktree)
       USE_WORKTREE=1
-      shift
-      ;;
-    --local)
-      LOCAL_MODE=1
       shift
       ;;
     --no-push)
@@ -205,32 +144,8 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-if [ -z "$REVIEW_MODEL" ]; then
-  if [ "$LOCAL_MODE" = "1" ]; then
-    REVIEW_MODEL="$LOCAL_REVIEW_MODEL"
-  else
-    echo "Usage: $0 --review <model-id> [--pool local|free|subscription|all | --combo <name>] [--report <path>] [--exclude <prefix>]... [--worktree] [--local] [--no-push] [--parallel N] [--rounds N] [build_dir] [file_filter]" >&2
-    echo "--review is required unless --local is set (defaults fixer/reviewer to $LOCAL_FIXER_MODEL / $LOCAL_REVIEW_MODEL via Ollama)." >&2
-    exit 1
-  fi
-fi
-
-if [ -z "$COMBO" ]; then
-  if [ "$LOCAL_MODE" = "1" ]; then
-    COMBO="$LOCAL_FIXER_MODEL"
-  else
-    case "$POOL" in
-      local) COMBO="local-coding" ;;
-      free) COMBO="code-fix-free" ;;
-      subscription) COMBO="code-fix-subscription" ;;
-      all) COMBO="code-fix-all" ;;
-      *)
-        echo "Unknown --pool '$POOL' (expected local|free|subscription|all), or pass --combo <name> directly." >&2
-        exit 1
-        ;;
-    esac
-  fi
-fi
+[ -z "$REVIEW_MODEL" ] && REVIEW_MODEL="$LOCAL_REVIEW_MODEL"
+FIXER_MODEL="$LOCAL_FIXER_MODEL"
 
 BUILD_DIR="${POSITIONAL[0]:-build.dev}"
 FILE_FILTER="${POSITIONAL[1]:-*/apps/sand/*}"
@@ -392,21 +307,9 @@ if [ "${#FILE_ENTRIES[@]}" -eq 0 ]; then
   exit 0
 fi
 
-echo "${#FILE_ENTRIES[@]} file(s) with findings to fix (up to $MAX_PARALLEL in parallel, $COMBO fixer, $REVIEW_MODEL review, $MAX_ROUNDS round(s)):"
+echo "${#FILE_ENTRIES[@]} file(s) with findings to fix (up to $MAX_PARALLEL in parallel, $FIXER_MODEL fixer, $REVIEW_MODEL review, $MAX_ROUNDS round(s)):"
 printf '  %s\n' "${FILE_ENTRIES[@]}"
 echo ""
-
-# Pulls choices[0].message.content out of an `omniroute --output json chat`
-# response, same as fix-audited-docs.sh.
-cat > "$TMPDIR/extract-content.js" << "JSEOF"
-const fs = require("fs");
-const text = fs.readFileSync(process.argv[2], "utf8");
-const start = text.indexOf("{");
-const end = text.lastIndexOf("}");
-if (start === -1 || end === -1) { process.exit(1); }
-const envelope = JSON.parse(text.slice(start, end + 1));
-process.stdout.write(envelope.choices[0].message.content);
-JSEOF
 
 # Bracket-depth-aware JSON array extraction (a patch's replace/reason text
 # can itself contain "[" or "]"), same as fix-audited-docs.sh.
@@ -435,13 +338,11 @@ function extractJsonArray(text) {
 module.exports = { extractJsonArray };
 JSEOF
 
-# chat_call PROMPT_FILE OUT_FILE MODEL_ID MAX_TOKENS [REASONING_EFFORT] LOG_FILE
-# Writes the model's raw text response (unwrapped from any provider
-# envelope) to OUT_FILE, appending any failure detail to LOG_FILE.
-# LOCAL_MODE=1 calls Ollama directly instead of OmniRoute -- see the --local
-# comment near the top of this file. Returns nonzero on failure. Runs inside
-# fix_one_file's subshells same as everything else there, so it's defined
-# once here rather than per call site.
+# chat_call PROMPT_FILE OUT_FILE MODEL_ID LOG_FILE -- writes the model's raw
+# text response to OUT_FILE via the Ollama CLI, appending any failure detail
+# to LOG_FILE. Returns nonzero on failure. Runs inside fix_one_file's
+# subshells same as everything else there, so it's defined once here rather
+# than per call site.
 #
 # --think=false is not optional: confirmed live on this machine that
 # reasoning-capable models (gemma4:26b, qwen3.8:27b -- not just the
@@ -454,23 +355,12 @@ JSEOF
 # out over the real array. --think=false suppresses this cleanly for every
 # locally-pulled model tested (reasoning and non-reasoning alike).
 chat_call() {
-  local prompt_file="$1" out_file="$2" model_id="$3" max_tokens="$4" effort="$5" log_file="$6"
-  if [ "$LOCAL_MODE" = "1" ]; then
-    if ! ollama run "$model_id" --think=false < "$prompt_file" > "$out_file" 2>>"$log_file"; then
-      echo "  ollama run $model_id failed" >> "$log_file"
-      return 1
-    fi
-    return 0
-  fi
-  local envelope="$out_file.envelope"
-  local effort_args=()
-  [ -n "$effort" ] && effort_args=(--reasoning-effort "$effort")
-  if ! omniroute --output json chat -m "$model_id" "${effort_args[@]}" --max-tokens "$max_tokens" \
-        --file "$prompt_file" --no-history > "$envelope" 2>>"$log_file"; then
-    echo "  omniroute call failed" >> "$log_file"
+  local prompt_file="$1" out_file="$2" model_id="$3" log_file="$4"
+  if ! ollama run "$model_id" --think=false < "$prompt_file" > "$out_file" 2>>"$log_file"; then
+    echo "  ollama run $model_id failed" >> "$log_file"
     return 1
   fi
-  node "$TMPDIR/extract-content.js" "$envelope" > "$out_file" 2>>"$log_file"
+  return 0
 }
 
 fix_one_file() {
@@ -510,7 +400,7 @@ fix_one_file() {
   } > "$workdir/fix_prompt.txt"
 
   echo "fixing $file" >> "$log"
-  if ! chat_call "$workdir/fix_prompt.txt" "$workdir/fix_content.txt" "$COMBO" 3000 low "$log"; then
+  if ! chat_call "$workdir/fix_prompt.txt" "$workdir/fix_content.txt" "$FIXER_MODEL" "$log"; then
     echo "  fixer call failed" >> "$log"
     echo "[]" > "$workdir/patches.json"
     return 0
@@ -584,7 +474,7 @@ fix_one_file() {
     } > "$workdir/review_prompt_r$round.txt"
 
     echo "  round $round: sending to $REVIEW_MODEL for review" >> "$log"
-    if ! chat_call "$workdir/review_prompt_r$round.txt" "$workdir/review_content_r$round.txt" "$REVIEW_MODEL" 4000 "" "$log"; then
+    if ! chat_call "$workdir/review_prompt_r$round.txt" "$workdir/review_content_r$round.txt" "$REVIEW_MODEL" "$log"; then
       echo "  review call failed -- keeping patches unreviewed" >> "$log"
       return 0
     fi
@@ -644,8 +534,8 @@ fix_one_file() {
       head -c "$MAX_SRC_CHARS" "$file"
     } > "$workdir/revise_prompt.txt"
 
-    echo "  round $round: sending rejected patch(es) back to $COMBO for revision" >> "$log"
-    if ! chat_call "$workdir/revise_prompt.txt" "$workdir/revise_content.txt" "$COMBO" 3000 low "$log"; then
+    echo "  round $round: sending rejected patch(es) back to $FIXER_MODEL for revision" >> "$log"
+    if ! chat_call "$workdir/revise_prompt.txt" "$workdir/revise_content.txt" "$FIXER_MODEL" "$log"; then
       echo "  revise call failed -- keeping already-approved patches only" >> "$log"
       return 0
     fi
@@ -771,7 +661,7 @@ if [ "$USE_WORKTREE" != "1" ]; then
   git checkout -b "$BRANCH"
 fi
 git add $CHANGED_FILES
-git commit -m "fix: resolve static-analysis findings (via $COMBO, reviewed by $REVIEW_MODEL)"
+git commit -m "fix: resolve static-analysis findings (via $FIXER_MODEL, reviewed by $REVIEW_MODEL)"
 
 if [ "$NO_PUSH" = "1" ]; then
   echo ""
