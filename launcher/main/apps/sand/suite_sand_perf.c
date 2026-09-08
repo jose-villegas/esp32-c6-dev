@@ -552,15 +552,16 @@ static void test_the_gas_grain_decomposes_by_phase(void)
     volatile bool *const decay = &sand_step_gate_gas_decay;
     volatile bool *const move  = &sand_step_gate_gas_move;
     volatile bool *const wake  = &sand_step_gate_gas_wake;
+    volatile bool *const eqbody = &sand_step_gate_gas_eq_body;
 
     volatile bool *const all_three[] = { decay, move, wake };
 
     static const char *const names[] = {
         "every phase on", "decay off", "the walk off", "block wake off",
-        "all three off (row filter only)",
+        "all three off (row filter only)", "equalise body off (scan only)",
     };
-    volatile bool *const *const sets[] = { NULL, &decay, &move, &wake, all_three };
-    static const size_t counts[] = { 0, 1, 1, 1, 3 };
+    volatile bool *const *const sets[] = { NULL, &decay, &move, &wake, all_three, &eqbody };
+    static const size_t counts[] = { 0, 1, 1, 1, 3, 1 };
 
     int64_t whole = 0;
     for (size_t i = 0; i < sizeof(sets) / sizeof(sets[0]); i++) {
@@ -577,7 +578,7 @@ static void test_the_gas_grain_decomposes_by_phase(void)
         }
     }
 
-    TEST_ASSERT_TRUE_MESSAGE(*decay && *move && *wake,
+    TEST_ASSERT_TRUE_MESSAGE(*decay && *move && *wake && *eqbody,
         "every gate must be back on before the next test in this binary runs");
 }
 
