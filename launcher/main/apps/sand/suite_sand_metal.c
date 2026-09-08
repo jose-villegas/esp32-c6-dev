@@ -202,9 +202,9 @@ static void test_saturated_dirt_smelts_roughly_eight_times_slower(void)
             "what makes it roughly SOIL_MOISTURE_MAX + 1 times as much "
             "work as bone-dry dirt's single conversion");
     } else {
-        /* Spoiled instead - and, at spoils_chance 235/256, the LIKELY path
-         * for this whole test now (rebalanced 2026-08-31 specifically so
-         * wet dirt reaching metal or stone at all is the rare outcome).
+        /* Spoiled instead. At spoils_chance 77/256 this is no longer the
+         * likely path - wet dirt now smelts about seven times in ten, where
+         * an earlier balance made reaching metal or stone the rare outcome.
          * No lower bound to assert here any more: spoils_chance is
          * unconditional (see its own comment in material.h for why an
          * earlier "spare the first roll" gate could not actually be made
@@ -222,13 +222,14 @@ static void test_saturated_dirt_smelts_roughly_eight_times_slower(void)
  * ambient drying (reaction_t.dries, ticking independently of any heat
  * source) winning every one of SOIL_MOISTURE_MAX levels before heat ever
  * won one would be vanishingly unlikely, guaranteeing steam eventually
- * appeared. That guarantee is GONE since spoils_chance's 2026-08-31
- * rebalances: at 235/256, a saturated cell now has roughly a 92% chance of
+ * appeared. That guarantee is GONE, though less starkly than it was:
+ * at spoils_chance 77/256 a saturated cell has roughly a 30% chance of
  * spoiling straight to sand on the very FIRST successful heat_chance roll
  * it ever gets - unconditional, no "spare the first roll" gate any more
  * (see spoils_chance's own comment in material.h for why that gate could
  * never really be made to work). So for ONE cell, steam appearing at all
- * is now the MINORITY outcome, not a near-certainty - test_dry_dirt_
+ * is no longer near-certain, though at 30% spoiling it is once again the
+ * more common outcome than it was - test_dry_dirt_
  * flaws_into_stone_at_least_sometimes's sibling test proves the STEAM path
  * still exists at all, from a sample large enough that chance is not a
  * factor; this test keeps only the ordering claim that is STILL true
@@ -259,9 +260,9 @@ static void test_watered_dirt_steaming_precedes_resolving_when_it_happens(void)
     TEST_ASSERT_TRUE_MESSAGE(resolved_at >= 0,
         "fixture check: it must eventually resolve");
     if (steamed_at < 0) {
-        return;   /* did not steam this run - now the expected majority
-                   * outcome at spoils_chance 235/256, and there is nothing
-                   * left to assert an ORDER over */
+        return;   /* did not steam this run - still a common outcome at
+                   * spoils_chance 77/256, though no longer the majority one,
+                   * and there is nothing left to assert an ORDER over */
     }
     /* Structurally guaranteed whenever steam DOES appear (see this
      * function's own top comment) - resolving strictly later, whichever
@@ -274,9 +275,9 @@ static void test_watered_dirt_steaming_precedes_resolving_when_it_happens(void)
 }
 
 /* The steam path itself still exists at all - not dead code the previous
- * test can no longer exercise reliably. At spoils_chance 235/256
- * unconditional, a single saturated cell steams before it resolves only
- * on the roughly 8% of first rolls that do NOT immediately spoil (see
+ * test can no longer exercise reliably. At spoils_chance 77/256
+ * unconditional, a single saturated cell steams before it resolves on the
+ * roughly 70% of first rolls that do NOT immediately spoil (see
  * the sequencing test just above for the full reasoning), so a single-
  * cell scene is now the wrong tool to prove the path is live at all -
  * exactly the same shape of problem test_dry_dirt_smelting_reaches_both_
@@ -347,7 +348,7 @@ static void test_wet_dirt_can_still_steam_before_spoiling_at_least_sometimes(voi
         "at least one of many saturated dirt cells against lava must "
         "still steam before spoiling - the drain-then-steam path in "
         "try_heat_transform() must still be reachable even though "
-        "spoils_chance 235/256 makes it the minority outcome; if this "
+        "spoils_chance 77/256 leaves it common but not guaranteed; if this "
         "never fires across STEAM_TEST_PODS independent attempts, either "
         "spoils_chance regressed to 255 (unconditional, path dead) or the "
         "steam emit itself broke");
@@ -358,11 +359,11 @@ static void test_wet_dirt_can_still_steam_before_spoiling_at_least_sometimes(voi
  * pockets side by side, each the same shape as lava_beside_dirt()'s one
  * cell, run until every one of them has resolved. Written when
  * spoils_chance was still 24/256 (~9%), where a single cell spoiling was
- * unlikely enough to need padding against; two rebalances later it sits at
- * 235/256 (~92%, unconditional - no gate any more, see that field's own
- * comment in material.h) and a single pod would already be enough on its
- * own, but PODS pockets costs nothing extra and keeps this test's
- * confidence independent of which exact cell it happens to be. */
+ * unlikely enough to need padding against; it now sits at 77/256 (~30%,
+ * unconditional - no gate any more, see that field's own comment in
+ * material.h), so one pod would usually do, but PODS pockets costs nothing
+ * extra and keeps this test's confidence independent of which exact cell it
+ * happens to be. */
 #define SPOILS_TEST_PODS 6
 static void test_wet_dirt_can_spoil_into_sand_instead_of_smelting(void)
 {
