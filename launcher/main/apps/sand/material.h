@@ -478,7 +478,7 @@ typedef enum {
     MATX_PLANT,
     MATX_LEAF,
 
-    /* METAL: see docs/plans/Metal-Smelting-Plan.md. Slot 5, now 3. 11 slots
+    /* METAL: see docs/sand/Metal.md. Slot 5, now 3. 11 slots
      * remain. */
     MATX_METAL,
 
