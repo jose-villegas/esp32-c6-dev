@@ -406,7 +406,8 @@ const reaction_t reactions[MATERIAL_MAX] = {
             .soaks_to = MAT_DIRT,
 
             .heats_to = MAT_GLASS,
-            .heat_chance = 16, /* 16 balances time. Tune on device. */
+            .heat_chance = 8, /* ~3% a step: vitrifying should be a slow
+                               * change you watch happen, not a flash. */
         },
 
     [MAT_GLASS] =
@@ -438,12 +439,19 @@ const reaction_t reactions[MATERIAL_MAX] = {
         .heats_to    = MATX(MATX_METAL),
         .heat_chance = 10,
 
+        /* METAL IS WHAT SURVIVES THIS ROLL, so the number is the STONE
+         * share: 230/256 stone leaves ~10% metal. Clumped, not sprinkled -
+         * HEAT_FLAW_CLUMP (sand_reactions.c) re-rolls only every fifth cell,
+         * so ore arrives in short veins and one run in ten is metal. */
         .flaw_to     = MAT_STONE,
-        .flaw_chance = 220,
+        .flaw_chance = 230,
 
-        /* Wet dirt reaching metal or stone should be rare. */
+        /* Wet ground now yields to heat more often than it crumbles: 77/256
+         * is about 30%, against the 235 that made wet dirt almost never
+         * produce anything but sand. Digging into damp earth is meant to
+         * be worth doing, not a reason to dry it out first. */
         .spoils_to     = MAT_SAND,
-        .spoils_chance = 235,
+        .spoils_chance = 77,
     },
 
     [MAT_SNOW] =
