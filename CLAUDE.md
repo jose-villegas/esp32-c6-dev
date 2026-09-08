@@ -269,16 +269,15 @@ don't read all of them per session:
 | [`docs/Testing-Guide.md`](docs/Testing-Guide.md) | Host/device test suites, why release builds carry no test code |
 | [`docs/Autana-Rendering-Roadmap.md`](docs/Autana-Rendering-Roadmap.md) | Proposal: the rendering/engine roadmap (band-mode framebuffer, span rasterizer, raycaster, the three target games, S3 port) |
 | [`docs/plans/`](docs/plans) | Not-yet-built plans: `Settings-App-Plan.md`, `Log-Level-Plan.md`, `Metal-Smelting-Plan.md`, `Reaction-Doc-Generator-Plan.md` |
-| [`docs/workflows/Model-Delegation-Workflow.md`](docs/workflows/Model-Delegation-Workflow.md) | Delegating a feature's implementation to a local/free-tier model, review kept on the driving session |
+| [`docs/workflows/Model-Delegation-Workflow.md`](docs/workflows/Model-Delegation-Workflow.md) | Delegating a feature's implementation to a local model, review kept on the driving session |
 
-`scripts/` also has OmniRoute/Ollama-backed doc/code audit automation --
-`audit-docs.sh` and `update-docs.sh` at the core, plus `fix-audited-code.sh`
-/ `fix-audited-docs.sh` (the find/replace-patch fixers, each scopable to one
-app or the whole project) and their single-click launchers
-(`fix-audited-code-free.sh`, `-local.sh`, `-choose-app.sh`;
-`fix-audited-docs-free.sh`, `-local.sh`, `-choose-app.sh`) — each pushes a
-branch for review rather than touching `main` directly; read the header
-comment of the one you need before running it, they're self-documenting.
+`scripts/` also has local-Ollama-backed doc/code audit automation --
+`audit-docs.sh` at the core, plus `fix-audited-code.sh` / `fix-audited-
+docs.sh` (the find/replace-patch fixers, each scopable to one app or the
+whole project) and their single-click launchers (`fix-audited-code-
+local.sh`, `fix-audited-docs-local.sh`) — each pushes a branch for review
+rather than touching `main` directly; read the header comment of the one
+you need before running it, they're self-documenting.
 `scripts/resolve-conflicts-local.sh` auto-resolves git merge conflicts the
 same local-Ollama way, one hunk at a time with a reviewer second opinion,
 but only ever commits if this repo's real test gate (`run_tests.sh` +
@@ -293,15 +292,10 @@ over-long comments the same local-Ollama way, but hands the model one
 comment's PROSE and never a line of code — the rewrite goes back into that
 comment's own span, so a bad generation can only produce a bad sentence, and
 a file that ends up differing in anything but comments is discarded. A
-comment it cannot get under the limit keeps its original text. `--via
-hybrid` tries a free OmniRoute model first, in parallel across the whole
-file, for reasoning this machine cannot run locally at no local-GPU cost —
-but never blindly: an automated check (dropped facts, a fabricated number,
-wholesale unrelated content — OmniRoute's free routing produces all three)
-gates every answer, and anything that fails falls back to the local model.
-`--review` then checks each rewrite for dropped numbers, dropped named
-functions and dropped negations — no model needed for any of that — before
-asking a reviewer model for a verdict on meaning; `--review-packet` writes the
+comment it cannot get under the limit keeps its original text. `--review`
+then checks each rewrite for dropped numbers, dropped named functions and
+dropped negations — no model needed for any of that — before asking a
+reviewer model for a verdict on meaning; `--review-packet` writes the
 prose-only pairs out for a reviewer the script cannot call itself. Expect
 ~45 s per comment, and read the report: a local model does occasionally drop
 a WHY.
