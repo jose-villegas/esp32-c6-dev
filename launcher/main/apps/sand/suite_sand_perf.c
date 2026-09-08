@@ -542,6 +542,45 @@ static void test_the_burning_cell_decomposes_by_phase(void)
         "every gate must be back on before the next test in this binary runs");
 }
 
+/* The gas pass began as the powder sweep with gravity inverted and has never
+ * been taken apart, so this asks the same question of a gas grain that
+ * test_the_burning_cell_decomposes_by_phase asks of a burning one. The
+ * all-three row is the floor: what a gas cell costs when the row loop finds
+ * it and does nothing with it. Prints; asserts no budget. */
+static void test_the_gas_grain_decomposes_by_phase(void)
+{
+    volatile bool *const decay = &sand_step_gate_gas_decay;
+    volatile bool *const move  = &sand_step_gate_gas_move;
+    volatile bool *const wake  = &sand_step_gate_gas_wake;
+
+    volatile bool *const all_three[] = { decay, move, wake };
+
+    static const char *const names[] = {
+        "every phase on", "decay off", "the walk off", "block wake off",
+        "all three off (row filter only)",
+    };
+    volatile bool *const *const sets[] = { NULL, &decay, &move, &wake, all_three };
+    static const size_t counts[] = { 0, 1, 1, 1, 3 };
+
+    int64_t whole = 0;
+    for (size_t i = 0; i < sizeof(sets) / sizeof(sets[0]); i++) {
+        const int64_t us = fire_scene_single_step_multi_us(sets[i], counts[i]);
+        if (i == 0) {
+            whole = us;
+            ESP_LOGI("device_tests", "gas grain: %s: %lld us", names[i], (long long)us);
+        } else {
+            const int64_t saved = whole - us;
+            ESP_LOGI("device_tests",
+                     "gas grain: %s: %lld us (%lld us, %lld%% of the whole)",
+                     names[i], (long long)us, (long long)saved,
+                     whole > 0 ? (long long)((saved * 100) / whole) : 0);
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(*decay && *move && *wake,
+        "every gate must be back on before the next test in this binary runs");
+}
+
 static void test_the_main_sweep_decomposes_by_pass(void)
 {
     static const char *const names[] = {
@@ -2775,6 +2814,7 @@ void run_sand_perf_suite(void)
     RUN_TEST(test_the_main_sweep_decomposes_by_pass);
     RUN_TEST(test_the_fire_scene_decomposes_by_pass);
     RUN_TEST(test_the_burning_cell_decomposes_by_phase);
+    RUN_TEST(test_the_gas_grain_decomposes_by_phase);
 #endif
     /* Ungated: the two gas movers compare through sand_set_gas_walk(), an
      * ordinary API, so this runs in every diagnostics build. */

@@ -671,6 +671,14 @@ extern volatile bool sand_step_gate_burn_flare;
  * aimed at that frame can be sized before it is spent. */
 extern volatile bool sand_step_gate_burn_call;
 
+/* Splits a gas grain the way the burn_* gates split a burning one. The gas
+ * pass began as the powder sweep with gravity inverted and has never been
+ * taken apart, so which of decay, the walk itself and the block wake owns
+ * its time has never been read off the device. */
+extern volatile bool sand_step_gate_gas_decay;
+extern volatile bool sand_step_gate_gas_move;
+extern volatile bool sand_step_gate_gas_wake;
+
 /* Wraps a pass's call site in `if (sand_step_gate_<name>)` when compiled in,
  * and in nothing at all otherwise - a release build's sand_step() has no
  * extra branch to fold away, because there was never a branch there to
