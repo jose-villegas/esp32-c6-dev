@@ -124,6 +124,94 @@ static bool try_bubble(sand_t *s, uint8_t *row, uint8_t *prow, int x, int y,
     return true;
 }
 
+
+/* THE WALK, in gravity's frame rather than the screen's. ring_dir() is ordered,
+ * so once `up` is the ring index of the rise direction, up-1 and up+1 are the
+ * two upper diagonals, up+-2 the sides and up+4 straight down - no per-material
+ * rotation table needed.
+ *
+ * Weights are out of 256 and sum to it exactly, so one draw decides everything:
+ * three ways up carry 216 between them, down 24, the two sides 8 each. The
+ * lower diagonals are deliberately 0 - a particle that drifts down does so
+ * bluntly, and giving five of eight directions a downward component read as
+ * smoke sinking rather than swirling. */
+static const struct { uint16_t upto; int8_t off; } gas_walk_weights[] = {
+    {  72,  0 },   /* straight up          */
+    { 144, -1 },   /* up, one side         */
+    { 216,  1 },   /* up, the other        */
+    { 240,  4 },   /* straight down        */
+    { 248, -2 },   /* sideways             */
+    { 256,  2 },   /* sideways, the other  */
+};
+
+/* BUOYANCY, which move_to() structurally cannot do: can_enter() admits a liquid
+ * only to something DENSER, and a gas is lighter by definition - so without this
+ * a walking gas cell cannot enter liquid at all and sits trapped inside a body
+ * of it. try_bubble() exists for exactly this in the exhaustive mover; the walk
+ * needs its own, because it reaches move_to() directly.
+ *
+ * UPWARD PICKS ONLY. A bubble rises: sideways or downward buoyancy is wrong
+ * physically, and downward is also unsafe for the sweep, which guarantees a
+ * single move per cell only in the direction it sweeps. */
+static inline bool gas_walk_bubble(sand_t *s, uint8_t *row, int x, int y,
+                                   int w, const int *d, cell_t grain,
+                                   uint8_t density)
+{
+    uint8_t *const trow = dest_row(s, y + d[1]);
+    const int nx = x + d[0];
+    if (trow == NULL || (unsigned)nx >= (unsigned)w) {
+        return false;
+    }
+
+    const cell_t target = trow[nx];
+    if (CELL_IS_EMPTY(target)) {
+        return false;   /* move_to() already had its turn at an open cell */
+    }
+    const material_t *tm = material_of(target);
+    if (tm->kind != KIND_LIQUID || density >= tm->density) {
+        return false;   /* only through a liquid, and only if lighter than it -
+                         * a gas as heavy as the liquid correctly just sits */
+    }
+
+    trow[nx] = grain;
+    row[x]   = target;
+
+    mark_rows(s, y, y + d[1]);
+    wake_block_and_neighbors(s, x, y);
+    wake_block_and_neighbors(s, nx, y + d[1]);
+    return true;
+}
+
+/* One draw, one probe, and the cost no longer depends on how boxed in the cell
+ * is - which is the whole reason the exhaustive mover is expensive on a packed
+ * grid. Returns whether the cell moved. */
+static inline bool gas_walk_once(sand_t *s, uint8_t *row, int x, int y, int w,
+                                 int rdx, int rdy, cell_t grain,
+                                 uint8_t density)
+{
+    const int up   = ring_of(rdx, rdy);
+    const int roll = (int)(rng_next(&s->rng) & 0xFF);
+
+    int off = 0;
+    for (size_t i = 0; i < sizeof(gas_walk_weights) / sizeof(gas_walk_weights[0]);
+         i++) {
+        if (roll < (int)gas_walk_weights[i].upto) {
+            off = gas_walk_weights[i].off;
+            break;
+        }
+    }
+
+    const int *d = ring_dir(up + off);
+    if (!move_to(row, dest_row(s, y + d[1]), x, x + d[0], w, grain, density)) {
+        /* Blocked. If the pick was upward and the blocker is a liquid this gas
+         * is lighter than, rise through it instead - see gas_walk_bubble(). */
+        return (off >= -1 && off <= 1)
+             && gas_walk_bubble(s, row, x, y, w, d, grain, density);
+    }
+    mark_rows(s, y, y + d[1]);
+    return true;
+}
+
 static bool step_one_gas_grain(sand_t *s, uint8_t *row, uint8_t *prow,
                                uint8_t *arow, uint8_t *brow, int x, int y,
                                int w, int rdx, int rdy, const int *rslide_a,
@@ -149,6 +237,24 @@ static bool step_one_gas_grain(sand_t *s, uint8_t *row, uint8_t *prow,
                             (int)(rng_next(&s->rng) & 0xFF) < mobility;
 
     bool moved = false;
+
+    /* The walk replaces only the MOVEMENT half - tick_decay() above still runs,
+     * so fire still burns down at the same rate. It draws its own direction, so
+     * it does not consume the mobility roll differently than the branch below;
+     * both paths have already drawn it. */
+    if (s->gas_walk) {
+        if (try_moving) {
+            /* gas_walk_once() already falls back to gas_walk_bubble() for
+             * an up-ish draw blocked by a lighter-than-gas liquid, so
+             * this needs no separate try_bubble() call of its own. */
+            moved = gas_walk_once(s, row, x, y, w, rdx, rdy, grain, density);
+        }
+        if (moved) {
+            wake_block_and_neighbors(s, x, y);
+        }
+        return moved;
+    }
+
     if (try_moving && jostle == 0) {
         const int scatter = (s->scatter >= 0) ? s->scatter : mat->scatter;
         /* The _impl, not the public wrapper. Both live in sand_priv.h as
