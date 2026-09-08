@@ -107,6 +107,8 @@ typedef enum {
     GRP_HARDEN,       /* becoming wood, and what that leaves behind */
     GRP_REGROW,       /* new growth and foliage from a finished trunk, and drinking */
     GRP_SHATTER,      /* thermal shock: shatters_to */
+    GRP_PADDING,      /* not chemistry at all: the bytes that round the row
+                       * to a 64-byte stride - see reaction_t's stride_pad0 */
     GRP_CONDENSE,     /* a 2x2 block collapsing into one cell: condenses,
                        * condenses_to */
     GRP_COUNT
@@ -120,6 +122,10 @@ typedef enum {
     FK_FLAG,      /* boolean-ish: zero/nonzero, no rate to speak of */
     FK_COUNT_MAG, /* a plain magnitude (a cell count, a width) - NOT a
                    * chance/256, so the rate ladder must not touch it */
+    FK_PAD,       /* not a field: a byte that exists only to round the row's
+                   * size. Never read, never emitted - it has a row here
+                   * solely so the every-byte-is-documented walk below stays
+                   * a full check rather than being told to skip offsets */
 } field_kind_t;
 
 /* Only meaningful when kind == FK_RATE - splits FK_RATE into the two
@@ -454,6 +460,13 @@ static const field_doc_t field_docs[] = {
      * "physical integrity" group and carries a row only so this ledger stays
      * complete, which is the whole point of the assert below. */
     F(dislodge_density, GRP_SHATTER, FK_COUNT_MAG, NULL),
+
+    /* Padding, not chemistry - see reaction_t. Listed so every byte of the
+     * struct is still claimed by exactly one row; nothing emits these,
+     * since output is driven by the fields a material actually sets. */
+    F(stride_pad0,      GRP_PADDING, FK_PAD, NULL),
+    F(stride_pad1,      GRP_PADDING, FK_PAD, NULL),
+    F(stride_pad2,      GRP_PADDING, FK_PAD, NULL),
 };
 
 #undef F
