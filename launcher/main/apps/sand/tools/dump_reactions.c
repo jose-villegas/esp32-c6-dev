@@ -445,6 +445,15 @@ static const field_doc_t field_docs[] = {
 
     /* GRP_SHATTER */
     F(shatters_to,  GRP_SHATTER, FK_TARGET, NULL),
+
+    /* NOT A REACTION, and it has no clause in any emit_*(). PR #87 added
+     * dislodge_density to reaction_t to give each solid its own toughness
+     * against being knocked loose, but nothing reads it during a reaction -
+     * queue_flying_grain() (sand_impulse.c) reads it when an impulse tries to
+     * move a KIND_STATIC cell. It sits in GRP_SHATTER as the nearest
+     * "physical integrity" group and carries a row only so this ledger stays
+     * complete, which is the whole point of the assert below. */
+    F(dislodge_density, GRP_SHATTER, FK_COUNT_MAG, NULL),
 };
 
 #undef F
