@@ -1,18 +1,18 @@
 # Model Delegation Workflow
 
-How to hand a feature's *implementation* to a local Ollama model and/or a
-free-tier model through OmniRoute, while keeping the investigation, review,
-and verification with you. Written after actually running this once (a sand
-feature: acid evaporation, then sand-floats-on-oil) - the steps below are
-what worked, and the gotchas are the specific things that silently didn't.
+How to hand a feature's *implementation* to a local Ollama model, while
+keeping the investigation, review, and verification with you. Written after
+actually running this once (a sand feature: acid evaporation, then
+sand-floats-on-oil) - the steps below are what worked, and the gotchas are
+the specific things that silently didn't.
 
-Living document: update it when the providers, combos, or failure modes
-change. They will - see "Things rot" below.
+Living document: update it when the models or failure modes change. They
+will - see "Things rot" below.
 
-Use this when a user says something like "delegate this to local/free
-models" or "use Ollama for local, OmniRoute for free tier." Don't reach for
-it unprompted - it is slower than doing the work yourself, and it exists to
-answer a specific request, not as a default implementation strategy.
+Use this when a user says something like "delegate this to a local model."
+Don't reach for it unprompted - it is slower than doing the work yourself,
+and it exists to answer a specific request, not as a default implementation
+strategy.
 
 ---
 
@@ -102,13 +102,7 @@ doing the typing, not you privately drafting the same text.
    double-digit seconds each. If a call times out, don't retry it as-is -
    shrink it further.
 
-4. **Route "local" through the Ollama CLI directly, not OmniRoute.**
-   OmniRoute's `ollama-local` provider had **no active connection pool** -
-   confirmed with `mcp__omniroute__omniroute_pool_status` returning `"No
-   pool found for provider 'ollama-local'"` - and every model in it timed
-   out identically at exactly 30s on a one-word test prompt, which is a
-   dead link, not a slow model. The user's own Ollama installation worked
-   fine standalone. Use it directly instead:
+4. **Route "local" through the Ollama CLI directly.**
 
    ```sh
    ollama list                                        # what's actually pulled
@@ -209,48 +203,17 @@ doing the typing, not you privately drafting the same text.
    default can't reintroduce this on its own even if the app setting drifts
    back up.
 
-   Re-test all of this before trusting it again if OmniRoute's own config
-   changes, Ollama updates its thinking-suppression or context-length
-   defaults, or the locally pulled model set changes - see "Things rot"
-   below.
+   Re-test all of this before trusting it again if Ollama updates its
+   thinking-suppression or context-length defaults, or the locally pulled
+   model set changes - see "Things rot" below.
 
-5. **Route "free tier" through OmniRoute, but test the combo first.**
-   Existing combos rot: in one session, `deepseek` had no active
-   credentials, `gemini/gemini-2.5-pro` was deprecated server-side, and one
-   `ollama-cloud` model id wasn't in the live catalog - all inside a combo
-   that looked fine from its listing. Before trusting a combo:
+5. **Review the delegated output against the codebase.** Does it miss an
+   edge case, or a guard an equivalent hand-written version would have
+   included? Rewrite the accepted version's comments to match the file's
+   actual voice before it goes in - don't paste a delegate model's comment
+   style into a codebase with a deliberate, consistent one.
 
-   ```
-   mcp__omniroute__omniroute_test_combo  (comboId, a short testPrompt)
-   ```
-
-   This reports per-provider success/failure/latency without spending a
-   real request. If a combo is polluted with dead entries, either accept
-   the latency of falling through them, or build a clean one:
-
-   ```
-   mcp__omniroute__omniroute_create_combo
-     name: something scoped to the task, e.g. "acid-feature-free-fast"
-     models: only the providers that actually responded, fastest first
-     strategy: "priority"
-   ```
-
-   Then call `mcp__omniroute__omniroute_route_request` with that combo
-   name in both `model` and `combo`.
-
-6. **Dispatch local and free in one message when they're independent** -
-   two tool calls in the same turn, not sequential turns, so they run
-   concurrently.
-
-7. **Review both outputs against each other and against the codebase.**
-   Do they agree on the logic? Does either one miss an edge case the other
-   caught (e.g. one used `const`, one didn't - trivial; one forgot a
-   guard the other included - not trivial)? Rewrite the accepted version's
-   comments to match the file's actual voice before it goes in - don't
-   paste a delegate model's comment style into a codebase with a
-   deliberate, consistent one.
-
-8. **Apply by hand, then verify for real.** For this project:
+6. **Apply by hand, then verify for real.** For this project:
 
    ```sh
    ./launcher/test/run_tests.sh   # host suite, portable, <1s - run this first
@@ -262,7 +225,7 @@ doing the typing, not you privately drafting the same text.
    every host test and still not compile for the target if it touches
    something host tests don't exercise.
 
-9. **Treat a test failure as the process working, not failing.** In the
+7. **Treat a test failure as the process working, not failing.** In the
    acid-evaporation feature, the chosen "low chance" constant sounded
    reasonable in isolation and was still roughly 100x too aggressive once
    checked against how many cells a real pool has and how many steps a
@@ -274,7 +237,7 @@ doing the typing, not you privately drafting the same text.
    here - see `test_acid_evaporates_into_gas_when_forced` in
    `suite_sand_reaction_encoding.c`).
 
-10. **Commit only when asked. Push/merge only when asked**, and even then,
+8. **Commit only when asked. Push/merge only when asked**, and even then,
     check the git mechanics below before assuming a plain `git merge` or
     `git push` does what you think in a worktree.
 
@@ -352,13 +315,12 @@ entirely - the user's primary checkout. That has real consequences:
 
 ## Things rot
 
-Everything provider-specific in this doc - which OmniRoute combo is clean,
-whether `ollama-local`'s pool is back, which cloud model ids are still
-live - is a snapshot from one session, not a promise. Re-verify with
-`omniroute_test_combo` or a trivial `ollama run` before trusting any of it
-again. If something here turns out to be stale, fix this doc in the same
-change rather than silently working around it - that's the whole point of
-it being a living document instead of a one-off spec.
+Which local model is best for which job, and its current thinking/wordwrap
+quirks, is a snapshot from one session, not a promise. Re-verify with a
+trivial `ollama run` before trusting any of it again. If something here
+turns out to be stale, fix this doc in the same change rather than silently
+working around it - that's the whole point of it being a living document
+instead of a one-off spec.
 
 ## Related, narrower tooling
 
@@ -366,26 +328,20 @@ it being a living document instead of a one-off spec.
 its own header comment) already do a more automated version of this for one
 specific, high-volume case: bulk-fixing MISRA/cppcheck findings, or doc
 audit findings, as exact find/replace patches. The code-side script has a
-mandatory review-model gate and its own `--pool local|free|subscription|all`
-selection; the docs-side script's review model is optional. Both also take
-`--local` (routes every model call through the Ollama CLI directly, per
-step 4 above - including `--think=false`, already handled for you) and
-`--no-push` (commit without pushing). Reach for whichever one applies when
-the task really is "fix N audit findings across files," not an open-ended
-feature - both have already worked out the patch-verification, the
-local/free routing, and (for code) review-loop machinery this doc doesn't
-need to repeat.
+mandatory review-model gate; the docs-side script's review model is
+optional. Both route every model call through the Ollama CLI directly, per
+step 4 above (including `--think=false`, already handled for you), and both
+take `--no-push` (commit without pushing). Reach for whichever one applies
+when the task really is "fix N audit findings across files," not an
+open-ended feature - both have already worked out the patch-verification
+and (for code) review-loop machinery this doc doesn't need to repeat.
 
 Single-click launchers wrap both, so you don't need to remember the flags:
-`fix-audited-code-free.sh` / `fix-audited-docs-free.sh` (free-tier cloud,
-no confirmation prompt), `-local.sh` variants of each (same, but `--local`
-instead - zero cloud calls), and `-choose-app.sh` variants of each
-(interactive: lists real scoping targets - apps under `launcher/main/apps/`
-for code, `docs/<Name>/` folders that actually exist for docs - and prompts
-for a number or name before running free-tier). `fix-audited-code-free.sh`
-and `-local.sh` also take `--project` to widen from the apps/sand default to
-the whole project; the docs-side `-free.sh`/`-local.sh` take `--app <name>`
-to narrow from the all-docs default to one app's own doc folder.
+`fix-audited-code-local.sh` / `fix-audited-docs-local.sh` (no confirmation
+prompt). `fix-audited-code-local.sh` also takes `--project` to widen from
+the apps/sand default to the whole project; `fix-audited-docs-local.sh`
+takes `--app <name>` to narrow from the all-docs default to one app's own
+doc folder.
 
 `scripts/resolve-conflicts-local.sh` is the same idea applied to git merge
 conflicts instead of audit findings: one hunk, one fixer call
