@@ -1832,7 +1832,10 @@ static int64_t run_present_against_scene(sand_t *s, const uint8_t *cells,
                                           uint8_t *row_n, int gx, int gy,
                                           int gz, int settle_steps,
                                           int measured_steps, int *full_bands,
-                                          int *gathered, int *partial_bands)
+                                          int *gathered, int *partial_bands,
+                                          int64_t *sim_us_out,
+                                          int64_t *mark_us_out,
+                                          int64_t *present_us_out)
 {
     for (int i = 0; i < settle_steps; i++) {
         sand_step(s, gx, gy, gz);
@@ -1843,20 +1846,37 @@ static int64_t run_present_against_scene(sand_t *s, const uint8_t *cells,
 
     gfx_reset_strip_send_counts();
 
-    int64_t total_us = 0;
+    int64_t sim_us = 0, mark_us = 0, present_us = 0;
     for (int i = 0; i < measured_steps; i++) {
+        const int64_t t0 = esp_timer_get_time();
         sand_step(s, gx, gy, gz);
+        const int64_t t1 = esp_timer_get_time();
         mirror_app_sand_marking(cells, w, h, dirty_rows, row_x0, row_x1,
                                 row_n);
-
-        const int64_t start = esp_timer_get_time();
+        const int64_t t2 = esp_timer_get_time();
         gfx_present();
-        total_us += esp_timer_get_time() - start;
+        const int64_t t3 = esp_timer_get_time();
+
+        sim_us     += t1 - t0;
+        mark_us    += t2 - t1;
+        present_us += t3 - t2;
     }
 
     gfx_get_strip_send_counts(full_bands, gathered, partial_bands);
 
-    return total_us / measured_steps;
+    /* Per-step MEANS, same as the return value below - three phases of the
+     * same measured window, so they share one averaging convention. */
+    if (sim_us_out != NULL) {
+        *sim_us_out = sim_us / measured_steps;
+    }
+    if (mark_us_out != NULL) {
+        *mark_us_out = mark_us / measured_steps;
+    }
+    if (present_us_out != NULL) {
+        *present_us_out = present_us / measured_steps;
+    }
+
+    return present_us / measured_steps;
 }
 
 /* The plain falling-sand case: the same half-screen checkerboard
@@ -1872,6 +1892,30 @@ static int64_t run_present_against_scene(sand_t *s, const uint8_t *cells,
  * reports one span covering nearly the whole row width - despite only half
  * of it actually holding a grain. That wide fallback span, not the true
  * occupied-cell count, is what gfx_present() actually has to move. */
+/* THE SCENE both this test and test_a_real_frame_is_sim_plus_present_on_a_
+ * falling_sand_scene below measure - factored out so the two cannot drift
+ * into quietly timing different boards, the same reason build_water_scene()
+ * exists above. `big`/`dirty_rows`/`row_x0`/`row_x1`/`row_n` must already be
+ * allocated storage; this does the sand_init()/tracking/seeding too. */
+static void build_falling_sand_present_scene(sand_t *real, uint8_t *big,
+                                              uint8_t *dirty_rows,
+                                              uint16_t *row_x0,
+                                              uint16_t *row_x1, uint8_t *row_n)
+{
+    sand_init(real, big, REAL_W, REAL_H, 99u);
+    sand_track_dirty_rows(real, dirty_rows);
+    seed_row_runs_full_width_for_gfx_test(row_x0, row_x1, row_n, REAL_W,
+                                          REAL_H);
+
+    for (int y = 0; y < REAL_H / 2; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            if (((x + y) & 1) == 0) {
+                sand_set(real, x, y, SAND_FIRST_SHADE);
+            }
+        }
+    }
+}
+
 static void test_present_cost_against_a_falling_sand_scene(void)
 {
     uint8_t  *big       = malloc(REAL_W * REAL_H);
@@ -1886,24 +1930,14 @@ static void test_present_cost_against_a_falling_sand_scene(void)
     TEST_ASSERT_NOT_NULL(row_n);
 
     sand_t real;
-    sand_init(&real, big, REAL_W, REAL_H, 99u);
-    sand_track_dirty_rows(&real, dirty_rows);
-    seed_row_runs_full_width_for_gfx_test(row_x0, row_x1, row_n, REAL_W,
-                                          REAL_H);
-
-    for (int y = 0; y < REAL_H / 2; y++) {
-        for (int x = 0; x < REAL_W; x++) {
-            if (((x + y) & 1) == 0) {
-                sand_set(&real, x, y, SAND_FIRST_SHADE);
-            }
-        }
-    }
+    build_falling_sand_present_scene(&real, big, dirty_rows, row_x0, row_x1,
+                                     row_n);
 
     int full_bands = 0, gathered = 0, partial_bands = 0;
     const int measured_steps = 20;
     const int64_t mean_us = run_present_against_scene(&real, big, REAL_W,
         REAL_H, dirty_rows, row_x0, row_x1, row_n, 0, 1, 0, 5, measured_steps,
-        &full_bands, &gathered, &partial_bands);
+        &full_bands, &gathered, &partial_bands, NULL, NULL, NULL);
 
     ESP_LOGI("device_tests", "present cost, falling sand checkerboard, "
                              "%dx%d: mean %lld us/frame over %d frames "
@@ -1962,6 +1996,65 @@ static void test_present_cost_against_a_falling_sand_scene(void)
         "before suspecting the panel");
 }
 
+/* bd esp32c6-e6c: sand_step() budgets exclude present; present tests run
+ * the sim outside their own timer. Neither measures the frame SUM, which
+ * bd esp32c6-91i (overlapping present with the next step) needs before it
+ * can be justified - water's step (15,168 us) now beats a full present
+ * (~17,800 us). PRINTS, no frame budget argued yet. Missing the real pixel
+ * writes (draw_dirty_rows()/paint_row() are static, unreachable here) - a
+ * LOWER BOUND only. */
+static void test_a_real_frame_is_sim_plus_present_on_a_falling_sand_scene(void)
+{
+    uint8_t  *big       = malloc(REAL_W * REAL_H);
+    uint8_t  *dirty_rows = malloc(REAL_H);
+    uint16_t *row_x0    = malloc(REAL_H * ROW_MAX_RUNS * sizeof(uint16_t));
+    uint16_t *row_x1    = malloc(REAL_H * ROW_MAX_RUNS * sizeof(uint16_t));
+    uint8_t  *row_n     = malloc(REAL_H);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(dirty_rows);
+    TEST_ASSERT_NOT_NULL(row_x0);
+    TEST_ASSERT_NOT_NULL(row_x1);
+    TEST_ASSERT_NOT_NULL(row_n);
+
+    sand_t real;
+    build_falling_sand_present_scene(&real, big, dirty_rows, row_x0, row_x1,
+                                     row_n);
+
+    int full_bands = 0, gathered = 0, partial_bands = 0;
+    int64_t sim_us = 0, mark_us = 0, present_us = 0;
+    const int measured_steps = 20;
+    run_present_against_scene(&real, big, REAL_W, REAL_H, dirty_rows, row_x0,
+        row_x1, row_n, 0, 1, 0, 5, measured_steps, &full_bands, &gathered,
+        &partial_bands, &sim_us, &mark_us, &present_us);
+
+    free(big);
+    free(dirty_rows);
+    free(row_x0);
+    free(row_x1);
+    free(row_n);
+
+    const int64_t total_us = sim_us + mark_us + present_us;
+    const int present_pct = total_us > 0
+        ? (int)((present_us * 100) / total_us) : 0;
+
+    ESP_LOGI("device_tests",
+             "frame time, falling sand checkerboard: sim %lld us/frame",
+             (long long)sim_us);
+    ESP_LOGI("device_tests",
+             "frame time, falling sand checkerboard: mark %lld us/frame",
+             (long long)mark_us);
+    ESP_LOGI("device_tests",
+             "frame time, falling sand checkerboard: present %lld us/frame",
+             (long long)present_us);
+    ESP_LOGI("device_tests",
+             "frame time, falling sand checkerboard: total %lld us/frame",
+             (long long)total_us);
+    ESP_LOGI("device_tests",
+             "frame time, falling sand checkerboard: present is %d%% of "
+             "the total",
+             present_pct);
+}
+
 /* The lava stress scene (build_lava_stress_scene() above, shared with
  * test_the_lava_stress_scene_reaches_every_reaction_it_claims and
  * test_the_lava_stress_scene_fits_in_the_frame_budget) - a lava reservoir
@@ -2008,7 +2101,8 @@ static void test_present_cost_against_the_lava_stress_scene(void)
     const int measured_steps = 20;
     const int64_t mean_us = run_present_against_scene(&real, big, REAL_W,
         REAL_H, dirty_rows, row_x0, row_x1, row_n, 0, 1000, 0, 30,
-        measured_steps, &full_bands, &gathered, &partial_bands);
+        measured_steps, &full_bands, &gathered, &partial_bands, NULL, NULL,
+        NULL);
 
     ESP_LOGI("device_tests", "present cost, lava stress scene, %dx%d: mean "
                              "%lld us/frame over %d frames (%d full-band, "
@@ -2087,7 +2181,8 @@ static void test_present_cost_against_the_thermal_shock_scene(void)
     const int measured_steps = 10;
     const int64_t mean_us = run_present_against_scene(&real, big, REAL_W,
         REAL_H, dirty_rows, row_x0, row_x1, row_n, 0, 1000, 0, 0,
-        measured_steps, &full_bands, &gathered, &partial_bands);
+        measured_steps, &full_bands, &gathered, &partial_bands, NULL, NULL,
+        NULL);
 
     ESP_LOGI("device_tests", "present cost, thermal shock lattice, %dx%d: "
                              "mean %lld us/frame over %d frames (%d "
@@ -2464,6 +2559,7 @@ void run_sand_perf_suite(void)
     RUN_TEST(test_the_gunpowder_basin_scene_fits_in_the_frame_budget);
 
     RUN_TEST(test_present_cost_against_a_falling_sand_scene);
+    RUN_TEST(test_a_real_frame_is_sim_plus_present_on_a_falling_sand_scene);
     RUN_TEST(test_present_cost_against_the_lava_stress_scene);
     RUN_TEST(test_present_cost_against_the_thermal_shock_scene);
 #endif
