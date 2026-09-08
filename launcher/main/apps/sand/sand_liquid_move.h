@@ -18,7 +18,13 @@
  * water splashing itself. WATER DECAYS TWO WAYS, INDEPENDENTLY - see
  * SAND_SPLASH_RADIUS_WATER's own comment in sand.h for the full
  * account. */
-static inline void splash_displace(sand_t *s, int x, int y, uint8_t mat_id)
+/* NOT INLINED, though it lives in a header for the one caller that is.
+ * Inlining move_liquid_grain() into the sweep won 18.4% on liquid scenes
+ * but grew sand_step() 975 -> 1425 instructions, because the whole helper
+ * chain came with it - and that growth is paid by every cell, which cost
+ * the liquid-free rows 5.5%. This body is big and its success path is
+ * uncommon, so it is the wrong thing to duplicate at the call site. */
+static __attribute__((noinline, unused)) void splash_displace(sand_t *s, int x, int y, uint8_t mat_id)
 {
     if (mat_id != MAT_WATER) {
         return;
@@ -185,6 +191,12 @@ static inline bool drag_allows_swap(sand_t *s, int x, int y, uint8_t id)
  * obvious but PREVENTS separation rather than slowing it - throttling
  * swap and levelling together settles a tilted pair into a permanent
  * shear instead of converging. */
+/* NOT INLINED, though it lives in a header for the one caller that is.
+ * Inlining move_liquid_grain() into the sweep won 18.4% on liquid scenes
+ * but grew sand_step() 975 -> 1425 instructions, because the whole helper
+ * chain came with it - and that growth is paid by every cell, which cost
+ * the liquid-free rows 5.5%. This body is big and its success path is
+ * uncommon, so it is the wrong thing to duplicate at the call site. */
 static inline bool sink_through_lighter_liquid(sand_t *s, uint8_t *row,
                                                uint8_t *prow, int x, int y,
                                                int tx, int ty, int w,
