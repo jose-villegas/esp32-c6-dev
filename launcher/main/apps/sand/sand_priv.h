@@ -446,6 +446,7 @@ clear_content_flags(sand_t* s) {
      * nothing, so it starts pessimistic and the first pass recomputes it from
      * what it actually walks. */
     s->may_have_pair_reactive = true;
+    s->may_have_conductive = true;
 }
 
 static inline void
@@ -470,6 +471,9 @@ latch_content_flags(sand_t* s, cell_t cell) {
     if (r->flammability != 0 || r->heat_ramp != 0
         || (r->heats_to != 0 && (r->heat_chance != 0 || r->melts != 0))) {
         s->may_have_pair_reactive = true;
+    }
+    if (r->conducts != 0) {
+        s->may_have_conductive = true;
     }
     if (cell_is_burning(cell)) {
         s->may_have_burning = true;
@@ -657,8 +661,12 @@ tick_decay(sand_t* s, uint8_t* row, int x, int y, cell_t* grain, const material_
  * guard checks only this option. Kept separate from the work counters: the
  * gates measure TIME, the counters measurably perturb codegen, so one
  * option covering both would perturb exactly what the gates measure. */
-#define cond (cond)
-
+/* Per-pass volatile gates - SCAFFOLDING for one round, removed at the end of
+ * it by scripts/strip-pass-gates.py. See docs/sand/Perf-Round-Guide.md,
+ * "Instrumenting a round". Volatile is load-bearing: an `#if` would let the
+ * compiler prove the guarded work unreachable and delete the walk that reaches
+ * it, which is how an earlier code-skip probe in this campaign measured
+ * nothing at all. */
 /* Defined in sand_reactions.c: the whole of a step's fire-chemistry work
  * for every burning cell (reaction_t.burns - fire and ember today) -
  * ignition of adjacent flammable neighbours, extinguishing by adjacent
