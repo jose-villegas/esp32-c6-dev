@@ -439,6 +439,14 @@ clear_content_flags(sand_t* s) {
 
     s->may_have_withering = false;
     s->may_have_condenser = false;
+
+    /* TRUE, not false, and it is the only one here that starts set. The others
+     * gate work that is merely wasted when the flag is wrong; this one gates a
+     * walk being SKIPPED, so a false negative loses a reaction. A board filled
+     * by writing s->cells directly - which tests and tools do - latches
+     * nothing, so it starts pessimistic and the first pass recomputes it from
+     * what it actually walks. */
+    s->may_have_pair_reactive = true;
 }
 
 static inline void
@@ -454,6 +462,15 @@ latch_content_flags(sand_t* s, cell_t cell) {
     }
     if (mat->kind == KIND_GAS) {
         s->may_have_gas = true;
+    }
+    /* Same predicate build_reaction_tables() uses for PAIR_IGNITABLE and
+     * PAIR_HEAT_RESPONSIVE - kept here rather than read out of pair_bits so
+     * this header does not need that file's table. Latched, never cleared
+     * here: sand_step_reactions() recomputes it each step from what it
+     * actually walks, exactly as it does for may_have_burning. */
+    if (r->flammability != 0 || r->heat_ramp != 0
+        || (r->heats_to != 0 && (r->heat_chance != 0 || r->melts != 0))) {
+        s->may_have_pair_reactive = true;
     }
     if (cell_is_burning(cell)) {
         s->may_have_burning = true;
