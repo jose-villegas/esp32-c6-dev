@@ -555,15 +555,18 @@ static void test_the_gas_grain_decomposes_by_phase(void)
     volatile bool *const move  = &sand_step_gate_gas_move;
     volatile bool *const wake  = &sand_step_gate_gas_wake;
     volatile bool *const eqbody = &sand_step_gate_gas_eq_body;
+    volatile bool *const rowskip = &sand_step_gate_gas_row_skip;
 
     volatile bool *const all_three[] = { decay, move, wake };
 
     static const char *const names[] = {
         "every phase on", "decay off", "the walk off", "block wake off",
         "all three off (row filter only)", "equalise body off (scan only)",
+        "packed-row skip off",
     };
-    volatile bool *const *const sets[] = { NULL, &decay, &move, &wake, all_three, &eqbody };
-    static const size_t counts[] = { 0, 1, 1, 1, 3, 1 };
+    volatile bool *const *const sets[] = {
+        NULL, &decay, &move, &wake, all_three, &eqbody, &rowskip };
+    static const size_t counts[] = { 0, 1, 1, 1, 3, 1, 1 };
 
     int64_t whole = 0;
     for (size_t i = 0; i < sizeof(sets) / sizeof(sets[0]); i++) {
@@ -580,8 +583,82 @@ static void test_the_gas_grain_decomposes_by_phase(void)
         }
     }
 
-    TEST_ASSERT_TRUE_MESSAGE(*decay && *move && *wake && *eqbody,
+    TEST_ASSERT_TRUE_MESSAGE(*decay && *move && *wake && *eqbody && *rowskip,
         "every gate must be back on before the next test in this binary runs");
+}
+
+/* Defined with the tilted scenes further down, which are not gate-only and so
+ * live outside this block; declared here because this is the only gated reader
+ * of it. */
+static int64_t time_a_quarter_turn(sand_t *real, int steps, int64_t *worst_out);
+
+/* WHAT THE PACKED-ROW SKIP IS WORTH ON A TILTED BOARD, read the only way a
+ * change this size can be read here.
+ *
+ * The gas-grain phases above run on the fire scene, which is axis-aligned, so
+ * they price the py == 0 skip and nothing else. Comparing two BUILDS on a
+ * tilted scene does not work: two images of identical simulation code measured
+ * 143166 and 133574 us on the packed turn, a 6.7% spread from flash layout
+ * alone, which is wider than the effect. So both halves of the comparison run
+ * here, on one board, in one image, with only a volatile bool between them.
+ *
+ * Both scenes, because they answer different questions - the packed one is the
+ * only shape where every row is skippable, and would flatter the skip on its
+ * own. Prints; asserts no budget. */
+static void test_the_tilted_turn_prices_the_packed_row_skip(void)
+{
+    static const char *const names[] = { "packed screen", "half screen" };
+
+    for (int scene = 0; scene < 2; scene++) {
+        int64_t on_us = 0, off_us = 0;
+
+        for (int pass = 0; pass < 2; pass++) {
+            uint8_t *big    = malloc(REAL_W * REAL_H);
+            uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+            TEST_ASSERT_NOT_NULL(big);
+            TEST_ASSERT_NOT_NULL(blocks);
+
+            sand_t real;
+            sand_init(&real, big, REAL_W, REAL_H, 31u);
+            sand_enable_sleeping(&real, blocks);
+
+            if (scene == 0) {
+                build_smoke_and_steam_scene(&real);
+            } else {
+                for (int y = 0; y < (REAL_H * 2) / 5; y++) {
+                    for (int x = 0; x < REAL_W; x++) {
+                        sand_set(&real, x, y, CELL_MAKE(MAT_GAS, 0));
+                    }
+                }
+                for (int i = 0; i < 60; i++) {
+                    sand_step(&real, 0, 1000, 0);
+                }
+            }
+
+            sand_step_gate_gas_row_skip = (pass == 0);
+            int64_t worst = 0;
+            const int64_t us = time_a_quarter_turn(&real, 24, &worst);
+            sand_step_gate_gas_row_skip = true;
+
+            free(big);
+            free(blocks);
+
+            if (pass == 0) {
+                on_us = us;
+            } else {
+                off_us = us;
+            }
+        }
+
+        ESP_LOGI("device_tests",
+                 "tilted turn, %s: skip on %lld us, off %lld us (worth %lld us, "
+                 "%lld%%)", names[scene], (long long)on_us, (long long)off_us,
+                 (long long)(off_us - on_us),
+                 off_us > 0 ? (long long)(((off_us - on_us) * 100) / off_us) : 0);
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(sand_step_gate_gas_row_skip,
+        "the gate must be back on before the next test in this binary runs");
 }
 
 static void test_the_main_sweep_decomposes_by_pass(void)
@@ -3003,6 +3080,7 @@ void run_sand_perf_suite(void)
     RUN_TEST(test_the_fire_scene_decomposes_by_pass);
     RUN_TEST(test_the_burning_cell_decomposes_by_phase);
     RUN_TEST(test_the_gas_grain_decomposes_by_phase);
+    RUN_TEST(test_the_tilted_turn_prices_the_packed_row_skip);
 #endif
     /* Ungated: the two gas movers compare through sand_set_gas_walk(), an
      * ordinary API, so this runs in every diagnostics build. */

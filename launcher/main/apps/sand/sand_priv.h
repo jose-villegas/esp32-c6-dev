@@ -685,6 +685,13 @@ extern volatile bool sand_step_gate_gas_wake;
  * whether that pass costs what it DOES or what it LOOKS AT. */
 extern volatile bool sand_step_gate_gas_eq_body;
 
+/* The packed-row skip in equalise_gas(), so it can be priced WITHIN one
+ * capture. A whole-scene diff across separately linked images carries a
+ * +-6% flash-layout spread here - wider than the effect - so a gate on one
+ * board in one image is the only instrument that can see a change this
+ * size. Read against "every phase on". */
+extern volatile bool sand_step_gate_gas_row_skip;
+
 /* Wraps a pass's call site in `if (sand_step_gate_<name>)` when compiled in,
  * and in nothing at all otherwise - a release build's sand_step() has no
  * extra branch to fold away, because there was never a branch there to
