@@ -283,6 +283,39 @@ static void scene_wet_earth(sand_t *s)
     }
 }
 
+/* A PLANTED BED, because nothing else here grows.
+ *
+ * THE GAP THIS CLOSES, demonstrated rather than assumed: setting GROW_REACH
+ * to 1 - a value that cripples plant growth outright - moved not one of the
+ * eight scenes above. The whole plant and root system, anchored()'s support
+ * search, find_water(), rooting, budding, sprouting and withering, had no
+ * behavioural cover at all, while a performance round was about to start
+ * changing it.
+ *
+ * Dry dirt over sand, seeded, with rain above: dirt at full moisture cannot
+ * soak the rain up, so it pools and drowns the seeds, and a submerged plant
+ * has no room to bud into and never grows. */
+static void scene_plant_bed(sand_t *s)
+{
+    sand_set_soak(s, SAND_SOAK_PER_MATERIAL);
+
+    const int bed_top = FP_H - 20;
+
+    for (int y = bed_top; y < FP_H; y++) {
+        for (int x = 0; x < FP_W; x++) {
+            sand_set(s, x, y, y < FP_H - 10 ? FP_DIRT : FP_SAND);
+        }
+    }
+    for (int x = 4; x < FP_W; x += 8) {
+        sand_set(s, x, bed_top - 1, MATX(MATX_PLANT));
+    }
+    for (int y = bed_top - 8; y < bed_top - 4; y++) {
+        for (int x = 0; x < FP_W; x++) {
+            sand_set(s, x, y, FP_WATER);
+        }
+    }
+}
+
 /* GRAVITY IS PER SCENE, and the six original rows keep the straight-down
  * vector they were baselined with - their hashes must not move.
  *
@@ -310,6 +343,9 @@ static const struct {
     /* Same builders, held sideways and cornerwise. */
     { "gas_land",    scene_fire_gas,    31u, 1000, 0    },
     { "water_diag",  scene_water_pool,  11u, 1000, 1000 },
+
+    /* The only row here in which anything grows - see the builder. */
+    { "plant_bed",   scene_plant_bed,   11u, 0,    1000 },
 };
 
 int main(void)

@@ -11,9 +11,14 @@
 # plus a block - so unwrapping one is a rewrite, not a deletion, and reading
 # the diff is exactly the wrong way to check a rewrite.
 #
-# This checks the object code instead. Both refs are built with gates OFF and
-# the sand translation units disassembled; if a single instruction differs,
-# the strip changed the program and the script says which function.
+# This checks the object code instead. Both refs MUST be built with gates OFF
+# and the sand translation units are disassembled; if a single instruction
+# differs, the strip changed the program and the script says which function.
+#
+# "Built with gates off" is verified against the generated sdkconfig, not
+# assumed: capture_ref.sh uses each ref's own sdkconfig.defaults.diag, and a
+# ref taken during a round has the option turned on in it. Pass a baseline
+# with the option off - branch from the gated ref and turn it off there.
 #
 # WHY NOT cmp ON THE .obj FILES: they carry DWARF, and DWARF carries line
 # numbers, so deleting lines changes the bytes without changing the code.
@@ -61,6 +66,21 @@ dump_ref() {
 
     echo "=== building $ref (gates off) ===" >&2
     sh "$REPO_ROOT/scripts/capture_ref.sh" "$ref" --build-only >/dev/null
+
+    # CHECKED, NOT ASSUMED. capture_ref.sh builds each ref with that ref's OWN
+    # sdkconfig.defaults.diag, and a ref taken mid-round has the gates turned
+    # ON in it - so "both built with gates off" is a claim about the refs, not
+    # something this script controls. Comparing a gates-ON build against a
+    # stripped one reports a difference for the obvious wrong reason, and the
+    # difference looks exactly like a real one: whole functions appearing and
+    # disappearing as inlining shifts.
+    cfg="$REPO_ROOT/.claude/capture-worktree/launcher/build.diag/config/sdkconfig.h"
+    if [ -f "$cfg" ] && grep -q "define CONFIG_LAUNCHER_SAND_PASS_GATES 1" "$cfg"; then
+        echo "ERROR: $ref built with the pass gates ON, so it cannot be a" >&2
+        echo "strip baseline. Branch from it, turn the option off in" >&2
+        echo "launcher/sdkconfig.defaults.diag, commit, and pass that ref." >&2
+        exit 2
+    fi
 
     objdir="$REPO_ROOT/.claude/capture-worktree/launcher/build.diag/esp-idf/main/CMakeFiles/__idf_main.dir/apps/sand"
     : > "$out"

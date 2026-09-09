@@ -772,7 +772,6 @@ void sand_step_gas(sand_t *s, int gx, int gy, int dx, int dy,
             found_any = true;
         }
     }
-    
 
     /* Then spread, alternating which way it looks each step - same reason
      * liquid's cross-flow does (see sand_step_liquids() in sand_liquid.c).
