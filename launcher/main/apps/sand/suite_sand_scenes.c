@@ -1067,6 +1067,47 @@ static void test_the_thermal_shock_scene_shatters_in_both_directions(void)
  * earlier draft of this scene used only by a SINGLE step: total step 41
  * is where the count first moves, and that draft stopped at 40. That is
  * not a margin worth building an assertion on. */
+/* A SMALL FIRE ON A BOARD THAT MOSTLY CANNOT REACT - the shape the app is
+ * actually in, and the one every other reaction scene here is not.
+ *
+ * build_fire_scene() and the boiler fill the board with things that react, so
+ * they measure what a reacting cell COSTS. This measures how much is paid for
+ * cells that cannot react at all: sand_step_reactions() early-outs only on a
+ * board-wide flag test, so one lit match makes it walk all 41,216 cells every
+ * step, decoding each one, however small the fire is. Roughly 2% of this board
+ * can do anything; the other 98% is the question.
+ *
+ * Sand rather than stone for the bulk, because sand is what a player pours and
+ * because a settled powder is the case the main sweep's own block skip already
+ * handles - so anything left is the reactions pass, not the sweep. */
+void build_campfire_scene(sand_t *s)
+{
+    const int ground_top = (REAL_H * 9) / 20;       /* sand fills ~55% */
+    const int pile_w     = 24;
+    const int pile_h     = 8;
+    const int pile_x0    = (REAL_W - pile_w) / 2;
+    const int pile_y1    = ground_top;              /* sits on the sand */
+    const int pile_y0    = pile_y1 - pile_h;
+
+    for (int y = ground_top; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            sand_set(s, x, y, SAND);
+        }
+    }
+
+    for (int y = pile_y0; y < pile_y1; y++) {
+        for (int x = pile_x0; x < pile_x0 + pile_w; x++) {
+            sand_set(s, x, y, WOOD);
+        }
+    }
+
+    /* Lit along the top of the pile, not buried in it: a fire needs air, and
+     * burying it would measure smothering instead of burning. */
+    for (int x = pile_x0; x < pile_x0 + pile_w; x++) {
+        sand_set(s, x, pile_y0 - 1, FIRE);
+    }
+}
+
 void build_boiler_scene(sand_t *s)
 {
     const int burn_h = 4, slab_h = 11, water_h = 30;
