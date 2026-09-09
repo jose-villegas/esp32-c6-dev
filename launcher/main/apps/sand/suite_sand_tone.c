@@ -562,9 +562,10 @@ static void test_each_material_is_painted_the_way_it_should_be(void)
              * (material.c's MAT_SAND case, CULLET_GLINT_ONE_IN's own
              * comment) - see this file's own CULLET GLINT tests for that
              * roll on its own terms, checked deliberately rather than by
-             * accident here. */
+             * accident here. Wood gets depth 0: nonzero now means "beside a
+             * leaf" for MAT_WOOD only, tested separately. */
             const material_pattern_t pat =
-                material_colours(c, 1u, 0u, 255u, col);
+                material_colours(c, 1u, 0u, m == MAT_WOOD ? 0u : 255u, col);
 
             char why[128];
             snprintf(why, sizeof why, "%s variant %d", material_by_id((material_id_t)m)->name, v);

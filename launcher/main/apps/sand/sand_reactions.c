@@ -1453,7 +1453,6 @@ step_one_acid_rain_cell(sand_t* s, int x, int y, int w, int h) {
 #define FOUND_TEMPERATURE 4u
 #define FOUND_MOISTURE    8u
 #define FOUND_FALLER      16u
-#define FOUND_WITHERING   32u
 #define FOUND_CONDENSING  64u
 #define FOUND_PAIR_REACTIVE 128u
 
@@ -1472,7 +1471,7 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
     static void* const stage_labels[RSTAGE_COUNT] = {
         &&stage_burn_any, &&stage_burn_always, &&stage_burn_check, &&stage_dissolve, &&stage_acid_rain,
         &&stage_condense, &&stage_heat_ramp,   &&stage_chill,      &&stage_warm,     &&stage_soak_dry,
-        &&stage_fall,     &&stage_wither,      &&stage_drink,      &&stage_root,     &&stage_grow,
+        &&stage_fall,     &&stage_drink,       &&stage_root,       &&stage_grow,
         &&stage_sprout,   &&stage_bud,         &&stage_end,
     };
 
@@ -1587,15 +1586,6 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
              * Dissolve ground, plants hang. Bug. */
             found |= FOUND_FALLER;
             if (step_one_falling_cell(s, x, y, w, h, r)) {
-                continue;
-            }
-        }
-        /* Not gated on may_have_moisture: cells are far from water, boards
-         * may have none. */
-    stage_wither:
-        if (r->withers != 0) {
-            found |= FOUND_WITHERING;
-            if (step_one_withering_cell(s, x, y, w, h, r)) {
                 continue;
             }
         }
@@ -1729,7 +1719,7 @@ sand_step_reactions(sand_t* s) {
     }
     /* Dissolving, not fire. Heat, condensation independent. */
     if (!s->may_have_burning && !s->may_have_dissolver && !s->may_have_temperature && !s->may_have_moisture
-        && !s->may_have_faller && !s->may_have_withering && !s->may_have_condenser) {
+        && !s->may_have_faller && !s->may_have_condenser) {
         return;
     }
 
@@ -1757,9 +1747,6 @@ sand_step_reactions(sand_t* s) {
     }
     if (!(found & FOUND_FALLER)) {
         s->may_have_faller = false;
-    }
-    if (!(found & FOUND_WITHERING)) {
-        s->may_have_withering = false;
     }
     if (!(found & FOUND_CONDENSING)) {
         s->may_have_condenser = false;

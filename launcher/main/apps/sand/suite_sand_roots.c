@@ -509,11 +509,9 @@ static void test_lava_burns_a_root_out_of_the_ground(void)
         sand_set(&s, x, H - 1, STONE);
     }
     sand_set(&s, cx, H - 2, MATX(MATX_ROOT));
-    /* Sheltered by a trunk beside it, for the same reason the fire test
-     * just below is: an orphaned root ROTS (reaction_t.withers), and the
-     * first version of this passed with the melt path deleted outright -
-     * the root was simply rotting inside the 400 steps. Diagonal to the
-     * lava, so the wood is out of its four-neighbour reach. */
+    /* Diagonal to the lava, so the wood is out of its four-neighbour
+     * reach - it plays no part in this test beyond matching the scene the
+     * fire test just below uses. */
     sand_set(&s, cx - 1, H - 2, CELL_MAKE(MAT_WOOD, 0));
     sand_set(&s, cx + 1, H - 2, STONE);
     sand_set(&s, cx - 1, H - 3, STONE);
@@ -527,9 +525,7 @@ static void test_lava_burns_a_root_out_of_the_ground(void)
     }
     TEST_ASSERT_TRUE_MESSAGE(gone,
         "lava sitting on a root must burn it out - a root ignores flame, "
-        "but molten rock is the one heat that reaches it (and with a trunk "
-        "beside it the root cannot have merely rotted, so the melt is the "
-        "only door left)");
+        "but molten rock is the one heat that reaches it");
 }
 
 static void test_fire_leaves_a_root_alone(void)
@@ -542,11 +538,8 @@ static void test_fire_leaves_a_root_alone(void)
         sand_set(&s, x, H - 1, STONE);
     }
     sand_set(&s, cx, H - 2, MATX(MATX_ROOT));
-    /* Sheltered by a trunk beside it, or the first version of this test
-     * failed for the wrong reason: an orphaned root on bare stone ROTS
-     * (reaction_t.withers), and 400 steps at 1 in 256 is plenty for that.
-     * Diagonal to the flame, not cardinal, so the wood itself is never
-     * the thing that catches. */
+    /* Diagonal to the flame, not cardinal, so the wood itself is never
+     * the thing that catches - it plays no other part in this test. */
     sand_set(&s, cx - 1, H - 2, CELL_MAKE(MAT_WOOD, 0));
 
     for (int i = 0; i < 400; i++) {
@@ -559,68 +552,6 @@ static void test_fire_leaves_a_root_alone(void)
             "both deliberate, and `melts` must not have opened a side door "
             "for a gas");
     }
-}
-
-/* An orphaned root rots; a root under a living tree does not.
- *
- * Roots were permanent litter: no falls, no flammability, only acid ever
- * removed one, and at 7-20 cells per tree a burnt forest would slowly fill
- * its bed with bone-coloured cells nothing could clear - the same trap
- * plant and leaf each fell into once. Withering is the answer for those,
- * so it is the answer here, with the same two exemptions: touching its
- * tree, or able to reach water. */
-static void test_an_orphaned_root_in_dry_ground_rots_away(void)
-{
-    fixture();
-    sand_clear(&s);
-    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
-
-    const int cx = W / 2;
-    for (int x = 0; x < W; x++) {
-        sand_set(&s, x, H - 1, STONE);
-        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, 0)); /* bone dry */
-    }
-    sand_set(&s, cx, H - 3, MATX(MATX_ROOT)); /* the tree is long gone */
-
-    int gone = 0;
-    for (int i = 0; i < 6000 && !gone; i++) {
-        sand_step(&s, 0, 1000, 0);
-        gone = (sand_at(&s, cx, H - 3) != MATX(MATX_ROOT));
-    }
-    TEST_ASSERT_TRUE_MESSAGE(gone,
-        "a root with no tree above it and no water below it has to rot "
-        "away, or every burnt tree leaves its root system in the ground "
-        "for ever");
-}
-
-/* Both cells of a two-deep column must survive: the top one touches wood,
- * the bottom one touches only root. Without `roots_to` counting as shelter
- * a column rotted from the bottom up beneath a perfectly healthy tree the
- * moment its soil dried. */
-static void test_a_root_column_under_a_living_tree_does_not_rot(void)
-{
-    fixture();
-    sand_clear(&s);
-    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
-
-    const int cx = W / 2;
-    for (int x = 0; x < W; x++) {
-        sand_set(&s, x, H - 1, STONE);
-        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, 0)); /* bone dry */
-        sand_set(&s, x, H - 3, CELL_SOIL(MAT_DIRT, 1, 0));
-    }
-    sand_set(&s, cx, H - 2, MATX(MATX_ROOT)); /* bottom: touches root only */
-    sand_set(&s, cx, H - 3, MATX(MATX_ROOT)); /* top: touches wood */
-    sand_set(&s, cx, H - 4, CELL_MAKE(MAT_WOOD, 0));
-
-    for (int i = 0; i < 6000; i++) {
-        sand_step(&s, 0, 1000, 0);
-    }
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_ROOT), sand_at(&s, cx, H - 3),
-        "the root touching the trunk is sheltered by it and must stay");
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_ROOT), sand_at(&s, cx, H - 2),
-        "the root touching only ANOTHER ROOT must stay too - a column under "
-        "a living tree must not rot out from the bottom in a drought");
 }
 
 /* Watering a CANOPY still reaches the soil once the tree has rooted.
@@ -1068,11 +999,7 @@ surface_rule_lets_growth_through(int satellite_roots)
      * - entirely bypassing whatever the central root's own surface count
      * says, and confounding the very boundary this test means to pin.
      * Row cy - 1 is two rows from the candidate at cy + 1, so nothing
-     * placed there can ever reach it. No explicit wood shelter is needed
-     * either: two or more satellite roots already shelter the central
-     * one through `roots_to`, the same mutual-shelter path
-     * step_one_withering_cell() gives a column of root under a living
-     * tree (see test_a_root_column_under_a_living_tree_does_not_rot). */
+     * placed there can ever reach it. */
     static const int sat_dx[3] = {-1, 0, 1};
     for (int i = 0; i < satellite_roots; i++) {
         sand_set(&t, cx + sat_dx[i], cy - 1, MATX(MATX_ROOT));
@@ -1483,15 +1410,11 @@ static void test_a_continuously_watered_root_system_still_saturates(void)
  * a mistake there does not fail to build - it paints some other extended
  * material in leaf green, which is the sort of thing nobody notices until
  * a fourteenth material arrives and comes out looking like a hedge. */
-/* A root darkens by STRUCTURE, not by time: the painter hands
- * material_colours() the count of root neighbours in `depth` for a root
- * cell (material_root_neighbours(), material.h), and the shade steps from
- * the fresh tan toward a wood-like brown as that count climbs. A tip (one
- * neighbour) must wear exactly the fresh colour a lone seed does, and every
- * step older must be darker in every channel - checked per channel after
- * undoing the panel's byte swap, rather than as a luminance, so a hue drift
- * could not pass as "darker". Nothing else may read `depth` this way: a
- * leaf at depth 0 and at depth 4 is the same leaf. */
+/* A root darkens by STRUCTURE: `depth` carries the count of root
+ * neighbours (material_root_neighbours()), and the shade steps toward a
+ * wood-like brown as it climbs - checked per channel, not as a luminance,
+ * so a hue drift cannot pass as "darker". Wood and leaf read `depth` too,
+ * but as a wave fraction, not a neighbour count - see their own tests. */
 static unsigned r5(gfx_color_t c) { const unsigned n = (unsigned)((c >> 8) | (c << 8)) & 0xFFFFu; return (n >> 11) & 31u; }
 static unsigned g6(gfx_color_t c) { const unsigned n = (unsigned)((c >> 8) | (c << 8)) & 0xFFFFu; return (n >> 5) & 63u; }
 static unsigned b5(gfx_color_t c) { const unsigned n = (unsigned)((c >> 8) | (c << 8)) & 0xFFFFu; return n & 31u; }
@@ -1517,12 +1440,26 @@ static void test_a_root_darkens_as_more_root_grows_around_it(void)
                              b5(by_count[4]) < b5(by_count[1]),
         "a root touched on four sides must be visibly darker than a tip, in "
         "every channel - the gradient has to actually exist");
+}
 
-    gfx_color_t leaf_shallow[3], leaf_deep[3];
-    material_colours(MATX(MATX_LEAF), 3u, 0u, 0u, leaf_shallow);
-    material_colours(MATX(MATX_LEAF), 3u, 0u, 4u, leaf_deep);
-    TEST_ASSERT_EQUAL_HEX16_MESSAGE(leaf_shallow[0], leaf_deep[0],
-        "only a root reads `depth` as a neighbour count - a leaf must ignore it");
+/* Leaf reads `depth` as the same wave fraction wood does, not a neighbour
+ * count and not ignored either - leaf is now part of the same gust the
+ * wood beside it catches (material_colours(), MATX_LEAF case). */
+static void test_leaf_tints_toward_the_wave_highlight(void)
+{
+    gfx_color_t at_rest[3], mid[3], peak[3], other_hash_peak[3];
+
+    /* hash 0's own base grain sits at LEAF_DARK, below the highlight's own
+     * green, so blending toward it must raise green monotonically. */
+    material_colours(MATX(MATX_LEAF), 0u, 0u, 0u, at_rest);
+    material_colours(MATX(MATX_LEAF), 0u, 0u, 129u, mid);
+    material_colours(MATX(MATX_LEAF), 0u, 0u, 256u, peak);
+    material_colours(MATX(MATX_LEAF), 5u, 0u, 256u, other_hash_peak);
+
+    TEST_ASSERT_TRUE_MESSAGE(g6(mid[0]) > g6(at_rest[0]) && g6(mid[0]) < g6(peak[0]),
+        "the midpoint must sit strictly between the base grain and the peak");
+    TEST_ASSERT_EQUAL_HEX16_MESSAGE(peak[0], other_hash_peak[0],
+        "at full depth every hash converges on the exact same highlight colour");
 }
 
 /* The count itself, on three synthetic rows with the top one missing the
@@ -1545,6 +1482,254 @@ static void test_root_neighbours_are_counted_across_three_rows(void)
         "the right-hand grid edge is not read past");
 }
 
+/* material_wood_leaf_top5() must exclude exactly the 3 directions most
+ * aligned with gravity, keeping the other 5 - see material_wood_near_leaf(). */
+static bool top5_contains(const int8_t top5[5][2], int dx, int dy)
+{
+    for (int i = 0; i < 5; i++) {
+        if (top5[i][0] == dx && top5[i][1] == dy) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void test_wood_leaf_top5_excludes_the_three_most_downward_directions(void)
+{
+    int8_t top5[5][2];
+    int last_down = 0;
+
+    /* Straight down: excludes down, down-left, down-right; keeps up,
+     * up-left, up-right, left, right. */
+    material_wood_leaf_top5(0, 100, &last_down, top5);
+    TEST_ASSERT_FALSE_MESSAGE(top5_contains(top5, 0, 1), "down must not be kept");
+    TEST_ASSERT_FALSE_MESSAGE(top5_contains(top5, -1, 1), "down-left must not be kept");
+    TEST_ASSERT_FALSE_MESSAGE(top5_contains(top5, 1, 1), "down-right must not be kept");
+    TEST_ASSERT_TRUE_MESSAGE(top5_contains(top5, 0, -1), "up must be kept");
+    TEST_ASSERT_TRUE_MESSAGE(top5_contains(top5, -1, 0), "left must be kept");
+    TEST_ASSERT_TRUE_MESSAGE(top5_contains(top5, 1, 0), "right must be kept");
+}
+
+static void test_wood_leaf_top5_rotates_with_gravity(void)
+{
+    int8_t top5[5][2];
+    int last_down = 0;
+
+    /* (60, 80) is not tied with a neighbouring ring direction: down-right
+     * wins outright, so it and its own two ring neighbours (down, right)
+     * drop out instead of test 1's straight-down set. Down-left survives -
+     * only 3 of 8 are ever excluded. */
+    material_wood_leaf_top5(60, 80, &last_down, top5);
+    TEST_ASSERT_FALSE_MESSAGE(top5_contains(top5, 0, 1), "down must not be kept");
+    TEST_ASSERT_FALSE_MESSAGE(top5_contains(top5, 1, 1), "down-right must not be kept");
+    TEST_ASSERT_FALSE_MESSAGE(top5_contains(top5, 1, 0), "right must not be kept");
+    TEST_ASSERT_TRUE_MESSAGE(top5_contains(top5, 1, -1), "up-right must be kept");
+    TEST_ASSERT_TRUE_MESSAGE(top5_contains(top5, -1, 1), "down-left must still be kept");
+}
+
+/* Hysteresis: recomputing "most downward" fresh every frame flipped right
+ * at the tie between two ring directions, popping every wood cell whose
+ * top5 set had just changed. */
+static void test_wood_leaf_top5_resists_a_small_lead_near_the_boundary(void)
+{
+    int8_t top5[5][2];
+    int last_down = 2; /* settled on "right" as of last frame */
+
+    /* Down-right's dot (110) edges right's (100) by only 10, well under
+     * the hysteresis margin for this gravity's magnitude (~25) - must not
+     * flip just because it is technically now ahead. */
+    material_wood_leaf_top5(100, 10, &last_down, top5);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(2, last_down, "a small lead must not flip the sticky choice");
+    TEST_ASSERT_TRUE_MESSAGE(top5_contains(top5, 0, 1), "down stays kept - the choice did not move to down-right");
+}
+
+static void test_wood_leaf_top5_still_flips_on_a_clear_change(void)
+{
+    int8_t top5[5][2];
+    int last_down = 2; /* settled on "right" as of last frame */
+
+    /* Straight down beats "right" by the whole magnitude, far past the
+     * margin - a real tilt must still move the sticky choice. */
+    material_wood_leaf_top5(0, 100, &last_down, top5);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, last_down, "a clear win must still flip the sticky choice");
+    TEST_ASSERT_TRUE_MESSAGE(top5_contains(top5, 1, 0), "right is now kept - the choice moved to straight down");
+}
+
+/* material_wood_near_leaf() with `slots` 1 checks only the ONE slot `hash`
+ * picks, not all five - the mechanism that turns a stable per-cell hash
+ * into a stand-in for a one-time random assignment, at the cost of one
+ * read instead of up to eight. */
+static void test_wood_near_leaf_checks_its_assigned_slot(void)
+{
+    static const int8_t top5[5][2] = { {0, -1}, {-1, -1}, {1, -1}, {-1, 0}, {1, 0} };
+    const cell_t L = MATX(MATX_LEAF), D = CELL_SOIL(MAT_DIRT, 0, 3), Wd = CELL_MAKE(MAT_WOOD, 0);
+    const uint8_t above[5] = { D, D, L, D, D }; /* leaf sits directly "up" (slot 0) */
+    const uint8_t row[5]   = { D, D, Wd, D, D };
+    const uint8_t below[5] = { D, D, D, D, D };
+
+    TEST_ASSERT_TRUE_MESSAGE(material_wood_near_leaf(above, row, below, 2, 5, top5, 0u, 1u),
+        "hash 0 picks slot 0 (up), where the leaf actually is");
+    TEST_ASSERT_FALSE_MESSAGE(material_wood_near_leaf(above, row, below, 2, 5, top5, 1u, 1u),
+        "hash 1 picks slot 1 (up-left), empty - the leaf at slot 0 must not "
+        "leak through a different slot's check");
+    TEST_ASSERT_FALSE_MESSAGE(material_wood_near_leaf(NULL, row, below, 2, 5, top5, 0u, 1u),
+        "a NULL above row (the grid's top edge) must not crash or false-positive");
+}
+
+/* `slots` widens how many of the 5 are checked, starting from the same
+ * hash-picked slot and wrapping - not a different single slot, an actual
+ * wider window, which is what makes coverage a tunable dial. */
+static void test_wood_near_leaf_widens_coverage_with_more_slots(void)
+{
+    static const int8_t top5[5][2] = { {0, -1}, {-1, -1}, {1, -1}, {-1, 0}, {1, 0} };
+    const cell_t L = MATX(MATX_LEAF), D = CELL_SOIL(MAT_DIRT, 0, 3), Wd = CELL_MAKE(MAT_WOOD, 0);
+    const uint8_t above[5] = { D, D, L, D, D }; /* leaf at slot 0 ("up") */
+    const uint8_t row[5]   = { D, D, Wd, D, D };
+    const uint8_t below[5] = { D, D, D, D, D };
+
+    TEST_ASSERT_FALSE_MESSAGE(material_wood_near_leaf(above, row, below, 2, 5, top5, 4u, 1u),
+        "checking only slot 4 (right) finds nothing - the leaf is at slot 0");
+    TEST_ASSERT_TRUE_MESSAGE(material_wood_near_leaf(above, row, below, 2, 5, top5, 4u, 2u),
+        "checking 2 slots from the same start wraps around to slot 0 too");
+}
+
+/* `depth` carries the wave's fraction (0-255) plus one for MAT_WOOD here,
+ * not a neighbour count (that's root's own use, see
+ * test_a_root_darkens_as_more_root_grows_around_it above) - see the
+ * MAT_WOOD case in material_colours(). */
+static void test_unlit_wood_tints_green_only_beside_a_leaf(void)
+{
+    const cell_t wood = CELL_MAKE(MAT_WOOD, 0);
+    gfx_color_t away[3], beside[3];
+
+    const material_pattern_t pat_away = material_colours(wood, 3u, 0u, 0u, away);
+    const material_pattern_t pat_beside = material_colours(wood, 3u, 0u, 129u, beside);
+
+    TEST_ASSERT_EQUAL_MESSAGE(MATERIAL_SPECKLED, pat_away, "plain wood keeps its grained pattern");
+    TEST_ASSERT_EQUAL_MESSAGE(MATERIAL_FLAT, pat_beside, "the live blend has no per-cell grain");
+    TEST_ASSERT_NOT_EQUAL_HEX16_MESSAGE(away[0], beside[0],
+        "a leaf neighbour must actually change unlit wood's colour");
+}
+
+/* The blend is a live LERP8 between the two named anchors, exact at both
+ * ends (depth 1 = fraction 0 = WOOD_LEAF_TINT_LO, depth 256 = fraction 255
+ * = WOOD_LEAF_TINT_HI) and monotonic in between - see the MAT_WOOD case in
+ * material_colours(). */
+static void test_wood_leaf_tint_blends_smoothly_between_its_anchors(void)
+{
+    const cell_t wood = CELL_MAKE(MAT_WOOD, 0);
+    gfx_color_t lo[3], mid[3], hi[3];
+
+    material_colours(wood, 3u, 0u, 1u, lo);
+    material_colours(wood, 3u, 0u, 129u, mid);
+    material_colours(wood, 3u, 0u, 256u, hi);
+
+    TEST_ASSERT_TRUE_MESSAGE(g6(mid[0]) > g6(lo[0]) && g6(mid[0]) < g6(hi[0]),
+        "the midpoint must sit strictly between the two anchors, not equal "
+        "either one - a live blend, not a snap to the nearer end");
+    TEST_ASSERT_TRUE_MESSAGE(g6(hi[0]) > g6(lo[0]), "the high anchor must read greener than the low one");
+}
+
+/* material_wood_leaf_wave() is the pure function behind the animation -
+ * app_sand.c is not host-portable, so this is the only place its shape gets
+ * checked (see docs/sand/Shading-and-Colour.md, "How to test a shading
+ * change"). */
+static void test_wood_leaf_wave_rises_then_falls_smoothly(void)
+{
+    /* pos 0, hash 0: no spatial or salt shift, isolating the wave's shape
+     * in time. Known from material_palette.c: PERIOD 600, RISE 60,
+     * FALL 140 - a short, thin gust against a longer quiet gap. hash 0's
+     * own roll (see test_wood_leaf_wave_sometimes_sits_a_gust_out) happens
+     * to activate cycle 0, so this still isolates the shape cleanly. */
+    const unsigned at_start = material_wood_leaf_wave(0u, 0, 100, 0u);
+    const unsigned at_rise_mid = material_wood_leaf_wave(30u, 0, 100, 0u);
+    const unsigned at_peak = material_wood_leaf_wave(60u, 0, 100, 0u);
+    const unsigned at_fall_mid = material_wood_leaf_wave(130u, 0, 100, 0u);
+    const unsigned at_settled = material_wood_leaf_wave(200u, 0, 100, 0u);
+    const unsigned at_quiet = material_wood_leaf_wave(400u, 0, 100, 0u);
+    const unsigned at_wrap = material_wood_leaf_wave(600u, 0, 100, 0u);
+
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(0u, at_start, "the gust starts at baseline");
+    TEST_ASSERT_TRUE_MESSAGE(at_rise_mid > at_start && at_rise_mid < at_peak,
+        "rising smoothly toward the peak, not jumping straight there");
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(255u, at_peak, "the peak sits at the end of the rise");
+    TEST_ASSERT_TRUE_MESSAGE(at_fall_mid < at_peak && at_fall_mid > at_settled,
+        "falling smoothly back down, not snapping");
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(0u, at_settled, "back to baseline once the fall finishes");
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(0u, at_quiet, "the quiet gap between gusts stays flat, not a slow ramp");
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(at_start, at_wrap, "one full period returns to the same baseline");
+}
+
+/* Position along the wind axis shifts the wave, the mechanism behind the
+ * "wind sweeping a grove" look: without it every tree would pulse together. */
+static void test_wood_leaf_wave_shifts_with_position(void)
+{
+    /* 60ms puts pos 0 exactly at its peak; pos 10 of a 100-wide span
+     * shifts by 10*SCREEN_SPAN_MS(4000)/100 = 400ms, landing it in the
+     * quiet gap instead - proving the travelling band is narrow. */
+    const unsigned at_pos0 = material_wood_leaf_wave(60u, 0, 100, 0u);
+    const unsigned at_pos10 = material_wood_leaf_wave(60u, 10, 100, 0u);
+
+    TEST_ASSERT_NOT_EQUAL_UINT_MESSAGE(at_pos0, at_pos10,
+        "different screen columns must sit at different points on the wave "
+        "at the same instant, or every trunk would pulse together");
+}
+
+/* `hash` salts each cell's own phase within the shared sweep - the same
+ * shape as glass's `(hash & 0xFF) + glass_phase`, so leaves catching the
+ * same gust still light up at slightly different moments within it. */
+static void test_wood_leaf_wave_salts_by_hash(void)
+{
+    const unsigned at_hash0 = material_wood_leaf_wave(60u, 0, 100, 0u);
+    const unsigned at_hash100 = material_wood_leaf_wave(60u, 0, 100, 100u);
+
+    TEST_ASSERT_NOT_EQUAL_UINT_MESSAGE(at_hash0, at_hash100,
+        "two cells at the same time and position must still differ by hash "
+        "alone, or every leaf would shade identically");
+}
+
+/* Every eligible cell lighting up on every gust read as one shine sweeping
+ * through, not real wind. Known from material_palette.c: hash 0 activates
+ * cycle 0's peak, is rolled out on cycle 1, and activates again on cycle 2 -
+ * the same cell must skip some gusts, and which ones must vary over time. */
+static void test_wood_leaf_wave_sometimes_sits_a_gust_out(void)
+{
+    const unsigned cycle0_peak = material_wood_leaf_wave(60u, 0, 100, 0u);
+    const unsigned cycle1_peak = material_wood_leaf_wave(660u, 0, 100, 0u);
+    const unsigned cycle2_peak = material_wood_leaf_wave(1260u, 0, 100, 0u);
+
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(255u, cycle0_peak, "cycle 0's gust must activate");
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(0u, cycle1_peak, "cycle 1's gust must be rolled out");
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(255u, cycle2_peak, "cycle 2's gust must activate again");
+}
+
+/* The wind axis must stay perpendicular to gravity - a grid axis (raw `cx`)
+ * does not rotate with the device, so a landscape hold swept the wrong way
+ * (top to bottom) until this replaced it. Checked by dot product rather
+ * than exact components, since only the "stays level" property matters. */
+static void test_wood_leaf_wind_axis_stays_perpendicular_to_gravity(void)
+{
+    static const int gxs[] = { 0, 100, -100, 60, -30 };
+    static const int gys[] = { 0, 0, 40, -80, -70 };
+
+    for (size_t i = 0; i < sizeof gxs / sizeof gxs[0]; i++) {
+        int ux_q8 = 0, uy_q8 = 0;
+        material_wood_leaf_wind_axis(gxs[i], gys[i], &ux_q8, &uy_q8);
+        const long dot = (long)gxs[i] * ux_q8 + (long)gys[i] * uy_q8;
+        char why[80];
+        snprintf(why, sizeof why, "gravity (%d,%d), dot %ld", gxs[i], gys[i], dot);
+        /* Exactly 0 for the true rotation; a few units of Q8 truncation
+         * error survive integer division, but a swapped/un-negated
+         * component would be off by orders of magnitude more than this. */
+        TEST_ASSERT_TRUE_MESSAGE(dot > -400 && dot < 400, why);
+    }
+
+    int ux_q8 = 0, uy_q8 = 0;
+    material_wood_leaf_wind_axis(0, 0, &ux_q8, &uy_q8);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(256, ux_q8, "zero gravity defaults to sweeping along grid-x");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, uy_q8, "zero gravity defaults to sweeping along grid-x");
+}
+
 static void test_the_right_extended_materials_are_grained(void)
 {
     gfx_color_t col[3] = { 0, 0, 0 };
@@ -1557,8 +1742,13 @@ static void test_the_right_extended_materials_are_grained(void)
         int distinct = 0;
         gfx_color_t seen[8];
         for (unsigned hash = 0; hash < 8u; hash++) {
+            /* depth 0 for leaf: any nonzero depth now blends leaf's grain
+             * toward the wave's highlight (material_colours(), MATX_LEAF
+             * case), and 255 sits so far into that blend that RGB565
+             * quantisation collapses all 8 hashes toward the same pixel -
+             * a real property of the blend, not what THIS test checks. */
             const material_pattern_t pat = material_colours(c, hash, 0u,
-                                                            255u,
+                                                            k == MATX_LEAF ? 0u : 255u,
                                                             col);
             char why[96];
             snprintf(why, sizeof why, "extended material %d", k);
@@ -2354,8 +2544,6 @@ void run_sand_roots_suite(void)
     RUN_TEST(test_a_root_column_reaches_below_the_collar);
     RUN_TEST(test_lava_burns_a_root_out_of_the_ground);
     RUN_TEST(test_fire_leaves_a_root_alone);
-    RUN_TEST(test_an_orphaned_root_in_dry_ground_rots_away);
-    RUN_TEST(test_a_root_column_under_a_living_tree_does_not_rot);
     RUN_TEST(test_a_canopy_waters_the_soil_through_its_own_roots);
     RUN_TEST(test_a_rooted_collar_survives_the_bed_shifting_away);
     RUN_TEST(test_a_root_is_inert);
@@ -2370,7 +2558,21 @@ void run_sand_roots_suite(void)
     RUN_TEST(test_roots_grow_toward_the_wet_side_only);
     RUN_TEST(test_a_continuously_watered_root_system_still_saturates);
     RUN_TEST(test_a_root_darkens_as_more_root_grows_around_it);
+    RUN_TEST(test_leaf_tints_toward_the_wave_highlight);
     RUN_TEST(test_root_neighbours_are_counted_across_three_rows);
+    RUN_TEST(test_wood_leaf_top5_excludes_the_three_most_downward_directions);
+    RUN_TEST(test_wood_leaf_top5_rotates_with_gravity);
+    RUN_TEST(test_wood_leaf_top5_resists_a_small_lead_near_the_boundary);
+    RUN_TEST(test_wood_leaf_top5_still_flips_on_a_clear_change);
+    RUN_TEST(test_wood_near_leaf_checks_its_assigned_slot);
+    RUN_TEST(test_wood_near_leaf_widens_coverage_with_more_slots);
+    RUN_TEST(test_unlit_wood_tints_green_only_beside_a_leaf);
+    RUN_TEST(test_wood_leaf_tint_blends_smoothly_between_its_anchors);
+    RUN_TEST(test_wood_leaf_wave_rises_then_falls_smoothly);
+    RUN_TEST(test_wood_leaf_wave_shifts_with_position);
+    RUN_TEST(test_wood_leaf_wave_salts_by_hash);
+    RUN_TEST(test_wood_leaf_wave_sometimes_sits_a_gust_out);
+    RUN_TEST(test_wood_leaf_wind_axis_stays_perpendicular_to_gravity);
     RUN_TEST(test_the_right_extended_materials_are_grained);
     RUN_TEST(test_metal_shine_does_not_vary_between_cells);
     RUN_TEST(test_the_air_agrees_about_weight_speed_and_lifetime);

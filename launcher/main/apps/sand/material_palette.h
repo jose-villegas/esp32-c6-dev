@@ -102,6 +102,35 @@ static inline unsigned material_root_neighbours(const uint8_t *above,
     return n;
 }
 
+/* Checks `slots` of material_wood_leaf_top5()'s 5 gravity-relative
+ * directions, never the 3 most downward, so a leaf near the ground cannot
+ * tint a trunk. Starts from a slot the cell's own hash picks and walks
+ * forward - stable with no storage spent (same reasoning as
+ * material_wood_leaf_wave()'s salt), and still varies cell to cell when
+ * `slots` is less than 5, not just when it is exactly 1. */
+static inline bool material_wood_near_leaf(const uint8_t *above,
+                                           const uint8_t *row,
+                                           const uint8_t *below,
+                                           int cx, int w,
+                                           const int8_t top5[5][2],
+                                           unsigned hash,
+                                           unsigned slots)
+{
+    const unsigned start = hash % 5u;
+    for (unsigned k = 0; k < slots && k < 5u; k++) {
+        const int8_t *d = top5[(start + k) % 5u];
+        const int nx = cx + d[0];
+        if ((unsigned)nx >= (unsigned)w) {
+            continue;
+        }
+        const uint8_t *src = d[1] < 0 ? above : d[1] > 0 ? below : row;
+        if (src && src[nx] == MATX(MATX_LEAF)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* See material_palette.c. `depth` is local to each puddle. Specular table
  * depends on gravity's direction. */
 void material_set_gravity(int gx, int gy);
@@ -109,6 +138,16 @@ void material_set_gravity(int gx, int gy);
 /* Tracks board, slanting shine. Pure, stateless. Returns (1,1) for degenerate
  * input. */
 void material_shine_direction(int gx, int gy, int *ux_q8, int *uy_q8);
+
+/* Perpendicular to gravity, Q8 unit vector - see material_wood_leaf_wave().
+ * Pure, stateless. Returns (256, 0) for degenerate (zero) gravity. */
+void material_wood_leaf_wind_axis(int gx, int gy, int *ux_q8, int *uy_q8);
+
+/* The 5 of 8 grid directions that are NOT among the 3 most aligned with
+ * gravity - see material_wood_near_leaf(). Call once per frame, not per
+ * cell. `*last_down` is hysteresis state the caller owns and initialises
+ * to 0 (straight down); see this function's own comment for why. */
+void material_wood_leaf_top5(int gx, int gy, int *last_down, int8_t top5[5][2]);
 
 /* Separate gravity setter. Phase is time, gravity direction. Test
  * independence. See material_colours() for foam. */
@@ -121,3 +160,9 @@ void material_set_cullet_phase(unsigned phase);
 
 /* Names direction, not rate; steady tilt stays fixed. */
 void material_set_glass_phase(int phase);
+
+/* Pure: see material_palette.c for the wave shape. `time_ms` is a plain
+ * running clock app_sand.c owns; `pos` is the cell's coordinate along
+ * material_wood_leaf_wind_axis(), `span` the grid's own width, `hash` the
+ * cell's own material_grain_hash() salting its phase within the sweep. */
+unsigned material_wood_leaf_wave(uint32_t time_ms, int pos, int span, unsigned hash);

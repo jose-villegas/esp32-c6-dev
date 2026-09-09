@@ -288,7 +288,7 @@ static void scene_wet_earth(sand_t *s)
  * THE GAP THIS CLOSES, demonstrated rather than assumed: setting GROW_REACH
  * to 1 - a value that cripples plant growth outright - moved not one of the
  * eight scenes above. The whole plant and root system, anchored()'s support
- * search, find_water(), rooting, budding, sprouting and withering, had no
+ * search, find_water(), rooting, budding and sprouting, had no
  * behavioural cover at all, while a performance round was about to start
  * changing it.
  *

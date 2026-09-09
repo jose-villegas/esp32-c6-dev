@@ -21,7 +21,7 @@ typedef enum {
     F_chills, F_conducts, F_boils, F_warms, F_thaws,
     F_wets, F_soaks, F_dries, F_soil,
     F_soaked_chance,
-    F_grows, F_falls, F_withers,
+    F_grows, F_falls,
     F_harden_run, F_harden_chance,
     F_roots,
     F_canopy, F_trunk_girth, F_holds_line,
