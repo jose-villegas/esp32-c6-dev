@@ -82,6 +82,14 @@ void build_wet_earth_scene(sand_t *s);
 
 /* A bed of sand capped with damp dirt, seeded and rained on - the only scene
  * here in which anything grows. See the builder for the spacing rule. */
+/* A grove of bushy trees, painted rather than grown - the shape the wood/leaf
+ * gust shading is for. Trunk wood away from leaves is the scan's worst case;
+ * canopy wood beside leaves is the dirtying's. See the builder. */
+#define TREE_GROVE_TREES     4
+#define TREE_GROVE_HEIGHT   70
+#define TREE_GROVE_CANOPY_R 18
+void build_tree_grove_scene(sand_t *s);
+
 void build_plant_bed_scene(sand_t *s);
 
 /* Another fall of rain onto an existing bed. One pour is drunk dry in a few
