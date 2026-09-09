@@ -263,11 +263,7 @@ static bool step_one_gas_grain(sand_t *s, uint8_t *row, uint8_t *prow,
     const uint8_t mat_id  = CELL_MATERIAL(grain);
     const uint8_t density = mat->density;
 
-    bool vanished = false;
-    SAND_STEP_GATE(gas_decay) {
-        vanished = !tick_decay(s, row, x, y, &grain, mat, mat_id);
-    }
-    if (vanished) {
+    if (!tick_decay(s, row, x, y, &grain, mat, mat_id)) {
         return true;    /* vanished - already woken, nothing left to move */
     }
 
@@ -286,13 +282,13 @@ static bool step_one_gas_grain(sand_t *s, uint8_t *row, uint8_t *prow,
      * it does not consume the mobility roll differently than the branch below;
      * both paths have already drawn it. */
     if (s->gas_walk) {
-        if (SAND_STEP_GATED(gas_move, try_moving)) {
+        if (try_moving) {
             /* gas_walk_once() handles an up-ish draw blocked by a
              * lighter-than-gas liquid itself, so this needs no separate
              * try_bubble() call of its own. */
             moved = gas_walk_once(s, row, x, y, w, rdx, rdy, grain, density);
         }
-        if (SAND_STEP_GATED(gas_wake, moved)) {
+        if (moved) {
             wake_block_and_neighbors(s, x, y);
         }
         return moved;
@@ -593,9 +589,8 @@ static inline bool equalise_gas_one_row_cell(sand_t *s, uint8_t *row,
 
     bool stayed_in_row = false;
     int  tx = 0;
-    if (SAND_STEP_GATED(gas_eq_body,
-                        equalise_gas_one_cell(s, row, arow, nrow, x, y, px, py, rdx, rdy,
-                                              sight, id, c, &stayed_in_row, &tx, carry_ok, run))
+    if (equalise_gas_one_cell(s, row, arow, nrow, x, y, px, py, rdx, rdy,
+                                              sight, id, c, &stayed_in_row, &tx, carry_ok, run)
         && stayed_in_row) {
         gas_union_touched_x(touched, touched_x0, touched_x1,
                             x < tx ? x : tx, x > tx ? x : tx);
@@ -668,7 +663,7 @@ static bool equalise_gas_one_row(sand_t *s, int y, int w, int x_from,
     int row_sight = 0;
     const bool packed = row_is_packed(row, w, is_gas, &any_gas, &row_sight);
     const bool skip =
-        SAND_STEP_GATED(gas_row_skip, packed && (py == 0 || *clean_run >= row_sight));
+        packed && (py == 0 || *clean_run >= row_sight);
     *clean_run = packed ? *clean_run + 1 : 0;
     if (skip) {
         return any_gas;
@@ -770,23 +765,21 @@ void sand_step_gas(sand_t *s, int gx, int gy, int dx, int dy,
 
     bool found_any = false;
     const int w = s->w;
-    SAND_STEP_GATE(gas_rise) {
-        for (int y = y_from; y != y_to; y += y_step) {
-            if (step_one_gas_row(s, y, w, rdx, rdy, rslide_a, rslide_b,
-                                 rx_step, rload_dx, rload_dy, jostle,
-                                 driven_gas)) {
-                found_any = true;
-            }
+    for (int y = y_from; y != y_to; y += y_step) {
+        if (step_one_gas_row(s, y, w, rdx, rdy, rslide_a, rslide_b,
+                             rx_step, rload_dx, rload_dy, jostle,
+                             driven_gas)) {
+            found_any = true;
         }
     }
+    
 
     /* Then spread, alternating which way it looks each step - same reason
      * liquid's cross-flow does (see sand_step_liquids() in sand_liquid.c).
      * Kept on its own flip flag rather than sharing liquid_flip, so gas's
      * alternation is not coupled to whether water also moved this step. */
-    if (SAND_STEP_GATED(gas_equalise,
-                        equalise_gas(s, s->gas_flip ? perp_a : perp_b,
-                                     rdx, rdy))) {
+    if (equalise_gas(s, s->gas_flip ? perp_a : perp_b,
+                                     rdx, rdy)) {
         found_any = true;
     }
     s->gas_flip = !s->gas_flip;
