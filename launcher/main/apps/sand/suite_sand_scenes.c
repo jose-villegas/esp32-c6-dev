@@ -1464,6 +1464,65 @@ static void test_the_boiler_scene_keeps_boiling_across_the_window(void)
  * silently measure nothing but liquid movement. Runs at
  * SAND_SOAK_PER_MATERIAL alongside the app's own scatter, decay and
  * mobility settings - app_sand.c calls all four. */
+/* A PLANTED BED, the one thing no scene here grows.
+ *
+ * The plant code - anchored()'s BFS, find_water(), the root roll - only runs
+ * for a cell that is already a plant standing on damp soil, so every existing
+ * scene prices it at zero. This is a bed of it: sand at the bottom, a dirt
+ * cap because only soil can be drunk from, seeds spaced along the surface, and
+ * water on top for them to pull up.
+ *
+ * SPACING IS THE YIELD KNOB. Seeds too close exhaust the same soil and stop
+ * spending moisture, which is the failure mode suite_sand_roots.c works around
+ * by replanting; spaced out, each has its own damp column and keeps growing.
+ * A timed step wants many plants busy at once, not one tall one. */
+#define PLANT_BED_SEED_SPACING 8
+
+void build_plant_bed_scene(sand_t *s)
+{
+    const int bed_top  = (REAL_H * 7) / 10;   /* bottom 30% is ground */
+    const int dirt_top = REAL_H - (REAL_H - bed_top) / 2;
+
+    for (int y = bed_top; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            /* Dirt is the CAP, not the fill: roots weld into soil, and soil is
+             * what holds the moisture they drink, so the surface has to be
+             * dirt however the rest of the bed is made. */
+            sand_set(s, x, y, y < dirt_top
+                                  ? CELL_SOIL(MAT_DIRT, 1, 0)
+                                  : CELL_MAKE(MAT_SAND, 0));
+        }
+    }
+
+    for (int x = PLANT_BED_SEED_SPACING / 2; x < REAL_W;
+         x += PLANT_BED_SEED_SPACING) {
+        sand_set(s, x, bed_top - 1, MATX(MATX_PLANT));
+    }
+
+    plant_bed_rain(s);
+}
+
+/* SEPARATE FROM THE BUILDER because one pour is not enough: the bed drinks a
+ * fall of rain dry in a few hundred steps, and a plant that runs out of
+ * moisture simply stops - which is the same exhaustion suite_sand_roots.c
+ * works around by replanting. Callers pour again partway through settling so
+ * the timed steps land on a bed that is still growing, not one that finished.
+ *
+ * Poured ABOVE the seeds rather than onto them: water dropped on a seed
+ * buries it before it can grow. */
+void plant_bed_rain(sand_t *s)
+{
+    const int bed_top = (REAL_H * 7) / 10;
+
+    for (int y = bed_top - 8; y < bed_top - 4; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            if (CELL_IS_EMPTY(sand_at(s, x, y))) {
+                sand_set(s, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+            }
+        }
+    }
+}
+
 void build_wet_earth_scene(sand_t *s)
 {
     const int earth_top = (REAL_H * 2) / 5;    /* bottom three fifths,
