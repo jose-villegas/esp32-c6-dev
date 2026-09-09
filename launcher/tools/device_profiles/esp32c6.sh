@@ -64,17 +64,14 @@ DP_CODEGEN_SOURCE="launcher/build.diag/compile_commands.json, sand_reactions.c e
 # The one cache between the core and flash-resident code and const data;
 # SRAM is direct-access, so there is no data cache to model.
 #
-# CAUTION on the size: ESP-IDF's esp32c6 ROM header (components/esp_rom/
-# esp32c6/include/esp32c6/rom/cache.h) declares MAX_ICACHE_SIZE 16384 - but
-# it declares exactly the ESP32-C3's geometry throughout and looks copied.
-# Ways (8) and line size (32 B) agree between that header and the TRM; only
-# the size disagrees, and 32 KB is what this repo has measured against.
-# Re-verify the size against the C6 TRM's L1 Cache chapter before an oracle
-# result turns on it, and run both sizes if it matters.
+# DO NOT take cache geometry from ESP-IDF's esp32c6 ROM header (components/
+# esp_rom/esp32c6/include/esp32c6/rom/cache.h): it declares exactly the
+# ESP32-C3's geometry throughout and is copied. It disagrees with the
+# datasheet on BOTH size (16384) and ways (8). Only its 32-byte line is right.
 DP_ICACHE_BYTES=32768
 DP_ICACHE_LINE_BYTES=32
-DP_ICACHE_WAYS=8
-DP_ICACHE_SOURCE="ways+line from IDF esp32c6/rom/cache.h (MIN/MAX_ICACHE_WAYS 8, MIN_CACHE_LINE_SIZE 32); size 32 KB from docs/sand/Performance-Tuning-Attempts.md 'Fixed facts' - see the caution above"
+DP_ICACHE_WAYS=4
+DP_ICACHE_SOURCE="ESP32-C6 datasheet, External Memory: 32 KB read-only cache, four-way set associative, 32-byte block - https://documentation.espressif.com/esp32-c6_datasheet_en.html"
 
 # --- QEMU route ------------------------------------------------------------
 # Espressif's QEMU fork at IDF v5.5 has NO esp32c6 machine model: tools.json
