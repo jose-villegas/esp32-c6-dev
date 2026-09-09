@@ -437,7 +437,6 @@ clear_content_flags(sand_t* s) {
     s->may_have_faller = false;
     s->may_have_heat_holder = false;
 
-    s->may_have_withering = false;
     s->may_have_condenser = false;
 
     /* TRUE, not false, and it is the only one here that starts set. The others
@@ -480,9 +479,6 @@ latch_content_flags(sand_t* s, cell_t cell) {
     }
     if (r->falls != 0) {
         s->may_have_faller = true;
-    }
-    if (r->withers != 0) {
-        s->may_have_withering = true;
     }
     if (r->condenses != 0) {
         s->may_have_condenser = true;
@@ -701,7 +697,6 @@ bool step_one_rooting_cell(sand_t* s, int x, int y, int w, int h, const reaction
 bool step_one_drinking_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r, cell_t self);
 bool step_one_sprouting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r);
 bool step_one_budding_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r);
-bool step_one_withering_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r);
 bool step_one_growing_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r);
 
 /* A pool's true perpendicular to gravity rarely lines up with a ring
@@ -968,7 +963,6 @@ enum {
     RSTAGE_WARM,
     RSTAGE_SOAK_DRY,
     RSTAGE_FALL,
-    RSTAGE_WITHER,
     RSTAGE_DRINK,
     RSTAGE_ROOT,
     RSTAGE_GROW,
@@ -1010,9 +1004,6 @@ reaction_first_stage(const reaction_t* r, bool is_acid_rain_material) {
     }
     if (r->falls != 0) {
         return RSTAGE_FALL;
-    }
-    if (r->withers != 0) {
-        return RSTAGE_WITHER;
     }
     if (r->drinks != 0) {
         return RSTAGE_DRINK;
