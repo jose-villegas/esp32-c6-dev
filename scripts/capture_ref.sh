@@ -3,7 +3,7 @@
 # One command from a git ref to a device performance verdict.
 #
 #   scripts/capture_ref.sh <git-ref> [--baseline REPORT.md] [--no-restore] \
-#       [--build-only] [COM_PORT]
+#       [--build-only] [--perf-scope] [COM_PORT]
 #
 #   <git-ref>       branch, tag, or SHA. NOT HEAD or anything relative to it
 #                   (@, HEAD~1, @{-1}): refs are resolved in the capture
@@ -24,6 +24,13 @@
 #                   its own to pre-check that a candidate even LINKS
 #                   (this week's aligned(64) candidate failed only at link
 #                   time) before spending a device round on it.
+#   --perf-scope    forwarded to report_performance.sh's own --perf-scope,
+#                   and applied to --build-only's build too: the diag image
+#                   carries only suite_sand_perf and the scene builders it
+#                   calls. Shorter run, and the static RAM a round's own
+#                   pass gates and probe rows need (bd esp32c6-iqx). Its
+#                   numbers compare only with other perf-scoped captures, so
+#                   scope every capture of one round the same way.
 #   COM_PORT        serial port the device is on. Default: COM3. Ignored
 #                   entirely under --build-only - no port is ever opened.
 #
@@ -83,6 +90,7 @@ COM_PORT=""
 BASELINE=""
 NO_RESTORE=0
 BUILD_ONLY=0
+PERF_SCOPE=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -101,6 +109,10 @@ while [ $# -gt 0 ]; do
             ;;
         --build-only)
             BUILD_ONLY=1
+            shift
+            ;;
+        --perf-scope)
+            PERF_SCOPE=1
             shift
             ;;
         -h|--help)
@@ -185,16 +197,25 @@ if [ "$BUILD_ONLY" -eq 1 ]; then
     # ref's build would otherwise silently keep winning.
     rm -f "$LAUNCHER_DIR/build.diag/sdkconfig"
 
+    # --perf-scope appends a fourth fragment; the three above it are the ones
+    # report_performance.sh already builds with and are never reordered.
+    FRAGMENTS="sdkconfig.defaults;sdkconfig.defaults.diag;sdkconfig.defaults.diag_autorun"
+    SCOPE_FLAGS=""
+    if [ "$PERF_SCOPE" -eq 1 ]; then
+        FRAGMENTS="$FRAGMENTS;sdkconfig.defaults.diag_perf"
+        SCOPE_FLAGS="CONFIG_LAUNCHER_SELFTEST_SCOPE_PERF"
+    fi
+
     echo "=== Building build.diag for $CAPTURE_SHA (--build-only, no flash) ==="
     powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
         Remove-Item Env:\MSYSTEM -ErrorAction SilentlyContinue
         & '$IDF_EXPORT_PS1' | Out-Null
         Set-Location '$LAUNCHER_DIR_WIN'
-        idf.py -B build.diag -D SDKCONFIG_DEFAULTS=\"sdkconfig.defaults;sdkconfig.defaults.diag;sdkconfig.defaults.diag_autorun\" -D SDKCONFIG=build.diag/sdkconfig build
+        idf.py -B build.diag -D SDKCONFIG_DEFAULTS=\"$FRAGMENTS\" -D SDKCONFIG=build.diag/sdkconfig build
         exit \$LASTEXITCODE
     "
 
-    for flag in CONFIG_LAUNCHER_SELFTEST CONFIG_LAUNCHER_SELFTEST_AUTORUN; do
+    for flag in CONFIG_LAUNCHER_SELFTEST CONFIG_LAUNCHER_SELFTEST_AUTORUN $SCOPE_FLAGS; do
         if ! grep -q "^${flag}=y" "$LAUNCHER_DIR/build.diag/sdkconfig"; then
             echo "ERROR: ${flag} is not set in the generated build.diag/sdkconfig -" >&2
             echo "a flashed image built from this would boot without running" >&2
@@ -227,6 +248,7 @@ OUT_MD="$RESULTS_DIR/capture_ref_${REF_SLUG}_${TIMESTAMP}.md"
 
 set --
 [ "$NO_RESTORE" -eq 1 ] && set -- "$@" --no-restore
+[ "$PERF_SCOPE" -eq 1 ] && set -- "$@" --perf-scope
 [ -n "$BASELINE" ] && set -- "$@" --baseline "$BASELINE"
 set -- "$@" "$COM_PORT" "$OUT_MD"
 
