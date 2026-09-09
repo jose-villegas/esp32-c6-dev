@@ -76,6 +76,13 @@ idf.py -B build.diag.<yours> \
   -D SDKCONFIG=build.diag.<yours>/sdkconfig build
 ```
 
+Add `--perf-scope` to either script (or a fourth fragment,
+`sdkconfig.defaults.diag_perf`, to that command) for a build carrying only
+the sand frame-budget suite and its scenes — shorter, and the only way a
+round has static RAM left for its own gates. Read "Scope the build first"
+below before using it: its numbers do not compare with an unscoped
+capture's.
+
 Reports land in `launcher/main/apps/sand/tools/results/` — both the
 generated `.md` table and the raw serial capture (`*_raw.txt`) beside it.
 Read the raw capture, not just the table, when a row looks wrong; the table
@@ -369,6 +376,34 @@ Gates are **scaffolding**. They go in to answer one question, the answer goes
 in bd and the commit message, and they come out before the round ships — see
 "Retiring the instrumentation" below. What is permanent is this section.
 
+### Scope the build first, or there is no room for the instrument
+
+A full diagnostics image compiles all 48 suites, and their static RAM had
+left the "one grid fits after POST" gate 64 bytes of headroom — one added
+decomposition row costs 272 bytes and fails the build (bd esp32c6-iqx). Take
+every capture of a round perf-scoped and the instrumentation has somewhere to
+live:
+
+```sh
+sh scripts/capture_ref.sh <ref> --perf-scope
+bash launcher/main/apps/sand/tools/report_performance.sh --perf-scope
+```
+
+| | full | perf scope |
+|---|---|---|
+| suites compiled | 48 | 3 — `suite_sand_perf` + the scenes and fixtures it calls |
+| device run | 952 timed tests, 7m 23s | 39 timed tests, 2m 19s |
+| behaviour coverage | complete | none, deliberately — not a gate |
+
+It is also a *better* instrument, not merely a roomier one: a smaller image
+sits closer to release layout in the 32 KB instruction cache, and much of
+this campaign is fetch-bound rather than IPC-bound (bd esp32c6-vk4).
+
+**Scope every capture of one round the same way.** A scoped and an unscoped
+image are different layouts, so the within-capture rule below does not merely
+apply — it forbids the comparison outright. What each scope contains, and how
+selection works, is in [`../Testing-Guide.md`](../Testing-Guide.md).
+
 ### The instrument
 
 A `volatile bool` per thing you want to price:
@@ -425,7 +460,9 @@ flash-layout spread, wider than most effects worth chasing. Comparing two
 captures produced a phantom −5.5% win and a phantom +1.4% regression on the
 same change, and a change was written to fix the regression that did not
 exist. A gate flipped on one board in one image does not have this problem:
-untouched phases hold to 1–2 us across it.
+untouched phases hold to 1–2 us across it. Two differently-**scoped** builds
+are the same trap with a wider mouth: never diff a perf-scoped capture
+against an unscoped one.
 
 **Only size-neutral changes attribute cleanly.** A change that grows the hot
 function relocates everything after it and moves every phase together. When

@@ -76,6 +76,47 @@ menu "Launcher"
             sdkconfig.defaults.diag_autorun on top of sdkconfig.defaults.diag
             for exactly that reason.
 
+    choice LAUNCHER_SELFTEST_SCOPE
+        prompt "Which suites the self-test image carries"
+        depends on LAUNCHER_SELFTEST
+        default LAUNCHER_SELFTEST_SCOPE_FULL
+        help
+            LAUNCHER_SELFTEST above compiles the suites in; this decides
+            WHICH of them get compiled at all. Scoped around what a run
+            READS rather than around folders - see the two entries below.
+
+            Full is the default and must stay that way: a scope is opt-in
+            precisely so that coverage can never shrink by accident.
+
+        config LAUNCHER_SELFTEST_SCOPE_FULL
+            bool "Full - every suite"
+            help
+                Every suite in the tree, shell-owned and app-owned alike.
+                This is what run_device_tests.sh and report_test_results.sh
+                want: a gate is only a gate if it runs everything.
+
+        config LAUNCHER_SELFTEST_SCOPE_PERF
+            bool "Perf - sand's frame-budget suite and the scenes it measures"
+            help
+                Only what a sand performance capture reads:
+                suite_sand_perf.c plus the scene builders it calls. Nothing
+                else is compiled, so their .bss and .text are gone from the
+                image - which is what buys back the static-RAM headroom a
+                round needs for its own pass gates and probe rows (bd
+                esp32c6-iqx).
+
+                It is also a build closer to release layout in the 32 KB
+                instruction cache. That is a better instrument on a
+                fetch-bound workload, but it means absolute numbers from a
+                perf-scoped capture cannot be compared against an unscoped
+                one - only within-capture comparisons survive, which is
+                already rule 1 of docs/sand/Perf-Round-Guide.md.
+
+                NOT a test gate: it drops behaviour coverage on purpose.
+                Never take a merge decision from a perf-scoped run.
+
+    endchoice
+
     config LAUNCHER_SAND_PASS_GATES
         bool "Sand: per-pass volatile gates for sand_step()"
         default n

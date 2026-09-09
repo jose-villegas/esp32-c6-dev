@@ -198,7 +198,10 @@ directory. `build/` is release, `build.diag/` is diagnostics — separate
 directories so testing never reconfigures the normal build. Every
 `idf.py build` also runs `tools/check_static_ram.py` and fails if the
 framebuffer plus one grid would no longer fit in the device's contiguous
-heap.
+heap. A diagnostics build can also be **scoped** — full (default, every
+suite) or perf (`--perf-scope`: sand's frame-budget suite and its scenes
+only, which is what leaves a performance round the static RAM to
+instrument itself). See `docs/Testing-Guide.md`.
 
 ### Testing (`docs/Testing-Guide.md`)
 
