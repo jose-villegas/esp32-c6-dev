@@ -223,10 +223,9 @@ static inline bool equalise_one_row_cell(sand_t *s, uint8_t *row, int x, int y,
 
     bool stayed_in_row = false;
     int  tx = 0;
-    if (SAND_STEP_GATED(xflow_body,
-            equalise_one_cell(s, row, x, y, px, py, dx, dy, sight, id,
+    if (equalise_one_cell(s, row, x, y, px, py, dx, dy, sight, id,
                               CELL_VARIANT(c), bias_q8, &stayed_in_row, &tx) &&
-            stayed_in_row)) {
+            stayed_in_row) {
         /* Marking deferred for gravity-free orientations. mark_rows() impact.
          * Narrow x range for wake. */
         union_touched_x(touched, touched_x0, touched_x1,

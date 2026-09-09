@@ -904,12 +904,11 @@ static void step_one_block(const sweep_ctx_t *ctx, int bx)
          * instead of O(moves). Docs/Sand/Performance-Tuning-Attempts.md ninth
          * attempt advises questioning skip structures before implementation. */
         saw_liquid |= (unsigned)(ctx->is_liquid >> CELL_MATERIAL(c)) & 1u;
-        if (SAND_STEP_GATED(sweep_body,
-                           step_one_grain(ctx->s, ctx->row, ctx->prow,
+        if (step_one_grain(ctx->s, ctx->row, ctx->prow,
                                ctx->arow, ctx->brow, x, ctx->y, ctx->w,
                                ctx->dx, ctx->dy, ctx->slide_a, ctx->slide_b,
                                ctx->load_dx, ctx->load_dy, ctx->jostle,
-                               ctx->driven))) {
+                               ctx->driven)) {
             moved_here = true;
         }
     }
@@ -1035,34 +1034,6 @@ static void build_xflow(xflow_t *f, int gx, int gy)
  * called from sand_step() below, the same shape sand_step_liquids()/
  * sand_step_gas() already use. */
 
-#if CONFIG_LAUNCHER_SAND_PASS_GATES
-/* Declared extern in sand_priv.h, next to the SAND_STEP_GATE()/
- * SAND_STEP_GATED() macros sand_step() below uses them through - see that
- * declaration's own comment for what these buy and why they are safe to
- * leave enabled. Not `static`: those macros expand at sand_step()'s own
- * call sites, in this file, but a probe outside it needs to flip them. */
-volatile bool sand_step_gate_main_sweep = true;
-volatile bool sand_step_gate_cross_flow = true;
-volatile bool sand_step_gate_gas        = true;
-volatile bool sand_step_gate_reactions  = true;
-volatile bool sand_step_gate_xflow_body = true;
-volatile bool sand_step_gate_sweep_body = true;
-volatile bool sand_step_gate_gas_rise     = true;
-volatile bool sand_step_gate_gas_equalise = true;
-volatile bool sand_step_gate_reactions_body = true;
-volatile bool sand_step_gate_burn_decay     = true;
-volatile bool sand_step_gate_burn_smother   = true;
-volatile bool sand_step_gate_burn_pair      = true;
-volatile bool sand_step_gate_burn_conduct   = true;
-volatile bool sand_step_gate_burn_flare     = true;
-volatile bool sand_step_gate_burn_call      = true;
-volatile bool sand_step_gate_gas_decay      = true;
-volatile bool sand_step_gate_gas_move       = true;
-volatile bool sand_step_gate_gas_wake       = true;
-volatile bool sand_step_gate_gas_eq_body    = true;
-volatile bool sand_step_gate_gas_row_skip   = true;
-#endif
-
 /* Pinned to a cache-line boundary so this function's placement is not a
  * coin flip of whatever unrelated code sits before it: a host bisect found
  * sand_step()'s compiled bytes IDENTICAL across commits that never touched
@@ -1142,26 +1113,24 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
     const int w = s->w;
     const uint16_t is_liquid = liquid_mask();
 
-    SAND_STEP_GATE(main_sweep) {
-        for (int y = y_from; y != y_to; y += y_step) {
-            step_one_row(s, y, w, dx, dy, slide_a, slide_b, x_step,
-                        load_dx, load_dy, jostle, settled_bit, is_liquid, driven);
-        }
+    for (int y = y_from; y != y_to; y += y_step) {
+        step_one_row(s, y, w, dx, dy, slide_a, slide_b, x_step,
+                    load_dx, load_dy, jostle, settled_bit, is_liquid, driven);
     }
+    
 
     /* Cross-flow for liquids, excluding gravity. See sand_step_liquids() in
      * sand_liquid.c. Runs before finalising block sleep states to ensure
      * BLOCK_ACTIVE reflects entire step. */
-    SAND_STEP_GATE(cross_flow) {
-        sand_step_liquids(s, &flow, dx, dy);
-    }
+    sand_step_liquids(s, &flow, dx, dy);
+    
 
     /* Rising gas doesn't join main sweep. Order of sand_step_liquids()
      * doesn't matter; both must finish before finalize_settling(). Checked
      * here, not via sand_step_gas()'s early return. Called every step,
      * skipping avoids marshalling nine arguments if no gas. Flash layout
      * cost. */
-    if (SAND_STEP_GATED(gas, s->may_have_gas)) {
+    if (s->may_have_gas) {
         sand_step_gas(s, gx, gy, dx, dy, slide_a, slide_b, perp_a, perp_b,
                      load_dx, load_dy, x_step, jostle);
     }
@@ -1171,9 +1140,8 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
      * Takes `s` argument, unlike sand_step_gas(). Boiling now happens at heat
      * source. No cost to dodge by checking may_have_burning, internal check
      * suffices. */
-    SAND_STEP_GATE(reactions) {
-        sand_step_reactions(s);
-    }
+    sand_step_reactions(s);
+    
 
     /* Final step after others to ensure correct position and arc for thrown
      * grains, adding outward half after gravity. */
