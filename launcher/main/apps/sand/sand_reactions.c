@@ -92,6 +92,14 @@
 static uint8_t  present_pair_bits = 0xFFu;
 static uint16_t seen_materials;
 
+/* The densest non-liquid anywhere on the board, from the same mask. A cell at
+ * or above it has no possible smotherer, because neighbor_smothers() asks only
+ * whether the NEIGHBOUR is a denser non-liquid - so the answer is a property of
+ * the board, not of the cell asking, exactly as the pair bits are.
+ *
+ * 255 until the first pass has looked: it gates work being skipped. */
+static uint8_t  max_smothering_density = 255u;
+
 /* A 17th material would fall out of the mask silently, and a material missing
  * from it reads as absent - which SKIPS work rather than adding it. Wrong
  * output, no crash, so nothing else would catch it. */
@@ -117,6 +125,7 @@ neighbor_quenches(const sand_t* s, int nx, int ny, int w, int h) {
     }
     return (pair_theirs_bits(CELL_MATERIAL(n)) & PAIR_QUENCHES) != 0;
 }
+
 
 /* Checks burial; returns false on failure. No cover_mask()/covered_at().
  * Burial skips rotation, side. */
@@ -1341,7 +1350,14 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
 
     /* Covered_at checks lid with cover_mask. */
 
+    /* SKIPPED WHOLE when nothing on the board is a denser non-liquid: every
+     * one of smothered()'s four probes would reject, and it draws no random
+     * number, so the skip is RNG-neutral outright rather than by argument.
+     *
+     * Measured: on a full screen of fire this test is reached 41216 times a
+     * step and has NEVER once smothered. */
     if (mat->kind != KIND_LIQUID && rx->explodes == 0
+        && mat->density < max_smothering_density
         && smothered(s, x, y, w, h, mat->density)) {
         row[x] = lit_state ? cell_with_code(grain, 0) : CELL_EMPTY;
         mark_rows(s, y, y);
@@ -1816,9 +1832,27 @@ sand_step_reactions(sand_t* s) {
      * the table is known built, and the passes below read the result per
      * cell. */
     present_pair_bits = 0;
+    max_smothering_density = 0;
     for (int m = 0; m < MATERIAL_MAX; m++) {
-        if ((s->may_have_materials & (1u << m)) != 0) {
-            present_pair_bits |= pair_theirs_bits((uint8_t)m);
+        if ((s->may_have_materials & (1u << m)) == 0) {
+            continue;
+        }
+        present_pair_bits |= pair_theirs_bits((uint8_t)m);
+
+        /* MAT_EXTENDED is one bit over several materials, so it contributes
+         * the densest of them - the conservative direction for a skip. */
+        if (m == MAT_EXTENDED) {
+            for (int k = 0; k < MATERIAL_EXTENDED_CODES; k++) {
+                const material_t* em = material_of(MATX(k));
+                if (em->kind != KIND_LIQUID && em->density > max_smothering_density) {
+                    max_smothering_density = em->density;
+                }
+            }
+            continue;
+        }
+        const material_t* mm = material_of(CELL_MAKE((uint8_t)m, 0));
+        if (mm->kind != KIND_LIQUID && mm->density > max_smothering_density) {
+            max_smothering_density = mm->density;
         }
     }
     seen_materials = 0;
