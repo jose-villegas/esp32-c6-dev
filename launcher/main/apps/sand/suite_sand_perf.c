@@ -37,6 +37,7 @@
 #include "util/intmath.h"
 #include "suite_sand_common.h"
 #include "suite_sand_scenes.h"
+#include "material_palette.h"
 #include "tilt.h"      /* TILT_TAU_*_MS - the turn below follows the real
                        * filter shape rather than a straight line */
 
@@ -645,6 +646,99 @@ static int64_t time_a_quarter_turn(sand_t *real, int steps, int64_t *worst_out)
  * rows to fire at all. The half-screen scene below is its realistic
  * counterpart, and the PAIR is the point - a number from this one alone would
  * flatter any optimisation aimed at packed rows. */
+/* WHAT THE WOOD/LEAF GUST SHADING COSTS ON A GROVE.
+ *
+ * WHAT THIS DOES NOT MEASURE, first, because the gap matters more than the
+ * number: paint_row_n() is `static inline` inside app_sand.c and nothing here
+ * can call it, so no row in this suite exercises the app's paint path. The
+ * present-cost rows above run mirror_app_sand_marking() and gfx_present(),
+ * never the app's own painting. That is why the shading could land measuring
+ * "nothing" - not because it is free, but because nothing was looking.
+ *
+ * So this times the per-cell work the shading actually adds, over the real
+ * grid the grove produces, walked the way paint_row_n() walks it. It covers
+ * the scan and the wave. It does NOT cover the framebuffer writes, nor the
+ * extra paint_row() calls the gust's wake tick causes - for that, watch how
+ * many rows carry foliage, which this prints.
+ *
+ * Prints; asserts no budget, since half the cost is out of reach. */
+static void test_the_wood_leaf_shading_on_a_grove(void)
+{
+    uint8_t *big = malloc(REAL_W * REAL_H);
+    TEST_ASSERT_NOT_NULL(big);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 3u);
+    build_tree_grove_scene(&real);
+
+    int8_t top5[5][2];
+    int down = 0;
+    material_wood_leaf_top5(0, 1000, &down, top5);
+
+    int wood = 0, leaf = 0, near_leaf = 0, rows_lit = 0;
+    unsigned sink = 0;
+
+    const int64_t start = esp_timer_get_time();
+    for (int rep = 0; rep < 20; rep++) {
+        for (int y = 0; y < REAL_H; y++) {
+            const uint8_t *row = big + (size_t)y * REAL_W;
+            const uint8_t *above = (y > 0) ? row - REAL_W : NULL;
+            const uint8_t *below = (y < REAL_H - 1) ? row + REAL_W : NULL;
+            int lit = 0;
+            for (int x = 0; x < REAL_W; x++) {
+                const unsigned hash = material_grain_hash(x, y);
+                const bool is_leaf = row[x] == MATX(MATX_LEAF);
+                const bool tinted = is_leaf
+                    || (row[x] == CELL_MAKE(MAT_WOOD, 0)
+                        && material_wood_near_leaf(above, row, below, x,
+                                                   REAL_W, top5, hash, 5u));
+                if (tinted) {
+                    sink += material_wood_leaf_wave(rep * 40u, x, REAL_W, hash);
+                    lit = 1;
+                }
+                if (rep == 0) {
+                    if (is_leaf) { leaf++; }
+                    else if (row[x] == CELL_MAKE(MAT_WOOD, 0)) {
+                        wood++;
+                        if (tinted) { near_leaf++; }
+                    }
+                }
+            }
+            if (rep == 0) { rows_lit += lit; }
+        }
+    }
+    const int64_t per_pass = (esp_timer_get_time() - start) / 20;
+
+    /* THE CONTROL, and without it the figure above is unattributable: the
+     * walk computes material_grain_hash() for all 41,216 cells whatever they
+     * are, while only the tinted ones reach the scan or the wave. This pass
+     * is the same walk with the shading's two calls removed, so the DELTA is
+     * the shading and the rest is the walk paint_row_n() would do anyway. */
+    const int64_t c0 = esp_timer_get_time();
+    for (int rep = 0; rep < 20; rep++) {
+        for (int y = 0; y < REAL_H; y++) {
+            const uint8_t *row = big + (size_t)y * REAL_W;
+            for (int x = 0; x < REAL_W; x++) {
+                sink += material_grain_hash(x, y);
+                sink += (row[x] == MATX(MATX_LEAF))
+                     || (row[x] == CELL_MAKE(MAT_WOOD, 0));
+            }
+        }
+    }
+    const int64_t control_pass = (esp_timer_get_time() - c0) / 20;
+
+    ESP_LOGI("device_tests",
+             "wood/leaf shading on a grove: %lld us per full-grid pass, "
+             "control %lld us, so the shading is %lld us "
+             "(wood %d, of which %d beside a leaf; leaf %d; %d of %d rows "
+             "carry foliage and so wake every gust tick) [%u]",
+             (long long)per_pass, (long long)control_pass,
+             (long long)(per_pass - control_pass),
+             wood, near_leaf, leaf, rows_lit, REAL_H, sink & 1u);
+
+    free(big);
+}
+
 /* HOW MUCH A MOSTLY-INERT BOARD PAYS FOR A SMALL FIRE.
  *
  * Every other reaction scene here fills the board with things that react, so
@@ -2822,6 +2916,7 @@ void run_sand_perf_suite(void)
     RUN_TEST(test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget);
     RUN_TEST(test_pouring_water_onto_a_plant_bed_costs_more_than_steady_growth);
     RUN_TEST(test_a_growing_plant_bed_fits_in_the_frame_budget);
+    RUN_TEST(test_the_wood_leaf_shading_on_a_grove);
     RUN_TEST(test_a_campfire_on_a_sand_bed_fits_in_the_frame_budget);
     RUN_TEST(test_turning_a_packed_screen_of_gas_fits_in_the_frame_budget);
     RUN_TEST(test_turning_a_half_screen_of_gas_fits_in_the_frame_budget);

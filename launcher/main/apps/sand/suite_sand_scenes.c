@@ -1464,6 +1464,64 @@ static void test_the_boiler_scene_keeps_boiling_across_the_window(void)
  * silently measure nothing but liquid movement. Runs at
  * SAND_SOAK_PER_MATERIAL alongside the app's own scatter, decay and
  * mobility settings - app_sand.c calls all four. */
+/* A GROVE OF BUSHY TREES - the shape the wood/leaf gust shading is for, and
+ * the one no other scene has.
+ *
+ * PAINTED, NOT GROWN. Every other plant scene here seeds and waits, which is
+ * right when the growth code is what you are measuring. This scene exists for
+ * the RENDER path: the shading asks only "is this unlit wood, and is a leaf
+ * near it", and does not care how the tree got there. Painting it makes the
+ * shape deterministic and the setup free.
+ *
+ * BOTH COSTS ARE DELIBERATE, and they pull in opposite directions:
+ *   - trunk wood AWAY from leaves pays the full five-slot scan and finds
+ *     nothing, which is the scan's worst case;
+ *   - canopy wood BESIDE leaves short-circuits early but takes the tint, and
+ *     its rows wake on every gust tick.
+ * A canopy alone would flatter the scan; a bare trunk would flatter the
+ * dirtying. The grove has both. */
+void build_tree_grove_scene(sand_t *s)
+{
+    const int ground = (REAL_H * 4) / 5;
+
+    for (int y = ground; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            sand_set(s, x, y, CELL_MAKE(MAT_DIRT, 0));
+        }
+    }
+
+    /* Four trees across the width, tall enough that trunk and canopy land in
+     * different rows - the dirtying is per row, so a tree squashed into a few
+     * rows would understate it. */
+    for (int t = 0; t < TREE_GROVE_TREES; t++) {
+        const int cx = (REAL_W * (2 * t + 1)) / (2 * TREE_GROVE_TREES);
+        const int top = ground - TREE_GROVE_HEIGHT;
+
+        for (int y = top; y < ground; y++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                sand_set(s, cx + dx, y, CELL_MAKE(MAT_WOOD, 0));
+            }
+        }
+
+        /* Canopy: a disc of leaf with woody branch cells threaded through it,
+         * so wood-beside-leaf is common rather than a thin rim. */
+        for (int dy = -TREE_GROVE_CANOPY_R; dy <= TREE_GROVE_CANOPY_R; dy++) {
+            for (int dx = -TREE_GROVE_CANOPY_R; dx <= TREE_GROVE_CANOPY_R; dx++) {
+                if (dx * dx + dy * dy > TREE_GROVE_CANOPY_R * TREE_GROVE_CANOPY_R) {
+                    continue;
+                }
+                const int x = cx + dx, y = top + dy;
+                if ((unsigned)x >= (unsigned)REAL_W || (unsigned)y >= (unsigned)REAL_H) {
+                    continue;
+                }
+                const bool branch = ((dx + dy) & 3) == 0;
+                sand_set(s, x, y, branch ? CELL_MAKE(MAT_WOOD, 0)
+                                         : MATX(MATX_LEAF));
+            }
+        }
+    }
+}
+
 /* A PLANTED BED, the one thing no scene here grows.
  *
  * The plant code - anchored()'s BFS, find_water(), the root roll - only runs
