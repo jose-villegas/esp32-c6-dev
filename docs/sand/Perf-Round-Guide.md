@@ -376,6 +376,35 @@ Gates are **scaffolding**. They go in to answer one question, the answer goes
 in bd and the commit message, and they come out before the round ships — see
 "Retiring the instrumentation" below. What is permanent is this section.
 
+### And skip the restore, which is most of the wait
+
+`capture_ref.sh` rebuilds and reflashes the release image when it finishes.
+That work produces nothing you read, and it is the bulk of the cycle:
+
+| phase | measured |
+|---|---:|
+| build + flash + run, report written | ~5 min |
+| release reflash afterwards | ~13 min |
+
+Pass `--no-restore` for every capture of a round and restore once at the end:
+
+```sh
+sh scripts/capture_ref.sh <ref> --perf-scope --no-restore COM3
+```
+
+**The report is complete before the restore starts.** If a capture is already
+running without the flag, read
+`main/apps/sand/tools/results/capture_ref_<ref>_*.md` as soon as it appears
+rather than waiting for the command to return — the numbers are final at that
+point and the remaining minutes are only reflashing.
+
+Scoped and unrestored together take an iteration from roughly 25 minutes to
+about 5, which is the difference between measuring a hunch and not bothering.
+
+**It leaves the board on a diagnostics build.** That is the point during a
+round, but say so when handing the device back, and restore before treating
+it as a normal board again.
+
 ### Scope the build first, or there is no room for the instrument
 
 A full diagnostics image compiles all 48 suites, and their static RAM had
