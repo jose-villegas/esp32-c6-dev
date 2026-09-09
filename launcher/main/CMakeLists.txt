@@ -133,6 +133,43 @@ if(CONFIG_LAUNCHER_SELFTEST)
         "../test/suites/suite_screenshot.c"
         "../test/suites/suite_device_state.c"
     )
+    # SCOPE: which of those suites this image actually carries.
+    #
+    # Full is the default and stays globbed, so nothing can lose coverage by
+    # accident - a scope only ever NARROWS, and only when asked for by name
+    # (CONFIG_LAUNCHER_SELFTEST_SCOPE_*, Kconfig.projbuild).
+    #
+    # The perf scope is a literal list rather than a pattern because it is
+    # shaped around what a capture READS, and that does not follow a folder
+    # or a filename: suite_sand_perf.c's rows are built by the scene
+    # builders in suite_sand_scenes.c and the fixtures in suite_sand_common.c,
+    # neither of which is named _perf, while suite_cube_perf.c and
+    # suite_boot_anim_perf.c are named _perf and are read by nobody in a sand
+    # round. Explicit, like the shell suite list above it.
+    #
+    # A member that goes missing (renamed, deleted with its app) fails the
+    # CONFIGURE below rather than quietly shrinking the scope. A member that
+    # is still here but no longer sufficient - an in-scope suite calling a
+    # builder from a file this list leaves out - fails at LINK, because the
+    # builders are ordinary called symbols and nothing stubs them.
+    if(CONFIG_LAUNCHER_SELFTEST_SCOPE_PERF)
+        set(app_suites
+            "${CMAKE_CURRENT_LIST_DIR}/apps/sand/suite_sand_perf.c"
+            "${CMAKE_CURRENT_LIST_DIR}/apps/sand/suite_sand_scenes.c"
+            "${CMAKE_CURRENT_LIST_DIR}/apps/sand/suite_sand_common.c"
+        )
+        foreach(suite_src IN LISTS app_suites)
+            if(NOT EXISTS "${suite_src}")
+                message(FATAL_ERROR
+                    "LAUNCHER_SELFTEST_SCOPE_PERF names a suite that does not "
+                    "exist: ${suite_src}. Fix the list in main/CMakeLists.txt "
+                    "(and docs/Testing-Guide.md) - a scope that silently "
+                    "measures less than it claims is worse than no scope.")
+            endif()
+        endforeach()
+        set(suite_srcs "")
+    endif()
+
     list(APPEND app_srcs
         "boot/selftest.c"
         "../test/suites.c"

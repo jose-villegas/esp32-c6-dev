@@ -20,6 +20,13 @@
 #                   ~3-4 minute build+flash plus a second ~90s ESP-IDF
 #                   activation on EVERY run; back-to-back candidate
 #                   captures only need it once, at the end of a session.
+#   --perf-scope    build the PERF-SCOPED diag image: only suite_sand_perf
+#                   and the scene builders it calls are compiled in, so the
+#                   run is shorter and the freed static RAM is available for
+#                   a round's own pass gates and probe rows (bd esp32c6-iqx,
+#                   docs/Testing-Guide.md). Its numbers are NOT comparable
+#                   with an unscoped capture's - the layout differs - so
+#                   scope every capture of a round the same way.
 #   --baseline REPORT.md
 #                   after generating the report, run compare_reports.py
 #                   --verdict against this earlier report and print its
@@ -34,12 +41,17 @@
 set -euo pipefail
 
 NO_RESTORE=0
+PERF_SCOPE=0
 BASELINE=""
 ARGS=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --no-restore)
             NO_RESTORE=1
+            shift
+            ;;
+        --perf-scope)
+            PERF_SCOPE=1
             shift
             ;;
         --baseline)
@@ -206,6 +218,19 @@ print_summary() {
 # noise beside the build, and makes the fragments authoritative again.
 rm -f "$LAUNCHER_DIR/build.diag/sdkconfig"
 
+# One string rather than a literal in the idf.py line below, so --perf-scope
+# only appends a fourth fragment and cannot reorder or drop the three the
+# capture already depends on.
+SDKCONFIG_FRAGMENTS="sdkconfig.defaults;sdkconfig.defaults.diag;sdkconfig.defaults.diag_autorun"
+SCOPE_FLAGS=""
+if [ "$PERF_SCOPE" -eq 1 ]; then
+    SDKCONFIG_FRAGMENTS="$SDKCONFIG_FRAGMENTS;sdkconfig.defaults.diag_perf"
+    SCOPE_FLAGS="CONFIG_LAUNCHER_SELFTEST_SCOPE_PERF"
+    echo "=== PERF SCOPE: behaviour suites are NOT in this image ==="
+    echo "Numbers from this capture compare only against other perf-scoped"
+    echo "captures. Do not diff them against an unscoped report."
+fi
+
 echo "=== Building and flashing build.diag to $COM_PORT ==="
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
     Remove-Item Env:\MSYSTEM -ErrorAction SilentlyContinue
@@ -232,7 +257,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
     # tools/report_test_results.sh to layer this file, but not this script,
     # which a2daa87 had already moved into the sand app's own tools folder.
     # The two scripts do the same job and must be changed together.
-    idf.py -B build.diag -D SDKCONFIG_DEFAULTS=\"sdkconfig.defaults;sdkconfig.defaults.diag;sdkconfig.defaults.diag_autorun\" -D SDKCONFIG=build.diag/sdkconfig build
+    idf.py -B build.diag -D SDKCONFIG_DEFAULTS=\"$SDKCONFIG_FRAGMENTS\" -D SDKCONFIG=build.diag/sdkconfig build
     if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }
     idf.py -B build.diag -p '$COM_PORT' flash
     exit \$LASTEXITCODE
@@ -241,11 +266,13 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
 # The generated config is the only honest witness that the fragments took:
 # check the flags the capture actually depends on, and fail loudly here
 # rather than after a 300-second timeout with an empty raw file.
-for flag in CONFIG_LAUNCHER_SELFTEST CONFIG_LAUNCHER_SELFTEST_AUTORUN; do
+for flag in CONFIG_LAUNCHER_SELFTEST CONFIG_LAUNCHER_SELFTEST_AUTORUN $SCOPE_FLAGS; do
     if ! grep -q "^${flag}=y" "$LAUNCHER_DIR/build.diag/sdkconfig"; then
         echo "ERROR: ${flag} is not set in the generated build.diag/sdkconfig -"
         echo "the flashed image would boot without running the suites, and the"
-        echo "capture below would time out with no measurements. Aborting."
+        echo "capture below would time out with no measurements. (For the"
+        echo "SCOPE flag: the image would be built unscoped, and its numbers"
+        echo "would silently not be the ones asked for.) Aborting."
         exit 1
     fi
 done

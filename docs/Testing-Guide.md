@@ -179,6 +179,62 @@ narrower still: gated on `CONFIG_LAUNCHER_SELFTEST` specifically, inside
 outside a SELFTEST build (`boot/selftest.c` is only added to `app_srcs`
 under `CONFIG_LAUNCHER_SELFTEST` — see `main/CMakeLists.txt`).
 
+### A diagnostics build can be scoped
+
+A diagnostics build compiles **every** suite: 48 of them, 952 timed tests,
+7m 23s of device run. Perf-scoped that is 3 suites, 39 tests, 2m 19s. A sand performance capture reads a dozen rows of that
+and pays for all of it — in run time, in build time, and in static RAM, where
+the suites' own `.bss` had left `tools/check_static_ram.py`'s "one grid fits
+after POST" gate 64 bytes of headroom. One added decomposition row costs 272
+bytes and fails the build outright, so a round could no longer instrument
+itself (bd esp32c6-iqx).
+
+`CONFIG_LAUNCHER_SELFTEST` says whether the suites are compiled in;
+`CONFIG_LAUNCHER_SELFTEST_SCOPE_*` says **which**. Excluding a suite removes
+its `.text` *and* its `.bss`, which is what buys the headroom back.
+
+| scope | fragment | carries | for |
+|---|---|---|---|
+| Full — the default | none | every suite, shell-owned and app-owned | every gate: `run_device_tests.sh`, `report_test_results.sh` |
+| Perf | `sdkconfig.defaults.diag_perf` | `suite_sand_perf.c` + `suite_sand_scenes.c` + `suite_sand_common.c` | a sand frame-budget capture |
+
+```sh
+sh scripts/capture_ref.sh <ref> --perf-scope                        # ref -> scoped capture
+bash launcher/main/apps/sand/tools/report_performance.sh --perf-scope
+# by hand, the fragment simply appends to the usual three:
+idf.py -B build.diag.<yours> \
+  -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.diag;sdkconfig.defaults.diag_autorun;sdkconfig.defaults.diag_perf" \
+  -D SDKCONFIG=build.diag.<yours>/sdkconfig build
+```
+
+Scoped around **what a run reads**, not around folders — which is why the
+perf list is written out in `main/CMakeLists.txt` rather than matched by a
+pattern. The rows in `suite_sand_perf.c` are built by the scene builders in
+`suite_sand_scenes.c` and the fixtures in `suite_sand_common.c`, neither of
+which is named `_perf`; `suite_cube_perf.c` and `suite_boot_anim_perf.c` are
+named `_perf` and are read by nobody in a sand round.
+
+Four things hold this together:
+
+- **Full is the default and stays globbed.** A scope only ever narrows, and
+  only when named, so coverage cannot shrink by accident.
+- **Both ways of getting it wrong are loud.** A scope member that no longer
+  exists (renamed, deleted with its app) fails the CMake *configure* with a
+  `FATAL_ERROR`. An in-scope suite calling a builder from an out-of-scope
+  file fails the *link* — builders are ordinary called symbols and nothing
+  stubs them.
+- **The scenes suite comes along because its builders do,** and its own tests
+  then check that the scenes the perf rows measure are still the scenes they
+  claim to be.
+- **Release is untouched.** Both scope symbols live under `LAUNCHER_SELFTEST`,
+  itself under `LAUNCHER_DEVELOPMENT`; a release config resolves neither, and
+  the suites were never in that image to scope.
+
+A perf-scoped build is **not a gate**: it drops behaviour coverage on purpose.
+Never take a merge decision from one, and never diff its numbers against an
+unscoped capture's — different scope, different layout. See
+[`sand/Perf-Round-Guide.md`](sand/Perf-Round-Guide.md).
+
 ### Development-only instrumentation is its own flag, not SELFTEST
 
 `CONFIG_LAUNCHER_SELFTEST` answers "does this build carry the test suites."
@@ -487,7 +543,9 @@ against.
 3. Register it from inside itself: `SUITE_REGISTER(run_<name>_suite);`. That is
    all — there is no list in `suites.h`, no call in `host_main.c` and none in
    `selftest.c`. App suites are globbed by the build; shell suites are listed in
-   `CMakeLists.txt` and `run_tests.sh`.
+   `CMakeLists.txt` and `run_tests.sh`. A new suite joins the full scope
+   automatically; if a perf capture needs it, add it to the perf list in
+   `main/CMakeLists.txt` too (see "A diagnostics build can be scoped").
 4. Guard anything needing hardware with `#ifdef DEVICE_BUILD`, including its
    `RUN_TEST` line. A suite can be portable and still have a device-only
    section — the sand suite (`suite_sand_*.c`) runs its rules on a host and
