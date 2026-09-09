@@ -496,6 +496,70 @@ static void test_water_falling_into_the_next_block_down_still_spreads(void)
         "the grid at all");
 }
 
+/* The cross-flow block skip proves a whole block cannot flow and then does not
+ * walk it. Its rays reach ONE CELL PAST the block on each side, so the span it
+ * checks has to be wider than the block it guards - check only [lo, hi) and a
+ * block of full water reads as settled while the empty cell just outside it is
+ * exactly where the water was about to go.
+ *
+ * A SEALED ONE-CELL CHANNEL is the fixture, and the shape is the whole point:
+ * the main sweep's two slides are diagonal-DOWN, so an open-topped column
+ * spreads sideways through the sweep whatever cross-flow does - an earlier
+ * version of this test passed with the margin deleted for exactly that reason.
+ * Stone directly above and below leaves no diagonal to take, so the only thing
+ * that can move this water is the pass under test.
+ *
+ * Verified to fail before it was kept: with the margin dropped the water never
+ * leaves the first block column and this reports 0. */
+#define XSPAN_W (SAND_BLOCK_W * 2)
+#define XSPAN_H 80
+#define XSPAN_COLS ((XSPAN_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
+#define XSPAN_ROWS ((XSPAN_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
+
+static void test_water_crosses_a_block_boundary_sideways(void)
+{
+    uint8_t *cells  = malloc((size_t)XSPAN_W * XSPAN_H);
+    uint8_t *blocks = malloc((size_t)XSPAN_COLS * XSPAN_ROWS);
+    TEST_ASSERT_NOT_NULL(cells);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t g;
+    sand_init(&g, cells, XSPAN_W, XSPAN_H, 5u);
+    sand_enable_sleeping(&g, blocks);
+
+    const int channel_y = 40;
+    for (int x = 0; x < XSPAN_W; x++) {
+        sand_set(&g, x, channel_y - 1, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+        sand_set(&g, x, channel_y + 1, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+    }
+    /* Every cell full, filling the first block column exactly - so the block
+     * holds no empty cell and no partly-filled liquid, and the skip's own test
+     * passes on everything except the one cell beyond its edge. */
+    for (int x = 0; x < SAND_BLOCK_W; x++) {
+        sand_set(&g, x, channel_y, CELL_MAKE(MAT_WATER, MASS_MAX));
+    }
+
+    for (int i = 0; i < 120; i++) {
+        sand_step(&g, 0, 1000, 0);
+    }
+
+    int crossed = 0;
+    for (int x = SAND_BLOCK_W; x < XSPAN_W; x++) {
+        const cell_t c = sand_at(&g, x, channel_y);
+        if (!CELL_IS_EMPTY(c) && CELL_MATERIAL(c) == MAT_WATER) {
+            crossed++;
+        }
+    }
+
+    free(cells);
+    free(blocks);
+
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, crossed,
+        "a full block column of water beside an empty one must still spread "
+        "into it - the cross-flow block skip has to check one cell past each "
+        "edge of the block, because that is how far its rays reach");
+}
+
 /* At the real screen size, SAND_BLOCK_W/H (16x64) do NOT evenly divide
  * 184x224 - the last block-column is 8 cells wide instead of 16, and the
  * last block-row is 32 cells tall instead of 64. No other test in this
@@ -762,6 +826,7 @@ void run_sand_locality_suite(void)
     RUN_TEST(test_liquid_cross_flow_wakes_only_the_blocks_it_touches_by_range);
     RUN_TEST(test_sand_pushing_water_up_wakes_the_dry_row_it_lands_in);
     RUN_TEST(test_water_falling_into_the_next_block_down_still_spreads);
+    RUN_TEST(test_water_crosses_a_block_boundary_sideways);
     RUN_TEST(test_block_indices_stay_in_range_at_the_real_screens_partial_edge_blocks);
     RUN_TEST(test_block_indices_stay_in_range_after_flipping_a_settled_pile_at_the_real_size);
     RUN_TEST(test_block_indices_stay_in_range_for_a_falling_screen_of_water_at_the_real_size);

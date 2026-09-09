@@ -369,7 +369,15 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
      * water does not spend the water for nothing. */
     const int soaks = cell_is_cullet(c) ? 0 : ((s->soak >= 0) ? s->soak : r->soaks);
 
-    if (soaks != 0 && r->soaks != 0 && s->may_have_liquid) {
+    /* LOCAL, NOT BOARD-WIDE. This walk looks only at the four orthogonal
+     * neighbours, all one cell away, so any water it could find is in this
+     * block or one touching it - exactly what BLOCK_LIQUID_NEAR covers. A
+     * cell this rejects provably had nothing to find.
+     *
+     * RNG-NEUTRAL: the roll inside the walk is drawn only after a PAIR_WETS
+     * neighbour is found, so a cell with no liquid neighbour draws nothing
+     * and the stream is untouched. */
+    if (soaks != 0 && r->soaks != 0 && liquid_near(s, x, y)) {
         for (int d = 0; d < 4; d++) {
             const int nx = x + reaction_dirs[d][0];
             const int ny = y + reaction_dirs[d][1];
@@ -1160,7 +1168,7 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
     const int burn_rate = (s->decay >= 0) ? s->decay : rx->burn_decay;
 
     if (lit_state ? !tick_decay_at(s, row, x, y, &grain, rx, burn_rate)
-                  : !tick_decay(s, row, x, y, &grain, mat, mat_id)) {
+                 : !tick_decay(s, row, x, y, &grain, mat, mat_id)) {
         if (rx->explodes != 0) {
             REACTION_DOC(
                 explodes,
@@ -1547,7 +1555,8 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
         }
         /* Cheap tests first: field, may_have_liquid, then neighbour scan. */
     stage_soak_dry:
-        if ((r->soaks != 0 || r->dries != 0) && step_one_soaking_cell(s, row, x, y, w, h, r)) {
+        if ((r->soaks != 0 || r->dries != 0)
+            && step_one_soaking_cell(s, row, x, y, w, h, r)) {
             found |= FOUND_MOISTURE;
             continue;
         }
