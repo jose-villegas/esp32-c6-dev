@@ -74,6 +74,10 @@ void build_lava_stress_scene(sand_t *s);
 void build_smoke_and_steam_scene(sand_t *s);
 void build_thermal_shock_scene(sand_t *s);
 void build_boiler_scene(sand_t *s);
+
+/* A small fire on a board that mostly cannot react - see the builder for
+ * why the other reaction scenes cannot answer the same question. */
+void build_campfire_scene(sand_t *s);
 void build_wet_earth_scene(sand_t *s);
 
 /* Same real device impulse budget the vent-spam scene this replaced used -
