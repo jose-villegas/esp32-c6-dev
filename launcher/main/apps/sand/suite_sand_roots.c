@@ -1638,7 +1638,9 @@ static void test_wood_leaf_wave_rises_then_falls_smoothly(void)
 {
     /* pos 0, hash 0: no spatial or salt shift, isolating the wave's shape
      * in time. Known from material_palette.c: PERIOD 600, RISE 60,
-     * FALL 140 - a short, thin gust against a longer quiet gap. */
+     * FALL 140 - a short, thin gust against a longer quiet gap. hash 0's
+     * own roll (see test_wood_leaf_wave_sometimes_sits_a_gust_out) happens
+     * to activate cycle 0, so this still isolates the shape cleanly. */
     const unsigned at_start = material_wood_leaf_wave(0u, 0, 100, 0u);
     const unsigned at_rise_mid = material_wood_leaf_wave(30u, 0, 100, 0u);
     const unsigned at_peak = material_wood_leaf_wave(60u, 0, 100, 0u);
@@ -1684,6 +1686,21 @@ static void test_wood_leaf_wave_salts_by_hash(void)
     TEST_ASSERT_NOT_EQUAL_UINT_MESSAGE(at_hash0, at_hash100,
         "two cells at the same time and position must still differ by hash "
         "alone, or every leaf would shade identically");
+}
+
+/* Every eligible cell lighting up on every gust read as one shine sweeping
+ * through, not real wind. Known from material_palette.c: hash 0 activates
+ * cycle 0's peak, is rolled out on cycle 1, and activates again on cycle 2 -
+ * the same cell must skip some gusts, and which ones must vary over time. */
+static void test_wood_leaf_wave_sometimes_sits_a_gust_out(void)
+{
+    const unsigned cycle0_peak = material_wood_leaf_wave(60u, 0, 100, 0u);
+    const unsigned cycle1_peak = material_wood_leaf_wave(660u, 0, 100, 0u);
+    const unsigned cycle2_peak = material_wood_leaf_wave(1260u, 0, 100, 0u);
+
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(255u, cycle0_peak, "cycle 0's gust must activate");
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(0u, cycle1_peak, "cycle 1's gust must be rolled out");
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(255u, cycle2_peak, "cycle 2's gust must activate again");
 }
 
 /* The wind axis must stay perpendicular to gravity - a grid axis (raw `cx`)
@@ -2554,6 +2571,7 @@ void run_sand_roots_suite(void)
     RUN_TEST(test_wood_leaf_wave_rises_then_falls_smoothly);
     RUN_TEST(test_wood_leaf_wave_shifts_with_position);
     RUN_TEST(test_wood_leaf_wave_salts_by_hash);
+    RUN_TEST(test_wood_leaf_wave_sometimes_sits_a_gust_out);
     RUN_TEST(test_wood_leaf_wind_axis_stays_perpendicular_to_gravity);
     RUN_TEST(test_the_right_extended_materials_are_grained);
     RUN_TEST(test_metal_shine_does_not_vary_between_cells);

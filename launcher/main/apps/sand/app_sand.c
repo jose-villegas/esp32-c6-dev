@@ -467,6 +467,18 @@ static int wood_leaf_top5_down;
  * and greener since more wood cells beside foliage qualify. */
 #define WOOD_LEAF_SLOTS_CHECKED 5u
 
+/* A sweep that always travels the same way still reads as one shine, even
+ * with gusts dropping out - real wind swings direction. Interval jittered
+ * (material_grain_hash of the flip count, not a real RNG) so the swings
+ * are not metronomic. */
+#define WOOD_LEAF_WIND_FLIP_BASE_MS   1200u
+#define WOOD_LEAF_WIND_FLIP_JITTER_MS 1800u
+
+static int wood_leaf_wind_sign = 1;
+static uint32_t wood_leaf_wind_flip_elapsed_ms;
+static uint32_t wood_leaf_wind_flip_due_ms = WOOD_LEAF_WIND_FLIP_BASE_MS;
+static unsigned wood_leaf_wind_flip_count;
+
 /* One bit per row per feature, not five 224-byte GRID_H_MAX arrays each
  * holding a single 0/1 flag - the diagnostics build has no headroom to
  * spend on that (check_static_ram.py). */
@@ -754,8 +766,11 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
 
         /* Projected onto the wind axis (gravity-perpendicular, see
          * material_wood_leaf_wind_axis()), not raw `cx` - a grid column is
-         * not a screen-relative direction once the device is rotated. */
-        const int wood_leaf_wind_pos = (cx * wood_leaf_wind_ux_q8 + cy * wood_leaf_wind_uy_q8) >> 8;
+         * not a screen-relative direction once the device is rotated.
+         * wood_leaf_wind_sign periodically reverses which way the gust
+         * appears to travel - see advance_wood_leaf_wind_sign(). */
+        const int wood_leaf_wind_pos =
+            wood_leaf_wind_sign * ((cx * wood_leaf_wind_ux_q8 + cy * wood_leaf_wind_uy_q8) >> 8);
 
         /* Every leaf cell rides the same wave unconditionally - no
          * adjacency check needed, unlike wood, since being leaf already
@@ -906,6 +921,19 @@ static bool advance_wood_leaf_phase(uint32_t dt_ms)
     const uint32_t steps = wood_leaf_wake_elapsed_ms / WOOD_LEAF_WAKE_MS;
     wood_leaf_wake_elapsed_ms -= steps * WOOD_LEAF_WAKE_MS;
     return true;
+}
+
+static void advance_wood_leaf_wind_sign(uint32_t dt_ms)
+{
+    wood_leaf_wind_flip_elapsed_ms += dt_ms;
+    if (wood_leaf_wind_flip_elapsed_ms < wood_leaf_wind_flip_due_ms) {
+        return;
+    }
+    wood_leaf_wind_flip_elapsed_ms -= wood_leaf_wind_flip_due_ms;
+    wood_leaf_wind_sign = -wood_leaf_wind_sign;
+    wood_leaf_wind_flip_count++;
+    wood_leaf_wind_flip_due_ms = WOOD_LEAF_WIND_FLIP_BASE_MS
+        + material_grain_hash((int)wood_leaf_wind_flip_count, 0) % WOOD_LEAF_WIND_FLIP_JITTER_MS;
 }
 
 static bool advance_local_depth_wake(uint32_t dt_ms)
@@ -1636,6 +1664,8 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
     material_wood_leaf_wind_axis(gx, gy, &wood_leaf_wind_ux_q8, &wood_leaf_wind_uy_q8);
 
     material_wood_leaf_top5(gx, gy, &wood_leaf_top5_down, wood_leaf_top5);
+
+    advance_wood_leaf_wind_sign(dt_ms);
 
     update_local_depth_gravity(gx, gy);
 
