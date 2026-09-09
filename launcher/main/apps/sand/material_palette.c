@@ -710,20 +710,32 @@ material_set_glass_phase(int phase) {
 #define WOOD_LEAF_WAVE_SCREEN_SPAN_MS 4000u
 #define WOOD_LEAF_WAVE_SALT_MS         150u
 
+/* Percent chance a cell actually shows a gust it is otherwise due for -
+ * every eligible cell lighting up together read as one shine sweeping
+ * through, not real wind, which is patchy. Rolled per gust (not once,
+ * ever), so which cells sit one out changes gust to gust. */
+#define WOOD_LEAF_WAVE_ACTIVATE_PERCENT 30u
+
 unsigned
 material_wood_leaf_wave(uint32_t time_ms, int pos, int span, unsigned hash) {
     const int32_t shift_ms = span != 0 ? (int32_t)(((int64_t)pos * WOOD_LEAF_WAVE_SCREEN_SPAN_MS) / span) : 0;
     const uint32_t salt_ms = hash % WOOD_LEAF_WAVE_SALT_MS;
     const uint32_t shifted = time_ms + (uint32_t)shift_ms + salt_ms;
     const uint32_t m = shifted % WOOD_LEAF_WAVE_PERIOD_MS;
+    if (m >= WOOD_LEAF_WAVE_RISE_MS + WOOD_LEAF_WAVE_FALL_MS) {
+        return 0u;
+    }
+
+    const uint32_t cycle = shifted / WOOD_LEAF_WAVE_PERIOD_MS;
+    if ((hash ^ (cycle * 0x9E3779B1u)) % 100u >= WOOD_LEAF_WAVE_ACTIVATE_PERCENT) {
+        return 0u;
+    }
+
     if (m < WOOD_LEAF_WAVE_RISE_MS) {
         return (unsigned)((m * 255u) / WOOD_LEAF_WAVE_RISE_MS);
     }
     const uint32_t since_peak = m - WOOD_LEAF_WAVE_RISE_MS;
-    if (since_peak < WOOD_LEAF_WAVE_FALL_MS) {
-        return (unsigned)(255u - (since_peak * 255u) / WOOD_LEAF_WAVE_FALL_MS);
-    }
-    return 0u;
+    return (unsigned)(255u - (since_peak * 255u) / WOOD_LEAF_WAVE_FALL_MS);
 }
 
 /* No floating point, suitable for water rim cells. See paint_row_n(). */
