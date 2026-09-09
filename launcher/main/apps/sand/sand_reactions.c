@@ -915,6 +915,18 @@ static inline bool
 conduct_heat(sand_t* s, int x, int y, int w, int h) {
     bool acted = false;
 
+    /* SKIPPED WHOLE when nothing on the board conducts. Host counters: on a
+     * full screen of fire this walk is entered 41216 times a step and finds
+     * nothing every single time, and the phase split prices it at 36725 us,
+     * 18% of that scene.
+     *
+     * RNG-NEUTRAL: the conduction roll sits inside the depth loop, which is
+     * only reached once a neighbour has passed the PAIR_CONDUCTS reject - so
+     * a board with no conductor draws nothing and the stream is untouched. */
+    if (!s->may_have_conductive) {
+        return false;
+    }
+
     for (int d = 0; d < 4; d++) {
         const int dx = reaction_dirs[d][0];
         const int dy = reaction_dirs[d][1];
@@ -1508,6 +1520,7 @@ step_one_acid_rain_cell(sand_t* s, int x, int y, int w, int h) {
 #define FOUND_FALLER      16u
 #define FOUND_CONDENSING  64u
 #define FOUND_PAIR_REACTIVE 128u
+#define FOUND_CONDUCTIVE  256u
 
 /* REACTION-STAGE DISPATCH TABLE skips PREFIX rows. Water, oil, metal traverse
  * all fields. */
@@ -1531,9 +1544,12 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
     unsigned found = 0;
     for (int x = 0; x < w; x++) {
         const cell_t c = row[x];
-        if ((pair_theirs_bits(CELL_MATERIAL(c))
-             & (PAIR_IGNITABLE | PAIR_HEAT_RESPONSIVE)) != 0) {
+        const uint8_t their_bits = pair_theirs_bits(CELL_MATERIAL(c));
+        if ((their_bits & (PAIR_IGNITABLE | PAIR_HEAT_RESPONSIVE)) != 0) {
             found |= FOUND_PAIR_REACTIVE;
+        }
+        if ((their_bits & PAIR_CONDUCTS) != 0) {
+            found |= FOUND_CONDUCTIVE;
         }
         if (CELL_IS_EMPTY(c)) {
             continue;
@@ -1809,6 +1825,9 @@ sand_step_reactions(sand_t* s) {
      * may_have_burning above. */
     if (!(found & FOUND_PAIR_REACTIVE)) {
         s->may_have_pair_reactive = false;
+    }
+    if (!(found & FOUND_CONDUCTIVE)) {
+        s->may_have_conductive = false;
     }
 
     /* may_have_heat_holder NOT cleared; clearing at end is wrong. */

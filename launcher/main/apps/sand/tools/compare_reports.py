@@ -19,10 +19,33 @@ The floor is measured fresh from the two reports being compared, every
 time - not a constant, because the controls are build-specific and would
 rot the moment someone tuned an unrelated budget. See classify() below.
 
+It also reads the `*_raw.txt` beside each report, for the pass-decomposition
+rows a round's gates print (`gas split: rise off: 191471 us`). Those never
+reach the markdown table - report_performance.py only tabulates budgeted
+tests - so without this they get diffed by eye, which is how a round ends up
+hand-writing this comparison in a scratch file. A decomposition line is
+recognised by its shape and nothing else: `device_tests: <prefix>: <label>:
+<n> us`, the second colon being what separates a split's row from an
+ordinary benchmark's one-line result.
+
+THE CAVEAT IS PRINTED, NOT JUST DOCUMENTED. Absolute microseconds do not
+compare across differently-scoped builds, and barely compare across builds
+whose flash layout moved much (Perf-Round-Guide.md, "Only within-capture
+comparisons are trustworthy"). The clearest machine-readable signature of the
+first mistake is the total run time: a perf-scoped capture runs 39 timed
+tests in ~2m and a full one 952 in ~7m, so a large gap between the two
+reports' totals means the two tables are not comparable at all. That check
+runs on every comparison and says so above the numbers.
+
 Usage:
-    python compare_reports.py OLD.md NEW.md
+    python compare_reports.py OLD.md NEW.md [--threshold PCT]
+
+Exits non-zero if any row regressed by more than the threshold, so it can
+gate a round. --verdict keeps its own stricter contract (exit 0 only for a
+measured win) for the optimisation loop, which is the only caller.
 """
 import argparse
+import os
 import re
 import sys
 
@@ -32,6 +55,25 @@ BUDGET_ROW_RE = re.compile(
 )
 # Its second table, tests measured with no fixed budget: | `name` | measured |
 MEASURED_ROW_RE = re.compile(r"^\|\s*`(?P<name>\w+)`\s*\|\s*(?P<measured>[^|]+?)\s*\|\s*$")
+
+# report_performance.py's headline: `Total run time: 7m 10.6s (430600 ms)`.
+TOTAL_RE = re.compile(r"^Total run time:\s*(?P<human>.+?)\s*\((?P<ms>\d+)\s*ms\)")
+# Where the report says its capture came from, used only for that file's name.
+SOURCE_RE = re.compile(r"^Source:\s*`(?P<path>[^`]+)`")
+
+# A pass-decomposition row in the raw serial capture. The trailing text after
+# `us` varies (some rows print a share of the whole, some do not), so only the
+# leading value is captured; the two-colon shape is what tells a split's row
+# from an ordinary benchmark result on the same log tag.
+DECOMP_RE = re.compile(
+    r"^I \(\d+\) device_tests: (?P<key>.+?): (?P<us>\d+) us(?![a-z])"
+)
+
+# Total run times further apart than this are the signature of a perf-scoped
+# capture being compared against a full one - 39 timed tests against 952.
+# Deliberately loose: a genuine within-scope pair lands within a few percent,
+# so anything near this is already the wrong comparison.
+SCOPE_MISMATCH_PCT = 20.0
 
 # The two frame-budget tests that run no liquid, reaction or gas code -
 # anything that moves them is flash layout, not the change under test.
@@ -59,6 +101,64 @@ def parse_report(path: str) -> dict:
                 continue  # unmeasured row (test didn't run this capture)
             measured[m.group("name")] = int(value)
     return measured
+
+
+def parse_total(path: str):
+    """(human, milliseconds) from the report's headline, or None."""
+    with open(path, "r", errors="replace") as f:
+        for line in f:
+            m = TOTAL_RE.match(line.strip())
+            if m:
+                return m.group("human"), int(m.group("ms"))
+    return None
+
+
+def find_raw(path: str):
+    """The `*_raw.txt` beside a report.
+
+    By timestamp, not by the report's own `Source:` line: that line records an
+    absolute path from whichever worktree took the capture, and a report read
+    on another machine - or moved out of the capture worktree, which is the
+    normal way one is kept - would send this looking in a directory that does
+    not exist here. The stamp in the two filenames is the same by
+    construction (capture_ref_<ref>_<stamp>.md next to
+    performance_<stamp>_raw.txt), so it survives the move."""
+    directory = os.path.dirname(os.path.abspath(path))
+    base = os.path.basename(path)
+    stamp = re.search(r"(\d{8}_\d{6})", base)
+    if stamp:
+        candidate = os.path.join(directory, "performance_%s_raw.txt" % stamp.group(1))
+        if os.path.exists(candidate):
+            return candidate
+    with open(path, "r", errors="replace") as f:
+        for line in f:
+            m = SOURCE_RE.match(line.strip())
+            if m:
+                candidate = os.path.join(directory, os.path.basename(m.group("path")))
+                if os.path.exists(candidate):
+                    return candidate
+            if line.startswith("|"):
+                break
+    return None
+
+
+def parse_decomposition(path: str) -> dict:
+    """{`<prefix>: <label>`: microseconds} from a raw capture.
+
+    First occurrence wins. A repeat means the same split ran twice in one
+    capture, which is a capture worth looking at by hand rather than one to
+    silently average."""
+    rows = {}
+    with open(path, "r", errors="replace") as f:
+        for line in f:
+            m = DECOMP_RE.match(line.strip())
+            if not m:
+                continue
+            key = m.group("key")
+            if ": " not in key:
+                continue    # an ordinary benchmark result, not a split's row
+            rows.setdefault(key, int(m.group("us")))
+    return rows
 
 
 # Smallest absolute movement, in microseconds, that --verdict will treat as
@@ -107,6 +207,98 @@ def format_row(name, old_v, new_v, tag=None):
     return line
 
 
+def print_delta_table(old: dict, new: dict, threshold: float,
+                      floor_pct: float = None, skip: set = frozenset()) -> int:
+    """Common rows, largest absolute percentage move first. Returns how many
+    rows regressed by more than `threshold`.
+
+    Rows that moved less than the threshold are hidden, and the COUNT OF THEM
+    IS ALWAYS PRINTED, even when it is zero. A filter that quietly drops rows
+    is how a regression leaves a round unnoticed, and the whole point of
+    comparing by machine is that nothing falls off the bottom of the table."""
+    common = sorted((set(old) & set(new)) - set(skip),
+                    key=lambda n: -abs(pct_delta(old[n], new[n])))
+
+    print("| Test | Old (us) | New (us) | Delta | Delta % |"
+          + (" |" if floor_pct is not None else ""))
+    print("|---|---:|---:|---:|---:|" + ("---|" if floor_pct is not None else ""))
+
+    hidden, regressed = 0, 0
+    for name in common:
+        old_v, new_v = old[name], new[name]
+        pct = pct_delta(old_v, new_v)
+        if pct > threshold:
+            regressed += 1
+        if abs(pct) < threshold:
+            hidden += 1
+            continue
+        tag = None
+        if floor_pct is not None:
+            tag = "signal" if abs(pct) > floor_pct else "layout?"
+        print(format_row(name, old_v, new_v, tag))
+    print()
+    print(f"{len(common) - hidden} of {len(common)} rows shown; {hidden} hidden "
+          f"for moving less than the {threshold:.1f}% threshold.")
+    print()
+    return regressed
+
+
+def report_missing(old: dict, new: dict, skip: set, old_title: str, new_title: str):
+    """Rows in one side only - a renamed test, or a scope change."""
+    for title, missing, source in (
+        (old_title, sorted(set(old) - set(new) - set(skip)), old),
+        (new_title, sorted(set(new) - set(old) - set(skip)), new),
+    ):
+        if not missing:
+            continue
+        print(f"### Only in {title}")
+        print()
+        for name in missing:
+            print(f"- `{name}`: {source[name]} us")
+        print()
+
+
+def decompositions(old_path: str, new_path: str):
+    """The gate rows from each report's raw capture, ({}, {}) if absent."""
+    out = []
+    for path in (old_path, new_path):
+        raw = find_raw(path)
+        out.append(parse_decomposition(raw) if raw else {})
+    return out[0], out[1]
+
+
+def print_scope_check(old_path: str, new_path: str):
+    """The totals, and the warning that the two tables may not be comparable
+    at all. Printed first, above the numbers, because it decides whether the
+    numbers mean anything."""
+    print("## Scope check")
+    print()
+    old_total, new_total = parse_total(old_path), parse_total(new_path)
+    if old_total is None or new_total is None:
+        print("One of the reports carries no `Total run time:` line, so the "
+              "scope check could not run. Confirm by hand that both captures "
+              "were taken the same way before reading a single row below.")
+        print()
+        return
+
+    print(f"Total run time: {old_total[0]} -> {new_total[0]}.")
+    if old_total[1] > 0:
+        gap = abs(new_total[1] - old_total[1]) / old_total[1] * 100.0
+        if gap > SCOPE_MISMATCH_PCT:
+            print()
+            print(f"**WARNING: the two runs differ by {gap:.0f}% of wall time.** "
+                  "That is the signature of a perf-scoped capture compared "
+                  "against a full one, and two differently-scoped images are "
+                  "different flash layouts: the absolute microseconds below do "
+                  "not compare, and no threshold makes them.")
+    print()
+    print("Even within one scope, absolute numbers compare only between "
+          "captures of the same shape - a change that grows a hot function "
+          "relocates everything after it and moves every row together. Read "
+          "the controls before anything else.")
+    print()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("old_report", help="Earlier performance_*.md")
@@ -117,6 +309,9 @@ def main() -> int:
                              "least one row improved beyond the noise floor "
                              "and none regressed beyond it. For the "
                              "optimisation loop, which cannot read a table.")
+    parser.add_argument("--threshold", type=float, default=0.4,
+                        help="percent below which a row is hidden, and above "
+                             "which a regression fails the run (default 0.4)")
     args = parser.parse_args()
 
     old_report = parse_report(args.old_report)
@@ -167,6 +362,7 @@ def main() -> int:
 
     print(f"# Comparing `{args.old_report}` -> `{args.new_report}`")
     print()
+    print_scope_check(args.old_report, args.new_report)
     print("## Controls (noise floor)")
     print()
     print("These two run no liquid, reaction or gas code, so their movement "
@@ -196,12 +392,6 @@ def main() -> int:
     print()
 
     control_names = set(CONTROLS)
-    common = sorted(
-        (set(old_report) & set(new_report)) - control_names,
-        key=lambda n: -abs(pct_delta(old_report[n], new_report[n])),
-    )
-    only_old = sorted(set(old_report) - set(new_report) - control_names)
-    only_new = sorted(set(new_report) - set(old_report) - control_names)
 
     print("## Everything else")
     print()
@@ -210,28 +400,33 @@ def main() -> int:
           "what the two controls moved for free, so it's not distinguishable "
           "from flash layout noise in this comparison.")
     print()
-    print("| Test | Old (us) | New (us) | Delta | Delta % | |")
-    print("|---|---:|---:|---:|---:|---|")
-    for name in common:
-        old_v, new_v = old_report[name], new_report[name]
-        tag = "signal" if abs(pct_delta(old_v, new_v)) > floor_pct else "layout?"
-        print(format_row(name, old_v, new_v, tag))
-    print()
+    regressed = print_delta_table(old_report, new_report, args.threshold,
+                                  floor_pct=floor_pct, skip=control_names)
+    report_missing(old_report, new_report, control_names,
+                   "the old report (removed or renamed)",
+                   "the new report (added or renamed)")
 
-    if only_old:
-        print("### Only in the old report (removed or renamed)")
+    old_decomp, new_decomp = decompositions(args.old_report, args.new_report)
+    if old_decomp and new_decomp:
+        print("## Pass decomposition (from the raw captures)")
         print()
-        for name in only_old:
-            print(f"- `{name}`: {old_report[name]} us")
+        print("Gate rows, read from the `*_raw.txt` beside each report. These "
+              "are upper bounds from measure-by-deleting and need not sum, so "
+              "they are not gated on below - a row moving here says where a "
+              "step's time went, not that anything regressed.")
         print()
-    if only_new:
-        print("### Only in the new report (added or renamed)")
-        print()
-        for name in only_new:
-            print(f"- `{name}`: {new_report[name]} us")
+        print_delta_table(old_decomp, new_decomp, args.threshold)
+        report_missing(old_decomp, new_decomp, set(),
+                       "the old capture's splits",
+                       "the new capture's splits")
+    elif old_decomp or new_decomp:
+        which = "old" if old_decomp else "new"
+        print(f"> Only the {which} capture carries pass-decomposition rows, so "
+              "there is nothing to diff. That is the normal state between "
+              "rounds - the gates are scaffolding.")
         print()
 
-    return 0
+    return 1 if regressed else 0
 
 
 if __name__ == "__main__":
