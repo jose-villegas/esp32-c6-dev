@@ -78,6 +78,25 @@
 #define PAIR_QUENCHES        (1u << 3) /* theirs is a liquid that is neither fuel nor a heat source - neighbor_quenches() */
 #define PAIR_DISSOLVABLE     (1u << 4) /* theirs has a nonzero dissolvable - step_one_dissolver_cell()'s own reject */
 #define PAIR_CONDUCTS        (1u << 5) /* theirs has a nonzero conducts - conduct_heat()'s own reject */
+
+/* Every pair bit any material now on the board can offer a neighbour: the OR
+ * of theirs_bits over s->may_have_materials, recomputed once a step in
+ * sand_step_reactions(). Every "is there anything here I could act ON" reject
+ * reads this instead of walking to find out.
+ *
+ * Starts all-ones so nothing is skipped before the first pass has looked.
+ *
+ * seen_materials is the same mask being rebuilt from what THIS pass actually
+ * walks, so the board can narrow as well as widen - a latch alone only ever
+ * grows. */
+static uint8_t  present_pair_bits = 0xFFu;
+static uint16_t seen_materials;
+
+/* A 17th material would fall out of the mask silently, and a material missing
+ * from it reads as absent - which SKIPS work rather than adding it. Wrong
+ * output, no crash, so nothing else would catch it. */
+_Static_assert(MATERIAL_MAX <= 16, "may_have_materials is a uint16_t bit per material");
+
 static uint8_t pair_bits[MATERIAL_MAX][MATERIAL_MAX];
 
 /* Reads theirs-only bits. Used by try_heat_transform(), step_one_cold_cell(),
@@ -923,7 +942,7 @@ conduct_heat(sand_t* s, int x, int y, int w, int h) {
      * RNG-NEUTRAL: the conduction roll sits inside the depth loop, which is
      * only reached once a neighbour has passed the PAIR_CONDUCTS reject - so
      * a board with no conductor draws nothing and the stream is untouched. */
-    if (!s->may_have_conductive) {
+    if ((present_pair_bits & PAIR_CONDUCTS) == 0) {
         return false;
     }
 
@@ -1373,7 +1392,7 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
      *
      * RNG-NEUTRAL: both draws inside this walk sit behind a non-zero pair
      * byte, so a board with none draws nothing and the stream is untouched. */
-    if (!s->may_have_pair_reactive) {
+    if ((present_pair_bits & (PAIR_IGNITABLE | PAIR_HEAT_RESPONSIVE)) == 0) {
         goto pair_done;
     }
 
@@ -1519,8 +1538,6 @@ step_one_acid_rain_cell(sand_t* s, int x, int y, int w, int h) {
 #define FOUND_MOISTURE    8u
 #define FOUND_FALLER      16u
 #define FOUND_CONDENSING  64u
-#define FOUND_PAIR_REACTIVE 128u
-#define FOUND_CONDUCTIVE  256u
 
 /* REACTION-STAGE DISPATCH TABLE skips PREFIX rows. Water, oil, metal traverse
  * all fields. */
@@ -1544,13 +1561,7 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
     unsigned found = 0;
     for (int x = 0; x < w; x++) {
         const cell_t c = row[x];
-        const uint8_t their_bits = pair_theirs_bits(CELL_MATERIAL(c));
-        if ((their_bits & (PAIR_IGNITABLE | PAIR_HEAT_RESPONSIVE)) != 0) {
-            found |= FOUND_PAIR_REACTIVE;
-        }
-        if ((their_bits & PAIR_CONDUCTS) != 0) {
-            found |= FOUND_CONDUCTIVE;
-        }
+        seen_materials |= (uint16_t)(1u << CELL_MATERIAL(c));
         if (CELL_IS_EMPTY(c)) {
             continue;
         }
@@ -1794,6 +1805,17 @@ sand_step_reactions(sand_t* s) {
 
     build_reaction_tables();
 
+    /* Materials -> bits, once, here: this is the first point in a step where
+     * the table is known built, and the passes below read the result per
+     * cell. */
+    present_pair_bits = 0;
+    for (int m = 0; m < MATERIAL_MAX; m++) {
+        if ((s->may_have_materials & (1u << m)) != 0) {
+            present_pair_bits |= pair_theirs_bits((uint8_t)m);
+        }
+    }
+    seen_materials = 0;
+
     const int w = s->w;
     const int h = s->h;
 
@@ -1820,15 +1842,10 @@ sand_step_reactions(sand_t* s) {
     if (!(found & FOUND_CONDENSING)) {
         s->may_have_condenser = false;
     }
-    /* Recomputed from what this pass actually walked, so the flag tracks the
-     * board rather than only ever latching upward - the same shape as
-     * may_have_burning above. */
-    if (!(found & FOUND_PAIR_REACTIVE)) {
-        s->may_have_pair_reactive = false;
-    }
-    if (!(found & FOUND_CONDUCTIVE)) {
-        s->may_have_conductive = false;
-    }
+    /* Recomputed from what this pass actually walked, so it narrows as well as
+     * widens - the same shape as may_have_burning above. A material that burnt
+     * away stops arming the rejects that name it. */
+    s->may_have_materials = seen_materials;
 
     /* may_have_heat_holder NOT cleared; clearing at end is wrong. */
 

@@ -61,26 +61,19 @@ typedef struct sand_s {
      * moment a liquid is placed, and only ever cleared by a pass that has
      * looked everywhere and found none. When it is false the whole cross-flow
      * pass is skipped, so a screen of sand never pays for water. */
-    /* Is there anything on the board a burning cell's pair walk could act
-     * ON - something ignitable, or something heat can transform? False means
-     * that walk provably finds nothing, so it is not run at all.
-     *
-     * A NEIGHBOUR PROPERTY, not a pair: pair_bits is built as
-     * pair_bits[mine][theirs] = theirs_bits[theirs], sixteen identical rows,
-     * so what can be acted on does not depend on what is looking. That is
-     * what lets one board-wide flag answer for every cell. */
-    bool     may_have_pair_reactive;
-
-    /* Is there anything on the board heat can CONDUCT into - a cell with a
-     * non-zero `conducts`? False means conduct_heat()'s four-direction walk
-     * provably finds nothing, so it is not run.
-     *
-     * Same reasoning as may_have_pair_reactive above: what heat can travel
-     * through is a property of the NEIGHBOUR, so one board-wide answer serves
-     * every cell. */
-    bool     may_have_conductive;
-
     bool     may_have_liquid;
+
+    /* Which materials are anywhere on the board, one bit per material id.
+     *
+     * ONE MASK, NOT A FLAG PER QUESTION: the passes keep asking variants of
+     * "is there anything here I could act ON" - ignitable, heat-transformable,
+     * conductive. Each is a property of the NEIGHBOUR alone, since pair_bits
+     * is sixteen identical rows.
+     *
+     * Records MATERIALS, not derived bits: the pair table lives in
+     * sand_reactions.c, so latching stays one OR and the conversion happens
+     * once a step. */
+    uint16_t may_have_materials;
 
     /* Same idea as may_have_liquid, for gas - see sand_step_gas() in
      * sand_gas.c. */
