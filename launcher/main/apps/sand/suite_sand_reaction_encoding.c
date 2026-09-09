@@ -433,6 +433,49 @@ static void test_acid_spends_at_least_a_unit_of_itself_per_cell_dissolved(void)
         "roll never landed at all across 8 acid cells and 400 steps");
 }
 
+/* Cullet is glass milled back to grains (cell_is_cullet(), material.h), and
+ * MAT_GLASS itself has no .dissolvable - acid cannot touch a pane whole. It
+ * shares MAT_SAND's reaction row, though, so without an explicit reject it
+ * inherited dune sand's dissolvable=200 and dissolved as if milling had
+ * made it MORE soluble, not immune. Dune sand is the control: it must
+ * still go, which is what proves the reject is variant-specific rather
+ * than a change to MAT_SAND's own dissolvable figure. */
+static void test_acid_dissolves_dune_sand_but_not_cullet(void)
+{
+    fixture();
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, GLASS);
+    }
+    for (int y = 0; y < H - 1; y++) {
+        sand_set(&s, 4, y, GLASS); /* keeps the two acid columns from ever meeting */
+    }
+
+    const int dune_x = 2, cullet_x = 6;
+    sand_set(&s, dune_x, H - 2, CELL_MAKE(MAT_SAND, 8));
+    sand_set(&s, cullet_x, H - 2, CELL_MAKE(MAT_SAND, SAND_CULLET_BASE));
+    for (int y = 0; y < H - 2; y++) {
+        sand_set(&s, dune_x, y, CELL_MAKE(MAT_ACID, MASS_MAX));
+        sand_set(&s, cullet_x, y, CELL_MAKE(MAT_ACID, MASS_MAX));
+    }
+
+    for (int i = 0; i < 400; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(MAT_SAND, CELL_MATERIAL(sand_at(&s, dune_x, H - 2)),
+        "control: acid must still dissolve ordinary dune sand, or this test "
+        "proves nothing about the reject being variant-specific");
+
+    const cell_t cullet_after = sand_at(&s, cullet_x, H - 2);
+    TEST_ASSERT_EQUAL_MESSAGE(MAT_SAND, CELL_MATERIAL(cullet_after),
+        "acid must not dissolve cullet - it is glass, and glass (MAT_GLASS) "
+        "is already immune to acid");
+    TEST_ASSERT_TRUE_MESSAGE(CELL_VARIANT(cullet_after) >= SAND_CULLET_BASE,
+        "and it must still read as cullet, not merely as some other grain "
+        "of sand that happened to survive");
+}
+
 /* The consequence of that, and the reason it is worth paying for: a
  * finite amount of acid can only eat a finite amount. A drop lands on a
  * deep pile and stops partway rather than boring through the floor. */
@@ -2662,6 +2705,7 @@ void run_sand_reaction_encoding_suite(void)
     RUN_TEST(test_glass_conducts_heat_like_stone);
     RUN_TEST(test_sand_turns_to_glass_under_sustained_heat);
     RUN_TEST(test_acid_spends_at_least_a_unit_of_itself_per_cell_dissolved);
+    RUN_TEST(test_acid_dissolves_dune_sand_but_not_cullet);
     RUN_TEST(test_acid_fizzes_while_it_eats);
     RUN_TEST(test_the_fizz_rises_out_of_the_acid);
     RUN_TEST(test_acid_and_water_dilute_each_other);

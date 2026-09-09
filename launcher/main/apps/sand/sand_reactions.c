@@ -1104,6 +1104,13 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
         if ((pair_theirs_bits(CELL_MATERIAL(n)) & PAIR_DISSOLVABLE) == 0) {
             continue;
         }
+        /* Cullet is glass milled to grains, and MAT_GLASS has no
+         * .dissolvable - acid cannot touch a pane whole. It shares
+         * MAT_SAND's row, though, so the material table alone cannot say
+         * cullet is different; reject it here explicitly. */
+        if (cell_is_cullet(n)) {
+            continue;
+        }
         const uint8_t give = reaction_of(n)->dissolvable;
         if (give == 0 || (int)(rng_next(&s->rng) & 0xFF) >= give) {
             continue;
