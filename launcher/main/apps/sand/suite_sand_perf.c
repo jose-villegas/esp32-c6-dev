@@ -649,6 +649,65 @@ static int64_t time_a_quarter_turn(sand_t *real, int steps, int64_t *worst_out)
  * rows to fire at all. The half-screen scene below is its realistic
  * counterpart, and the PAIR is the point - a number from this one alone would
  * flatter any optimisation aimed at packed rows. */
+/* HOW MUCH A MOSTLY-INERT BOARD PAYS FOR A SMALL FIRE.
+ *
+ * Every other reaction scene here fills the board with things that react, so
+ * they measure what a reacting cell costs. This one measures the opposite,
+ * which is the shape the app is usually in: sand_step_reactions() early-outs
+ * only on a board-wide flag test, so one lit match makes it walk every cell
+ * every step, decoding each, however small the fire is.
+ *
+ * The sand bulk is deliberate. A settled powder is exactly what the main
+ * sweep's own block skip already handles, so whatever this row costs is the
+ * reactions pass and the renderer, not the sweep.
+ *
+ * What it settled: the full-grid walk a small fire forces is 256 us, 0.4% of
+ * this step, against 24343 us in the reaction bodies. That retired bd
+ * esp32c6-3pa, which had proposed a per-block skip for the walk - the whole
+ * ceiling of that idea turned out to be 0.4%, against a failure mode of a
+ * stale bit extinguishing a quiet fire. */
+static void test_a_campfire_on_a_sand_bed_fits_in_the_frame_budget(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 23u);
+    sand_enable_sleeping(&real, blocks);
+
+    build_campfire_scene(&real);
+
+    /* Let the sand settle and the fire catch, so the timed steps are a
+     * burning campfire rather than a scene still falling into place. */
+    for (int i = 0; i < 30; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+
+    const int steps = 20;
+    const int64_t start = esp_timer_get_time();
+    for (int i = 0; i < steps; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+    const int64_t per_step = (esp_timer_get_time() - start) / steps;
+
+    ESP_LOGI("device_tests", "campfire on a sand bed, %dx%d: %lld us per step",
+             REAL_W, REAL_H, (long long)per_step);
+
+    free(big);
+    free(blocks);
+
+    /* MEASURED 56,963 us per step on device, 2026-09-09
+     * (capture_ref_5cf243b_20260909_054... ). Budget is that x 0.9 = 51,266,
+     * rounded DOWN to 51,200 so the target is never looser than the
+     * convention. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(51200, (int)per_step,
+        "a small fire on a settled sand bed is the shape the app is usually "
+        "in - a reduction target at measured x 0.9, so failing means the work "
+        "is not done yet");
+}
+
 static void test_turning_a_packed_screen_of_gas_fits_in_the_frame_budget(void)
 {
     uint8_t *big    = malloc(REAL_W * REAL_H);
@@ -2651,6 +2710,7 @@ void run_sand_perf_suite(void)
     RUN_TEST(test_four_liquids_reacting_at_once_fits_in_the_frame_budget);
     RUN_TEST(test_the_lava_stress_scene_fits_in_the_frame_budget);
     RUN_TEST(test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget);
+    RUN_TEST(test_a_campfire_on_a_sand_bed_fits_in_the_frame_budget);
     RUN_TEST(test_turning_a_packed_screen_of_gas_fits_in_the_frame_budget);
     RUN_TEST(test_turning_a_half_screen_of_gas_fits_in_the_frame_budget);
     RUN_TEST(test_the_thermal_shock_scene_fits_in_the_frame_budget);
