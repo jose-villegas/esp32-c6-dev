@@ -71,6 +71,15 @@ typedef struct sand_s {
      * what lets one board-wide flag answer for every cell. */
     bool     may_have_pair_reactive;
 
+    /* Is there anything on the board heat can CONDUCT into - a cell with a
+     * non-zero `conducts`? False means conduct_heat()'s four-direction walk
+     * provably finds nothing, so it is not run.
+     *
+     * Same reasoning as may_have_pair_reactive above: what heat can travel
+     * through is a property of the NEIGHBOUR, so one board-wide answer serves
+     * every cell. */
+    bool     may_have_conductive;
+
     bool     may_have_liquid;
 
     /* Same idea as may_have_liquid, for gas - see sand_step_gas() in
