@@ -15,7 +15,7 @@ static const char *const slot_field_names[F_COUNT] = {
     "chills", "conducts", "boils", "warms", "thaws",
     "wets", "soaks", "dries", "soil",
     "soaked_chance",
-    "grows", "falls", "withers",
+    "grows", "falls",
     "harden_run", "harden_chance",
     "roots",
     "canopy", "trunk_girth", "holds_line",

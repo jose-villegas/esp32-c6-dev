@@ -623,8 +623,8 @@ static void test_heat_through_a_stone_wall_smelts_the_dirt_beyond_it(void)
  * bit makes every extended cell pass the cheap reject - root included, which
  * conducts nothing.
  *
- * Fire and root are re-placed each step so neither burn-out nor root's
- * `withers` can end the scene early and retire the assertion quietly. */
+ * Fire and root are re-placed each step so burn-out cannot end the scene
+ * early and retire the assertion quietly. */
 static void test_a_non_conducting_extended_cell_passes_no_heat_beyond_itself(void)
 {
     fixture();
@@ -641,9 +641,9 @@ static void test_a_non_conducting_extended_cell_passes_no_heat_beyond_itself(voi
         sand_step(&s, 0, 1000, 0);
 
         TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_ROOT), sand_at(&s, 3, y),
-            "the root must survive each step - if it burns or withers away "
-            "the fire is touching the wood directly and this test can no "
-            "longer tell a conducted ignition from a contact one");
+            "the root must survive each step - if it burns away the fire is "
+            "touching the wood directly and this test can no longer tell a "
+            "conducted ignition from a contact one");
         /* Byte-exact, not CELL_MATERIAL: wood's `ignites_to` is MAT_WOOD, so
          * lit wood keeps its own material nibble and only the code changes -
          * a material-only assertion here reads PASS on an ignited cell. */

@@ -49,10 +49,7 @@ static void test_a_seed_falls_until_it_lands(void)
     sand_set(&s, W / 2, 0, MATX(MATX_PLANT));
 
     /* Long enough to fall the height of the board at a leaf's pace, and
-     * no longer. A seed on bare stone can neither drink nor lean on a
-     * trunk, so it withers - correctly - and a test that leaves one lying
-     * there for hundreds of steps is timing the withering rate rather
-     * than the falling. */
+     * no longer. */
     for (int i = 0; i < 90; i++) {
         sand_step(&s, 0, 1000, 0);
     }
@@ -82,10 +79,7 @@ static void test_two_falling_seeds_do_not_hold_each_other_up(void)
     sand_set(&s, W / 2 + 1, 1, MATX(MATX_PLANT));
 
     /* Long enough to fall the height of the board at a leaf's pace, and
-     * no longer. A seed on bare stone can neither drink nor lean on a
-     * trunk, so it withers - correctly - and a test that leaves one lying
-     * there for hundreds of steps is timing the withering rate rather
-     * than the falling. */
+     * no longer. */
     for (int i = 0; i < 90; i++) {
         sand_step(&s, 0, 1000, 0);
     }
@@ -137,11 +131,8 @@ static void test_a_brushful_of_seeds_does_not_hang_in_the_air(void)
         "the brush has to have painted a disc, not a single cell - one "
         "seed on its own cannot show this at all");
 
-    /* Watched for, not sampled at some fixed step. A disc on a bare board
-     * can neither drink nor lean on a trunk, so it withers as it goes -
-     * correctly - and at a leaf's falling pace the two rates are close
-     * enough that "is it there at step N" is a coin toss. What the test
-     * means is that it got to the bottom, so that is what it waits for. */
+    /* Watched for, not sampled at some fixed step: what the test means is
+     * that it got to the bottom, so that is what it waits for. */
     int landed = 0;
     for (int i = 0; i < 300 && !landed; i++) {
         sand_step(&s, 0, 1000, 0);
@@ -187,10 +178,7 @@ static void test_a_seed_in_a_shaft_does_not_stick_to_the_walls(void)
     sand_set(&s, cx, 0, MATX(MATX_PLANT));
 
     /* Long enough to fall the height of the board at a leaf's pace, and
-     * no longer. A seed on bare stone can neither drink nor lean on a
-     * trunk, so it withers - correctly - and a test that leaves one lying
-     * there for hundreds of steps is timing the withering rate rather
-     * than the falling. */
+     * no longer. */
     for (int i = 0; i < 90; i++) {
         sand_step(&s, 0, 1000, 0);
     }
@@ -211,14 +199,14 @@ static void test_a_seed_in_a_shaft_does_not_stick_to_the_walls(void)
  * a plant that is already there is not created twice.
  *
  * Everything downstream of that is quietly dead: dissolve the ground out
- * from under a plant with acid and it hangs in the air; the greenery never
- * withers. The cold pass documents the same shape of bug for snow sitting
- * on dry ground, and for the same reason: a cell with nothing to do NOW is
- * not a cell with nothing to do EVER.
+ * from under a plant with acid and it hangs in the air, since nothing
+ * re-arms the flag that would let it fall. The cold pass documents the
+ * same shape of bug for snow sitting on dry ground, and for the same
+ * reason: a cell with nothing to do NOW is not a cell with nothing to do
+ * EVER.
  *
- * Asserting on the flag rather than on a scene, deliberately. Every scene
- * that shows the consequence is a race between falling and withering, and
- * the flag is the actual invariant. */
+ * Asserting on the flag rather than on a scene, deliberately - the flag
+ * is the actual invariant. */
 static void test_a_settled_plant_keeps_the_reaction_pass_armed(void)
 {
     fixture();
@@ -227,8 +215,8 @@ static void test_a_settled_plant_keeps_the_reaction_pass_armed(void)
     for (int x = 0; x < W; x++) {
         sand_set(&s, x, H - 1, STONE);
     }
-    /* Resting on the floor, so it never moves, and beside wood, so it
-     * never withers - it just sits there being a plant. */
+    /* Resting on the floor, so it never moves - it just sits there being
+     * a plant. */
     sand_set(&s, W / 2, H - 2, MATX(MATX_PLANT));
     sand_set(&s, W / 2 + 1, H - 2, CELL_MAKE(MAT_WOOD, 0));
 
@@ -375,9 +363,8 @@ static void test_a_seed_under_stone_stays_put(void)
     }
     sand_set(&s, W / 2, H - 3, MATX(MATX_PLANT));
 
-    /* Kept watered. Soil dries, and a seed that cannot drink withers - so
-     * without this the seed does eventually disappear, which is correct
-     * behaviour and nothing to do with what this test is about. */
+    /* Kept watered - not load-bearing for the shove rule this test checks,
+     * but keeps the scene closer to a real watered planting. */
     for (int i = 0; i < 1500; i++) {
         for (int x = 0; x < W; x++) {
             sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
@@ -436,80 +423,6 @@ static void test_a_limb_hangs_on_to_a_wooden_trunk(void)
         "every branch it grows is not one");
 }
 
-
-/* Loose greenery withers; greenery on a tree does not.
- *
- * Growth is the only thing on this board that makes cells, and until now
- * nothing took them away again except fire and acid. So every fragment a
- * tree shed - a limb broken off by a tilt, a seed poured onto bare stone -
- * was permanent, and the board silted up with green litter that could
- * neither do anything nor go anywhere.
- *
- * All three cases are checked together because the rule is only useful if
- * it can tell them apart. Withering everything that is thirsty would strip
- * a grown tree the moment its soil dried out. */
-static void test_loose_greenery_withers_a_stem_lignifies_a_crown_stays(void)
-{
-    fixture();
-    sand_clear(&s);
-    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
-
-    for (int x = 0; x < W; x++) {
-        sand_set(&s, x, H - 1, STONE);
-    }
-    /* left: a scrap on bare stone, nothing to drink and nothing to hold */
-    sand_set(&s, 1, H - 2, MATX(MATX_PLANT));
-    /* middle: a trunk with a LEAF on it and a stem beside it. The leaf
-     * is sheltered by the wood; the stem is not, and that difference is
-     * the point - foliage in a drought is a tree keeping its leaves,
-     * green growth in a drought is growth that failed and should go. */
-    sand_set(&s, 4, H - 2, CELL_MAKE(MAT_WOOD, 0));
-    sand_set(&s, 5, H - 2, MATX(MATX_LEAF));
-    sand_set(&s, 3, H - 2, MATX(MATX_PLANT));
-    /* right: on watered soil */
-    sand_set(&s, W - 1, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
-    sand_set(&s, W - 1, H - 3, MATX(MATX_PLANT));
-
-    for (int i = 0; i < 2000; i++) {
-        /* The right-hand patch stays watered, so its plant can always
-         * drink; the other two never can. */
-        sand_set(&s, W - 1, H - 2,
-                 CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
-        sand_step(&s, 0, 1000, 0);
-    }
-
-    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 1, H - 2)),
-        "a scrap of green on bare stone must eventually go - it can "
-        "neither drink nor lean on a trunk, and nothing else on the board "
-        "would ever have cleared it away");
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_LEAF), sand_at(&s, 5, H - 2),
-        "but FOLIAGE touching wood must stay, however dry it gets - a tree "
-        "in a drought keeps its leaves, and a leaf cannot fall, so nothing "
-        "else would ever clear a crown whose trunk had burned away");
-    /* And green GROWTH touching wood LIGNIFIES. It must not stay green -
-     * sheltered growth that never dies is how every stem that failed to
-     * finish its run stayed on the tree for ever, which is what the
-     * stacking was - but it should not simply vanish either. A shoot on
-     * a trunk that stops being fed goes woody, which is what a stalled
-     * shoot does and what stops a settled tree reading green.
-     *
-     * Variant zero, checked rather than assumed: wood's low nibble is
-     * burn progress, and its maximum is what "alight" means, so wood
-     * born the usual way would come into the world on fire. */
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(CELL_MAKE(MAT_WOOD, 0),
-        sand_at(&s, 3, H - 2),
-        "green growth touching wood must go WOODY - not stay green, "
-        "which was the stacking, and not simply vanish, which threw away "
-        "the stem instead of finishing it");
-    /* Still plant, or already grown into wood - either way it is alive
-     * and still there, which is the claim. Two thousand steps on watered
-     * soil is plenty of time for a seedling to become a trunk. */
-    const cell_t fed = sand_at(&s, W - 1, H - 3);
-    TEST_ASSERT_TRUE_MESSAGE(fed == MATX(MATX_PLANT) ||
-                             CELL_MATERIAL(fed) == MAT_WOOD,
-        "and a plant that can still reach water must survive - withering "
-        "is for what has nothing behind it, not for anything thirsty");
-}
 
 /* A tree is not a stick.
  *
@@ -782,74 +695,6 @@ static void test_a_hardened_trunk_is_thicker_at_the_foot(void)
         "only asks whether it is thick");
 }
 
-/* Hardening takes the WHOLE run, tip and all.
- *
- * The reverse of what this file asserted until now, deliberately. A green
- * tip was the only way a tree could get taller, so hardening stopped one
- * cell short - and that is why a tree carried green around for ever.
- * Growth comes from crowned wood now (reaction_t.buds), so a run can turn
- * to timber entire and the tree still has a future.
- *
- * Asserted as "a tree reaches a state with no plant on it at all", which
- * is the claim that matters: plant is a phase a cell passes through, not a
- * tissue a tree keeps. */
-static void test_a_finished_tree_carries_no_green(void)
-{
-    fixture();
-    sand_clear(&s);
-    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
-    sand_set_decay(&s, SAND_DECAY_PER_MATERIAL);
-
-    for (int x = 0; x < W; x++) {
-        sand_set(&s, x, H - 1, STONE);
-        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
-    }
-    sand_set(&s, W / 2, H - 3, MATX(MATX_PLANT));
-
-    /* Watered while it grows, then left alone. Kept watered for ever it
-     * simply keeps budding, which is the model working; the claim here is
-     * about what a tree looks like once it is FINISHED.
-     *
-     * And leaving it dry is what makes the test discriminate: a green tip
-     * clings to wood, so on a build that leaves one it survives drought
-     * indefinitely and this never reaches zero. */
-    int wooded = 0, bare = 0;
-    for (int i = 0; i < 4000 && !bare; i++) {
-        if (i < 1500) {
-            for (int x = 0; x < W; x++) {
-                sand_set(&s, x, H - 2,
-                         CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
-            }
-        }
-        sand_step(&s, 0, 1000, 0);
-
-        if (count_cells_of(MAT_WOOD) > 0) {
-            wooded = 1;
-        }
-        if (!wooded) {
-            continue;
-        }
-        int green = 0;
-        for (int y = 0; y < H; y++) {
-            for (int x = 0; x < W; x++) {
-                if (sand_at(&s, x, y) == MATX(MATX_PLANT)) {
-                    green++;
-                }
-            }
-        }
-        if (green == 0) {
-            bare = 1;
-        }
-    }
-
-    TEST_ASSERT_TRUE_MESSAGE(wooded, "the tree has to have hardened at all");
-    TEST_ASSERT_TRUE_MESSAGE(bare,
-        "a tree must reach a state with no plant cells on it - hardening "
-        "leaves no tip behind, so green is a phase a cell passes through "
-        "on its way to timber rather than something a tree keeps");
-}
-
-
 /* A limb TRAVELS. It does not go out one cell and then climb.
  *
  * Growth used to reckon every direction from gravity, which meant a branch
@@ -1062,10 +907,10 @@ static void test_a_crowned_trunk_buds_and_a_bare_one_does_not(void)
 /* A leaf on a tree never multiplies, and never moves.
  *
  * This is the entire reason foliage is its own material rather than more
- * plant. Every cell of a PLANT is a grower - foliage touches wood so it
- * never withers, and find_water() walks down through wood so it can always
- * drink - which means a canopy made of plant would feed the growth loop
- * with every leaf it put out, and that loop has run away once already.
+ * plant. Every cell of a PLANT is a grower, and find_water() walks down
+ * through wood so foliage can always drink - which means a canopy made of
+ * plant would feed the growth loop with every leaf it put out, and that
+ * loop has run away once already.
  * Charging moisture per leaf makes it expensive; having no `grows` field
  * makes it impossible.
  *
@@ -1076,9 +921,9 @@ static void test_a_crowned_trunk_buds_and_a_bare_one_does_not(void)
  * how this test first failed when budding changed from plant to foliage. */
 static void test_a_leaf_neither_spreads_nor_falls(void)
 {
-    /* One: on watered soil with NO wood anywhere. It can drink, so it will
-     * not wither, and nothing else in the scene can produce foliage - so
-     * any second leaf would have to have come from the first. */
+    /* One: on watered soil with NO wood anywhere. Nothing else in the
+     * scene can produce foliage - so any second leaf would have to have
+     * come from the first. */
     fixture();
     sand_clear(&s);
     sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
@@ -1128,38 +973,6 @@ static void test_a_leaf_neither_spreads_nor_falls(void)
         "foliage hangs off its trunk over thin air and stays there");
     TEST_ASSERT_EQUAL_INT_MESSAGE(1, count_cells_of(MAT_EXTENDED),
         "nor multiplied, on dry ground where nothing can bud");
-}
-
-/* A leaf with no tree behind it goes.
- *
- * The other half of having no `falls`: nothing else would ever clear it.
- * Burn a trunk out from under a crown and, without this, the crown hangs
- * in the air permanently. `clings_to` is what tells the two apart - wood
- * beside it means it is still part of something. */
-static void test_a_leaf_with_no_tree_withers_away(void)
-{
-    fixture();
-    sand_clear(&s);
-
-    for (int x = 0; x < W; x++) {
-        sand_set(&s, x, H - 1, STONE);
-    }
-    sand_set(&s, 2, H - 4, MATX(MATX_LEAF));          /* alone, in mid-air */
-    sand_set(&s, W - 3, H - 2, CELL_MAKE(MAT_WOOD, 0));
-    sand_set(&s, W - 2, H - 2, MATX(MATX_LEAF));      /* beside a trunk */
-
-    int gone = 0;
-    for (int i = 0; i < 4000 && !gone; i++) {
-        sand_step(&s, 0, 1000, 0);
-        gone = CELL_IS_EMPTY(sand_at(&s, 2, H - 4));
-    }
-
-    TEST_ASSERT_TRUE_MESSAGE(gone,
-        "a leaf with no wood beside it must wither - it cannot fall, so "
-        "nothing else on the board would ever take it away, and a crown "
-        "whose trunk burned out would hang there for good");
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_LEAF), sand_at(&s, W - 2, H - 2),
-        "while one still touching a trunk stays, however dry it gets");
 }
 
 /* And water gets through a canopy.
@@ -1271,11 +1084,8 @@ static void test_a_plant_on_dry_soil_stays_where_it_is(void)
     }
     sand_set(&s, 1, H - 3, MATX(MATX_PLANT));
 
-    /* The most it is ever seen to be, not what is left at the end. A
-     * plant that cannot drink withers, so a seedling on dry ground is
-     * gone long before step 400 - which is right, and would make an
-     * assert on the final count pass for the wrong reason. What this is
-     * about is that it never GREW. */
+    /* The most it is ever seen to be, not what is left at the end - what
+     * this is about is that it never GREW past its starting seed. */
     int tall = 0;
     for (int i = 0; i < 400; i++) {
         sand_step(&s, 0, 1000, 0);
@@ -1623,17 +1433,14 @@ void run_sand_seeds_suite(void)
     RUN_TEST(test_a_buried_seed_comes_up_through_the_soil);
     RUN_TEST(test_a_seed_under_stone_stays_put);
     RUN_TEST(test_a_limb_hangs_on_to_a_wooden_trunk);
-    RUN_TEST(test_loose_greenery_withers_a_stem_lignifies_a_crown_stays);
     RUN_TEST(test_a_tree_grows_wider_than_one_column);
     RUN_TEST(test_a_plant_drains_standing_water_into_the_soil);
     RUN_TEST(test_a_plant_rooted_on_stone_does_not_drink);
     RUN_TEST(test_a_hardened_trunk_is_left_with_foliage);
     RUN_TEST(test_a_hardened_trunk_is_thicker_at_the_foot);
-    RUN_TEST(test_a_finished_tree_carries_no_green);
     RUN_TEST(test_a_limb_travels_outward_instead_of_climbing);
     RUN_TEST(test_a_crowned_trunk_buds_and_a_bare_one_does_not);
     RUN_TEST(test_a_leaf_neither_spreads_nor_falls);
-    RUN_TEST(test_a_leaf_with_no_tree_withers_away);
     RUN_TEST(test_a_leaf_drains_standing_water_into_the_soil);
     RUN_TEST(test_a_plant_on_wet_soil_grows_upward);
     RUN_TEST(test_a_plant_on_dry_soil_stays_where_it_is);

@@ -6,7 +6,7 @@
  * Shares almost no call graph with sand_reactions.c's fire chemistry -
  * nothing here reads pair_bits[]/PAIR_*, calls try_ignite_given(),
  * conduct_heat() or cool_off_chain(), and nothing over there calls a
- * grow/root/sprout/bud/wither function. The two halves used to sit in one
+ * grow/root/sprout/bud function. The two halves used to sit in one
  * 2,870-line file only because both are reaction_t-driven per-cell passes
  * dispatched by the same step_one_reacting_row() (sand_reactions.c) - that
  * dispatch table, and the handful of helpers genuinely needed by BOTH
@@ -668,74 +668,6 @@ shove_aside(sand_t* s, int gx, int gy, int dx, int dy, int w, int h) {
     s->cells[(size_t)gy * (size_t)w + (size_t)gx] = SAND_EMPTY;
     mark_rows(s, gy, gy);
     wake_block_and_neighbors(s, gx, gy);
-    return true;
-}
-
-/* Cells WITHER without drink or trunk. Touch wood first (8 reads). Dried soil
- * keeps leaves. */
-bool
-step_one_withering_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
-    const size_t at = (size_t)y * (size_t)w + (size_t)x;
-    const cell_t self = s->cells[at];
-
-    if (r->sheltered_by != 0) {
-        for (int d = 0; d < 8; d++) {
-            const int* nd = ring_dir(d);
-            const int nx = x + nd[0], ny = y + nd[1];
-            if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
-                continue;
-            }
-            const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
-            if (!CELL_IS_EMPTY(n) && CELL_MATERIAL(n) == r->sheltered_by) {
-                return false; /* under its tree; it stays */
-            }
-            /* ROOT counts as shelter; `roots_to` matches `find_water()`.
-             * Roots touch wood; else, column rots from bottom. */
-            if (r->roots_to != 0 && n == (cell_t)r->roots_to) {
-                return false;
-            }
-        }
-    }
-
-    /* See lignifying branch. Leaf, no hardens_to, skips reads. */
-    bool attached = false;
-    if (r->hardens_to != 0 && r->clings_to != 0) {
-        for (int d = 0; d < 8; d++) {
-            const int* nd = ring_dir(d);
-            const int nx = x + nd[0], ny = y + nd[1];
-            if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
-                continue;
-            }
-            const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
-            if (!CELL_IS_EMPTY(n) && CELL_MATERIAL(n) == r->clings_to) {
-                attached = true;
-                break;
-            }
-        }
-    }
-
-    int lift = 0, contact_at = -1, root_depth = 0; /* just a reachability
-                                                     * check - nothing here
-                                                     * spends, so nothing
-                                                     * roots */
-    if (find_water(s, x, y, w, h, r, self, &lift, &contact_at, &root_depth, false) >= 0) {
-        return false; /* it can still drink */
-    }
-    if ((int)(rng_next(&s->rng) & 0xFF) >= r->withers) {
-        return false;
-    }
-
-    /* Withering prevents shoot from becoming permanent woody speck. CELL_MAKE
-     * used for wood burn progress. */
-    REACTION_DOC(hardens_to, "if withering but still touching its own hardened trunk");
-    if (attached) {
-        place_cell(s, x, y, at, CELL_MAKE(r->hardens_to, 0));
-        return true;
-    }
-
-    s->cells[at] = SAND_EMPTY;
-    mark_rows(s, y, y);
-    wake_block_and_neighbors(s, x, y);
     return true;
 }
 
