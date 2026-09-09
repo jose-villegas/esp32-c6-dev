@@ -118,6 +118,11 @@ typedef void (*scene_fn)(sand_t *s);
 #define FP_GLASS  CELL_MAKE(MAT_GLASS, SAND_AMBIENT_HEAT)  /* heat_ramp, like stone */
 #define FP_CULLET CELL_MAKE(MAT_SAND,  SAND_CULLET_BASE)   /* glass milled to grains */
 #define FP_METAL  MATX(MATX_METAL)
+#define FP_SNOW   CELL_MAKE(MAT_SNOW,  0)             /* dry, as sand and dirt are */
+#define FP_SMOKE  CELL_MAKE(MAT_SMOKE, MATERIAL_VARIANTS - 1)
+#define FP_WET_DIRT CELL_MAKE(MAT_DIRT, MASS_MAX)      /* saturated, not damp */
+#define FP_HOT_GLASS CELL_MAKE(MAT_GLASS, SAND_SHOCK_HEAT - 1)
+#define FP_ICE    MATX(MATX_ICE)
 
 
 /* Scene 1: dry grains over a floor. The main sweep and nothing else - no
@@ -379,6 +384,76 @@ static void scene_acid_bath(sand_t *s)
     }
 }
 
+/* SNOW, which no scene placed and none produced either - unlike smoke, which
+ * fire at least makes in scene_fire_gas. Three issues are queued against it
+ * (esp32c6-bl4, -tov, -l4s), all changing melting, cold reach or conversion,
+ * and today each would get "identical to baseline" and mean nothing by it.
+ *
+ * Four bays under one smoke band, walled off in stone so they cannot pour
+ * into each other. Each pending change targets a bay that is INERT today -
+ * which is what lets this scene fail when they land. */
+static void scene_snow_thaw(sand_t *s)
+{
+    sand_set_soak(s, SAND_SOAK_PER_MATERIAL);
+
+    for (int x = 0; x < FP_W; x++) {
+        sand_set(s, x, FP_H - 1, FP_STONE);
+    }
+    for (int x = 15; x < FP_W; x += 16) {
+        for (int y = 40; y < FP_H - 1; y++) {
+            sand_set(s, x, y, FP_STONE);
+        }
+    }
+
+    for (int y = FP_H - 8; y < FP_H - 1; y++) {
+        for (int x = 0; x < 15; x++) {
+            sand_set(s, x, y, FP_WATER);      /* thaws=4 - melts today */
+        }
+        for (int x = 16; x < 31; x++) {
+            sand_set(s, x, y, FP_WET_DIRT);   /* inert today; bd esp32c6-bl4 */
+        }
+    }
+
+    /* Heat held FIVE cells from the snow through a conductor, because today
+     * chilling only ever reaches an immediate neighbour - bd esp32c6-tov
+     * would let the cold travel, and that shows up here as a different row.
+     * Lava rather than a hot pane alone so the source is still hot at 300. */
+    for (int x = 32; x < 47; x++) {
+        sand_set(s, x, FP_H - 2, FP_LAVA);
+        sand_set(s, x, FP_H - 3, FP_HOT_GLASS);
+        for (int y = FP_H - 7; y < FP_H - 3; y++) {
+            sand_set(s, x, y, FP_STONE);
+        }
+    }
+
+    /* Settled snow resting ON something convertible: inert today, and what
+     * bd esp32c6-l4s would turn to ice. Ice below it covers MATX_ICE's own
+     * chills and thaws, which nothing else here reaches. */
+    for (int x = 48; x < FP_W; x++) {
+        for (int y = FP_H - 4; y < FP_H - 1; y++) {
+            sand_set(s, x, y, FP_STONE);
+        }
+        for (int y = FP_H - 7; y < FP_H - 4; y++) {
+            sand_set(s, x, y, FP_ICE);
+        }
+    }
+
+    for (int y = FP_H - 16; y < FP_H - 8; y++) {
+        for (int x = 0; x < FP_W; x++) {
+            if (x % 16 != 15) {
+                sand_set(s, x, y, FP_SNOW);
+            }
+        }
+    }
+
+    /* Smoke warms (28) whatever it touches, and it starts on the snow. */
+    for (int y = FP_H - 20; y < FP_H - 16; y++) {
+        for (int x = 0; x < FP_W; x++) {
+            sand_set(s, x, y, FP_SMOKE);
+        }
+    }
+}
+
 /* GRAVITY IS PER SCENE, and the six original rows keep the straight-down
  * vector they were baselined with - their hashes must not move.
  *
@@ -412,6 +487,9 @@ static const struct {
 
     /* The only row here that puts acid on the board at all. */
     { "acid_bath",   scene_acid_bath,   67u, 0,    1000 },
+
+    /* Likewise snow, ice and deliberately-placed smoke. */
+    { "snow_thaw",   scene_snow_thaw,   71u, 0,    1000 },
 };
 
 int main(void)
