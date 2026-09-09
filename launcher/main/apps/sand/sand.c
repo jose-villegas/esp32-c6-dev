@@ -731,6 +731,34 @@ static int sweep_x_order(sand_t *s, int dx)
  * friction and shaking. Moved to sand_priv.h (static inline). See header
  * comment for reason and why non-inline calls are defined below. */
 
+/* One bit per materials[] row for the two questions the sweep asks of every
+ * cell on the grid, so each reads as a shift out of a word in SRAM instead of
+ * dereferencing a struct in flash. The same trade gas_kind_mask makes in
+ * sand_gas.c, on a hotter loop: this one runs per cell of every awake block,
+ * and there is no data cache, so that dereference is a real flash read.
+ *
+ * Eight bytes rather than two 32-entry tables, because MATERIAL_ROWS is 32 and
+ * a row index therefore fits a uint32_t exactly. */
+static uint32_t sweep_skip_mask;    /* KIND_STATIC and KIND_GAS - not ours */
+static uint32_t sweep_liquid_mask;  /* KIND_LIQUID - takes the liquid path  */
+static bool     sweep_tables_ready;
+
+static void build_sweep_tables(void)
+{
+    if (sweep_tables_ready) {
+        return;
+    }
+    for (int r = 0; r < MATERIAL_ROWS; r++) {
+        if (materials[r].kind == KIND_STATIC || materials[r].kind == KIND_GAS) {
+            sweep_skip_mask |= 1u << r;
+        }
+        if (materials[r].kind == KIND_LIQUID) {
+            sweep_liquid_mask |= 1u << r;
+        }
+    }
+    sweep_tables_ready = true;
+}
+
 static bool step_one_grain(sand_t *s, uint8_t *row, uint8_t *prow,
                            uint8_t *arow, uint8_t *brow, int x, int y, int w,
                            int dx, int dy, const int *slide_a,
@@ -738,25 +766,25 @@ static bool step_one_grain(sand_t *s, uint8_t *row, uint8_t *prow,
                            int jostle, bool driven[MATERIAL_ROWS][2])
 {
     const cell_t grain = row[x];
-    const material_t *mat = material_of(grain);
-    if (mat->kind == KIND_STATIC || mat->kind == KIND_GAS) {
-        /* Static costs a single comparison. Gas skipped as it moves against
-         * the sweep's direction, into unvisited cells, risking teleportation.
-         * Handled in sand_gas.c via sand_step_gas() called after this sweep. */
+
+    /* Two shifts answer what two flash reads used to. Gas is skipped because
+     * it moves AGAINST the sweep's direction, into cells not yet visited, and
+     * would teleport - sand_step_gas() has its own reversed pass for it.
+     *
+     * Only a powder reaches materials[] now, and only for its density and
+     * scatter, which no mask can carry. */
+    const unsigned mrow = (unsigned)grain >> 3;
+    if (((sweep_skip_mask >> mrow) & 1u) != 0) {
         return false;
     }
+    if (((sweep_liquid_mask >> mrow) & 1u) != 0) {
+        return move_liquid_grain(s, row, prow, x, y, dx, dy, slide_a,
+                                 slide_b, grain, CELL_MATERIAL(grain));
+    }
+
+    const material_t *mat = material_of(grain);
 
     const uint8_t density = mat->density;
-
-    /* See `move_liquid_grain()` in `sand_liquid.c` and `sand_step_liquids()`.
-     * `mat_id` is computed here, not above with `density`. Calculating
-     * `mat_id` for every grain would waste resources on unused
-     * `CELL_MATERIAL()` calls. */
-    if (mat->kind == KIND_LIQUID) {
-        const uint8_t mat_id = CELL_MATERIAL(grain);
-        return move_liquid_grain(s, row, prow, x, y, dx, dy,
-                                 slide_a, slide_b, grain, mat_id);
-    }
 
     if (jostle == 0) {
         const int scatter = (s->scatter >= 0) ? s->scatter : mat->scatter;
@@ -1034,6 +1062,7 @@ static void build_xflow(xflow_t *f, int gx, int gy)
  * called from sand_step() below, the same shape sand_step_liquids()/
  * sand_step_gas() already use. */
 
+
 /* Pinned to a cache-line boundary so this function's placement is not a
  * coin flip of whatever unrelated code sits before it: a host bisect found
  * sand_step()'s compiled bytes IDENTICAL across commits that never touched
@@ -1048,6 +1077,8 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
      * sand_spawn_cell() calls. This allows new grains to move immediately.
      * Runs unconditionally, even in free fall, ensuring "once per
      * sand_step()". */
+    build_sweep_tables();
+
     emit_from_emitters(s);
 
     /* Dithered rather than nearest, so a tilt between two of the eight
@@ -1117,13 +1148,11 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
         step_one_row(s, y, w, dx, dy, slide_a, slide_b, x_step,
                     load_dx, load_dy, jostle, settled_bit, is_liquid, driven);
     }
-    
 
     /* Cross-flow for liquids, excluding gravity. See sand_step_liquids() in
      * sand_liquid.c. Runs before finalising block sleep states to ensure
      * BLOCK_ACTIVE reflects entire step. */
     sand_step_liquids(s, &flow, dx, dy);
-    
 
     /* Rising gas doesn't join main sweep. Order of sand_step_liquids()
      * doesn't matter; both must finish before finalize_settling(). Checked
@@ -1141,7 +1170,6 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
      * source. No cost to dodge by checking may_have_burning, internal check
      * suffices. */
     sand_step_reactions(s);
-    
 
     /* Final step after others to ensure correct position and arc for thrown
      * grains, adding outward half after gravity. */

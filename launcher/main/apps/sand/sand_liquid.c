@@ -257,11 +257,70 @@ static inline bool equalise_one_block(sand_t *s, uint8_t *row, int y,
     return any_liquid;
 }
 
+/* Whether every cell in [x0, x1) rejects a cross-flow ray landing in it.
+ * neighbour_is_lower() reads a full cell, a foreign material and a wall all as
+ * MASS_MAX, so only an empty cell or a partly-filled liquid can read as lower.
+ * Breaks on the first of either, so a span that is still moving costs a
+ * handful of loads rather than its length. */
+static inline bool span_blocks_flow(const uint8_t *row, int x0, int x1,
+                                    uint16_t is_liquid)
+{
+    for (int x = x0; x < x1; x++) {
+        const cell_t c = row[x];
+        if (CELL_IS_EMPTY(c)) {
+            return false;
+        }
+        if (((is_liquid >> CELL_MATERIAL(c)) & 1u) != 0 &&
+            CELL_VARIANT(c) < MASS_MAX) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* The answer a skipped span still owes equalise_liquids(): found_any is what
+ * clears may_have_liquid. */
+static inline bool span_has_liquid(const uint8_t *row, int x0, int x1,
+                                   uint16_t is_liquid)
+{
+    for (int x = x0; x < x1; x++) {
+        if (((is_liquid >> CELL_MATERIAL(row[x])) & 1u) != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* The columns a span's rays can reach: both rays step x by -1, 0 or +1, so the
+ * span's own width plus one cell of margin either side, clipped to the grid.
+ * A ray leaving the grid sideways is already a reject. */
+static inline bool rays_blocked(const uint8_t *ax_row, const uint8_t *dg_row,
+                                int x0, int x1, int w, uint16_t is_liquid)
+{
+    const int sx0 = (x0 > 0) ? x0 - 1 : 0;
+    const int sx1 = (x1 < w) ? x1 + 1 : w;
+
+    if (ax_row != NULL && !span_blocks_flow(ax_row, sx0, sx1, is_liquid)) {
+        return false;
+    }
+    /* Equal covers both "one row, two rays" - which is every landscape and
+     * diagonal orientation, where ax and dg differ only in x - and "both off
+     * the grid". */
+    if (dg_row == ax_row) {
+        return true;
+    }
+    return dg_row == NULL || span_blocks_flow(dg_row, sx0, sx1, is_liquid);
+}
+
 static bool equalise_one_row(sand_t *s, int y, int w, int x_step,
                              const xflow_t *r, int dx, int dy, int sight,
                              uint16_t is_liquid)
 {
     uint8_t *row = s->cells + (size_t)y * (size_t)w;
+
+    const uint8_t *const ax_row = dest_row(s, y + r->ax[1]);
+    const uint8_t *const dg_row = dest_row(s, y + r->dg[1]);
+
     bool any_liquid = false;
     bool touched = false;
     int  touched_x0 = 0, touched_x1 = 0;
@@ -279,6 +338,27 @@ static bool equalise_one_row(sand_t *s, int y, int w, int x_step,
         }
         const int lo = bx * SAND_BLOCK_W;
         const int hi = (lo + SAND_BLOCK_W < w) ? lo + SAND_BLOCK_W : w;
+
+        /* SKIPPED WHOLE when both rays land where nothing can be lower - the
+         * shape a SETTLED pool holds, and it pays to rediscover every step
+         * forever, because BLOCK_LIQUID_NEAR only says liquid is present,
+         * never that it is still moving. Halves a settled basin.
+         *
+         * RNG-NEUTRAL, which is what makes it safe rather than merely faster:
+         * these cells would all have rejected at neighbour_is_lower(), and
+         * liquid_may_move()'s viscosity roll sits after that, so no draw is
+         * skipped and oil's stream is untouched.
+         *
+         * PER BLOCK, NOT PER ROW: a row-level form of the same fact only ever
+         * fires on a pool spanning the whole screen, and measured nothing on a
+         * pool with air beside it - which is every pool the app holds. */
+        if (rays_blocked(ax_row, dg_row, lo, hi, w, is_liquid)) {
+            if (span_has_liquid(row, lo, hi, is_liquid)) {
+                any_liquid = true;
+            }
+            continue;
+        }
+
         if (equalise_one_block(s, row, y,
                                (x_step > 0) ? lo : hi - 1,
                                (x_step > 0) ? hi : lo - 1,

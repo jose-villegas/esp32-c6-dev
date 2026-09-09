@@ -285,10 +285,6 @@ void sand_host_probe_run_water(void)
 #endif /* DEVICE_BUILD */
 
 #ifdef DEVICE_BUILD
-/* Compares the two gas movers through sand_set_gas_walk(), an ordinary API,
- * so it runs in every diagnostics build. It was placed inside a gated region
- * by mistake once and a whole capture printed nothing - worth remembering
- * whenever a probe is added back. */
 /* THE TWO GAS MOVERS ON THE SAME BOARD. Warmup runs with the walk OFF in both
  * arms, so the timed step sees a byte-identical scene and the only difference
  * is which mover handles it - the same reason the pass decompositions rebuild
@@ -666,6 +662,120 @@ static int64_t time_a_quarter_turn(sand_t *real, int steps, int64_t *worst_out)
  * esp32c6-3pa, which had proposed a per-block skip for the walk - the whole
  * ceiling of that idea turned out to be 0.4%, against a failure mode of a
  * stale bit extinguishing a quiet fire. */
+/* THE POUR, WHICH IS THE MOMENT THAT ACTUALLY HURTS.
+ *
+ * Reported from play: the frame drops when water is poured onto the bed, and
+ * pacing is stable once the plants are merely drinking from wet dirt. The
+ * steady-state row below measures the second of those, so on its own it
+ * measures the moment nobody complains about.
+ *
+ * Same bed, same settle, but timed over the steps immediately AFTER a fresh
+ * pour rather than a quiet window - so the pair brackets what a player sees,
+ * the way the packed and half-screen gas scenes do. The whole point is the
+ * DIFFERENCE between the two rows; a number from either alone would describe
+ * half the experience. Prints; asserts no budget until the pair has been read
+ * once. */
+static void test_pouring_water_onto_a_plant_bed_costs_more_than_steady_growth(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 11u);
+    sand_enable_sleeping(&real, blocks);
+    sand_set_soak(&real, SAND_SOAK_PER_MATERIAL);
+    build_plant_bed_scene(&real);
+    for (int i = 0; i < PLANT_BED_SETTLE_STEPS; i++) {
+        if (i == PLANT_BED_RAIN_A || i == PLANT_BED_RAIN_B) {
+            plant_bed_rain(&real);
+        }
+        sand_step(&real, 0, 1000, 0);
+    }
+
+    const int steps = 20;
+
+    /* Steady first, from the same board the pour will start from - measuring
+     * the pour first would leave the steady rows a wetter bed than the one
+     * the other row times. */
+    int64_t start = esp_timer_get_time();
+    for (int i = 0; i < steps; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+    const int64_t steady = (esp_timer_get_time() - start) / steps;
+
+    plant_bed_rain(&real);
+    start = esp_timer_get_time();
+    for (int i = 0; i < steps; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+    const int64_t poured = (esp_timer_get_time() - start) / steps;
+
+    ESP_LOGI("device_tests",
+             "plant bed pour: steady %lld us, first %d steps after a pour "
+             "%lld us (%lld us more, %lld%%)", (long long)steady, steps,
+             (long long)poured, (long long)(poured - steady),
+             steady > 0 ? (long long)(((poured - steady) * 100) / steady) : 0);
+
+    free(big);
+    free(blocks);
+}
+
+/* WHAT A GROWING BED COSTS, which no other row here can say.
+ *
+ * The plant code - anchored()'s support BFS, find_water()'s reach down through
+ * the soil, the root roll - only runs for a plant cell standing on damp soil,
+ * so every other scene in this file prices it at exactly zero. This one has
+ * ~188 plants, 183 leaves and 266 roots alive at once.
+ */
+static void test_a_growing_plant_bed_fits_in_the_frame_budget(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 11u);
+    sand_enable_sleeping(&real, blocks);
+    sand_set_soak(&real, SAND_SOAK_PER_MATERIAL);
+    build_plant_bed_scene(&real);
+
+    for (int i = 0; i < PLANT_BED_SETTLE_STEPS; i++) {
+        if (i == PLANT_BED_RAIN_A || i == PLANT_BED_RAIN_B) {
+            plant_bed_rain(&real);
+        }
+        sand_step(&real, 0, 1000, 0);
+    }
+
+    const int steps = 20;
+    const int64_t start = esp_timer_get_time();
+    for (int i = 0; i < steps; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+    const int64_t per_step = (esp_timer_get_time() - start) / steps;
+
+    ESP_LOGI("device_tests", "growing plant bed, %dx%d: %lld us per step",
+             REAL_W, REAL_H, (long long)per_step);
+
+    free(big);
+    free(blocks);
+
+    /* MEASURED 73,130 us per step on the 230-step schedule (capture_ref_
+     * b2bb520) - three whole frames for one bed of plants. Budget is that
+     * x 0.9 = 65,817, rounded DOWN to 65,800 so the target is never looser
+     * than the convention.
+     *
+     * RED ON PURPOSE, and it should stay red until the work is done: this is
+     * a reduction target, not a regression guard, the same convention the
+     * campfire and water rows use. soak/dry is 28% of this step and is where
+     * the reduction has to come from. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(65800, (int)per_step,
+        "a bed of growing plants costs three frames a step - a reduction "
+        "target at measured x 0.9, so failing means the work is not done yet");
+}
+
 static void test_a_campfire_on_a_sand_bed_fits_in_the_frame_budget(void)
 {
     uint8_t *big    = malloc(REAL_W * REAL_H);
@@ -2710,6 +2820,8 @@ void run_sand_perf_suite(void)
     RUN_TEST(test_four_liquids_reacting_at_once_fits_in_the_frame_budget);
     RUN_TEST(test_the_lava_stress_scene_fits_in_the_frame_budget);
     RUN_TEST(test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget);
+    RUN_TEST(test_pouring_water_onto_a_plant_bed_costs_more_than_steady_growth);
+    RUN_TEST(test_a_growing_plant_bed_fits_in_the_frame_budget);
     RUN_TEST(test_a_campfire_on_a_sand_bed_fits_in_the_frame_budget);
     RUN_TEST(test_turning_a_packed_screen_of_gas_fits_in_the_frame_budget);
     RUN_TEST(test_turning_a_half_screen_of_gas_fits_in_the_frame_budget);

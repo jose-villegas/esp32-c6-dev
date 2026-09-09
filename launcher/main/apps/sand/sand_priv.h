@@ -127,6 +127,32 @@ block_of(const sand_t* s, int x, int y) {
     return (y / SAND_BLOCK_H) * s->block_cols + (x / SAND_BLOCK_W);
 }
 
+/* Is there liquid in this cell's own block or any block touching it?
+ *
+ * WHY THIS AND NOT s->may_have_liquid: that flag is board-wide, so one water
+ * cell anywhere arms every liquid-adjacent behaviour on the whole grid - which
+ * is why a pour is felt the instant it spawns, before it has touched anything.
+ * BLOCK_LIQUID_NEAR is the same question asked locally, and it is already
+ * recomputed each step by mark_liquid_neighbourhoods() before the reaction
+ * pass runs.
+ *
+ * SOUND FOR ANY FOUR-NEIGHBOUR TEST: a neighbour is one cell away, so it lies
+ * in this block or one touching it, and NEAR covers exactly that. A cell this
+ * answers false for provably had no liquid neighbour to find.
+ *
+ * Falls back to the flag when block state is off, which is the same answer,
+ * only board-wide. */
+static inline bool
+liquid_near(const sand_t* s, int x, int y) {
+    if (!s->may_have_liquid) {
+        return false;
+    }
+    if (s->block_state == NULL) {
+        return true;
+    }
+    return (s->block_state[block_of(s, x, y)] & BLOCK_LIQUID_NEAR) != 0;
+}
+
 static inline void
 wake_blocks_range(sand_t* s, int bx0, int by0, int bx1, int by1) {
     if (s->block_state == NULL) {
@@ -605,6 +631,20 @@ tick_decay(sand_t* s, uint8_t* row, int x, int y, cell_t* grain, const material_
     return true;
 }
 
+/* Per-pass volatile gates for sand_step() (bd esp32c6-8zx), default enabled
+ * so behaviour is untouched. One binary, five configurations, one boot - a
+ * device pass decomposition with no layout difference between
+ * configurations, unlike four separate images each drawing their own
+ * flash-layout ticket. Defined in sand.c. */
+
+/* OPT-IN, for the reason sand_work_counters.h spells out: development
+ * alone puts these in build.diag, the capture build, and an instrument
+ * that shifts every measurement is worse than none. CONFIG_LAUNCHER_
+ * SAND_PASS_GATES cannot be set without LAUNCHER_DEVELOPMENT, so the
+ * guard checks only this option. Kept separate from the work counters: the
+ * gates measure TIME, the counters measurably perturb codegen, so one
+ * option covering both would perturb exactly what the gates measure. */
+#define cond (cond)
 
 /* Defined in sand_reactions.c: the whole of a step's fire-chemistry work
  * for every burning cell (reaction_t.burns - fire and ember today) -

@@ -80,6 +80,31 @@ void build_boiler_scene(sand_t *s);
 void build_campfire_scene(sand_t *s);
 void build_wet_earth_scene(sand_t *s);
 
+/* A bed of sand capped with damp dirt, seeded and rained on - the only scene
+ * here in which anything grows. See the builder for the spacing rule. */
+void build_plant_bed_scene(sand_t *s);
+
+/* Another fall of rain onto an existing bed. One pour is drunk dry in a few
+ * hundred steps and growth then stops - see the definition. */
+void plant_bed_rain(sand_t *s);
+
+/* THE SCHEDULE IS CHOSEN SO EVERY STAGE IS STILL DOING WORK IN THE TIMED
+ * WINDOW, which is a stricter test than "the bed looks grown" and is what
+ * settled these numbers. Measured leaf growth across candidate 20-step
+ * windows: a bed settled 400 steps produces ZERO leaves during the window -
+ * its canopy has saturated, so budding runs and rejects every time and the
+ * row would be timing a reject rather than the stage. At 230 all three of
+ * plants, leaves and roots are still being produced.
+ *
+ * Two pours, both BEFORE the window: one fall of rain is drunk dry within a
+ * few hundred steps and growth then stops - left alone the plants collapse.
+ * Pouring earlier than this is worse, not better (at 80 and 160 the canopy
+ * stalls at 137 leaves and never moves again), so the timing was measured
+ * too, not reasoned. */
+#define PLANT_BED_SETTLE_STEPS 230
+#define PLANT_BED_RAIN_A       100
+#define PLANT_BED_RAIN_B       170
+
 /* Same real device impulse budget the vent-spam scene this replaced used -
  * the app's own buffer is sized APP_IMPULSE_MAX (2048), and this scene
  * should be fighting the same memory ceiling a real device pour actually
