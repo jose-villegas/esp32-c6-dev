@@ -108,13 +108,6 @@ typedef struct sand_s {
      * for every gas cell on smoke/steam-only boards. */
     bool     may_have_heat_holder;
 
-    /* Own flag for withering, like may_have_dissolver and
-     * may_have_temperature. Plant was the only material that both fell and
-     * withered. Foliage never falls, so it arms nothing above, but it does
-     * wither, requiring the pass to visit it. Leaf on a bare board would be
-     * skipped forever. */
-    bool     may_have_withering;
-
     /* Condensing flag for steam; unlike boiling, it's independent and must
      * persist. Without it, steam would never condense if no other reactions
      * occur. */

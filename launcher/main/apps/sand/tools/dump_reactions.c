@@ -412,7 +412,6 @@ static const field_doc_t field_docs[] = {
     /* GRP_GROW */
     FRATE(grows,    GRP_GROW, "grows up into wet soil"),
     FRATE(falls,    GRP_GROW, "falls down"),
-    FRATE(withers,  GRP_GROW, "dries up and dies"),
 
     /* GRP_HARDEN - becoming wood, and what that moment leaves behind.
      * `harden_chance`, `canopy` and `holds_line` are each a one-shot
@@ -422,9 +421,6 @@ static const field_doc_t field_docs[] = {
     F(harden_run,     GRP_HARDEN, FK_COUNT_MAG, NULL),
     FCHANCE(harden_chance, GRP_HARDEN, "hardens"),
     F(clings_to,      GRP_HARDEN, FK_TARGET,    NULL),
-    F(sheltered_by,   GRP_GROW,   FK_TARGET,    NULL), /* modifies withers,
-                                                        * not hardening -
-                                                        * see emit_grow() */
     FCHANCE(canopy,   GRP_HARDEN, "grows leaves on top"),
     F(canopy_to,      GRP_HARDEN, FK_TARGET,    NULL),
     F(trunk_girth,    GRP_HARDEN, FK_COUNT_MAG, NULL),
@@ -470,6 +466,8 @@ static const field_doc_t field_docs[] = {
     F(stride_pad0,      GRP_PADDING, FK_PAD, NULL),
     F(stride_pad1,      GRP_PADDING, FK_PAD, NULL),
     F(stride_pad2,      GRP_PADDING, FK_PAD, NULL),
+    F(stride_pad3,      GRP_PADDING, FK_PAD, NULL),
+    F(stride_pad4,      GRP_PADDING, FK_PAD, NULL),
 };
 
 #undef F
@@ -582,11 +580,10 @@ static cause_t causes[CAUSE_MAX];
 static size_t causes_count;
 
 /* Every field name this file actually pulls a cause_at() clause out of -
- * NOT every field with a trigger at a read site (hardens_to's own
- * REACTION_DOC() in sand_reactions.c documents one, at its lignify branch
- * in step_one_withering_cell(), but nothing in this file prints it, so it
- * is deliberately absent here; adding a printed clause for it later means
- * adding it to this list too). A trailing `has_cause` column on field_docs[]
+ * NOT every field with a trigger at a read site; a field can carry a
+ * REACTION_DOC() elsewhere that this file never prints, in which case it
+ * stays deliberately absent here (adding a printed clause for it later
+ * means adding it to this list too). A trailing `has_cause` column on field_docs[]
  * rows would say the same thing but forces every F()/FRATE()/FCHANCE() row
  * in the whole table to grow a new argument for the sake of the two fields
  * that need one - this small separate list costs far less churn for the
@@ -2159,29 +2156,6 @@ static void emit_grow(const reaction_t *r)
     if (r->falls != 0) {
         printf("- It *falls down*%s when there is empty space below it.\n",
                rate_gap(adverb_child("falls", r->falls)));
-    }
-    if (r->withers != 0) {
-        /* "Withers away" -> "dries up and dies" - the same fact, but
-         * concrete rather than a word ("withers") this pass could not
-         * confirm a five-year-old has. The sheltered_by branch used to
-         * chain a second condition onto the same sentence with "unless" -
-         * stacking "if X" with "unless Y" is a harder logical shape than
-         * a young reader needs ("unless" is a less familiar connective
-         * than "if" or "but"), and a re-read as the child-reader persona
-         * flagged the whole sentence (19 words, one "and", one comma) as
-         * running long by the end. Split into two plain sentences
-         * instead: the rule, then the safe exception as its own "but". */
-        if (r->sheltered_by != 0) {
-            printf("- It *dries up and dies*%s if it cannot get water "
-                   "through its roots.\n",
-                   rate_gap(adverb_child("withers", r->withers)));
-            printf("- But it is safe if it is touching %s.\n",
-                   mat_span_v(r->sheltered_by));
-        } else {
-            printf("- It *dries up and dies*%s if it cannot get water "
-                   "through its roots.\n",
-                   rate_gap(adverb_child("withers", r->withers)));
-        }
     }
 }
 

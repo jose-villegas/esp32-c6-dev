@@ -68,6 +68,13 @@
         WOOD_BURN(7), WOOD_BURN(8), WOOD_BURN(9), WOOD_BURN(10), WOOD_BURN(11), WOOD_BURN(12), WOOD_BURN(13),          \
         WOOD_BURN(14), WOOD_BURN(15)
 
+/* Unlit wood beside a leaf blends live between these two anchors (LERP8 -
+ * see material_wood_leaf_wave() and material_colours()'s MAT_WOOD case).
+ * Both anchored on leaf's own green, not wood's colour - even at rest this
+ * should read as leaf, just a darker shade of it. */
+#define WOOD_LEAF_TINT_LO LERP(0x468F26, 0x000000, 6)
+#define WOOD_LEAF_TINT_HI LERP(0x468F26, 0x8CD24E, 3)
+
 /* Hot walls appear visibly hot now. */
 #define STONE_FROST   0xCEDCE8
 #define STONE_AMBIENT 0x5F6673
@@ -492,7 +499,6 @@ static inline unsigned root_shade(unsigned n)
 
 static const gfx_color_t plant_grain[8] = GRAIN8_ROW(PLANT_DARK, PLANT_LIGHT);
 static const gfx_color_t ice_grain[8] = GRAIN8_ROW(ICE_DARK, ICE_LIGHT);
-static const gfx_color_t leaf_grain[8] = GRAIN8_ROW(LEAF_DARK, LEAF_LIGHT);
 static const gfx_color_t metal_grain[8] = GRAIN8_ROW(METAL_DARK, METAL_LIGHT);
 
 /* HATCHED's only effect - lifted off METAL_LIGHT for uniform highlight. */
@@ -589,6 +595,62 @@ material_shine_direction(int gx, int gy, int *ux_q8, int *uy_q8) {
     *uy_q8 = ((gx - gy) * 181) / len;
 }
 
+/* Perpendicular to gravity, not a fixed grid axis - so the wood-leaf wind
+ * (material_wood_leaf_wave()) sweeps level on the panel no matter how the
+ * device is held, the same reasoning material_shine_direction() already
+ * uses for its own band. Flat: defaults to grid-x. */
+void
+material_wood_leaf_wind_axis(int gx, int gy, int *ux_q8, int *uy_q8) {
+    const int len = im_len(gx, gy);
+    if (len == 0) {
+        *ux_q8 = 256;
+        *uy_q8 = 0;
+        return;
+    }
+    *ux_q8 = (-gy * 256) / len;
+    *uy_q8 = (gx * 256) / len;
+}
+
+/* Ring order matches sand_priv.h's own ring_dir() (0 = down, clockwise) -
+ * duplicated here since the render path does not reach into simulation
+ * internals for it. */
+static const int8_t wood_leaf_ring[8][2] = {
+    {0, 1}, {1, 1}, {1, 0}, {1, -1}, {0, -1}, {-1, -1}, {-1, 0}, {-1, 1},
+};
+
+/* Recomputing fresh every frame flips right at a tie between neighbouring
+ * ring directions, popping every wood cell whose top5 just changed in one
+ * frame - see Shading-and-Colour.md, "hysteresis hides the seam, it does
+ * not remove it". `*last_down` is the caller's own state, like
+ * glass_last_phase. */
+void
+material_wood_leaf_top5(int gx, int gy, int *last_down, int8_t top5[5][2]) {
+    const int len = im_len(gx, gy);
+    const long margin = len / 4;
+    int down = *last_down & 7;
+    long best = (long)wood_leaf_ring[down][0] * gx + (long)wood_leaf_ring[down][1] * gy;
+    for (int i = 0; i < 8; i++) {
+        const long dot = (long)wood_leaf_ring[i][0] * gx + (long)wood_leaf_ring[i][1] * gy;
+        if (dot > best + margin) {
+            best = dot;
+            down = i;
+        }
+    }
+    *last_down = down;
+
+    const int down_left = (down + 7) & 7;
+    const int down_right = (down + 1) & 7;
+    int n = 0;
+    for (int i = 0; i < 8; i++) {
+        if (i == down || i == down_left || i == down_right) {
+            continue;
+        }
+        top5[n][0] = wood_leaf_ring[i][0];
+        top5[n][1] = wood_leaf_ring[i][1];
+        n++;
+    }
+}
+
 /* Foam is gated by rim curvature instead of a separate motion flag: a still
  * rim already reads as flat and a sloshing one as curved throughout, so a
  * flag would only re-derive what curvature already answers. See the
@@ -636,6 +698,44 @@ static int glass_phase;
 void
 material_set_glass_phase(int phase) {
     glass_phase = phase;
+}
+
+/* A short gust, not a slow ramp - a symmetric triangle read as one broad
+ * pulse. SCREEN_SPAN_MS is a multiple of PERIOD_MS so several bands show
+ * at once. `hash` salts each cell's phase - see glass's own `(hash & 0xFF)
+ * + glass_phase`. */
+#define WOOD_LEAF_WAVE_PERIOD_MS       600u
+#define WOOD_LEAF_WAVE_RISE_MS          60u
+#define WOOD_LEAF_WAVE_FALL_MS         140u
+#define WOOD_LEAF_WAVE_SCREEN_SPAN_MS 4000u
+#define WOOD_LEAF_WAVE_SALT_MS         150u
+
+/* Percent chance a cell actually shows a gust it is otherwise due for -
+ * every eligible cell lighting up together read as one shine sweeping
+ * through, not real wind, which is patchy. Rolled per gust (not once,
+ * ever), so which cells sit one out changes gust to gust. */
+#define WOOD_LEAF_WAVE_ACTIVATE_PERCENT 30u
+
+unsigned
+material_wood_leaf_wave(uint32_t time_ms, int pos, int span, unsigned hash) {
+    const int32_t shift_ms = span != 0 ? (int32_t)(((int64_t)pos * WOOD_LEAF_WAVE_SCREEN_SPAN_MS) / span) : 0;
+    const uint32_t salt_ms = hash % WOOD_LEAF_WAVE_SALT_MS;
+    const uint32_t shifted = time_ms + (uint32_t)shift_ms + salt_ms;
+    const uint32_t m = shifted % WOOD_LEAF_WAVE_PERIOD_MS;
+    if (m >= WOOD_LEAF_WAVE_RISE_MS + WOOD_LEAF_WAVE_FALL_MS) {
+        return 0u;
+    }
+
+    const uint32_t cycle = shifted / WOOD_LEAF_WAVE_PERIOD_MS;
+    if ((hash ^ (cycle * 0x9E3779B1u)) % 100u >= WOOD_LEAF_WAVE_ACTIVATE_PERCENT) {
+        return 0u;
+    }
+
+    if (m < WOOD_LEAF_WAVE_RISE_MS) {
+        return (unsigned)((m * 255u) / WOOD_LEAF_WAVE_RISE_MS);
+    }
+    const uint32_t since_peak = m - WOOD_LEAF_WAVE_RISE_MS;
+    return (unsigned)(255u - (since_peak * 255u) / WOOD_LEAF_WAVE_FALL_MS);
 }
 
 /* No floating point, suitable for water rim cells. See paint_row_n(). */
@@ -759,13 +859,27 @@ material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_col
                 return MATERIAL_HATCHED;
             }
 
+            if (v == MATX_LEAF) {
+                /* depth carries the wave's fraction (0-255) plus one here
+                 * too - the same live sweep MAT_WOOD's near-leaf case
+                 * reads, so a leaf and the wood beside it catch the same
+                 * gust together. No stored grain table: LERP8 needs
+                 * 0xRRGGBB, not a packed gfx_color_t (see GLASS's own
+                 * note on this exact trap). */
+                const unsigned frac = depth != 0 ? depth - 1u : 0u;
+                const uint32_t base = LERP(LEAF_DARK, LEAF_LIGHT, (hash & 7u) * 15 / 7);
+                out[0] = GFX_RGB(LERP8(base, WOOD_LEAF_TINT_HI, frac));
+                out[1] = out[0];
+                out[2] = out[0];
+                return MATERIAL_SPECKLED;
+            }
+
             /* Guard-plus-ternary: switch costs 14%, unhinted branch 26% - see
              * Tuning-At-a-Glance.md. */
-            if (v == MATX_PLANT || v == MATX_LEAF || v == MATX_ICE || v == MATX_ROOT) {
-                out[0] = (v == MATX_PLANT)  ? plant_grain[hash & 7u]
-                         : (v == MATX_LEAF) ? leaf_grain[hash & 7u]
-                         : (v == MATX_ICE)  ? ice_grain[hash & 7u]
-                                            : root_grain[root_shade(depth)][hash & 7u];
+            if (v == MATX_PLANT || v == MATX_ICE || v == MATX_ROOT) {
+                out[0] = (v == MATX_PLANT) ? plant_grain[hash & 7u]
+                         : (v == MATX_ICE) ? ice_grain[hash & 7u]
+                                           : root_grain[root_shade(depth)][hash & 7u];
                 out[1] = out[0];
                 out[2] = out[0];
                 return MATERIAL_SPECKLED;
@@ -799,6 +913,17 @@ material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_col
         case MAT_WOOD:
             if (v != 0) {
                 break; /* alight: one flat glow, not grain */
+            }
+            if (depth != 0) {
+                /* depth carries the wave's fraction (0-255) plus one, from
+                 * material_wood_leaf_wave() via paint_row_n() - see
+                 * material_wood_near_leaf() in material_palette.h for the
+                 * gate. A live LERP8, not a stored step, so the blend is
+                 * smooth rather than snapping between fixed shades. */
+                out[0] = GFX_RGB(LERP8(WOOD_LEAF_TINT_LO, WOOD_LEAF_TINT_HI, depth - 1u));
+                out[1] = out[0];
+                out[2] = out[0];
+                return MATERIAL_FLAT;
             }
             out[0] = wood_grain[hash & 7u];
             out[1] = out[0];

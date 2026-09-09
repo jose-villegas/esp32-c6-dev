@@ -124,7 +124,6 @@ Typography carries the other three roles colour does not: *italic* is the verb d
 - It *grows up* into wet $\textcolor{#846542}{\text{dirt}}$.
 - Growing uses up a bit of the $\textcolor{#846542}{\text{dirt}}$'s water.
 - It *falls down* when there is empty space below it.
-- It *dries up and dies* **slowly** if it cannot get water through its roots.
 - If it grows straight for 6 spots in a row, it **sometimes** *turns into* $\textcolor{#825830}{\text{wood}}$.
 - The bottom can be up to 2 spots wider than the top.
 - Its branches **usually** keep growing the same way they started, instead of curving back down.
@@ -138,8 +137,6 @@ Typography carries the other three roles colour does not: *italic* is the verb d
 
 - *Catches* $\textcolor{#B19100}{\text{fire}}$ from $\textcolor{#B19100}{\text{fire}}$ or $\textcolor{#BF1B00}{\text{lava}}$.
 - It *gives in to* $\textcolor{#2B6F08}{\text{acid}}$ **a lot**.
-- It *dries up and dies* **slowly** if it cannot get water through its roots.
-- But it is safe if it is touching $\textcolor{#825830}{\text{wood}}$.
 - If $\textcolor{#1863A3}{\text{water}}$ touches it, it *sends the water down* to $\textcolor{#846542}{\text{dirt}}$ at its roots.
 
 ### Metal
@@ -152,8 +149,6 @@ Typography carries the other three roles colour does not: *italic* is the verb d
 - If $\textcolor{#BF1B00}{\text{lava}}$ touches it, it *turns into* $\textcolor{#B19100}{\text{fire}}$.
 - A flame alone will not do this. It has to be $\textcolor{#BF1B00}{\text{lava}}$.
 - It *gives in to* $\textcolor{#2B6F08}{\text{acid}}$ **a lot**.
-- It *dries up and dies* **slowly** if it cannot get water through its roots.
-- But it is safe if it is touching $\textcolor{#825830}{\text{wood}}$.
 - If it touches wet $\textcolor{#846542}{\text{dirt}}$, it **hardly ever** *turns* that spot into more $\textcolor{#AC8F6F}{\text{root}}$.
 
 ### Gunpowder
