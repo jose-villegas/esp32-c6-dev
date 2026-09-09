@@ -603,32 +603,33 @@ static inline bool equalise_gas_one_row_cell(sand_t *s, uint8_t *row,
     return true;
 }
 
-/* A row with no empty cell in it cannot spread, and knowing that skips its
- * whole body. Every target equalise_gas_one_cell() can pick lies in this same
- * row when py == 0 - ty is y, and stayed_in_row is exactly that test - so with
- * nowhere in the row to go, none of its gas moves however long it looks.
- *
- * Pays for itself in both directions: it BREAKS on the first empty cell, so a
- * sparse row costs a handful of loads and then runs the body as before, while
- * a packed one costs w loads to skip two probes on every gas cell it holds.
- * That is the trade the device asked for - the body is 14578 us of a fire step
- * and its cost is per-cell probes, not the sight scan, which gas_run_t already
- * carries.
- *
- * Reports whether the row held gas on the way past, since the caller needs
- * that for may_have_gas whether or not the body runs. */
+/* A row with no empty cell in it cannot spread - see equalise_gas_one_cell()
+ * for why ty == y when py == 0. BREAKS on the first empty cell (a packed row
+ * pays w loads instead, to skip two probes per gas cell - 14578us of a fire
+ * step). Also reports the widest gas `sight` actually in the row, free from
+ * the same scan, so a tilted caller can bound its skip by what this row
+ * could reach rather than the worst case over every gas material
+ * (smoke's 24). */
 static inline bool row_is_packed(const uint8_t *row, int w, uint16_t is_gas,
-                                 bool *any_gas)
+                                 bool *any_gas, int *max_sight)
 {
-    bool gas = false;
+    bool gas   = false;
+    int  sight = 0;
     for (int x = 0; x < w; x++) {
         const cell_t c = row[x];
         if (CELL_IS_EMPTY(c)) {
             return false;
         }
-        gas |= (((is_gas >> CELL_MATERIAL(c)) & 1u) != 0);
+        if (((is_gas >> CELL_MATERIAL(c)) & 1u) != 0) {
+            gas = true;
+            const int cur = material_of(c)->sight;
+            if (cur > sight) {
+                sight = cur;
+            }
+        }
     }
-    *any_gas = gas;
+    *any_gas   = gas;
+    *max_sight = sight;
     return true;
 }
 
@@ -638,7 +639,8 @@ static inline bool row_is_packed(const uint8_t *row, int w, uint16_t is_gas,
  * alone is the pass's cheap-skip for now. */
 static bool equalise_gas_one_row(sand_t *s, int y, int w, int x_from,
                                  int x_to, int x_step, int px, int py,
-                                 int rdx, int rdy, uint16_t is_gas)
+                                 int rdx, int rdy, uint16_t is_gas,
+                                 int *clean_run)
 {
     uint8_t *row = s->cells + (size_t)y * (size_t)w;
     /* Both fixed for the whole row - see has_room_above()'s comment. */
@@ -648,11 +650,9 @@ static bool equalise_gas_one_row(sand_t *s, int y, int w, int x_from,
     bool touched = false;
     int  touched_x0 = 0, touched_x1 = 0;
 
-    /* carry_ok gates the whole run-skipping scheme off the moment gravity
+    /* carry_ok gates gas_run_t's cheap re-walk skip off the moment gravity
      * is not axis-aligned - see gas_run_t's own comment for why the sweep
-     * geometry it relies on only holds when py == 0. Computed once per
-     * row (constant for the whole equalise_gas() call, since px and py do
-     * not change mid-pass) rather than re-checked per cell. */
+     * geometry it relies on only holds when py == 0. */
     const bool carry_ok = (py == 0);
 
     /* Reset at the start of every row: a run only ever describes cells
@@ -660,10 +660,17 @@ static bool equalise_gas_one_row(sand_t *s, int y, int w, int x_from,
      * yet. */
     gas_run_t run = { .id = -1, .len = 0 };
 
-    /* Same py == 0 precondition carry_ok rests on, for the same reason: a
-     * tilted sweep's targets leave the row, so this row's contents no longer
-     * decide the answer. */
-    if (carry_ok && row_is_packed(row, w, is_gas, &any_gas)) {
+    /* A tilted ray from THIS row's own cells can only reach rows already
+     * behind the sweep - *clean_run counts consecutive packed rows there
+     * (see equalise_gas()'s own comment). Once that count covers this row's
+     * own widest gas sight, no cell in it has anywhere left to reach, same
+     * conclusion as py == 0's own-row check, just aimed further out. */
+    int row_sight = 0;
+    const bool packed = row_is_packed(row, w, is_gas, &any_gas, &row_sight);
+    const bool skip =
+        SAND_STEP_GATED(gas_row_skip, packed && (py == 0 || *clean_run >= row_sight));
+    *clean_run = packed ? *clean_run + 1 : 0;
+    if (skip) {
         return any_gas;
     }
 
@@ -703,9 +710,15 @@ static bool equalise_gas(sand_t *s, const int *perp, int rdx, int rdy)
     const int x_to   = (px > 0) ? -1    : w;
     const int x_step = (px > 0) ? -1    : 1;
 
+    /* Consecutive packed rows immediately behind the sweep pointer. py > 0
+     * sweeps y descending while a tilted ray reads downward (increasing y);
+     * py < 0 sweeps ascending while the ray reads upward - either way the
+     * ray's targets are exactly the rows this count has already crossed. */
+    int clean_run = 0;
+
     for (int y = y_from; y != y_to; y += y_step) {
         if (equalise_gas_one_row(s, y, w, x_from, x_to, x_step, px, py, rdx,
-                                 rdy, is_gas)) {
+                                 rdy, is_gas, &clean_run)) {
             found_any = true;
         }
     }
