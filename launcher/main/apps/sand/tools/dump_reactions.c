@@ -72,6 +72,9 @@
 
 #include "material.h"
 #include "material_palette.h"
+/* Declarations and #defines only - no sand.c body comes with it, so this
+ * does not reopen reaction_doc.h's "do not link the simulation" decision. */
+#include "sand.h"
 
 /* Not defined anywhere in this codebase today (checked) - every other array
  * here is either sized by a named constant or walked with sizeof/pointer
@@ -2519,12 +2522,17 @@ static void emit_pairwise_table(void)
 
     /* dissolves x dissolvable. `fizz` is read from the DISSOLVER's own row
      * (all_rows[i], not the cell being eaten) - see step_one_dissolver_
-     * cell() in sand_reactions.c, which rolls r->fizz on the acid cell at
-     * the moment it eats a neighbour. */
+     * cell(), which rolls r->fizz on the acid cell as it eats a neighbour.
+     * Water and Oil pass this gate but branch away before reading `fizz`
+     * (bd esp32c6-c3r) - skipped here, bespoke rows follow the loop. */
     for (size_t i = 0; i < all_rows_count; i++) {
         if (all_rows[i].r->dissolves == 0) continue;
         for (size_t j = 0; j < all_rows_count; j++) {
             if (all_rows[j].r->dissolvable == 0) continue;
+            if (all_rows[j].self_id == MAT_WATER ||
+                all_rows[j].self_id == MAT_OIL) {
+                continue;
+            }
             char becomes[64];
             if (all_rows[i].r->fizz != 0) {
                 /* `fizz` is FCHANCE - never silent (see frequency_words[]'s
@@ -2544,6 +2552,51 @@ static void emit_pairwise_table(void)
             print_join_row(all_rows[i].name, all_rows[j].name, becomes,
                            rate, "both rolls must pass");
         }
+    }
+
+    /* Acid|Water and Acid|Oil (bd esp32c6-c3r): neither is a dissolve past
+     * the shared gate above, so hand-written here rather than walked - but
+     * every number comes from sand.h's own #defines, not typed twice. */
+    {
+        const mrow_t *acid = find_row("Acid");
+        const mrow_t *water = find_row("Water");
+        char rate[64];
+        snprintf(rate, sizeof(rate), "%s / %s",
+                 table_rate(adverb("dissolves", acid->r->dissolves)),
+                 table_rate(adverb("dissolvable", water->r->dissolvable)));
+
+        /* step_one_dissolver_cell()'s MAT_WATER branch: one roll, three
+         * outcomes. water_wins/acid_wins is the unbiased baseline -
+         * SAND_ACID_DILUTE_MASS_BIAS shifts it by local backing at runtime. */
+        const int evaporate = SAND_ACID_DILUTE_EVAPORATE_CHANCE;
+        const int water_wins = SAND_ACID_DILUTE_TO_WATER_CHANCE;
+        const int acid_wins = 256 - evaporate - water_wins;
+        char note[256];
+        snprintf(note, sizeof(note),
+                 "one roll: %d/256 Acid alone boils to Gas; else "
+                 "%d/256 baseline Acid->Water & Water->Steam, or %d/256 "
+                 "baseline Acid->Gas & Water->Acid - shifted by local "
+                 "backing (sand_set_acid_dilute_mass_bias())",
+                 evaporate, water_wins, acid_wins);
+        print_join_row("Acid", "Water", "Gas, or swaps identity with Water",
+                       rate, note);
+
+        /* MAT_OIL branch: two INDEPENDENT rolls, not the paired
+         * dissolves/fizz roll the generic join above prints - Oil's own
+         * fate and Acid's own fate are decided separately. */
+        const mrow_t *oil = find_row("Oil");
+        snprintf(rate, sizeof(rate), "%s / %s",
+                 table_rate(adverb("dissolves", acid->r->dissolves)),
+                 table_rate(adverb("dissolvable", oil->r->dissolvable)));
+        const int oil_to_gas = SAND_ACID_OIL_TO_GAS_CHANCE;
+        const int acid_dies = SAND_ACID_OIL_DEATH_CHANCE;
+        snprintf(note, sizeof(note),
+                 "two independent rolls: %d/256 Oil becomes Gas (else "
+                 "Acid); separately %d/256 the Acid cell dies outright "
+                 "(else it survives and pays a quench cost)",
+                 oil_to_gas, acid_dies);
+        print_join_row("Acid", "Oil", "Oil becomes Gas or Acid; Acid may die too",
+                       rate, note);
     }
 
     /* flammability/ignites_to x burns. Same three-way split as
