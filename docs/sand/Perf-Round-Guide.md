@@ -192,10 +192,12 @@ campaign real decisions.
 
 Measured 2026-09-07 with a probe built for the question: 32 dummy field
 tests per non-empty cell, one build executing them and one skipping them,
-gated on a `volatile` so both builds emit *identical* code (4,833
-instructions, same function inventory) and differ only in one `.data`
-initialiser. Each machine's delta against its own baseline for the same
-scene:
+gated on a `volatile` so both builds emit *identical* code - 4,829
+instructions with **zero** differing instruction lines across the whole
+object, `sand_step` 6,208 bytes and a 768-byte frame either way - and
+differ only in one `.data` initialiser. Reproduce that check with
+`launcher/tools/codegen_diff.py`. Each machine's delta against its own
+baseline for the same scene:
 
 | scene | host | device | device/host |
 |---|---:|---:|---:|
@@ -214,6 +216,13 @@ fit these numbers and the experiment cannot separate them. A separate test
 - growing flash-resident const data read per cell from 4 KB to 32 KB -
 measured *exactly zero* on device, which is weak evidence against the
 cache half. What is established is the effect, not the mechanism.
+
+And the ratio is **scene-specific**, so it cannot be turned into one
+correction factor and applied. An earlier estimate did exactly that -
+fire measures ~318x host, the every-material flip ~63x, and extrapolating
+one from the other predicted 226-244 ms against an actual 60 ms, four
+times too pessimistic. That is why step 6 says a budget comes from a
+capture and never from a host number.
 
 Two consequences for how you run a round:
 
