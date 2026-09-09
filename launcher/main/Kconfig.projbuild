@@ -76,35 +76,6 @@ menu "Launcher"
             sdkconfig.defaults.diag_autorun on top of sdkconfig.defaults.diag
             for exactly that reason.
 
-    config LAUNCHER_SAND_PASS_GATES
-        bool "Sand: per-pass volatile gates for sand_step()"
-        default n
-        depends on LAUNCHER_DEVELOPMENT
-        help
-            Compiles in four volatile bools (sand_priv.h) that let a probe
-            disable one of sand_step()'s four passes - main sweep,
-            cross-flow, gas, reactions - at a time without a rebuild.
-            Default true at runtime (every pass on), so behaviour is
-            untouched until a probe flips one off.
-
-            This buys a device pass decomposition - which pass owns a
-            scene's cost - as one binary, five configurations (all passes
-            on, then each disabled in turn), and one capture, with no
-            layout difference between configurations to confound the
-            comparison. Four separately-built stub-each-pass images would
-            each draw their own flash-layout ticket instead.
-
-            Deliberately NOT paired with the sand work counters, which live
-            in tools/perf_probe/ and are injected into a scratch build by
-            compare_counters.py rather than compiled from this tree. The
-            gates measure TIME on device; the counters cost sand_step_liquids
-            +39 instructions and +120 bytes, measured against the real
-            toolchain, so building both together would perturb exactly the
-            timings the gates exist to produce. Off by default because
-            build.diag is what every frame-budget capture is
-            taken on, and this campaign chases effects too small to risk
-            shifting by default.
-
     config LAUNCHER_GFX_QSPI_80MHZ
         bool "Drive the panel's QSPI bus at 80 MHz instead of 40"
         default n
