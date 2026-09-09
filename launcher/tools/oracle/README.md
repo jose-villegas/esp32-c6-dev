@@ -54,7 +54,7 @@ that field's own caution in the device profile about the C6's icache size
 being unverified against the TRM). That ratio — not the byte count itself —
 is the whole reason this oracle is worth building: with `.text` twelve-plus
 times the cache, which scene's working set actually fits, and where the
-compiler placed each function relative to a 32 B line / 8-way set, decides
+compiler placed each function relative to a 32 B line / 4-way set, decides
 more of the device's real cost than the instruction count alone does.
 
 Disassembly of a real sand function, showing genuine `rv32imac` code
@@ -169,9 +169,8 @@ qemu-system-riscv32 -M virt -bios none -kernel out/oracle_water.elf -nographic \
 ```
 
 i-cache misses, with the cache geometry read from the device profile
-(`DP_ICACHE_BYTES=32768`, `DP_ICACHE_LINE_BYTES=32`, `DP_ICACHE_WAYS=8` —
-see that field's own caution about the *size* specifically being unverified
-against the C6 TRM):
+(`DP_ICACHE_BYTES=32768`, `DP_ICACHE_LINE_BYTES=32`, `DP_ICACHE_WAYS=4`, all
+three from the ESP32-C6 datasheet):
 
 ```sh
 qemu-system-riscv32 -M virt -bios none -kernel out/oracle_water.elf -nographic \
