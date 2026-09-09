@@ -47,7 +47,7 @@
 #include "sand.h"
 #include "material.h"
 
-/* Small enough that all four scenes run in well under a second on a laptop
+/* Small enough that every scene runs in well under a second on a laptop
  * - this gets called once per candidate in a loop that may try dozens
  * overnight - and large enough that grains actually interact rather than
  * each falling down its own private column. */
@@ -113,6 +113,11 @@ typedef void (*scene_fn)(sand_t *s);
 #define FP_OIL    CELL_MAKE(MAT_OIL,   MASS_MAX)
 #define FP_GAS    CELL_MAKE(MAT_GAS,   MATERIAL_VARIANTS - 1)
 #define FP_FIRE   CELL_MAKE(MAT_FIRE,  MATERIAL_VARIANTS - 1)
+#define FP_ACID   CELL_MAKE(MAT_ACID,  MASS_MAX)
+#define FP_STEAM  CELL_MAKE(MAT_STEAM, MATERIAL_VARIANTS - 1)
+#define FP_GLASS  CELL_MAKE(MAT_GLASS, SAND_AMBIENT_HEAT)  /* heat_ramp, like stone */
+#define FP_CULLET CELL_MAKE(MAT_SAND,  SAND_CULLET_BASE)   /* glass milled to grains */
+#define FP_METAL  MATX(MATX_METAL)
 
 
 /* Scene 1: dry grains over a floor. The main sweep and nothing else - no
@@ -316,6 +321,64 @@ static void scene_plant_bed(sand_t *s)
     }
 }
 
+/* ACID, which appeared nowhere in this file - every scene above ran without
+ * one acid cell, so any change to the dissolver or acid rain got "identical
+ * to baseline" from a gate that never executed it. The cullet fix
+ * (esp32c6-75e) shipped on exactly that; deleting it again takes this
+ * scene's MAT_SAND from 20 to 0 and moves no other row.
+ *
+ * One band per outcome, because what the dissolver does interestingly is
+ * REFUSE: sand goes fast (200), stone slowly (60), metal barely (1), glass
+ * and cullet never. */
+static void scene_acid_bath(sand_t *s)
+{
+    /* 1 in 256 in production would not fire inside 300 steps - forced for
+     * the reason scene_sealed_lava forces the burst. */
+    sand_set_acid_rain(s, 255);
+
+    for (int x = 0; x < FP_W; x++) {
+        sand_set(s, x, FP_H - 1, FP_STONE);
+    }
+
+    /* Glass is immune for having no dissolvable at all; cullet is immune
+     * because it IS glass, and needs its own reject to say so - it shares
+     * MAT_SAND's row. A band that starts going moves the histogram. */
+    for (int y = FP_H - 3; y < FP_H - 1; y++) {
+        for (int x = 0; x < FP_W; x++) {
+            cell_t target;
+            if (x < 10) {
+                target = FP_SAND;
+            } else if (x < 20) {
+                target = FP_CULLET;
+            } else if (x < 30) {
+                target = FP_METAL;
+            } else if (x < 40) {
+                target = FP_GLASS;
+            } else if (x < 50) {
+                target = FP_STONE;
+            } else {
+                target = FP_WATER;   /* the dilution path */
+            }
+            sand_set(s, x, y, target);
+        }
+    }
+
+    for (int y = FP_H - 12; y < FP_H - 3; y++) {
+        for (int x = 2; x < FP_W - 2; x++) {
+            sand_set(s, x, y, FP_ACID);
+        }
+    }
+
+    /* Alternating rows put exactly two steam in every 2x2, which is what
+     * step_one_acid_rain_cell() demands - so the 4x4 scan bd esp32c6-va6
+     * wants to optimise actually runs here. */
+    for (int y = 6; y < 18; y++) {
+        for (int x = 4; x < 44; x++) {
+            sand_set(s, x, y, (y & 1) ? FP_STEAM : FP_GAS);
+        }
+    }
+}
+
 /* GRAVITY IS PER SCENE, and the six original rows keep the straight-down
  * vector they were baselined with - their hashes must not move.
  *
@@ -346,6 +409,9 @@ static const struct {
 
     /* The only row here in which anything grows - see the builder. */
     { "plant_bed",   scene_plant_bed,   11u, 0,    1000 },
+
+    /* The only row here that puts acid on the board at all. */
+    { "acid_bath",   scene_acid_bath,   67u, 0,    1000 },
 };
 
 int main(void)
