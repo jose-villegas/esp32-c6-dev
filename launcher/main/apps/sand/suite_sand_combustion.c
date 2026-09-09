@@ -427,6 +427,41 @@ static void test_gas_decaying_away_marks_its_row_dirty(void)
         "mark_rows() the same way its tick-down branch already does");
 }
 
+/* bd esp32c6-uc9: the packed-row equalise skip (row_is_packed(), see
+ * sand_gas.c) generalised from py == 0 to tilted gravity via a running count
+ * of packed rows already behind the sweep. Row 2 here is packed and has only
+ * ONE packed row behind it when the sweep reaches it - nowhere near
+ * MAT_FIRE's sight of 5 - so the skip must not fire, and the row's fire must
+ * still cross into row 3 through the open row_is_packed() found there. */
+static void test_tilted_equalise_still_spreads_a_packed_row_under_the_sight_bound(void)
+{
+    fixture();
+    sand_set_gas_walk(&s, false);
+    sand_set_scatter(&s, 0);
+
+    /* Row 1 seals off the rise direction (anti-gravity is up-left for
+     * down-right gravity) so every fire cell in row 2 is forced into
+     * equalise rather than rising through row 1 first. */
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, 1, STONE);
+        sand_set(&s, x, 2, FIRE);
+    }
+
+    sand_step(&s, 1000, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_FIRE, CELL_MATERIAL(sand_at(&s, 0, 2)),
+        "column 0's ray runs off the left edge on its first step and has "
+        "nowhere to go - it must stay put");
+    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 3, 2)),
+        "column 3 must have left row 2 - if the tilted skip fired here, "
+        "the whole row's equalise body never ran and nothing would move");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_FIRE, CELL_MATERIAL(sand_at(&s, 2, 3)),
+        "column 3's grain must land one diagonal step down-left, in the "
+        "row that was open");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(W, count_of(MAT_FIRE),
+        "whole-grain gas conserves its count - this is a move, not a loss");
+}
+
 /* --- fire ------------------------------------------------------------- */
 
 /* A stone box sealing columns x0..x1 of row 3 on all four sides with NO
@@ -1663,6 +1698,7 @@ void run_sand_combustion_suite(void)
     RUN_TEST(test_gas_scatter_can_be_disabled);
     RUN_TEST(test_gas_decays_and_disappears_over_time);
     RUN_TEST(test_gas_decaying_away_marks_its_row_dirty);
+    RUN_TEST(test_tilted_equalise_still_spreads_a_packed_row_under_the_sight_bound);
     RUN_TEST(test_fire_ignites_an_adjacent_flammable_neighbour);
     RUN_TEST(test_a_confined_gas_pocket_bursts_instead_of_just_catching);
     RUN_TEST(test_an_open_gas_pocket_still_just_catches_fire);
