@@ -709,12 +709,32 @@ static void test_the_wood_leaf_shading_on_a_grove(void)
     }
     const int64_t per_pass = (esp_timer_get_time() - start) / 20;
 
+    /* THE CONTROL, and without it the figure above is unattributable: the
+     * walk computes material_grain_hash() for all 41,216 cells whatever they
+     * are, while only the tinted ones reach the scan or the wave. This pass
+     * is the same walk with the shading's two calls removed, so the DELTA is
+     * the shading and the rest is the walk paint_row_n() would do anyway. */
+    const int64_t c0 = esp_timer_get_time();
+    for (int rep = 0; rep < 20; rep++) {
+        for (int y = 0; y < REAL_H; y++) {
+            const uint8_t *row = big + (size_t)y * REAL_W;
+            for (int x = 0; x < REAL_W; x++) {
+                sink += material_grain_hash(x, y);
+                sink += (row[x] == MATX(MATX_LEAF))
+                     || (row[x] == CELL_MAKE(MAT_WOOD, 0));
+            }
+        }
+    }
+    const int64_t control_pass = (esp_timer_get_time() - c0) / 20;
+
     ESP_LOGI("device_tests",
-             "wood/leaf shading on a grove: %lld us per full-grid pass "
+             "wood/leaf shading on a grove: %lld us per full-grid pass, "
+             "control %lld us, so the shading is %lld us "
              "(wood %d, of which %d beside a leaf; leaf %d; %d of %d rows "
              "carry foliage and so wake every gust tick) [%u]",
-             (long long)per_pass, wood, near_leaf, leaf, rows_lit, REAL_H,
-             sink & 1u);
+             (long long)per_pass, (long long)control_pass,
+             (long long)(per_pass - control_pass),
+             wood, near_leaf, leaf, rows_lit, REAL_H, sink & 1u);
 
     free(big);
 }
