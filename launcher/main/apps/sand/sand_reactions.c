@@ -1624,14 +1624,21 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
     return found;
 }
 
-void
-sand_step_reactions(sand_t* s) {
-    if (s->fuse_blast_wait != 0) {
-        s->fuse_blast_wait--;
-    }
-    /* Dissolving, not fire. Heat, condensation independent. */
-    if (!s->may_have_burning && !s->may_have_dissolver && !s->may_have_temperature && !s->may_have_moisture
-        && !s->may_have_faller && !s->may_have_withering && !s->may_have_condenser) {
+/* BUILT ONCE, NOT PER STEP. Every one of these is a pure function of
+ * reactions[], extended_reactions[] and materials[] - all const, all
+ * flash-resident, none of them reachable by anything at runtime - yet the
+ * whole lot was rebuilt on every step that got past the seven-flag early
+ * out. reaction_first_stage() alone is a seventeen-field ladder run
+ * thirty-two times, and pair_bits is 256 stores.
+ *
+ * A step's own cost is unchanged by this on a busy board; what it removes is
+ * a fixed toll on every step of every scene that has anything reacting at
+ * all. */
+static bool reaction_tables_ready;
+
+static void build_reaction_tables(void)
+{
+    if (reaction_tables_ready) {
         return;
     }
 
@@ -1692,6 +1699,22 @@ sand_step_reactions(sand_t* s) {
     for (int k = 0; k < MATERIAL_EXTENDED_CODES; k++) {
         extended_first_stage[k] = reaction_first_stage(&extended_reactions[k], false);
     }
+
+    reaction_tables_ready = true;
+}
+
+void
+sand_step_reactions(sand_t* s) {
+    if (s->fuse_blast_wait != 0) {
+        s->fuse_blast_wait--;
+    }
+    /* Dissolving, not fire. Heat, condensation independent. */
+    if (!s->may_have_burning && !s->may_have_dissolver && !s->may_have_temperature && !s->may_have_moisture
+        && !s->may_have_faller && !s->may_have_withering && !s->may_have_condenser) {
+        return;
+    }
+
+    build_reaction_tables();
 
     const int w = s->w;
     const int h = s->h;
