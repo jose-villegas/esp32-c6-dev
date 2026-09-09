@@ -283,17 +283,33 @@ static void scene_wet_earth(sand_t *s)
     }
 }
 
+/* GRAVITY IS PER SCENE, and the six original rows keep the straight-down
+ * vector they were baselined with - their hashes must not move.
+ *
+ * The two below exist because everything else here holds gravity vertical,
+ * and a vertical vector is the ONE case that leaves the perpendicular
+ * horizontal: perp is ring_dir(i_stable + 2), so py == 0 only when gravity is
+ * (0, +-1). Landscape and every diagonal give py != 0, where equalise_gas()
+ * takes a different path, gas_run_t's carry is disabled, and the row skip has
+ * a branch that runs nowhere else. None of that was reachable by this tool -
+ * corrupting a tilted-only branch left --check reporting "identical". */
 static const struct {
     const char *name;
     scene_fn    build;
     uint32_t    seed;
+    int         gx;
+    int         gy;
 } SCENES[] = {
-    { "dry_fall",    scene_dry_fall,    7u  },
-    { "water_pool",  scene_water_pool,  11u },
-    { "lava_quench", scene_lava_quench, 23u },
-    { "fire_gas",    scene_fire_gas,    31u },
-    { "sealed_lava", scene_sealed_lava, 41u },
-    { "wet_earth",   scene_wet_earth,   53u },
+    { "dry_fall",    scene_dry_fall,    7u,  0,    1000 },
+    { "water_pool",  scene_water_pool,  11u, 0,    1000 },
+    { "lava_quench", scene_lava_quench, 23u, 0,    1000 },
+    { "fire_gas",    scene_fire_gas,    31u, 0,    1000 },
+    { "sealed_lava", scene_sealed_lava, 41u, 0,    1000 },
+    { "wet_earth",   scene_wet_earth,   53u, 0,    1000 },
+
+    /* Same builders, held sideways and cornerwise. */
+    { "gas_land",    scene_fire_gas,    31u, 1000, 0    },
+    { "water_diag",  scene_water_pool,  11u, 1000, 1000 },
 };
 
 int main(void)
@@ -334,11 +350,12 @@ int main(void)
         sand_enable_impulses(&s, impulses, cell_count);
         SCENES[i].build(&s);
 
-        /* Gravity held straight down and jostle fixed: this tool answers
-         * "did the same input produce the same output", so every input
-         * including the environment has to be pinned. */
+        /* Gravity pinned PER SCENE and jostle fixed: this tool answers "did
+         * the same input produce the same output", so every input including
+         * the environment has to be pinned - pinned to one value, not to the
+         * same value everywhere. */
         for (int step = 0; step < FP_STEPS; step++) {
-            sand_step(&s, 0, 1000, 0);
+            sand_step(&s, SCENES[i].gx, SCENES[i].gy, 0);
         }
 
         int counts[16];
