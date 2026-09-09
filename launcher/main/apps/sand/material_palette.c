@@ -72,8 +72,8 @@
  * see material_wood_leaf_wave() and material_colours()'s MAT_WOOD case).
  * Both anchored on leaf's own green, not wood's colour - even at rest this
  * should read as leaf, just a darker shade of it. */
-#define WOOD_LEAF_TINT_LO LERP(0x468F26, 0x000000, 4)
-#define WOOD_LEAF_TINT_HI LERP(0x468F26, 0x8CD24E, 5)
+#define WOOD_LEAF_TINT_LO LERP(0x468F26, 0x000000, 6)
+#define WOOD_LEAF_TINT_HI LERP(0x468F26, 0x8CD24E, 3)
 
 /* Hot walls appear visibly hot now. */
 #define STONE_FROST   0xCEDCE8
