@@ -834,6 +834,59 @@ emit_into_empty_neighbor(sand_t* s, int x, int y, int w, int h, uint8_t spec) {
 
 /* KIND_STATIC exempt; never moves, thus unaffected by gravity. */
 
+/* Flame goes UP, and up is wherever gravity is not - so this tries the cell
+ * against gravity and the two either side of it, and nothing else. Never
+ * sideways, never down.
+ *
+ * WHY NOT emit_into_empty_neighbor(): that walks reaction_dirs in a fixed
+ * SCREEN-space order, up-down-left-right, and takes the first empty cell it
+ * finds. Two things go wrong. It falls through, so a lava cell with something
+ * above it puts fire BESIDE or BENEATH itself. And its "up" is the screen's,
+ * not the board's, so once the device is tilted the preferred direction is
+ * sideways in world terms and once inverted it is downward. Every fire fixture
+ * holds gravity vertical, which is why neither was visible.
+ *
+ * THREE CANDIDATES, NOT ONE: the cell against gravity, then the two either
+ * side of it. Never sideways, never down.
+ *
+ * Straight-up-only is the tidier reading of "flame rises" and it is wrong.
+ * Measured, it lands 6% of rolls against the old walk's 14%, and that costs
+ * the thermal-shock scene 59% of its fire - 827 cells against 2000. Flame
+ * blocked directly above does not stop, it curls around the obstruction, and
+ * allowing that recovers the density structurally (12% land) instead of by
+ * raising `flare`, which cannot do the job: raise it far enough and a lava
+ * grain in free fall starts flaring and a brief touch of lava melts glass. It
+ * sets a rate, not a density.
+ *
+ * Uses last_step, the dithered direction, not last_load - the same vector
+ * try_flare() checks for "below" one line earlier, so the cell it refuses to
+ * flare from and the cells it flares into stay consistent. */
+static inline bool
+emit_against_gravity(sand_t* s, int x, int y, int w, int h, uint8_t spec) {
+    const int dx = s->last_step_dx, dy = s->last_step_dy;
+    if (dx == 0 && dy == 0) {
+        return false;   /* no down yet, so no up to rise into */
+    }
+    const int up = ring_of(-dx, -dy);
+
+    /* Straight on before either shoulder - the same ordering find_water()
+     * uses when it walks gravity-ward. */
+    for (int k = 0; k < 3; k++) {
+        const int* d = ring_dir(up + (k == 0 ? 0 : k == 1 ? 1 : 7));
+        const int ux = x + d[0], uy = y + d[1];
+        if ((unsigned)ux >= (unsigned)w || (unsigned)uy >= (unsigned)h) {
+            continue;
+        }
+        const size_t at = (size_t)uy * (size_t)w + (size_t)ux;
+        if (!CELL_IS_EMPTY(s->cells[at])) {
+            continue;
+        }
+        place_reacted(s, ux, uy, at, spec);
+        return true;
+    }
+    return false;
+}
+
 static inline bool
 try_flare(sand_t* s, int x, int y, int w, int h, const material_t* mat, uint8_t flare) {
     if (flare == 0) {
@@ -848,7 +901,7 @@ try_flare(sand_t* s, int x, int y, int w, int h, const material_t* mat, uint8_t 
     if ((int)(rng_next(&s->rng) & 0xFF) >= flare) {
         return false;
     }
-    return emit_into_empty_neighbor(s, x, y, w, h, MAT_FIRE);
+    return emit_against_gravity(s, x, y, w, h, MAT_FIRE);
 }
 
 /* Bounds conduct_heat() walk - see "THE BOILER" for rationale. Caps cold

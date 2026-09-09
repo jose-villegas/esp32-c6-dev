@@ -1107,7 +1107,16 @@ static void test_heat_dries_wet_gunpowder_one_level_with_steam(void)
         sand_set(&s, x, H - 1, STONE);
     }
     sand_set(&s, 2, H - 2, STONE);
+    /* BOXED IN ON THE DIAGONALS TOO, not just straight up. This test
+     * measures conduction drying a wet cell, so the lava must heat without
+     * flaring - and try_flare() emits against gravity AND into the two
+     * cells either side of that, so capping only the cell above leaves two
+     * escapes open. Measured with them open, flare fills this small grid
+     * with 51 fire cells and the drying gunpowder is left with no empty
+     * neighbour to puff steam into. */
+    sand_set(&s, 2, H - 3, STONE);
     sand_set(&s, 3, H - 3, STONE);
+    sand_set(&s, 4, H - 3, STONE);
     sand_set(&s, 3, H - 2, CELL_MAKE(MAT_LAVA, MASS_MAX));
     const reaction_t *r = reaction_of(GUNPOWDER_BASE);
     const uint8_t start_moisture = 2;
