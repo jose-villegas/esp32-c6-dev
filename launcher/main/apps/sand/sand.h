@@ -61,6 +61,16 @@ typedef struct sand_s {
      * moment a liquid is placed, and only ever cleared by a pass that has
      * looked everywhere and found none. When it is false the whole cross-flow
      * pass is skipped, so a screen of sand never pays for water. */
+    /* Is there anything on the board a burning cell's pair walk could act
+     * ON - something ignitable, or something heat can transform? False means
+     * that walk provably finds nothing, so it is not run at all.
+     *
+     * A NEIGHBOUR PROPERTY, not a pair: pair_bits is built as
+     * pair_bits[mine][theirs] = theirs_bits[theirs], sixteen identical rows,
+     * so what can be acted on does not depend on what is looking. That is
+     * what lets one board-wide flag answer for every cell. */
+    bool     may_have_pair_reactive;
+
     bool     may_have_liquid;
 
     /* Same idea as may_have_liquid, for gas - see sand_step_gas() in
