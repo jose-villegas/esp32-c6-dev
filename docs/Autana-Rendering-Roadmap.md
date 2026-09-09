@@ -276,6 +276,13 @@ both boards, and this repo's own notes.
 | Second processor | LP RISC-V @ 20 MHz, LP peripherals only | none | not usable: our I2C pins are not the LP I2C pins, and it cannot touch HP SRAM at speed |
 | Graphics acceleration | none (`SOC_PPA_SUPPORTED` is P4-only) | none | scalar C, verified not assumed |
 
+This table says what differs. What it *costs* — which of the sand
+campaign's findings survive the move and which were the C6's cache all
+along — is worked through in
+[`notes/Second-Target-Draft.md`](notes/Second-Target-Draft.md). The short
+version: the algorithmic skips transfer, the SRAM-mask wins plausibly do
+not, because they are written on the premise that there is no data cache.
+
 The two numbers to carry in your head for the C6:
 
 - **Cycles per pixel.** 160 MHz at 60 fps is 2.67 M cycles per frame, or
