@@ -398,9 +398,6 @@ typedef struct {
     /* KIND_POWDER falls into empty cells; seeds drop, stems remain upright. */
     uint8_t falls;
 
-    /* "Or wood" keeps foliage on living trees. */
-    uint8_t withers;
-
     /* Hardens to align cells, makes tall stems trunks. Creeper stays soft.
      * Burns as wood, catches fire, rain keeps growth soft. */
     uint8_t hardens_to;
@@ -423,8 +420,6 @@ typedef struct {
      * neighbours doesn't roll (ROOT_SURFACE_MAX). */
     uint8_t roots;
     uint8_t roots_to;
-
-    uint8_t sheltered_by;
 
     uint8_t canopy;
     uint8_t canopy_to;
@@ -462,6 +457,8 @@ typedef struct {
     uint8_t stride_pad0;
     uint8_t stride_pad1;
     uint8_t stride_pad2;
+    uint8_t stride_pad3;
+    uint8_t stride_pad4;
 } reaction_t;
 
 _Static_assert(sizeof(reaction_t) == 64, "reaction_of()'s stride must stay a power of two - resize stride_pad");
