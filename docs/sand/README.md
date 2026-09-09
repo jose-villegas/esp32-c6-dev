@@ -32,6 +32,9 @@ its own set. Ten files, three jobs:
 - **[Perf-Round-Guide.md](Perf-Round-Guide.md)** — the entry point for a
   fresh session told to run a sand performance round. Read this first,
   not the two files below.
+- **[Perf-Instruments.md](Perf-Instruments.md)** — the toolbox that guide
+  uses: what each instrument measures and what it cannot say. Reach for it
+  when a number needs explaining, not to start a round.
 
 **Discovery narratives** (how the above got the way it is, not a
 reference for it):

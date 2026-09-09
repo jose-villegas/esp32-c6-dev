@@ -269,6 +269,7 @@ don't read all of them per session:
 | [`docs/sand/Metal.md`](docs/sand/Metal.md) | Metal: smelted from dirt, and the only material that moves heat a long way |
 | [`docs/sand/Tuning-At-a-Glance.md`](docs/sand/Tuning-At-a-Glance.md) | Sand constants and their current values |
 | [`docs/sand/Perf-Round-Guide.md`](docs/sand/Perf-Round-Guide.md) | Entry point for a fresh session told to run a sand performance round |
+| [`docs/sand/Perf-Instruments.md`](docs/sand/Perf-Instruments.md) | The instruments that guide uses - what each measures, and what it cannot say |
 | [`docs/notes/README.md`](docs/notes/README.md) | Index into board-specific hardware notes (memory budget, panel/touch gotchas, flashing/recovery, optimization playbook) |
 | [`docs/Testing-Guide.md`](docs/Testing-Guide.md) | Host/device test suites, why release builds carry no test code |
 | [`docs/Autana-Rendering-Roadmap.md`](docs/Autana-Rendering-Roadmap.md) | Proposal: the rendering/engine roadmap (band-mode framebuffer, span rasterizer, raycaster, the three target games, S3 port) |

@@ -219,14 +219,22 @@ def main():
         lines = drop_option_blocks(lines)
         total["blocks"] += before - len(lines)
 
-        text = "\n".join(lines)
+        # BEFORE strip_gated, not after. The #else branch drop_option_blocks
+        # leaves behind contains a literal `SAND_STEP_GATED(name, cond)`, and
+        # strip_gated rewrites every occurrence of that macro into its second
+        # argument - including the definition, which becomes `#define cond
+        # (cond)` and so no longer matches the exact text removed here. That
+        # artefact reached main once, where it renamed every later `cond`
+        # identifier in sand_priv.h and in everything including it.
+        text = strip_leftover_macros("\n".join(lines))
+
         text, n_gated = strip_gated(text)
         total["gated"] += n_gated
 
         lines, n_gate = strip_gate(text.split("\n"))
         total["gate"] += n_gate
 
-        text = strip_leftover_macros("\n".join(lines))
+        text = "\n".join(lines)
 
         if text != original:
             changed.append(rel)

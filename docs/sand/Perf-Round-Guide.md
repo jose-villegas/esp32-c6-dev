@@ -381,158 +381,18 @@ that can re-record its own baseline has no baseline.
 
 ## Instrumenting a round
 
-Gates are **scaffolding**. They go in to answer one question, the answer goes
-in bd and the commit message, and they come out before the round ships — see
-"Retiring the instrumentation" below. What is permanent is this section.
+Moved to [`Perf-Instruments.md`](Perf-Instruments.md) — the gates, the
+ceiling probe, the single-step technique, the control pass, the four
+measurement rules, and how the scaffolding comes back out.
 
-### And skip the restore, which is most of the wait
-
-`capture_ref.sh` rebuilds and reflashes the release image when it finishes.
-That work produces nothing you read, and it is the bulk of the cycle:
-
-| phase | measured |
-|---|---:|
-| build + flash + run, report written | ~5 min |
-| release reflash afterwards | ~13 min |
-
-Pass `--no-restore` for every capture of a round and restore once at the end:
+The short version, for a round that just needs to get going:
 
 ```sh
+python scripts/add-pass-gate.py --name <phase>   # declare it
 sh scripts/capture_ref.sh <ref> --perf-scope --no-restore COM3
+python scripts/strip-pass-gates.py               # at the end
+sh scripts/verify-gate-strip.sh <gated-ref> <stripped-ref>
 ```
-
-**The report is complete before the restore starts.** If a capture is already
-running without the flag, read
-`main/apps/sand/tools/results/capture_ref_<ref>_*.md` as soon as it appears
-rather than waiting for the command to return — the numbers are final at that
-point and the remaining minutes are only reflashing.
-
-Scoped and unrestored together take an iteration from roughly 25 minutes to
-about 5, which is the difference between measuring a hunch and not bothering.
-
-**It leaves the board on a diagnostics build.** That is the point during a
-round, but say so when handing the device back, and restore before treating
-it as a normal board again.
-
-### Scope the build first, or there is no room for the instrument
-
-A full diagnostics image compiles all 48 suites, and their static RAM had
-left the "one grid fits after POST" gate 64 bytes of headroom — one added
-decomposition row costs 272 bytes and fails the build (bd esp32c6-iqx). Take
-every capture of a round perf-scoped and the instrumentation has somewhere to
-live:
-
-```sh
-sh scripts/capture_ref.sh <ref> --perf-scope
-bash launcher/main/apps/sand/tools/report_performance.sh --perf-scope
-```
-
-| | full | perf scope |
-|---|---|---|
-| suites compiled | 48 | 3 — `suite_sand_perf` + the scenes and fixtures it calls |
-| device run | 952 timed tests, 7m 23s | 39 timed tests, 2m 19s |
-| behaviour coverage | complete | none, deliberately — not a gate |
-
-It is also a *better* instrument, not merely a roomier one: a smaller image
-sits closer to release layout in the 32 KB instruction cache, and much of
-this campaign is fetch-bound rather than IPC-bound (bd esp32c6-vk4).
-
-**Scope every capture of one round the same way.** A scoped and an unscoped
-image are different layouts, so the within-capture rule below does not merely
-apply — it forbids the comparison outright. What each scope contains, and how
-selection works, is in [`../Testing-Guide.md`](../Testing-Guide.md).
-
-### The instrument
-
-A `volatile bool` per thing you want to price:
-
-```c
-/* sand_priv.h */   extern volatile bool sand_step_gate_<name>;
-/* sand.c */        volatile bool sand_step_gate_<name> = true;
-```
-
-wrapped at the call site with one of two macros (both in `sand_priv.h`):
-
-```c
-SAND_STEP_GATE(name)          /* wraps a bare call or block */
-SAND_STEP_GATED(name, cond)   /* ANDs into a condition that already exists */
-```
-
-Both compile to **nothing** when `CONFIG_LAUNCHER_SAND_PASS_GATES` is off,
-which is the default and every release build. `SAND_STEP_GATE(x)` becomes
-empty and `SAND_STEP_GATED(x, c)` becomes `(c)`, so the gated source and the
-ungated source are the same program. Confirm it rather than assume:
-
-```sh
-riscv32-esp-elf-nm launcher/build/launcher.elf | grep -c sand_step_gate_   # 0
-```
-
-Turn them on for a round by appending `CONFIG_LAUNCHER_SAND_PASS_GATES=y` to
-`launcher/sdkconfig.defaults.diag` in a commit marked TEMP, and strip that
-commit before the PR.
-
-### The single-step technique
-
-A gate that is off changes the board, so timing twenty steps with a pass
-disabled measures a *different simulation*. Instead:
-
-1. rebuild the scene from its builder
-2. warm up N steps with **every** gate on
-3. flip one gate off
-4. time **exactly one** step
-5. restore, and take the **min** over repeats, never the mean
-
-Every configuration then sees a byte-identical board at the moment it is
-timed. This is valid because the scene builders and the RNG are deterministic
-and a `volatile` read consumes no RNG.
-
-Twenty steps with a gate off is only safe when the disabled work cannot feed
-the passes that follow it in the same step — check `sand_step()`'s pass order
-before relying on it.
-
-### Four rules, each learned by getting it wrong
-
-**Only within-capture comparisons are trustworthy.** Two builds of *identical*
-simulation code measured 143,165 and 133,574 us on the same scene — a 6.7%
-flash-layout spread, wider than most effects worth chasing. Comparing two
-captures produced a phantom −5.5% win and a phantom +1.4% regression on the
-same change, and a change was written to fix the regression that did not
-exist. A gate flipped on one board in one image does not have this problem:
-untouched phases hold to 1–2 us across it. Two differently-**scoped** builds
-are the same trap with a wider mouth: never diff a perf-scoped capture
-against an unscoped one.
-
-**Only size-neutral changes attribute cleanly.** A change that grows the hot
-function relocates everything after it and moves every phase together. When
-the controls move by ~1,000 us instead of ~2, the per-phase split is no longer
-readable and only the whole-step number means anything.
-
-**Check `nm` for a new out-of-line symbol before believing an inline-shaped
-change.** A per-direction helper marked `static inline` was out-lined by GCC
-and cost −14.5%; the hot function got *smaller*, and that shrinkage was the
-symptom, not evidence of a win. A plain call costs ~27 cycles here.
-
-**An identical fingerprint proves nothing until the oracle reaches the new
-path.** Mutate the grid *inside* the new branch and confirm `--check` moves. It
-did not for a `conduct_heat` guard, nor for the tilted row skip — in the second
-case because `grid_fingerprint.c` pins gravity to `(0, 1000)` for all six of
-its scenes, so no fingerprint scene can reach `py != 0` at all (bd
-esp32c6-rhu).
-
-### Retiring the instrumentation
-
-At the end of a round, strip **all** of it — not some. Partial removal leaves
-two idioms side by side and a reader cannot tell "never gated" from "gate
-removed once answered".
-
-The strip is behaviour-neutral by construction, and that is mechanically
-checkable rather than a matter of care: gated source built with gates **off**
-and stripped source must produce a **byte-identical release object file**. A
-strip that changes an object file changed the program, whatever the diff looks
-like. Some gates restructure control flow to exist (`burn_decay` turned an
-`if/else` into a `bool` plus a block), so unwrapping them by hand is a rewrite,
-not a deletion — which is exactly why the check is on the object file and not
-on the diff.
 
 ## Reading a capture
 
