@@ -36,6 +36,15 @@ the falling-sand app's own discovery narrative, moved out to
   the gfx debug overlays, and the USB-Serial-JTAG console quirk that breaks
   typing into idf_monitor if you don't know to look for it.
 
+## Not verified on a board
+
+- **[Second-Target-Draft.md](Second-Target-Draft.md)** — what a second
+  target (ESP32-S3) would cost, and which sand findings are the chip's
+  rather than the algorithm's. Kept apart from the six notes above because
+  it breaks their rule: no S3 has been built for, flashed or captured, so
+  every row is marked `[spec]`, `[repo]` or `[derived]` and none of it is a
+  board measurement. Read it for the mechanism arguments, not for numbers.
+
 ## Related
 
 - [`../Launcher-Architecture.md`](../Launcher-Architecture.md) — how the
