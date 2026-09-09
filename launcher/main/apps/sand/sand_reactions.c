@@ -1159,12 +1159,8 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
     const bool lit_state = rx->burn_decay != 0;
     const int burn_rate = (s->decay >= 0) ? s->decay : rx->burn_decay;
 
-    bool burnt_out = false;
-    SAND_STEP_GATE(burn_decay) {
-        burnt_out = lit_state ? !tick_decay_at(s, row, x, y, &grain, rx, burn_rate)
-                              : !tick_decay(s, row, x, y, &grain, mat, mat_id);
-    }
-    if (burnt_out) {
+    if (lit_state ? !tick_decay_at(s, row, x, y, &grain, rx, burn_rate)
+                  : !tick_decay(s, row, x, y, &grain, mat, mat_id)) {
         if (rx->explodes != 0) {
             REACTION_DOC(
                 explodes,
@@ -1246,7 +1242,7 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
 
     /* Covered_at checks lid with cover_mask. */
 
-    if (SAND_STEP_GATED(burn_smother, mat->kind != KIND_LIQUID && rx->explodes == 0)
+    if (mat->kind != KIND_LIQUID && rx->explodes == 0
         && smothered(s, x, y, w, h, mat->density)) {
         row[x] = lit_state ? cell_with_code(grain, 0) : CELL_EMPTY;
         mark_rows(s, y, y);
@@ -1294,7 +1290,6 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
                                  ? ((s->lava_cooloff >= 0) ? s->lava_cooloff : SAND_LAVA_COOLOFF_CHANCE)
                                  : 0;
     const uint8_t* my_pair_row = pair_bits[mat_id];
-    SAND_STEP_GATE(burn_pair)
     for (int d = 0; d < 4; d++) {
         const int nx = x + reaction_dirs[d][0];
         const int ny = y + reaction_dirs[d][1];
@@ -1337,14 +1332,14 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
         }
     }
 
-    if (SAND_STEP_GATED(burn_conduct, conduct_heat(s, x, y, w, h))) {
+    if (conduct_heat(s, x, y, w, h)) {
         acted = true;
     }
 
     /* rx, not a second reaction_of(grain): decay only ever rewrites the code
      * nibble, so the row is the same one and re-deriving it costs a flash
      * dereference per burning cell for nothing. */
-    if (SAND_STEP_GATED(burn_flare, try_flare(s, x, y, w, h, mat, rx->flare))) {
+    if (try_flare(s, x, y, w, h, mat, rx->flare)) {
         acted = true;
     }
 
@@ -1473,23 +1468,17 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
             r = &reactions[mat];
             stage = material_first_stage[mat];
         }
-        /* With the gate off the walk above is still paid in full and only
-         * the stage bodies are skipped. Compiled out, SAND_STEP_GATE() is
-         * empty and the continue below is simply unreachable. */
-        SAND_STEP_GATE(reactions_body) {
-            goto* stage_labels[stage];
-        }
-        continue;
+        goto* stage_labels[stage];
 
     stage_burn_always:
         found |= FOUND_BURNING;
-        SAND_STEP_GATE(burn_call) { step_one_burning_cell(s, row, x, y, w, h); }
+        step_one_burning_cell(s, row, x, y, w, h);
         continue;
 
     stage_burn_check:
         if (cell_code(c) >= r->lit_from) {
             found |= FOUND_BURNING;
-            SAND_STEP_GATE(burn_call) { step_one_burning_cell(s, row, x, y, w, h); }
+            step_one_burning_cell(s, row, x, y, w, h);
             continue;
         }
         goto stage_dissolve;
@@ -1497,7 +1486,7 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
     stage_burn_any:
         if (cell_is_burning(c)) {
             found |= FOUND_BURNING;
-            SAND_STEP_GATE(burn_call) { step_one_burning_cell(s, row, x, y, w, h); }
+            step_one_burning_cell(s, row, x, y, w, h);
             continue;
         }
 
