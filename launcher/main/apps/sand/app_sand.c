@@ -453,11 +453,30 @@ static uint32_t shine_elapsed_ms;
 static int shine_ux_q8 = 181;
 static int shine_uy_q8 = 181;
 
-static uint8_t row_has_shine[GRID_H_MAX];
+static int wood_leaf_wind_ux_q8 = 256;
+static int wood_leaf_wind_uy_q8;
 
-static uint8_t row_has_cullet[GRID_H_MAX];
+/* The 5 gravity-relative directions material_wood_near_leaf() checks -
+ * see material_wood_leaf_top5(). Recomputed once a frame, not per cell. */
+static int8_t wood_leaf_top5[5][2] = {
+    {0, -1}, {-1, -1}, {1, -1}, {-1, 0}, {1, 0},
+};
+static int wood_leaf_top5_down;
 
-static uint8_t row_has_glass[GRID_H_MAX];
+/* How many of the 5 are actually checked, out of 5 - higher reads bulkier
+ * and greener since more wood cells beside foliage qualify. */
+#define WOOD_LEAF_SLOTS_CHECKED 5u
+
+/* One bit per row per feature, not five 224-byte GRID_H_MAX arrays each
+ * holding a single 0/1 flag - the diagnostics build has no headroom to
+ * spend on that (check_static_ram.py). */
+#define ROW_FLAG_SHINE     (1u << 0)
+#define ROW_FLAG_LIQUID    (1u << 1)
+#define ROW_FLAG_CULLET    (1u << 2)
+#define ROW_FLAG_GLASS     (1u << 3)
+#define ROW_FLAG_WOOD_LEAF (1u << 4)
+
+static uint8_t row_flags[GRID_H_MAX];
 
 #define FOAM_BLOB_SHIFT 3
 
@@ -468,6 +487,15 @@ static uint32_t foam_elapsed_ms;
 #define CULLET_PHASE_MS 250
 
 static uint32_t cullet_elapsed_ms;
+
+/* time_ms itself runs continuously for a smooth blend, but redraw cadence
+ * is separately throttled by WOOD_LEAF_WAKE_MS - dirtying every wood-near-
+ * leaf row every frame defeated the dirty-row system for a whole tree, the
+ * same reasoning LOCAL_DEPTH_WAKE_MS already applies to liquid depth. */
+#define WOOD_LEAF_WAKE_MS 40
+
+static uint32_t wood_leaf_time_ms;
+static uint32_t wood_leaf_wake_elapsed_ms;
 
 #define GLASS_PHASE_SHIFT 7
 
@@ -599,16 +627,11 @@ static void update_local_depth_gravity(int gx, int gy)
 
 static uint32_t local_depth_wake_elapsed_ms;
 
-static uint8_t row_has_liquid[GRID_H_MAX];
-
 static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
                                int cy, const uint8_t *row, int n)
 {
     gfx_color_t *out = fb + (cy * n) * GFX_WIDTH;
-    row_has_shine[cy] = 0;
-    row_has_liquid[cy] = 0;
-    row_has_cullet[cy] = 0;
-    row_has_glass[cy] = 0;
+    row_flags[cy] = 0;
 
     const uint8_t *above = (cy > 0) ? row - grid_w : NULL;
     const uint8_t *below = (cy < grid_h - 1) ? row + grid_w : NULL;
@@ -725,20 +748,44 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
         const unsigned depth_liquid = depth_raw < MATERIAL_LIQUID_DEPTH_BAND
             ? depth_raw : MATERIAL_LIQUID_DEPTH_BAND;
 
+        const bool wood_near_leaf = row[cx] == CELL_MAKE(MAT_WOOD, 0) &&
+            material_wood_near_leaf(above, row, below, cx, grid_w, wood_leaf_top5, hash,
+                                     WOOD_LEAF_SLOTS_CHECKED);
+
+        /* Projected onto the wind axis (gravity-perpendicular, see
+         * material_wood_leaf_wind_axis()), not raw `cx` - a grid column is
+         * not a screen-relative direction once the device is rotated. */
+        const int wood_leaf_wind_pos = (cx * wood_leaf_wind_ux_q8 + cy * wood_leaf_wind_uy_q8) >> 8;
+
+        /* Every leaf cell rides the same wave unconditionally - no
+         * adjacency check needed, unlike wood, since being leaf already
+         * means being part of the canopy. */
+        const bool leaf_shading = wood_near_leaf || row[cx] == MATX(MATX_LEAF);
+
+        /* +1: the wave's own fraction can legitimately be 0 at its trough,
+         * which must still select the tint branch in material_colours(),
+         * not fall through to the untinted look an untinted depth of 0
+         * would. */
         const unsigned depth = (row[cx] == MATX(MATX_ROOT))
             ? material_root_neighbours(above, row, below, cx, grid_w)
-            : depth_liquid;
+            : (leaf_shading
+                   ? material_wood_leaf_wave(wood_leaf_time_ms, wood_leaf_wind_pos, grid_w, hash) + 1u
+                   : depth_liquid);
 
         if (here_liquid) {
-            row_has_liquid[cy] = 1;
+            row_flags[cy] |= ROW_FLAG_LIQUID;
+        }
+
+        if (leaf_shading) {
+            row_flags[cy] |= ROW_FLAG_WOOD_LEAF;
         }
 
         if ((unsigned)(row[cx] - cullet_first) < SAND_CULLET_SHADES) {
-            row_has_cullet[cy] = 1;
+            row_flags[cy] |= ROW_FLAG_CULLET;
         }
 
         if (CELL_MATERIAL(row[cx]) == MAT_GLASS) {
-            row_has_glass[cy] = 1;
+            row_flags[cy] |= ROW_FLAG_GLASS;
         }
 
         gfx_color_t col[3];
@@ -747,7 +794,7 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
         gfx_color_t *p = out + cx * n;
 
         if (pat == MATERIAL_HATCHED) {
-            row_has_shine[cy] = 1;
+            row_flags[cy] |= ROW_FLAG_SHINE;
         }
 
         if (pat != MATERIAL_HATCHED) {
@@ -849,6 +896,18 @@ static bool advance_cullet(uint32_t dt_ms)
     return true;
 }
 
+static bool advance_wood_leaf_phase(uint32_t dt_ms)
+{
+    wood_leaf_time_ms += dt_ms;
+    wood_leaf_wake_elapsed_ms += dt_ms;
+    if (wood_leaf_wake_elapsed_ms < WOOD_LEAF_WAKE_MS) {
+        return false;
+    }
+    const uint32_t steps = wood_leaf_wake_elapsed_ms / WOOD_LEAF_WAKE_MS;
+    wood_leaf_wake_elapsed_ms -= steps * WOOD_LEAF_WAKE_MS;
+    return true;
+}
+
 static bool advance_local_depth_wake(uint32_t dt_ms)
 {
     local_depth_wake_elapsed_ms += dt_ms;
@@ -882,13 +941,14 @@ static bool advance_glass_phase(int gx, int gy)
 }
 
 static void draw_dirty_rows(bool shine_moved, bool local_depth_woke,
-                             bool cullet_moved, bool glass_moved)
+                             bool cullet_moved, bool glass_moved,
+                             bool wood_leaf_moved)
 {
     gfx_color_t *fb = gfx_framebuffer();
 
     if (shine_moved) {
         for (int cy = 0; cy < grid_h; cy++) {
-            if (row_has_shine[cy]) {
+            if (row_flags[cy] & ROW_FLAG_SHINE) {
                 dirty_rows[cy] = 1;
             }
         }
@@ -896,7 +956,7 @@ static void draw_dirty_rows(bool shine_moved, bool local_depth_woke,
 
     if (local_depth_woke) {
         for (int cy = 0; cy < grid_h; cy++) {
-            if (row_has_liquid[cy]) {
+            if (row_flags[cy] & ROW_FLAG_LIQUID) {
                 dirty_rows[cy] = 1;
             }
         }
@@ -904,7 +964,7 @@ static void draw_dirty_rows(bool shine_moved, bool local_depth_woke,
 
     if (cullet_moved) {
         for (int cy = 0; cy < grid_h; cy++) {
-            if (row_has_cullet[cy]) {
+            if (row_flags[cy] & ROW_FLAG_CULLET) {
                 dirty_rows[cy] = 1;
             }
         }
@@ -912,7 +972,15 @@ static void draw_dirty_rows(bool shine_moved, bool local_depth_woke,
 
     if (glass_moved) {
         for (int cy = 0; cy < grid_h; cy++) {
-            if (row_has_glass[cy]) {
+            if (row_flags[cy] & ROW_FLAG_GLASS) {
+                dirty_rows[cy] = 1;
+            }
+        }
+    }
+
+    if (wood_leaf_moved) {
+        for (int cy = 0; cy < grid_h; cy++) {
+            if (row_flags[cy] & ROW_FLAG_WOOD_LEAF) {
                 dirty_rows[cy] = 1;
             }
         }
@@ -1519,7 +1587,7 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
              * markers aren't stored in the grid. No wake ticks - the sim is
              * paused, so nothing would change anyway. */
             mark_sand_fully_dirty();
-            draw_dirty_rows(false, false, false, false);
+            draw_dirty_rows(false, false, false, false, false);
             draw_emitter_markers();
             palette_drawn_quarter = quarter;
         }
@@ -1565,6 +1633,10 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
 
     material_shine_direction(gx, gy, &shine_ux_q8, &shine_uy_q8);
 
+    material_wood_leaf_wind_axis(gx, gy, &wood_leaf_wind_ux_q8, &wood_leaf_wind_uy_q8);
+
+    material_wood_leaf_top5(gx, gy, &wood_leaf_top5_down, wood_leaf_top5);
+
     update_local_depth_gravity(gx, gy);
 
     foam_elapsed_ms += dt_ms;
@@ -1576,11 +1648,12 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
     count_awake(&awake_blocks, &awake_cells);
 #endif
 
-    /* Local-depth wake, cullet cycle, and shine each have their own clock
-     * tick and row array. Driven by dt_ms, not frame count. Glass's wake uses
-     * gravity_bearing_q16(). */
+    /* Local-depth wake, cullet cycle, shine, and the wood-leaf swing each
+     * have their own clock tick and row array. Driven by dt_ms, not frame
+     * count. Glass's wake uses gravity_bearing_q16(). */
     draw_dirty_rows(advance_shine(dt_ms), advance_local_depth_wake(dt_ms),
-                     advance_cullet(dt_ms), advance_glass_phase(gx, gy));
+                     advance_cullet(dt_ms), advance_glass_phase(gx, gy),
+                     advance_wood_leaf_phase(dt_ms));
 
     draw_emitter_markers();
 

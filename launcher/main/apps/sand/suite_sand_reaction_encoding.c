@@ -152,9 +152,6 @@ reaction_ladder_reference_stage(const reaction_t *r, bool is_acid_rain_material)
     if (r->falls != 0) {
         return RSTAGE_FALL;
     }
-    if (r->withers != 0) {
-        return RSTAGE_WITHER;
-    }
     if (r->drinks != 0) {
         return RSTAGE_DRINK;
     }

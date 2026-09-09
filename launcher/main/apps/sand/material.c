@@ -630,8 +630,6 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_CODES] = {
              * cell by step, not teleport. */
             .falls = 85,
 
-            .withers = 1,
-
             .flammability = 40,
 
             .dissolvable = 220, /* softer than wood's 160 - acid goes
@@ -649,13 +647,10 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_CODES] = {
             /* FOLIAGE: Grows, catches fire, lets water through. No `grows`,
              * `falls`, `hardens_to`. */
             .clings_to = MAT_WOOD,
-            .sheltered_by = MAT_WOOD, /* a tree in drought keeps its leaves */
 
             /* DRINK required; leaves hold water. Real bug on plant. Rain
              * lands on leaves. */
             .drinks = 40,
-
-            .withers = 1,
 
             .flammability = 90,
 
@@ -720,9 +715,6 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_CODES] = {
              * `heat_chance`). Lava needs ten steps per root cell. */
             .heats_to = MAT_FIRE,
             .melts = 24,
-
-            .withers = 1,
-            .sheltered_by = MAT_WOOD,
 
             /* Root cell rolls into soil, `roots_to` doubles as target. Kept
              * low (8 in 256) since, unlike the one-time collar seed, this
