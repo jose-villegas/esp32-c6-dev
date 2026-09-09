@@ -563,10 +563,11 @@ static void test_turning_a_settled_pool_to_landscape_fits_in_the_frame_budget(vo
         "turning the board must move water, not create or destroy it - the "
         "cell COUNT changes as the pool re-levels, the mass must not");
 
-    /* MEASURED 41,509 us per step on device, 2026-09-06, this row's first
-     * real measurement (capture_ref_main_20260906_185911.md). Budget is
-     * that x 0.9 = 37,358, rounded DOWN to 37,300 so the target is never
-     * looser than the convention. */
+    /* MEASURED 30,134 us per step on device, 2026-09-10
+     * (capture_ref_303c7f9_20260910_011940.md). Budget is that x 0.9 =
+     * 27,120, rounded DOWN to 27,100 so the target is never looser than
+     * the convention. Was 37,300 from 41,509 measured 2026-09-06; the row
+     * came in under it without anyone aiming at it. */
 
     /* THE 14000 THIS REPLACES WAS NEVER A BUDGET - it was borrowed from
      * the water screen so the row would compile, and said so. It also
@@ -577,7 +578,7 @@ static void test_turning_a_settled_pool_to_landscape_fits_in_the_frame_budget(vo
      * never runs here at all - s->impulse_count is 0 for all 390 steps,
      * host-counted 2026-09-06 - and a host pass map puts ~48% of the cost
      * in cross-flow, ~1% reactions, ~1.5% gas. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(37300, (int)per_step,
+    TEST_ASSERT_LESS_THAN_MESSAGE(27100, (int)per_step,
         "turning the board a quarter turn with a settled pool on it must "
         "still fit in a frame or two - the pool re-levels across the whole "
         "grid width, so the cross-flow search is the thing to suspect, and "
@@ -1243,16 +1244,14 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
      * measured against the fourteen-material scene, and this scene is
      * now bigger. */
 
-    /* 200000 is a loose SANITY CEILING, not a budget - the same
-     * placeholder shape this row used before its first measurement.
-     * Re-peg from the first clean capture of THIS scene: measured x 0.9,
-     * rounded, this section's usual reduction-target rule. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(200000, (int)per_step,
-        "INVALIDATED, NOT A REAL BUDGET - this scene now covers the "
-        "extended statics and gunpowder too, so the 87800 figure it used "
-        "to carry no longer describes what it measures; re-peg from the "
-        "first clean device capture of this scene at measured x 0.9 and "
-        "replace this placeholder ceiling");
+    /* MEASURED 90,713 us per step, 2026-09-10 - this scene's first clean
+     * capture, which is what the 200000 sanity ceiling before it was
+     * waiting for. Budget is that x 0.9 rounded DOWN to 81,600. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(81600, (int)per_step,
+        "flipping gravity on every material at once, including the "
+        "extended statics and gunpowder, is held to 10% below its first "
+        "measured number as a reduction target - failing means the work "
+        "is not done, not that something broke");
 }
 
 #ifdef SAND_HOST_PROBE
@@ -1314,53 +1313,16 @@ static void test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_b
     free(big);
     free(blocks);
 
-    /* Measured on device at 321339-321342 us (~321 ms), exactly
-     * reproducible across three separate captures (this simulation's
-     * fixed RNG seeds mean identical runs give identical timings) -
-     * nowhere near the plain-material budgets above, and deliberately not
-     * held to them:
-     * unlike the flip and water tests above, which model a single
-     * realistic user gesture (a pour, then a tilt), an edge-to-edge
-     * screen of gas is not something the current pour-brush UI can
-     * practically produce - this is a deliberately synthetic worst case
-     * (see this test's own top comment), not a claim that a real user
-     * could trigger a stall this long. If fire+gas ever needs to
-     * support a fully-packed screen at interactive rates, that is the
-     * "creeping fire" design explicitly deferred in the plan this was
-     * built from, not a bug in this v1.
+    /* A DELIBERATELY SYNTHETIC WORST CASE: an edge-to-edge screen of gas
+     * is not something the pour-brush UI can produce, so this row is not
+     * held to the plain-material budgets above.
      *
-     * Re-based 2026-08-26: what had been a ~9%-over regression guard
-     * became a reduction target like everything else in this file (see
-     * FULL_STEP_BUDGET_US's comment). Measured 506666 after the
-     * materials wave - the reactions pass gained real chemistry and the
-     * gas pass is 60% of a saturated step - -> target 456000
-     * (measured * 0.9, rounded; was 350000, pegged to a pre-wave
-     * 321339).
-     *
-     * Re-pegged the same evening from the first watchdog-free capture
-     * (performance_20260826_183646): the clean number is 412718 - a
-     * 94000 us drop that says the 506666 was itself a contaminated row
-     * the fifteenth attempt's survey missed, which this single-step
-     * test is unusually exposed to (one ~500 ms window per capture
-     * against a 5-second dump cadence, and deterministically so).
-     * Same uniform rule, measured * 0.9 rounded -> 371500, back to a
-     * deliberately failing reduction target rather than the accidental
-     * pass the inflated peg produced.
-     *
-     * AND THEN IT WAS EARNED. The seventeenth attempt's gas sight-scan
-     * change brought this to 331,654 us - inside 371500, the first
-     * budget this project has closed since the tenth attempt. So the
-     * same rule applies again rather than leaving the win as slack:
-     * measured * 0.9 rounded -> 298000, failing by design once more.
-     * That is deliberate and it is not moving the goalposts. The gas
-     * pass had been written off as exhausted five rounds earlier, and
-     * then gave up 13.9% to three integers on the stack once someone
-     * noticed the cost was sequential rather than spatial - which is
-     * the opposite of evidence that this scene has nothing left. When
-     * a row genuinely reaches its floor, say so with a measurement the
-     * way the thermal-shock present row does, and make it a guard
-     * instead. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(298000, (int)elapsed,
+     * MEASURED 247,533 us, 2026-09-10, inside the budget it carried.
+     * Re-pegged by the rule every row here uses: measured x 0.9 rounded
+     * DOWN -> 222,700, failing by design again. Not moving goalposts -
+     * this pass was called exhausted five rounds before it gave up 13.9%.
+     * A row at its real floor should prove it and become a guard. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(222700, (int)elapsed,
         "a full-screen cascade must stay in the same ballpark as measured "
         "- a jump here means something got much more expensive, not that "
         "this specific number is a real-time requirement");
@@ -1414,31 +1376,15 @@ static void test_a_full_screen_of_fire_fits_in_the_frame_budget(void)
     free(big);
     free(blocks);
 
-    /* Measured on device at 230962 us (~231 ms), identical across two
-     * separate captures - same "not a real-time promise" reasoning as
-     * the cascade test above: an edge-to-edge screen of fire is not
-     * something the pour-brush UI can practically sustain, but this
-     * catches a real regression if the steady-state cost balloons past
-     * what was actually measured. Originally ~8% headroom over 230962,
-     * tightened from an initial, untuned 300000 once the number proved
-     * exactly reproducible rather than noisy.
+    /* Same "not a real-time promise" reasoning as the cascade test above:
+     * an edge-to-edge screen of fire is not something the pour-brush UI
+     * can sustain. It catches a real regression if the steady-state cost
+     * balloons past what was measured.
      *
-     * Re-based 2026-08-26 (see FULL_STEP_BUDGET_US's comment): measured
-     * 295533 after the materials wave -> target 266000 (measured * 0.9,
-     * rounded; was 250000). A reduction target now, like the rest of the
-     * file.
-     *
-     * CLOSED, then re-pegged, 2026-08-28. The seventeenth attempt's gas
-     * sight-scan change brought this to 255,130 - inside 266000, and the
-     * host had predicted 255,400, which is 0.1% out on a change that
-     * alters how much work happens rather than merely where the code
-     * sits. That is the class of change the eleventh and fourteenth
-     * attempts both mispredicted badly, so the accuracy is worth
-     * recording rather than assuming next time. Same rule as every
-     * other row: measured * 0.9 rounded -> 229500. See the cascade
-     * test above for why a closed budget gets re-pegged rather than
-     * banked. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(229500, (int)per_step,
+     * MEASURED 97,541 us, 2026-09-10, after bd esp32c6-jin's three
+     * four-neighbour skips took this row 154726 -> 97541. Budget is that
+     * x 0.9 rounded DOWN to 87,700. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(87700, (int)per_step,
         "steady-state cost of a full screen of fire must stay in the "
         "same ballpark as measured - not a real-time promise, but a "
         "real regression guard");
@@ -1525,9 +1471,12 @@ static void test_four_liquids_reacting_at_once_fits_in_the_frame_budget(void)
     free(big);
     free(blocks);
 
-    TEST_ASSERT_LESS_THAN_MESSAGE(112000, (int)per_step,
+    /* RE-PEGGED 2026-09-10: 99,203 us measured, inside the 112000 it
+     * carried, so that number had stopped being a target. x 0.9 rounded
+     * DOWN -> 89,200. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(89200, (int)per_step,
         "four liquids reacting under the app's own per-material mobility "
-        "is held to 10% below its first measured number, as a reduction "
+        "is held to 10% below its last measured number, as a reduction "
         "target - failing means the work is not done, not that something "
         "broke");
 }
@@ -1674,8 +1623,10 @@ static void test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget(void)
         "at the end of the window - steam condensing into water loses three "
         "cells a patch, but losing an appreciable fraction of the board "
         "means it decayed into something else");
-    TEST_ASSERT_LESS_THAN_MESSAGE(127000, (int)per_step,
-        "a full screen of smoke and steam is held to 10% below its first "
+    /* RE-PEGGED 2026-09-10: 115,178 us measured, inside the 127000 it
+     * carried. x 0.9 rounded DOWN -> 103,600. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(103600, (int)per_step,
+        "a full screen of smoke and steam is held to 10% below its last "
         "measured number, as a reduction target - failing means the work "
         "is not done, not that something broke");
 }
@@ -1983,12 +1934,13 @@ static void test_the_water_over_lava_scene_fits_in_the_frame_budget(void)
     free(blocks);
     free(impulses);
 
-    TEST_ASSERT_LESS_THAN_MESSAGE(400000, (int)per_step,
-        "PROVISIONAL ceiling, not yet measured on a device - see this "
-        "test's own comment. Once measured this row becomes measured x "
-        "0.9, rounded, the same reduction-target method every other row "
-        "in this section uses - not a number chosen to keep this row "
-        "passing");
+    /* MEASURED 199,311 us per step, 2026-09-10 - this row's first real
+     * device number, replacing the provisional ceiling it carried. Budget
+     * is that x 0.9 rounded DOWN to 179,300. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(179300, (int)per_step,
+        "water poured onto lava is held to 10% below its first measured "
+        "number, as a reduction target - failing means the work is not "
+        "done, not that something broke");
 }
 
 #ifdef SAND_HOST_PROBE
