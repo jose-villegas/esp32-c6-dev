@@ -912,6 +912,15 @@ static void test_a_campfire_on_a_sand_bed_fits_in_the_frame_budget(void)
         "is not done yet");
 }
 
+#ifdef SAND_HOST_PROBE
+/* Host-only timing probe - the campfire scene (see the full-step control's
+ * own wrapper for the pattern). */
+void sand_host_probe_run_campfire(void)
+{
+    test_a_campfire_on_a_sand_bed_fits_in_the_frame_budget();
+}
+#endif
+
 static void test_turning_a_packed_screen_of_gas_fits_in_the_frame_budget(void)
 {
     uint8_t *big    = malloc(REAL_W * REAL_H);
@@ -1434,6 +1443,15 @@ static void test_a_full_screen_of_fire_fits_in_the_frame_budget(void)
         "same ballpark as measured - not a real-time promise, but a "
         "real regression guard");
 }
+
+#ifdef SAND_HOST_PROBE
+/* Host-only timing probe - the full_fire scene (see the full-step control's
+ * own wrapper for the pattern). */
+void sand_host_probe_run_full_fire(void)
+{
+    test_a_full_screen_of_fire_fits_in_the_frame_budget();
+}
+#endif
 
 /* Every material at once above flips gravity on a settled scene; this one
  * never lets the scene settle in the first place. Four liquids of
