@@ -434,6 +434,17 @@ int ui_measure_text(const char *str)
     return gfx_font_text_width(fs.font, str, -1, fs.scale);
 }
 
+void ui_draw_bitmap(mu_Context *c, mu_Rect r, const uint16_t *bitmap, mu_Color color)
+{
+    icon_rect_t blocks[UI_DRAW_BITMAP_MAX_BLOCKS];
+    const int n = icon_bitmap_blocks(bitmap, r.w, r.h, blocks, UI_DRAW_BITMAP_MAX_BLOCKS);
+
+    for (int i = 0; i < n; i++) {
+        mu_draw_rect(c, mu_rect(r.x + blocks[i].x, r.y + blocks[i].y,
+                                blocks[i].w, blocks[i].h), color);
+    }
+}
+
 /* See ui.h for the full argument. Short version: mu_begin_window_ex()
  * only seeds cnt->rect the FIRST time a title is opened, remembering it
  * forever after - correct for a desktop window manager, wrong here,
