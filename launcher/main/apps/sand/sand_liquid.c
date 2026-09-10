@@ -439,23 +439,10 @@ static void equalise_liquids(sand_t *s, const xflow_t *f, int sight,
 /*-----------------------------------------------------------------------------
  * Sub-pass: a lighter liquid rises through a denser one.
  *
- * WHY A PASS OF ITS OWN, rather than the denser cell sinking during the main
- * sweep as it used to. The sweep's no-double-move guarantee covers the cell
- * that MOVES; it says nothing about the cell that gets DISPLACED. Every row's
- * water sank past the same oil in turn, so one sweep carried that oil sixteen
- * rows - it was at the surface the step it was created, and no rise was ever
- * visible. Gas never had the problem because it has always risen in its own
- * reversed sub-pass (sand_gas.c), at about 0.7 rows a step.
- *
- * A period gate on the old swap was tried instead and is NOT equivalent: it
- * strands a lone water cell inside the oil layer for good, because a cell
- * cannot sink into its own material (give_mass owns that) and the swap only
- * ever looks DOWN, so nothing can cross it sideways. The cascade had been
- * hiding that by brute force.
- *
- * ORDERED so a cell that rises lands in a row this pass has already left
- * behind - the same trick the main sweep uses for falling, mirrored. That is
- * what caps it at one cell a step without any per-cell state to remember.
+ * A PASS OF ITS OWN, not the denser cell sinking during the main sweep. That
+ * sweep's no-double-move guarantee covers the cell which MOVES, not the one it
+ * DISPLACES, so every row's water sank past the same oil in turn and carried
+ * it sixteen rows in a step. Gas has always risen in its own reversed pass.
  *---------------------------------------------------------------------------*/
 static bool float_lighter_liquids(sand_t *s, int dx, int dy)
 {
@@ -469,6 +456,18 @@ static bool float_lighter_liquids(sand_t *s, int dx, int dy)
     const int y0 = (dy > 0) ? 0 : h - 1, ystep = (dy > 0) ? 1 : -1;
     const int x0 = (dx > 0) ? 0 : w - 1, xstep = (dx > 0) ? 1 : -1;
 
+    /* ONE SWAP PER COLUMN PER STEP - ordering alone is not enough. A swap
+     * moves two cells: the heavy one displaced drops a row, where the next
+     * row's mover finds it and pushes it down again, so acid sank a whole
+     * column in a step. Gas escapes that because its mover is a material of
+     * its own and does not refill from below; a lighter liquid does.
+     *
+     * Chunked by column so any width fits 32 bytes of stack. */
+    enum { RISE_COLS = 256 };
+    uint8_t swapped[RISE_COLS / 8];
+
+    for (int xbase = 0; xbase < w; xbase += RISE_COLS) {
+    memset(swapped, 0, sizeof swapped);
     for (int yi = 0; yi < h; yi++) {
         const int y = y0 + yi * ystep;
         const int uy = y - dy;
@@ -480,6 +479,13 @@ static bool float_lighter_liquids(sand_t *s, int dx, int dy)
 
         for (int xi = 0; xi < w; xi++) {
             const int x = x0 + xi * xstep;
+            if (x < xbase || x - xbase >= RISE_COLS) {
+                continue;
+            }
+            const int col = x - xbase;
+            if (((swapped[col >> 3] >> (col & 7)) & 1u) != 0u) {
+                continue;   /* this column has had its one move */
+            }
             const int ux = x - dx;
             if ((unsigned)ux >= (unsigned)w) {
                 continue;
@@ -514,11 +520,13 @@ static bool float_lighter_liquids(sand_t *s, int dx, int dy)
 
             urow[ux] = me;
             row[x]   = above;
+            swapped[col >> 3] |= (uint8_t)(1u << (col & 7));
             mark_rows(s, y, uy);
             wake_block_and_neighbors(s, x, y);
             wake_block_and_neighbors(s, ux, uy);
             moved = true;
         }
+    }
     }
     return moved;
 }
