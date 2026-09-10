@@ -926,6 +926,49 @@ static void test_pouring_stone_never_arms_the_reactions_pass(void)
     }
 }
 
+
+/* A MATERIAL THIS PASS CREATES MUST SURVIVE THE PASS'S OWN WRITE-BACK.
+ *
+ * The reactions walk logs a cell's material, then a stage may convert that
+ * same cell: saturated gunpowder becomes oil at the walk's OWN (x, y). It
+ * logged MAT_EXTENDED and never returns, so its census cannot hold MAT_OIL -
+ * only latch_content_flags() knows (bd esp32c6-cxx).
+ *
+ * NOT VISIBLE TO THE FINGERPRINT: the dropped bit only changes an outcome
+ * where a skip fires, so every scene hashes identically either way. */
+static void test_a_material_created_during_the_pass_stays_in_the_mask(void)
+{
+    fixture();
+
+    const reaction_t *r = reaction_of(GUNPOWDER_BASE);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    /* Saturated on arrival, so the soaked_to roll is live immediately and no
+     * water is needed - water would put a second material on the board and
+     * blur what the mask is being asked about. */
+    sand_set(&s, 4, H - 2, with_moisture(GUNPOWDER_CELL(0), r->moist_max, r));
+
+    bool turned = false;
+    for (int i = 0; i < 4000 && !turned; i++) {
+        sand_step(&s, 0, 1000, 0);
+        if (count_cells_of(MAT_OIL) > 0) {
+            turned = true;
+            TEST_ASSERT_TRUE_MESSAGE((s.may_have_materials & (1u << MAT_OIL)) != 0,
+                "oil is on the board, so may_have_materials must say so - the "
+                "cell that became oil was converted at the reactions walk's "
+                "own coordinates, which it had already counted as gunpowder "
+                "and does not revisit");
+        }
+    }
+
+    /* Without this the test passes on a board where nothing ever converts,
+     * asserting nothing at all. */
+    TEST_ASSERT_TRUE_MESSAGE(turned,
+        "setup: saturated gunpowder must actually reach oil inside the "
+        "window, or this test proves nothing");
+}
+
 /* A DRY BOARD WITH SAND ON IT HAS TO LET THE MOISTURE PASS GO.
  *
  * Sand soaks but does not dry, so its variant is a SHADE, not a wetness -
@@ -1714,6 +1757,7 @@ void run_sand_combustion_suite(void)
     RUN_TEST(test_fire_burning_out_marks_its_row_dirty);
     RUN_TEST(test_fire_spreads_through_a_connected_pocket_in_one_step);
     RUN_TEST(test_pouring_stone_never_arms_the_reactions_pass);
+    RUN_TEST(test_a_material_created_during_the_pass_stays_in_the_mask);
     RUN_TEST(test_sand_alone_lets_the_moisture_pass_switch_off_again);
     RUN_TEST(test_placing_fire_arms_both_gas_and_fire_passes);
     RUN_TEST(test_wood_does_not_catch_instantly);
