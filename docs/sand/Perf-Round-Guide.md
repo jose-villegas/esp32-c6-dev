@@ -47,7 +47,7 @@ you drop a candidate because the host shrugged at it.
 
 ## Exact commands
 
-Host suite (portable suites, <1s):
+Host suite (portable suites, ~35s):
 
 ```sh
 bash launcher/test/run_tests.sh
