@@ -37,3 +37,29 @@ static const icon_t icon_sand_table[ICON_SAND_COUNT] = {
     [ICON_SAND_BOOM] = { .offset = 64, .w = 16, .h = 16, .stride = 2, .blocks = 16 },
     [ICON_SAND_INFO] = { .offset = 96, .w = 16, .h = 16, .stride = 2, .blocks = 12 },
 };
+
+/* Rects every icon here emits if all are drawn once - a
+ * command-list cost, not just a count. */
+#define ICON_SAND_TOTAL_BLOCKS 69
+
+/* Pins this table against its own blob, so a bad offset or
+ * stride is a compile error where the header is included rather
+ * than a wrong glyph at draw time. */
+_Static_assert(sizeof icon_sand_rows == 128,
+               "icon_sand_rows was rebaked without its offsets");
+_Static_assert(0 + 16 * 2 <= (int)sizeof icon_sand_rows,
+               "icon pour runs past the end of icon_sand_rows");
+_Static_assert(2 == (16 + 7) / 8,
+               "icon pour stride does not match its width");
+_Static_assert(32 + 16 * 2 <= (int)sizeof icon_sand_rows,
+               "icon erase runs past the end of icon_sand_rows");
+_Static_assert(2 == (16 + 7) / 8,
+               "icon erase stride does not match its width");
+_Static_assert(64 + 16 * 2 <= (int)sizeof icon_sand_rows,
+               "icon boom runs past the end of icon_sand_rows");
+_Static_assert(2 == (16 + 7) / 8,
+               "icon boom stride does not match its width");
+_Static_assert(96 + 16 * 2 <= (int)sizeof icon_sand_rows,
+               "icon info runs past the end of icon_sand_rows");
+_Static_assert(2 == (16 + 7) / 8,
+               "icon info stride does not match its width");

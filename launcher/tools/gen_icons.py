@@ -668,6 +668,32 @@ def emit(w_stdout, prefix, cmd, source_png, cell_w, cell_h, svg_commits, baked):
           (prefix.upper(), name.upper(), offset, iw, ih, stride, blocks))
     w("};\n")
 
+    # What this atlas would cost a caller that drew every icon once. A
+    # screen drawing a known set can size its own share of the command
+    # list against this rather than counting rects by hand.
+    total_blocks = sum(b for _n, _w2, _h2, _s, _o, b, _p in baked)
+    w("\n/* Rects every icon here emits if all are drawn once - a\n"
+      " * command-list cost, not just a count. */\n")
+    w("#define ICON_%s_TOTAL_BLOCKS %d\n" % (prefix.upper(), total_blocks))
+
+    # Facts the CONSUMER's own compile can check. The table and the blob it
+    # indexes are emitted together and can only disagree through a generator
+    # bug - which would otherwise surface as a wrong glyph at draw time, far
+    # from its cause.
+    w("\n/* Pins this table against its own blob, so a bad offset or\n"
+      " * stride is a compile error where the header is included rather\n"
+      " * than a wrong glyph at draw time. */\n")
+    w("_Static_assert(sizeof %s == %d,\n"
+      "               \"%s was rebaked without its offsets\");\n"
+      % (rows_name, len(blob), rows_name))
+    for name, iw, ih, stride, offset, _blocks, _packed in baked:
+        w("_Static_assert(%d + %d * %d <= (int)sizeof %s,\n"
+          "               \"icon %s runs past the end of %s\");\n"
+          % (offset, ih, stride, rows_name, name, rows_name))
+        w("_Static_assert(%d == (%d + 7) / 8,\n"
+          "               \"icon %s stride does not match its width\");\n"
+          % (stride, iw, name))
+
 
 def main(argv):
     if len(argv) != 3:
