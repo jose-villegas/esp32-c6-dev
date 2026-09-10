@@ -681,6 +681,22 @@ In practice the backdrop is genuinely fresh at exactly two moments — the
 frame the panel opens, and a turn taken while it is open (which repaints the
 app underneath). See `dim_backdrop()` in `apps/sand/app_sand.c`.
 
+**The general form, when once is not enough.** "Once" is a global sequencing
+rule, and those rot. The local version: *whoever repaints a region restores
+the app underneath it first, then re-scrims that region, then draws.* The
+app's own partial-repaint machinery is what makes this affordable — the sand
+app marks the rows it needs and calls `draw_dirty_rows()` rather than
+repainting the grid — so the cost is one panel's worth of rows, not a
+canvas, and only while someone is actually interacting.
+
+That form is strictly more robust and is the **precondition for genuinely
+translucent panels**: a panel you can see through has to be composited over
+fresh pixels every repaint, so it cannot use the once-only shortcut at all.
+The simple version above is the special case that suffices while panels are
+opaque and do not move — nothing ever reveals backdrop that was not scrimmed,
+and nothing repaints backdrop that was. Switch to the general form when
+either of those stops being true.
+
 **Why this one is allowed to paint pixels**, when `ui_style.h` insists a
 style must emit commands: everything in the command list is re-emitted on
 every repaint, and re-emitting is precisely what a scrim must never do. It
