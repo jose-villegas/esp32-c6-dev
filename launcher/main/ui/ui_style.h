@@ -15,7 +15,7 @@
  *
  * PURE GEOMETRY, SEPARATE FROM DRAWING
  *
- * The same split icons.h makes, for the same reason: ui_bezel_spans() returns
+ * The same split gfx/icon.h makes, for the same reason: ui_bezel_spans() returns
  * WHERE the rectangles go and touches nothing else, so a host test can check
  * the shape (see test/suites/suite_ui_style.c) without linking gfx.c or even
  * microui.c. Nothing here calls a microui function - mu_rect() is a real

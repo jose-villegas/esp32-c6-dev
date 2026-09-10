@@ -36,6 +36,7 @@
 
 #include "app.h"
 #include "gfx/gfx_font.h"
+#include "gfx/icon.h"
 #include "microui.h"
 #include "ui/ui_style.h"
 #include "ui/ui_transform.h"
@@ -186,20 +187,12 @@ static inline mu_Rect ui_centered_rect(int canvas_w, int w, int h, int y)
     return (mu_Rect){ (canvas_w - w) / 2, y, w, h };
 }
 
-/* UI_DRAW_BITMAP_MAX_BLOCKS: ui_draw_bitmap()'s stack buffer, smaller than
- * ICON_BITMAP_MAX_BLOCKS (128, gfx/icons.h) on purpose - 128 icon_rect_t is
- * ~2 KB of UI-task stack for a worst case no shipped artwork gets near.
- * apps/sand/suite_sand_icons.c is what keeps that promise: it asserts every
- * shipped bitmap's block count, at the sizes the screen actually draws
- * them, fits under this cap. Raise it there first if a new icon does not. */
-#define UI_DRAW_BITMAP_MAX_BLOCKS 48
-
-/* Draws a 16x16 bitmap in icon_check_bitmap's format (gfx/icons.h) filling
- * `r`, in `color`, as MU_COMMAND_RECT entries - never gfx_fill_rect()
- * directly, which the repaint hash cannot see and would leave as a stale
- * smear. Same "a style emits commands, not pixels" rule ui_style.h argues
- * for a control's frame, applied here to an app's own artwork. */
-void ui_draw_bitmap(mu_Context *ctx, mu_Rect r, const uint16_t *bitmap, mu_Color color);
+/* Draws a baked icons_<name>.h glyph (icon_t) filling `r`, in `color`, via
+ * icon_walk_blocks() - streamed rather than collected, so an icon's run
+ * count no longer bounds artwork. `rows` is separate from `icon` because
+ * icon_t.offset indexes into its own header's blob, not a self-contained
+ * pointer - see gfx/icon.h. */
+void ui_draw_icon(mu_Context *ctx, mu_Rect r, const icon_t *icon, const uint8_t *rows, mu_Color color);
 
 /* An integer-valued slider over the next layout row - shaped like
  * mu_slider_ex(), but integer: that one's float/"%.2f" thumb is the wrong

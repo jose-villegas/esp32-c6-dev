@@ -54,11 +54,11 @@
 #include "../../input/imu.h"
 #include "../../ui/ui.h"
 #include "brush_screen.h"
+#include "icons_sand.h"
 #include "material_palette.h"
 #include "palette.h"
 #include "row_runs.h"
 #include "sand.h"
-#include "sand_icons.h"
 #include "sand_swatch.h"
 #include "sand_ui.h"
 #include "tilt.h"
@@ -1204,17 +1204,6 @@ static void draw_mode_label(int gx, int gy)
 #define PALETTE_BADGE_BORDER_COLOR  0x141414
 #define PALETTE_BADGE_FILL_COLOR    0xF2F2F2
 
-/* The brush screen's palette - dark navy panels, a gold accent for the
- * selected mode segment. Unlike the palette above, none of these derive
- * from a material's own colour: this screen's chrome, not its content. */
-#define BRUSH_PANEL_FACE_COLOR         0x131C2E
-#define BRUSH_PANEL_BORDER_COLOR       0xE8ECF4
-#define BRUSH_SEG_SELECTED_COLOR       0xE0A63C
-#define BRUSH_SEG_UNSELECTED_COLOR     0x1B2740
-#define BRUSH_CAPTION_COLOR            0x8FA3C0
-#define BRUSH_TEXT_COLOR               0xF2F6FF
-#define BRUSH_SEG_SELECTED_INK_COLOR   0x2A1A06
-
 static mu_Color mu_color_hex(uint32_t rgb)
 {
     return mu_color((int)((rgb >> 16) & 0xFF), (int)((rgb >> 8) & 0xFF),
@@ -1371,10 +1360,10 @@ static void draw_palette(const input_t *input)
 #define BRUSH_INFO_ICON_PAD  12
 
 
-static const uint16_t *const brush_seg_icons[BRUSH_SCREEN_SEGMENT_COUNT] = {
-    [BRUSH_SCREEN_SEG_POUR]  = icon_pour_bitmap,
-    [BRUSH_SCREEN_SEG_ERASE] = icon_erase_bitmap,
-    [BRUSH_SCREEN_SEG_BOOM]  = icon_boom_bitmap,
+static const icon_t *const brush_seg_icons[BRUSH_SCREEN_SEGMENT_COUNT] = {
+    [BRUSH_SCREEN_SEG_POUR]  = &icon_sand_table[ICON_SAND_POUR],
+    [BRUSH_SCREEN_SEG_ERASE] = &icon_sand_table[ICON_SAND_ERASE],
+    [BRUSH_SCREEN_SEG_BOOM]  = &icon_sand_table[ICON_SAND_BOOM],
 };
 
 /* One panel frame (ui_style.h's flat section frame) in a fixed colour
@@ -1521,7 +1510,8 @@ static void draw_brush_screen(const input_t *input)
                 lay.info_button.w - 2 * BRUSH_INFO_ICON_PAD,
                 lay.info_button.h - 2 * BRUSH_INFO_ICON_PAD,
             };
-            ui_draw_bitmap(ctx, icon_r, icon_info_bitmap, mu_color_hex(BRUSH_TEXT_COLOR));
+            ui_draw_icon(ctx, icon_r, &icon_sand_table[ICON_SAND_INFO], icon_sand_rows,
+                        mu_color_hex(BRUSH_TEXT_COLOR));
         }
 
         /*---------------------------------------------------------------
@@ -1564,7 +1554,7 @@ static void draw_brush_screen(const input_t *input)
                 r.x + (r.w - icon_side) / 2, r.y + BRUSH_SEG_PAD,
                 icon_side, icon_side,
             };
-            ui_draw_bitmap(ctx, icon_r, brush_seg_icons[i], ink);
+            ui_draw_icon(ctx, icon_r, brush_seg_icons[i], icon_sand_rows, ink);
 
             const mu_Rect label_r = {
                 r.x + BRUSH_SEG_PAD, icon_r.y + icon_side + BRUSH_SEG_LABEL_GAP,

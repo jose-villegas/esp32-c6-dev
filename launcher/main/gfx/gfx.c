@@ -1,4 +1,3 @@
-#include "driver/gpio.h"
 #include "gfx/gfx.h"
 #include "gfx/gfx_dirty.h"
 #include "gfx/gfx_font_roles.h"
@@ -8,6 +7,7 @@
 #include <string.h>
 
 #ifdef ESP_PLATFORM
+#include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_io.h"

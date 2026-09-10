@@ -569,7 +569,12 @@ against.
    large in `fixture()` instead, as `suite_sand_liquid_depth.c` already
    does, and run `tools/build_diag_check.sh` before pushing rather than
    finding out from a pull request.
-6. Break the implementation, confirm red, restore.
+6. **Stick to ISO C in a suite.** The host runner compiles with
+   `-std=c11`, which on glibc hides everything POSIX-only behind
+   `__STRICT_ANSI__` - so `strnlen`, `strdup` and friends compile on a
+   Windows toolchain whose headers declare them unconditionally, and
+   fail on Linux and macOS. The suites have to build on all three.
+7. Break the implementation, confirm red, restore.
 
 ---
 

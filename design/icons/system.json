@@ -1,0 +1,28 @@
+{
+    "cell_w": 16,
+    "cell_h": 16,
+    "icons": [
+        { "name": "check", "source": "png", "col": 0, "row": 0 },
+
+        { "name": "close", "source": "svg", "file": "close.svg",
+          "upstream": "close", "commit": "8275e0af7c16aa40c54ea2b90b7af83b1fe4eb4c" },
+        { "name": "info", "source": "svg", "file": "info-box.svg",
+          "upstream": "info-box", "commit": "8275e0af7c16aa40c54ea2b90b7af83b1fe4eb4c" },
+        { "name": "alert", "source": "svg", "file": "square-alert.svg",
+          "upstream": "square-alert", "commit": "8275e0af7c16aa40c54ea2b90b7af83b1fe4eb4c" },
+        { "name": "chevron_left", "source": "svg", "file": "chevron-left.svg",
+          "upstream": "chevron-left", "commit": "8275e0af7c16aa40c54ea2b90b7af83b1fe4eb4c" },
+        { "name": "chevron_right", "source": "svg", "file": "chevron-right.svg",
+          "upstream": "chevron-right", "commit": "8275e0af7c16aa40c54ea2b90b7af83b1fe4eb4c" },
+        { "name": "chevron_up", "source": "svg", "file": "chevron-up.svg",
+          "upstream": "chevron-up", "commit": "8275e0af7c16aa40c54ea2b90b7af83b1fe4eb4c" },
+        { "name": "chevron_down", "source": "svg", "file": "chevron-down.svg",
+          "upstream": "chevron-down", "commit": "8275e0af7c16aa40c54ea2b90b7af83b1fe4eb4c" },
+        { "name": "arrow_left", "source": "svg", "file": "arrow-bar-left.svg",
+          "upstream": "arrow-bar-left", "commit": "8275e0af7c16aa40c54ea2b90b7af83b1fe4eb4c" },
+        { "name": "checkbox_on", "source": "svg", "file": "checkbox-on.svg",
+          "upstream": "checkbox-on", "commit": "8275e0af7c16aa40c54ea2b90b7af83b1fe4eb4c" },
+        { "name": "home", "source": "svg", "file": "home.svg",
+          "upstream": "home", "commit": "8275e0af7c16aa40c54ea2b90b7af83b1fe4eb4c" }
+    ]
+}

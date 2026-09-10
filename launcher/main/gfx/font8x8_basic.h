@@ -23,7 +23,7 @@
  * than one translation unit - the firmware's gfx.c and the host test suite,
  * at least - needs a guard against double inclusion within one TU and
  * internal linkage to avoid a duplicate-symbol clash across TUs, the same
- * way icons.h's icon_check_bitmap is `static const` for the same reason.
+ * way icons_system.h's icon_system_rows is `static const` for the same reason.
  * `const` also lands the table in flash rather than RAM, matching the model
  * gfx_color.h's own top comment describes. Neither change alters what any
  * reader sees: every existing use already only reads through a `const

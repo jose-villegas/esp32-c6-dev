@@ -1,0 +1,10 @@
+{
+    "cell_w": 16,
+    "cell_h": 16,
+    "icons": [
+        { "name": "pour", "source": "png", "col": 0, "row": 0 },
+        { "name": "erase", "source": "png", "col": 1, "row": 0 },
+        { "name": "boom", "source": "png", "col": 2, "row": 0 },
+        { "name": "info", "source": "png", "col": 3, "row": 0 }
+    ]
+}

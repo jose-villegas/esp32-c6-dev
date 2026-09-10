@@ -3,10 +3,10 @@
  *
  * gfx_font.h splits a font into pure metrics (gfx_font_advance(),
  * gfx_font_text_width(), gfx_font_height() - `static inline` in the header,
- * same reason icon_check_blocks() is in icons.h: it links on a host with no
+ * same reason icon_walk_blocks() is in gfx/icon.h: it links on a host with no
  * gfx.h, no BSP, no drivers) and drawing (gfx_text_font() in gfx.c, which
  * calls gfx_fill_rect() and so cannot). This suite exercises only the
- * metrics, the same split suite_icons.c makes for icons.h.
+ * metrics, the same split suite_icons.c makes for gfx/icons_system.h.
  *
  * gfx.h is deliberately NOT included here - it pulls in bsp/esp-bsp.h, which
  * does not compile on a host. That means GFX_CHAR_W, GFX_CHAR_H and
