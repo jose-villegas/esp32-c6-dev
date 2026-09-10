@@ -502,16 +502,15 @@ latch_content_flags(sand_t* s, cell_t cell) {
     }
 }
 
-/* The four-cardinal-direction table every per-cell reaction pass walks
- * neighbours through - fire chemistry (sand_reactions.c) and tree/root
- * growth (sand_plants.c) both need it, unlike ring_dir()'s 8-way table
- * above, which the gravity-relative powder sweep uses instead. */
-static const int reaction_dirs[4][2] = {
-    {0, -1},
-    {0, 1},
-    {-1, 0},
-    {1, 0},
-};
+/* The four cardinals every per-cell reaction pass walks - fire chemistry and
+ * tree growth both need it, unlike ring_dir()'s 8-way table above.
+ *
+ * ONE COPY, EIGHT BYTES. As `static const` in a header each TU got its own, so
+ * the image carried two 32-byte tables in flash. Extern plus int8_t makes it
+ * one 8-byte table. Still DROM - `const` lives in flash regardless - so the
+ * win is cache footprint, measured at 1-2% on nearly every scene that walks
+ * neighbours (bd esp32c6-fs7). */
+extern const int8_t reaction_dirs[4][2];
 
 /* Use precomputed `at` index to write `mat` into cell. Every cell creation
  * goes through here. */
