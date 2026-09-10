@@ -46,6 +46,10 @@
 #define UI_ROW_GAP        8
 #define UI_MARGIN         16
 
+/* ui_slider_int()'s knob width - chunky enough for a finger, not tuned
+ * finer than that until Phase 5 puts a screenshot next to the design. */
+#define UI_SLIDER_KNOB_W  40
+
 /* The strip across the top of the home screen, reserved and deliberately
  * empty. It is where status belongs - battery, connection, the clock -
  * and holding the space open now means adding any of that later moves
@@ -196,6 +200,12 @@ static inline mu_Rect ui_centered_rect(int canvas_w, int w, int h, int y)
  * smear. Same "a style emits commands, not pixels" rule ui_style.h argues
  * for a control's frame, applied here to an app's own artwork. */
 void ui_draw_bitmap(mu_Context *ctx, mu_Rect r, const uint16_t *bitmap, mu_Color color);
+
+/* An integer-valued slider over the next layout row - shaped like
+ * mu_slider_ex(), but integer: that one's float/"%.2f" thumb is the wrong
+ * shape for a "06 PX" control. Writes through `value`, returns whether it
+ * changed this frame. */
+bool ui_slider_int(mu_Context *ctx, int *value, int lo, int hi, int step);
 
 /* Close the frame and paint it, but only if it would look any different
  * from what is already on screen. Returns whether it drew. It repaints

@@ -34,6 +34,7 @@
 #include "gfx/gfx_font_roles.h"
 #include "gfx/icons.h"
 #include "ui/ui_pointer.h"
+#include "ui/ui_slider.h"
 
 static const char *TAG = "ui";
 
@@ -443,6 +444,50 @@ void ui_draw_bitmap(mu_Context *c, mu_Rect r, const uint16_t *bitmap, mu_Color c
         mu_draw_rect(c, mu_rect(r.x + blocks[i].x, r.y + blocks[i].y,
                                 blocks[i].w, blocks[i].h), color);
     }
+}
+
+/* See ui.h. `value`'s own address (not what it points to, same idiom
+ * mu_slider_ex() uses) gives each call site a stable id with no string
+ * needed. MU_OPT_HOLDFOCUS keeps a drag updating once it leaves the knob. */
+bool ui_slider_int(mu_Context *c, int *value, int lo, int hi, int step)
+{
+    const mu_Id id = mu_get_id(c, &value, sizeof(value));
+    const mu_Rect track = mu_layout_next(c);
+    mu_update_control(c, id, track, MU_OPT_HOLDFOCUS);
+
+    int v = *value;
+    if (c->focus == id && (c->mouse_down | c->mouse_pressed) == MU_MOUSE_LEFT) {
+        v = ui_slider_value_at_x(track, lo, hi, UI_SLIDER_KNOB_W, step, c->mouse_pos.x);
+    }
+    v = mu_clamp(v, lo, hi);
+    const bool changed = (v != *value);
+    *value = v;
+
+    ui_span_t panel[UI_PANEL_MAX_SPANS];
+    const int pn = ui_panel_spans(track, c->style->colors[MU_COLOR_BASE],
+                                  c->style->colors[MU_COLOR_BORDER],
+                                  panel, UI_PANEL_MAX_SPANS);
+    if (pn > 0) {
+        /* Face, then the filled portion, then the border last - so the
+         * border still frames the whole track rather than the fill
+         * painting over it where the two overlap. */
+        mu_draw_rect(c, panel[0].rect, panel[0].color);
+        mu_draw_rect(c, ui_slider_fill_rect(track, lo, hi, v, UI_SLIDER_KNOB_W),
+                     c->style->colors[MU_COLOR_BUTTONFOCUS]);
+        for (int i = 1; i < pn; i++) {
+            mu_draw_rect(c, panel[i].rect, panel[i].color);
+        }
+
+        ui_span_t knob[UI_BEZEL_MAX_SPANS];
+        const mu_Rect knob_rect = ui_slider_knob_rect(track, lo, hi, v, UI_SLIDER_KNOB_W);
+        const int kn = ui_bezel_spans(knob_rect, c->style->colors[MU_COLOR_BUTTON],
+                                      false, knob, UI_BEZEL_MAX_SPANS);
+        for (int i = 0; i < kn; i++) {
+            mu_draw_rect(c, knob[i].rect, knob[i].color);
+        }
+    }
+
+    return changed;
 }
 
 /* See ui.h for the full argument. Short version: mu_begin_window_ex()
