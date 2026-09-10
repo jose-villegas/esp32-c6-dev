@@ -167,6 +167,50 @@ void sand_host_probe_run_full_step_control(void)
  * configurations: a disabled pass leaves a different grid behind, so
  * reusing one scene would have each configuration measuring a board the
  * previous one shaped. */
+/* The settled-pool board, matching
+ * test_turning_a_settled_pool_to_landscape_fits_in_the_frame_budget above so
+ * the decomposition and the budget row cannot drift apart. The harness does
+ * the settling; this only fills the pool. */
+static void build_settled_pool_for_split(sand_t *s)
+{
+    for (int y = (REAL_H * 3) / 5; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            sand_set(s, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+        }
+    }
+}
+
+#if CONFIG_LAUNCHER_SAND_PASS_GATES
+/* WHERE THE SETTLED POOL'S MOVE WORK GOES - bd esp32c6-2u7, which asks what
+ * step_one_grain() spends its time on and how much is dispatch rather than
+ * the moves themselves.
+ *
+ * Host counters already said 94% of move_liquid_grain() calls on this board
+ * move nothing (1,297,446 of 1,380,945). What they cannot say is what that
+ * costs, so these four gates split the call from its three phases: reaching
+ * move_liquid_grain at all, the density swap, the fall, and the two slides.
+ *
+ * Prints; asserts nothing. A decomposition is a measurement, and pinning a
+ * budget to one would make every future change to the split a test failure. */
+static void test_the_settled_pool_move_work_splits_into_its_phases(void)
+{
+    static const split_scene_t pool = {
+        .name = "settled pool", .build = build_settled_pool_for_split,
+        .seed = 17u,   /* no setup and no pours - see its budget row */
+        .sgx = 0, .sgy = 1000,      /* settle upright */
+        .gx = 1000, .gy = 0,        /* then turn it on its side */
+        .settle = 300,
+    };
+    static const char *const names[] = { "sweep_move", "liq_sink",
+                                         "liq_down", "liq_slides" };
+    static volatile bool *const gates[] = { &sand_step_gate_sweep_move,
+                                            &sand_step_gate_liq_sink,
+                                            &sand_step_gate_liq_down,
+                                            &sand_step_gate_liq_slides };
+    split_report(&pool, names, gates, 4, 3);
+}
+#endif
+
 #if CONFIG_LAUNCHER_SAND_PASS_GATES
 /* The setup both the wet-earth and plant-bed budget rows do before their
  * builders, and the plant bed's timed pours - copied from those rows so the
