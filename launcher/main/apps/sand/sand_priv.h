@@ -127,6 +127,19 @@ block_of(const sand_t* s, int x, int y) {
     return (y / SAND_BLOCK_H) * s->block_cols + (x / SAND_BLOCK_W);
 }
 
+/* Has this cell's block come to rest? The same test sand_block_settled()
+ * makes, by cell rather than by block index. False when sleeping is off,
+ * because then nothing is ever known to be settled and a rule gated on rest
+ * must not fire. */
+static inline bool
+cell_settled(const sand_t* s, int x, int y) {
+    if (s->block_state == NULL) {
+        return false;
+    }
+    return (s->block_state[block_of(s, x, y)]
+            & (BLOCK_SETTLED_NEAREST | BLOCK_SETTLED_OTHER)) != 0;
+}
+
 /* Is there liquid in this cell's own block or any block touching it?
  *
  * WHY THIS AND NOT s->may_have_liquid: that flag is board-wide, so one water
@@ -958,6 +971,7 @@ enum {
     RSTAGE_ACID_RAIN,
     RSTAGE_CONDENSE,
     RSTAGE_HEAT_RAMP,
+    RSTAGE_CRUST,
     RSTAGE_CHILL,
     RSTAGE_WARM,
     RSTAGE_SOAK_DRY,
@@ -991,6 +1005,12 @@ reaction_first_stage(const reaction_t* r, bool is_acid_rain_material) {
     }
     if (r->heat_ramp != 0) {
         return RSTAGE_HEAT_RAMP;
+    }
+    /* BEFORE chills, because stage_chill ends in `continue` and never falls
+     * through - snow chills, so a crust stage after it would be unreachable
+     * for the one material that has it. */
+    if (r->crusts != 0) {
+        return RSTAGE_CRUST;
     }
     if (r->chills != 0) {
         return RSTAGE_CHILL;

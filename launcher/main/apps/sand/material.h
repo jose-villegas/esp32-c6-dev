@@ -448,14 +448,18 @@ typedef struct {
     /* MAT_SAND closes loop; glass to sand when shocked. */
     uint8_t shatters_to;
 
+    /* SETTLED-ONLY and extremely rare: a cell at rest slowly becomes
+     * crusts_to. The roll is 16-bit at its read site, not the usual 8, since
+     * 1 in 256 a step is not slow once a bank holds a thousand cells. */
+    uint8_t crusts;
+    uint8_t crusts_to;
+
     /* NEVER READ. Rounds the row to 64 bytes so reaction_of()'s index is one
      * shift: at 61 GCC strength-reduces the stride into slli/sub/slli/add,
      * four ALU ops at every call site. Declared rather than left to the
      * compiler because sizeof(reaction_t) is this table's documentation
      * contract - dump_reactions.c insists every byte is exactly one
      * documented field - and silent padding would be an undocumented hole. */
-    uint8_t stride_pad0;
-    uint8_t stride_pad1;
     uint8_t stride_pad2;
     uint8_t stride_pad3;
     uint8_t stride_pad4;
