@@ -551,6 +551,19 @@ def count_runs(bits, w, h):
     return total
 
 
+def output_path_for(json_path):
+    """Where this bake's own banner tells a future reader to redirect stdout.
+    Not discovered - the script never sees its own `>` redirect - but derived
+    from the manifest's location, matching docs/plans/Icon-Baker-Plan.md's
+    ownership split: design/icons/<x>.json bakes to the shared gfx/ atlas, an
+    app's own apps/<name>/icons/<x>.json bakes beside that app's folder."""
+    manifest_dir = Path(json_path).parent
+    prefix = Path(json_path).stem
+    if manifest_dir.name == "icons" and manifest_dir.parent.name != "design":
+        return "%s/icons_%s.h" % (manifest_dir.parent.as_posix(), prefix)
+    return "main/gfx/icons_%s.h" % prefix
+
+
 # --- manifest ------------------------------------------------------------------
 
 def load_manifest(path):
@@ -766,8 +779,8 @@ def main(argv):
         die("baked rows blob is %d bytes, too large for icon_t.offset "
             "(uint16_t)" % offset)
 
-    cmd = ("python tools/gen_icons.py %s %s > main/gfx/icons_%s.h" %
-           (png_path, json_path, prefix))
+    cmd = ("python tools/gen_icons.py %s %s > %s" %
+           (png_path, json_path, output_path_for(json_path)))
     emit(sys.stdout.write, prefix, cmd, png_path, cell_w, cell_h,
          sorted(svg_commits), baked)
 
