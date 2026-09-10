@@ -330,9 +330,9 @@ static void test_covers_both_equals_covers_the_lower_alpha(void)
  * that nothing else repaints - a panel's frozen backdrop, in practice -
  * lands the second application on the first one's own output. This is the
  * arithmetic behind that: same mix, same alpha, twice, is strictly darker
- * than once, and repeating it walks the picture to black. See
- * dim_backdrop() in apps/sand/app_sand.c, which is why it is called from
- * the two moments the backdrop is genuinely fresh and nowhere else. */
+ * than once, and repeating it walks the picture to black. Hence the rule a
+ * caller has to follow - scrim once per repaint of the backdrop, never per
+ * frame - which this pins without needing any particular caller to exist. */
 static void test_mixing_toward_black_twice_is_darker_than_once(void)
 {
     const gfx_color_t black = GFX_RGB(0x000000);

@@ -2,7 +2,7 @@
  * sand_swatch - which shade paints which cell of the brush screen's material
  * swatch.
  *
- * Pure, header-only (the same precedent ui_slider.h/icons.h set): a brush
+ * Pure, header-only (the same precedent ui_slider.h/gfx/icon.h set): a brush
  * cell spec and a (col, row) in an N x N grid go in, the exact cell byte to
  * paint there comes out - drawn straight from material_palette(), the same
  * table the grid itself renders with, rather than a second, drifting idea

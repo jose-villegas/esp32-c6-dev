@@ -86,6 +86,21 @@ typedef struct {
 const char *brush_screen_segment_label(brush_screen_segment_t seg);
 const char *brush_screen_size_caption(brush_screen_segment_t seg);
 
+/* The screen's own chrome palette - dark navy panels, a gold accent for the
+ * selected mode segment. Unlike the material palette (app_sand.c's
+ * draw_palette()), none of these derive from a material's own colour. Here
+ * rather than at the drawing call site for the same reason the strings
+ * above are: anything that draws this screen, or previews it off-device,
+ * must agree on these exact values rather than each keeping its own copy
+ * that can drift. */
+#define BRUSH_PANEL_FACE_COLOR         0x131C2E
+#define BRUSH_PANEL_BORDER_COLOR       0xE8ECF4
+#define BRUSH_SEG_SELECTED_COLOR       0xE0A63C
+#define BRUSH_SEG_UNSELECTED_COLOR     0x1B2740
+#define BRUSH_CAPTION_COLOR            0x8FA3C0
+#define BRUSH_TEXT_COLOR               0xF2F6FF
+#define BRUSH_SEG_SELECTED_INK_COLOR   0x2A1A06
+
 /* Fills `out` for a `screen_w` x `screen_h` canvas - the LOGICAL canvas
  * (ui_width()/ui_height()), which swap under a quarter turn, exactly as
  * palette_tile_rect() takes them. Never reads GFX_WIDTH/GFX_HEIGHT. */

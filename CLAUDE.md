@@ -156,7 +156,16 @@ build.
 ### Includes are layer-qualified
 
 `"gfx/gfx.h"`, not `"gfx.h"`, even between files in the same folder — so an
-app reaching past `ui` into `gfx` is visible at the include line. Layers:
+app reaching past `ui` into `gfx` is visible at the include line.
+
+**Comments obey the same direction as includes.** A file in `gfx/`, `ui/`,
+`boot/`, `util/` or `test/suites/` must not name a particular app — an app
+is a folder designed to be deleted whole, so a lower layer naming one is a
+dangling reference by construction, and the comment survives the code it
+described. Say what shape of caller needs the thing ("a checkbox toggle", "a
+per-tile badge"), or state the rule a caller must follow, rather than naming
+the file that currently does it. An app's own files may name anything below
+them freely; that direction is the one that cannot dangle. Layers:
 `boot/` (runs once, before the frame loop exists), `gfx/` (the one
 framebuffer + primitives), `ui/` (microui integration), `input/` (touch,
 gesture), `util/` (pure arithmetic), `apps/`.
@@ -263,6 +272,8 @@ don't read all of them per session:
 | | |
 |---|---|
 | [`docs/Launcher-Architecture.md`](docs/Launcher-Architecture.md) | Shell/app contract, frame loop, adding an app, microui integration, why not LVGL |
+| [`docs/Building-a-Screen.md`](docs/Building-a-Screen.md) | **Start here to build or change a UI screen** - the loop, the house rules, how to do what a screen needs |
+| [`docs/UI-Lessons.md`](docs/UI-Lessons.md) | The record behind that guide: what each of its rules cost to learn |
 | [`docs/sand/README.md`](docs/sand/README.md) | Index into the sand app's own doc set |
 | [`docs/sand/Sand-Simulation.md`](docs/sand/Sand-Simulation.md) | The sand app: materials, liquid model, momentum, performance budget |
 | [`docs/sand/Architecture.md`](docs/sand/Architecture.md) | Single-page map of `main/apps/sand/`'s shape - the grid byte, material table, file split |
@@ -276,7 +287,7 @@ don't read all of them per session:
 | [`docs/notes/README.md`](docs/notes/README.md) | Index into board-specific hardware notes (memory budget, panel/touch gotchas, flashing/recovery, optimization playbook) |
 | [`docs/Testing-Guide.md`](docs/Testing-Guide.md) | Host/device test suites, why release builds carry no test code |
 | [`docs/Autana-Rendering-Roadmap.md`](docs/Autana-Rendering-Roadmap.md) | Proposal: the rendering/engine roadmap (band-mode framebuffer, span rasterizer, raycaster, the three target games, S3 port) |
-| [`docs/plans/`](docs/plans) | Not-yet-built plans: `Settings-App-Plan.md`, `Log-Level-Plan.md`, and `Reaction-Doc-Generator-Plan.md`'s brush-blurb phase |
+| [`docs/plans/`](docs/plans) | Not-yet-built plans: `UI-Editor-Plan.md` (authored layout, baked, edited live), `Icon-Baker-Plan.md`, `Settings-App-Plan.md`, `Log-Level-Plan.md`, and `Reaction-Doc-Generator-Plan.md`'s brush-blurb phase |
 | [`docs/workflows/Model-Delegation-Workflow.md`](docs/workflows/Model-Delegation-Workflow.md) | Delegating a feature's implementation to a local model, review kept on the driving session |
 
 `scripts/` also has local-Ollama-backed doc/code audit automation --

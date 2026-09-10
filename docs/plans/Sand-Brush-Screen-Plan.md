@@ -26,6 +26,13 @@ predicted by it:
   on its own line) and accepted as-is, so the shorter wording is the design
   now rather than a deviation from it.
 
+- **The slider draws in microui's default chrome, not the design's gold.**
+  `ui_slider_int()` takes its track and knob colours from `MU_COLOR_BASE`/
+  `MU_COLOR_BORDER`/`MU_COLOR_BUTTON`, and the screen overrides those for its
+  segments but not for the slider. Seen on a host render and accepted as-is,
+  so it is the design now - recorded because a reader comparing the screen to
+  the original mockup would otherwise read grey-instead-of-gold as a bug.
+
 Deliberately deferred, unchanged from the plan: the info button draws but
 has no handler behind it (a separate, unbuilt panel), and nothing on either
 screen persists across an app restart - brush, mode and every radius reset
