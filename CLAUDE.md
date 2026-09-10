@@ -41,6 +41,7 @@ markdown report into their own `tools/results/`:
 ```sh
 ./launcher/tools/build_flash.sh                          # build + flash release firmware
 ./launcher/tools/build_flash_select.sh                    # interactive: variant + any worktree/branch, creating one if needed
+./launcher/tools/build_diag_check.sh                     # build diagnostics only - runs the static-RAM gate, no device
 ./launcher/tools/report_test_results.sh                  # every suite, pass/fail
 ./launcher/main/apps/sand/tools/report_performance.sh    # sand's frame-budget numbers
 ```
@@ -49,9 +50,10 @@ markdown report into their own `tools/results/`:
 ~90 s environment-activation cost.
 
 `./launcher/tools/screenshot.sh` captures the device's current screen to a
-`.bmp` plus a `.json` state snapshot, over the same serial connection — needs
-neither `idf.py` nor PowerShell, but only works on development builds
-(`build_flash_dev.sh` / `build_flash.sh --diag`), not release.
+lossless `.png` plus a `.json` state snapshot, over the same serial
+connection — needs neither `idf.py` nor PowerShell, but only works on
+development builds (`build_flash_dev.sh` / `build_flash.sh --diag`), not
+release.
 
 Formatting (only on files you just wrote or edited — this repo has no house
 C style guide, match the surrounding file; do not reformat pre-existing
@@ -173,9 +175,10 @@ gesture), `util/` (pure arithmetic), `apps/`.
 256 KiB just for the command list, cut down in the header itself since it
 affects struct layout). Immediate-mode command list, hashed per-window each
 frame to skip repainting/transferring unchanged canvases (dirty-band system).
-Touch needs a synthesized hover frame (`feed_input()`) since a touchscreen
-never produces microui's mouse-shaped "point, then click" sequence — costs
-one frame (~24 ms) of tap latency, applies to every control. See
+Touch needs two synthesized hover frames (`ui_pointer.c`) since a touchscreen
+never produces microui's mouse-shaped "point, then click" sequence, and
+`hover_root` itself lags a frame — costs ~48 ms of tap latency, applies to
+every control. See
 `docs/Launcher-Architecture.md` for the full mechanism and the styling system
 (`ui_style.h`, `UI_BUTTON_FLAT` vs `UI_BUTTON_BEZEL`).
 

@@ -46,6 +46,10 @@
 #define UI_ROW_GAP        8
 #define UI_MARGIN         16
 
+/* ui_slider_int()'s knob width - chunky enough for a finger, not tuned
+ * finer than that until Phase 5 puts a screenshot next to the design. */
+#define UI_SLIDER_KNOB_W  40
+
 /* The strip across the top of the home screen, reserved and deliberately
  * empty. It is where status belongs - battery, connection, the clock -
  * and holding the space open now means adding any of that later moves
@@ -88,14 +92,25 @@ void ui_set_button_style(ui_button_style_t style);
 void ui_set_text_style(ui_text_style_t style);
 
 /* Choose the font microui measures and draws MU_COMMAND_TEXT with, until
- * this is called again - ui_init() seeds it with gfx_font_ui() so it is
- * never left NULL in normal use. Passing NULL here falls back to
- * gfx_font_ui() rather than storing NULL. Unlike ui_set_text_style() and
- * ui_set_transform() below it, this does NOT need to call
- * ui_invalidate() - see the comment above ui_set_font()'s definition in
- * ui.c for why the font is the one style-like setting here that gets to
- * skip it. */
+ * called again - ui_init() seeds it with gfx_font_ui(). NULL falls back
+ * to gfx_font_ui() rather than being stored. Unlike ui_set_text_style()
+ * and ui_set_transform() below, this does NOT need ui_invalidate() - see
+ * ui_set_font()'s ui.c comment for why. Equivalent to
+ * ui_set_font_scaled(font, GFX_GLYPH_SCALE). */
 void ui_set_font(const gfx_font_t *font);
+
+/* Like ui_set_font(), but at `scale` glyph cells instead of the fixed
+ * GFX_GLYPH_SCALE - see ui_set_font()'s ui.c comment for why carrying the
+ * scale inside the font, rather than a separate render-time setting, is
+ * what lets a screen mix two text sizes without paying ui_invalidate()
+ * every frame. Clamped to at least 1. */
+void ui_set_font_scaled(const gfx_font_t *font, int scale);
+
+/* The width `str` would measure at the CURRENT font and scale - what
+ * ui_set_font()/ui_set_font_scaled() last set. For right-aligning a
+ * string (e.g. against a caption on the same row) without re-deriving
+ * the font role and scale at the call site. */
+int ui_measure_text(const char *str);
 
 /* Choose the transform every command is mapped through before it is
  * drawn - see ui_transform.h for what a transform is and why it is
@@ -170,6 +185,27 @@ static inline mu_Rect ui_centered_rect(int canvas_w, int w, int h, int y)
 {
     return (mu_Rect){ (canvas_w - w) / 2, y, w, h };
 }
+
+/* UI_DRAW_BITMAP_MAX_BLOCKS: ui_draw_bitmap()'s stack buffer, smaller than
+ * ICON_BITMAP_MAX_BLOCKS (128, gfx/icons.h) on purpose - 128 icon_rect_t is
+ * ~2 KB of UI-task stack for a worst case no shipped artwork gets near.
+ * apps/sand/suite_sand_icons.c is what keeps that promise: it asserts every
+ * shipped bitmap's block count, at the sizes the screen actually draws
+ * them, fits under this cap. Raise it there first if a new icon does not. */
+#define UI_DRAW_BITMAP_MAX_BLOCKS 48
+
+/* Draws a 16x16 bitmap in icon_check_bitmap's format (gfx/icons.h) filling
+ * `r`, in `color`, as MU_COMMAND_RECT entries - never gfx_fill_rect()
+ * directly, which the repaint hash cannot see and would leave as a stale
+ * smear. Same "a style emits commands, not pixels" rule ui_style.h argues
+ * for a control's frame, applied here to an app's own artwork. */
+void ui_draw_bitmap(mu_Context *ctx, mu_Rect r, const uint16_t *bitmap, mu_Color color);
+
+/* An integer-valued slider over the next layout row - shaped like
+ * mu_slider_ex(), but integer: that one's float/"%.2f" thumb is the wrong
+ * shape for a "06 PX" control. Writes through `value`, returns whether it
+ * changed this frame. */
+bool ui_slider_int(mu_Context *ctx, int *value, int lo, int hi, int step);
 
 /* Close the frame and paint it, but only if it would look any different
  * from what is already on screen. Returns whether it drew. It repaints

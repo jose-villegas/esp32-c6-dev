@@ -84,6 +84,9 @@ $TEST_DIR/suites/suite_icons.c
 $TEST_DIR/suites/suite_ui_style.c
 $TEST_DIR/suites/suite_ui_transform.c
 $TEST_DIR/suites/suite_ui_centered_rect.c
+$TEST_DIR/suites/suite_ui_pointer.c
+$TEST_DIR/suites/suite_ui_pointer_microui.c
+$TEST_DIR/suites/suite_ui_slider.c
 $TEST_DIR/suites/suite_display.c
 $TEST_DIR/suites/suite_screenshot.c
 $TEST_DIR/suites/suite_device_state.c
@@ -91,6 +94,8 @@ $MAIN_DIR/input/touch_fsm.c
 $MAIN_DIR/input/gesture.c
 $MAIN_DIR/input/button_fsm.c
 $MAIN_DIR/display/display.c
+$MAIN_DIR/ui/ui_pointer.c
+$TEST_DIR/../components/microui/src/microui.c
 "
 
 # App-owned sources, discovered rather than listed, so adding or deleting an
@@ -147,7 +152,11 @@ UNITY_OBJ="$BUILD_DIR/unity.o"
 
 # components/microui/include is on the path for ui_style.h's sake: it needs
 # mu_Rect and mu_Color, and those are plain declarations in microui.h with no
-# library behind them. Nothing here links microui.c - see suite_ui_style.c on
+# library behind them. microui.c itself IS linked now, for exactly one suite:
+# suite_ui_pointer_microui.c drives the real widget code, because the event
+# list ui_pointer.c emits can be perfectly correct and still produce a UI in
+# which nothing is clickable - see that file's own comment. Every other
+# suite here still needs only the declarations - see suite_ui_style.c on
 # why a style's geometry was kept free of it.
 #
 # components/small3dlib/include is on the path for boot_anim.h's sake: its

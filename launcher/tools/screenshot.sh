@@ -4,13 +4,15 @@
 # serial connection - no SD card, no button on the device: this script sends
 # the request and receives the image itself, together with a same-named
 # .json snapshot of device state at that exact frame (sensors, memory,
-# clock - see screenshot_dump()'s own comment in main/util/screenshot.c). A
-# same-named .png is written alongside the .bmp if Pillow is installed (pip
-# install Pillow) - the .bmp is always written either way.
+# clock - see screenshot_dump()'s own comment in main/util/screenshot.c).
+# The device streams a 24bpp BMP over the wire, but screenshot.py converts
+# it to a lossless .png in memory (stdlib zlib/struct, no Pillow) and that
+# .png is the only image this writes - any extension given to -o/--out is
+# replaced with .png.
 #
 #   ./tools/screenshot.sh                  # auto-detected port, timestamped files
 #   ./tools/screenshot.sh -p /dev/ttyACM0
-#   ./tools/screenshot.sh -o mine.bmp      # writes mine.bmp, mine.png, mine.json
+#   ./tools/screenshot.sh -o mine.png      # writes mine.png, mine.json
 #
 # The board has no other channel to a host - see main/util/screenshot.h's own
 # top comment - so this rides the exact same serial connection monitor.sh and
@@ -59,7 +61,7 @@ fi
 
 mkdir -p "$OUT_DIR"
 if [ -z "$OUT" ]; then
-    OUT="$OUT_DIR/screenshot_$(date +%Y%m%d_%H%M%S).bmp"
+    OUT="$OUT_DIR/screenshot_$(date +%Y%m%d_%H%M%S).png"
 fi
 
 # pyserial lives in ESP-IDF's environment, so use that interpreter rather

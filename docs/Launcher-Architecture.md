@@ -35,7 +35,10 @@ launcher/
     │   └── icons.{h,c}         artwork no font provides   (host-tested)
     ├── ui/             microui integration, shared by the shell and apps
     │   ├── ui.{h,c}
+    │   ├── ui_pointer.{h,c}    input_t -> move/down/up events   (host-tested)
+    │   ├── ui_slider.h         geometry for an integer slider   (host-tested)
     │   ├── ui_style.h          how a control's frame looks (host-tested)
+    │   ├── ui_transform.h      the quarter-turn mapping     (host-tested)
     │   └── ui_launcher.c       the home screen
     ├── input/          the devices a finger reaches
     │   ├── touch.{h,c}         FT5x06 polling task
@@ -500,18 +503,106 @@ reset, the launcher opting in would leave the sand app's overlay buttons
 bezelled too.
 
 One detail worth spelling out, because it is the opposite of what a desktop
-toolkit would do: **the pressed look is on hover, not on focus.** On a mouse,
-hover means "the pointer is near" and focus means "the button is held"; on a
-touchscreen the pointer does not exist until a finger is already on the glass,
-so hover *is* contact. A tap renders `MU_COLOR_BUTTONHOVER` for every frame the
-finger is down and `MU_COLOR_BUTTONFOCUS` for the single frame the press lands
-on, so sinking the bezel only on focus would flash it for one frame out of a
-press lasting dozens.
+toolkit would do: **the pressed look is on hover, not only on focus.** On a
+mouse, hover means "the pointer is near" and focus means "the button is
+held"; on a touchscreen the pointer does not exist until a finger is already
+on the glass, so hover *is* contact.
+
+The pointer holds `DOWN` for the whole press instead of releasing the same
+frame it presses — `ui_pointer.c` is where that policy lives — so
+`MU_COLOR_BUTTONFOCUS` now covers most of a tap on its own —
+microui keeps a control focused for as long as `mouse_down` stays true,
+`MU_OPT_HOLDFOCUS` or not. What still needs hover is the one synthesized
+frame *before* `DOWN` lands (see `feed_input()`'s comment): the pointer is
+on the control but focus has not been taken yet, so a style keyed only on
+focus would render that one frame flat. Keying the bezel off hover as well
+as focus is what keeps it sinking smoothly through the whole gesture instead
+of flashing in on the second frame.
 
 The geometry and the shading are pure functions in the header, the same split
 `icons.h` makes, so `test/suites/suite_ui_style.c` checks the shape on a host
 without linking `gfx.c` or even `microui.c` — nobody can eyeball five
 overlapping rectangles reliably.
+
+`ui_style.h` has a flat sibling to the bezel above: `ui_panel_spans()` is a
+face plus a plain border, for a captioned section frame that groups controls
+without inviting a press — a panel outlines a whole screen area, a bezel
+outlines one tap target, and the two would fight if a panel were lit and
+shadowed the same way.
+
+#### Text at more than one size
+
+Every `mu_Font` used to mean the same thing: `gfx_font_ui()` at the
+compile-time `GFX_GLYPH_SCALE`, no exceptions. A screen that puts a small
+caption next to a much larger value or heading needs two sizes on one
+canvas, and the obvious fix — a `ui_set_text_scale()` global read at render
+time — would be the same shape as `ui_set_text_style()` above and pay the
+same cost: a scale carried outside the command list changes what gets drawn
+without changing a single byte of it, so `hash_canvas()` cannot see the
+change and skips the repaint, leaving the old size on screen. A screen
+mixing two sizes sets the scale more than once a frame, which would mean
+calling `ui_invalidate()` every frame — permanently defeating the repaint
+skip on exactly the kind of mostly-static panel it exists for.
+
+`ui_set_font()` already gets this right, for the reason its own comment
+gives: a `mu_Font` is baked into every `mu_TextCommand`, so a font change is
+different bytes and the hash sees it unaided. `ui_set_font_scaled(font,
+scale)` carries the scale the same way rather than beside it — `mu_Font`
+points at an interned `{ font, scale }` pair, from a small fixed table in
+`ui.c`, instead of a bare `gfx_font_t`. The same pair always yields the same
+address, so a size change is a different pointer in the command list and
+the hash catches it unaided — no invalidate, no per-frame thrash, and the
+mechanism is the one the file already argues for rather than a second one
+beside it. `ui_set_font(f)` is exactly `ui_set_font_scaled(f,
+GFX_GLYPH_SCALE)`. `ui_measure_text(str)` answers what `str` would measure
+at whatever font and scale are currently set, so a caller right-aligning a
+value like `06 PX` against a caption on the same row does not have to
+re-derive the font role and scale it already set.
+
+#### App-owned artwork, and how it reaches the command list
+
+`gfx/icons.h` used to hand-draw exactly one glyph — the check mark
+microui's own checkbox needs. The run-length/scale/centre geometry behind
+it was never specific to that shape, so `icon_bitmap_blocks()` generalises
+it into a function taking any 16×16 bitmap in the same one-row-per-scanline
+format; `icon_check_blocks()` is now a thin wrapper over it, kept as its own
+entry point so `ICON_CHECK_MAX_BLOCKS` still promises a bound specific to
+that one glyph's own run count. It stays pure geometry, the same split
+`ui_style.h`'s spans use: it returns WHERE the blocks go, not how they
+reach a framebuffer, so it links and is tested on a host with no `gfx.c` or
+`microui.c` involved.
+
+`ui_draw_bitmap(ctx, rect, bitmap, color)` (`ui.c`) is what turns that
+geometry into command-list entries — one `mu_draw_rect()` per run. That is
+the whole reason it exists, rather than an app calling `gfx_fill_rect()`
+straight into the framebuffer for its own icon: artwork painted outside the
+command list is invisible to the repaint hash and survives as a stale smear
+once the control underneath it changes — the same "a style emits commands,
+not pixels" rule above, applied to an app's own artwork instead of a
+control's frame. It also means an app icon needs no new `MU_ICON_*` id and
+no patch to `components/microui/`.
+
+The icons themselves are never the shell's to own. `gfx/icons.h` stays the
+one hand-drawn glyph microui's own checkbox needs — see its own header
+comment for why `MU_ICON_CLOSE`/`COLLAPSED`/`EXPANDED` stay unbuilt, which
+is unrelated to this and still true. An app that wants a funnel, a cross, a
+starburst draws its own bitmaps in its own folder (e.g.
+`apps/sand/sand_icons.h`) and reaches `ui_draw_bitmap()` to put them in its
+own command list. Deleting the app folder deletes its icons with it, per
+"an app is a folder" above.
+
+`ui_slider_int()` (`ui.c`) is built the same way, one layer down:
+`ui/ui_slider.h` is pure geometry — the track, the filled portion and the
+knob rect for a value, and the inverse, a touch x back to a value,
+quantized and clamped — and `ui_slider_int()` turns that into
+`mu_draw_rect()` calls via `ui_panel_spans()`/`ui_bezel_spans()`. Integer
+throughout, deliberately: the design calls for a `06 PX` control, and
+`mu_slider_ex()`'s float value and `"%.2f"` thumb are the wrong shape for
+that. A slider is also the one control that actually needs the pointer to
+hold `DOWN` for the whole press rather than release on the same frame it
+pressed — see "the pressed look is on hover" above for that policy and why
+it lives in `ui_pointer.c`; without it, a drag can only jump to where a
+finger first landed and then goes deaf to everything after.
 
 #### Immediate mode versus dirty bands
 
@@ -562,6 +653,56 @@ Measured: an idle launcher went from 66.7 fps to the 1 kHz tick ceiling,
 because it now paints and sends nothing at all. `test/suites/suite_ui.c` covers
 the independence claim directly - it builds two windows, changes one, and
 asserts the other's bands stay clean.
+
+#### Dimming what is behind a panel (the scrim)
+
+A panel over a paused app reads as pasted on unless whatever is behind it is
+knocked back. The pattern, used by both of the sand app's screens:
+
+1. the panel keeps `UI_NO_BACKGROUND`, so the frozen app stays visible in
+   the gaps rather than being cleared away;
+2. once, when the panel opens, dim the whole canvas —
+   `gfx_fill_rect_blend(0, 0, GFX_WIDTH, GFX_HEIGHT, black, alpha)`;
+3. draw the panel over it, opaque.
+
+No new primitive: `gfx_fill_rect_blend()` already mixes into the destination.
+
+**The rule that makes it work: apply it exactly once per repaint of what is
+underneath, never per frame.** A blend fill *reads* the pixel it writes, and
+the app behind a panel is frozen — nothing repaints it while the panel is up
+— so a second application lands on the first one's own output. Repeat it per
+frame and the backdrop walks toward black while the user sits there.
+`suite_gfx_color.c` pins the arithmetic so the rule cannot quietly rot into a
+comment nobody believes. Cost says the same thing independently: this reads
+every pixel on the panel, which `gfx.h` warns is not what a blend fill is
+for. Once is free; every frame is neither correct nor affordable.
+
+In practice the backdrop is genuinely fresh at exactly two moments — the
+frame the panel opens, and a turn taken while it is open (which repaints the
+app underneath). See `dim_backdrop()` in `apps/sand/app_sand.c`.
+
+**The general form, when once is not enough.** "Once" is a global sequencing
+rule, and those rot. The local version: *whoever repaints a region restores
+the app underneath it first, then re-scrims that region, then draws.* The
+app's own partial-repaint machinery is what makes this affordable — the sand
+app marks the rows it needs and calls `draw_dirty_rows()` rather than
+repainting the grid — so the cost is one panel's worth of rows, not a
+canvas, and only while someone is actually interacting.
+
+That form is strictly more robust and is the **precondition for genuinely
+translucent panels**: a panel you can see through has to be composited over
+fresh pixels every repaint, so it cannot use the once-only shortcut at all.
+The simple version above is the special case that suffices while panels are
+opaque and do not move — nothing ever reveals backdrop that was not scrimmed,
+and nothing repaints backdrop that was. Switch to the general form when
+either of those stops being true.
+
+**Why this one is allowed to paint pixels**, when `ui_style.h` insists a
+style must emit commands: everything in the command list is re-emitted on
+every repaint, and re-emitting is precisely what a scrim must never do. It
+is not part of the picture the hash describes; it is a one-off change to
+what the picture is drawn *on top of*. A scrim expressed as a command would
+be a scrim applied every repaint, which is the bug above.
 
 ### Text and fonts
 
@@ -681,7 +822,7 @@ other app, rather than reusing it for free.
 **The real cost, for balance:** microui encodes a mouse's interaction model
 (point, then click), and a touchscreen cannot produce that sequence - the
 pointer does not exist until a finger is already down. Every control needs a
-synthesised hover frame to compensate, costing one frame (~24 ms) of input
+synthesised hover frames to compensate, costing two frames (~48 ms) of input
 latency on every tap. That friction is specific to picking an immediate-mode,
 mouse-shaped toolkit; a touch-native widget system would not have it. It was
 worth paying given the three constraints above, but it is a real trade-off,
@@ -707,18 +848,38 @@ values in trailing comments. They are edited in the header rather than
 overridden from our side because they determine the struct's layout, and two
 translation units disagreeing would corrupt it silently.
 
-**Touch needs a synthesised hover frame.** `mu_update_control()` only
+**Touch needs two synthesised hover frames.** `mu_update_control()` only
 establishes hover on a frame where the button is *not* held, and a control only
 submits once focused — the mouse sequence "point, then click". A touchscreen
 never produces the first half, because the pointer does not exist until a finger
 is already down.
 
-So `feed_input()` delivers a press across two frames: position only, then the
-button-down. One frame of latency, ~24 ms, and taps register every time.
+Two frames, not one, and the second is the one that is easy to miss:
+`mu_mouse_over()` needs `in_hover_root()`, and `mu_begin()` copies `hover_root`
+from the *previous* frame's `next_hover_root`. So the first frame at a new
+position only tells microui which window the finger is in; the second is the
+first that can mark a control hovered; the press follows. `ui_pointer.c` owns
+that policy (`UI_POINTER_HOVER_FRAMES`) and `suite_ui_pointer_microui.c` pins
+it against real microui.
+
+Shipping a press one frame early cost exactly what this passage predicts: the
+pointer held `mouse_down` from the press frame onward, hover was therefore
+never established, nothing took focus, and **every button in the shell drew
+its pressed frame while returning 0** — no app reachable from the launcher.
+The event-list unit tests stayed green throughout, which is why a suite that
+drives real microui now exists.
 
 **This applies to every microui control**, not just buttons — anything reacting
-to a press goes through `mu_update_control()`. Adding a slider or checkbox
-requires nothing new, but reworking input handling means preserving this.
+to a press goes through `mu_update_control()`. Adding a checkbox requires
+nothing new, but reworking input handling means preserving this.
+
+A slider needed one more thing the hover synthesis alone does not give:
+`DOWN` has to stay held for the whole press rather than release on the same
+frame it presses, or a drag can only jump to where a finger first landed and
+then goes deaf to the rest of the gesture. `ui/ui_pointer.c` is where that
+policy actually lives — see "the pressed look is on hover" under "Drawing a
+UI" above — and `ui_slider_int()` is the control that could not exist
+without it.
 
 ---
 
