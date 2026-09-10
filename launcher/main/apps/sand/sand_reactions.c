@@ -92,6 +92,13 @@
 static uint8_t  present_pair_bits = 0xFFu;
 static uint16_t seen_materials;
 
+/* Can an acid-rain quad exist at all? It needs all four cells to be steam or
+ * gas with exactly two steam - so two of each - and a board missing either
+ * material can never form one, wherever the cells happen to sit.
+ *
+ * True until the first pass has looked, since it gates work being skipped. */
+static bool     acid_rain_possible = true;
+
 /* The densest non-liquid anywhere on the board, from the same mask. A cell at
  * or above it has no possible smotherer, because neighbor_smothers() asks only
  * whether the NEIGHBOUR is a denser non-liquid - so the answer is a property of
@@ -1531,6 +1538,18 @@ step_one_condensing_cell(sand_t* s, int x, int y, int w, int h, const reaction_t
  * Acid/Water. Caller: FOUND_DISSOLVER, FOUND_MOISTURE, FOUND_CONDENSING. */
 static inline bool
 step_one_acid_rain_cell(sand_t* s, int x, int y, int w, int h) {
+    /* SKIPPED WHOLE when the board cannot hold a quad. Four cell loads and
+     * four material decodes per gas or steam cell otherwise, every step, to
+     * rediscover that the same thing is missing.
+     *
+     * RNG-NEUTRAL: the roll sits below the quad tests, so a board that cannot
+     * form one draws nothing and the stream is untouched.
+     *
+     * Measured: a screen of smoke and steam reaches this 204247 times a run
+     * and forms a quad NEVER - it holds no gas at all. */
+    if (!acid_rain_possible) {
+        return false;
+    }
     if (x + 1 >= w || y + 1 >= h) {
         return false;
     }
@@ -1872,6 +1891,8 @@ sand_step_reactions(sand_t* s) {
      * cell. */
     present_pair_bits = 0;
     max_smothering_density = 0;
+    acid_rain_possible = (s->may_have_materials & (1u << MAT_STEAM)) != 0
+                      && (s->may_have_materials & (1u << MAT_GAS)) != 0;
     for (int m = 0; m < MATERIAL_MAX; m++) {
         if ((s->may_have_materials & (1u << m)) == 0) {
             continue;
