@@ -759,6 +759,12 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_CODES] = {
 /* dries = 1: far under dirt's 2 - a powder keg holds water a long time
  * once soaked. */
 
+/* soaked_chance = 16: how fast a FULLY WET keg turns, which is a separate
+ * question from how long it takes to get wet (soaks) and was tuned separately.
+ * Measured, pre-saturated powder under water, steps until half of it is gone:
+ * 1542 at 8, 835 here. The other lever, SOAKED_CONVERT_PERIOD, is a mask and
+ * so only moves in factors of two - it could not express this. */
+
 #define GUNPOWDER_REACTION                                                                                             \
     {                                                                                                                  \
         .flammability = 200,                                                                                           \
@@ -776,7 +782,7 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_CODES] = {
         .moist_max = GUNPOWDER_MOIST_MAX,                                                                              \
         .dries = 1,                                                                                                    \
         .soaked_to = MAT_OIL,                                                                                          \
-        .soaked_chance = 8,                                                                                            \
+        .soaked_chance = 16,                                                                                            \
         .residue = 0,                                                                                                  \
     }
     [8] = GUNPOWDER_REACTION,
