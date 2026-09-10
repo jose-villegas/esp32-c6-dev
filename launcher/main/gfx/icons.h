@@ -55,10 +55,10 @@ typedef struct {
     int x, y, w, h;
 } icon_rect_t;
 
-/* Every hand-drawn icon in this module, and an app's own (e.g.
- * sand_icons.h), shares this format: one row of bits per scanline, MSB is
- * column 0. Not a property of the check mark specifically - see
- * icon_bitmap_blocks() below, which works on any bitmap in this shape. */
+/* Every hand-drawn icon in this module shares this format: one row of bits
+ * per scanline, MSB is column 0. Not a property of the check mark
+ * specifically - see icon_bitmap_blocks() below, which works on any bitmap
+ * in this shape. */
 #define ICON_BITMAP_SIZE 16
 
 /* icon_bitmap_blocks() never returns more than this many blocks for ANY
