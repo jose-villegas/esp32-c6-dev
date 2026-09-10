@@ -474,7 +474,7 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
 
             int give, cost, recv_m;
             if (nr->soaks_to != 0) {
-                give = (int)((unsigned)held >> 1);
+                give = held / 2;
                 if (give == 0) {
                     continue; /* not enough to bind a grain */
                 }
@@ -551,11 +551,11 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
             const cell_t below = s->cells[nat];
             const reaction_t* br = reaction_of(below);
 
-            int give = (int)(((unsigned)held + 1u) >> 1);
+            int give = (held + 1) / 2;
             int cost = give;
             int recv_m;
             if (br->soaks_to != 0) {
-                give = (int)((unsigned)held >> 1);
+                give = held / 2;
                 if (give == 0) {
                     return true; /* too little to bind a grain */
                 }
