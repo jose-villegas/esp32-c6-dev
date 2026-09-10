@@ -1204,17 +1204,6 @@ static void draw_mode_label(int gx, int gy)
 #define PALETTE_BADGE_BORDER_COLOR  0x141414
 #define PALETTE_BADGE_FILL_COLOR    0xF2F2F2
 
-/* The brush screen's palette - dark navy panels, a gold accent for the
- * selected mode segment. Unlike the palette above, none of these derive
- * from a material's own colour: this screen's chrome, not its content. */
-#define BRUSH_PANEL_FACE_COLOR         0x131C2E
-#define BRUSH_PANEL_BORDER_COLOR       0xE8ECF4
-#define BRUSH_SEG_SELECTED_COLOR       0xE0A63C
-#define BRUSH_SEG_UNSELECTED_COLOR     0x1B2740
-#define BRUSH_CAPTION_COLOR            0x8FA3C0
-#define BRUSH_TEXT_COLOR               0xF2F6FF
-#define BRUSH_SEG_SELECTED_INK_COLOR   0x2A1A06
-
 static mu_Color mu_color_hex(uint32_t rgb)
 {
     return mu_color((int)((rgb >> 16) & 0xFF), (int)((rgb >> 8) & 0xFF),
