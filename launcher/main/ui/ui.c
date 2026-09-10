@@ -462,6 +462,28 @@ void ui_draw_bitmap(mu_Context *c, mu_Rect r, const uint16_t *bitmap, mu_Color c
     }
 }
 
+/* icon_walk_blocks()'s callback context: everything one emitted run needs to
+ * become a mu_draw_rect() call, and nothing else - kept off the stack as an
+ * array only, never grown into a buffer. */
+typedef struct {
+    mu_Context *c;
+    mu_Rect     r;
+    mu_Color    color;
+} ui_draw_icon_ctx_t;
+
+static void ui_draw_icon_emit(void *ctx, int x, int y, int w, int h)
+{
+    const ui_draw_icon_ctx_t *dc = ctx;
+    mu_draw_rect(dc->c, mu_rect(dc->r.x + x, dc->r.y + y, w, h), dc->color);
+}
+
+void ui_draw_icon(mu_Context *c, mu_Rect r, const icon_t *icon, const uint8_t *rows, mu_Color color)
+{
+    ui_draw_icon_ctx_t dc = { .c = c, .r = r, .color = color };
+    icon_walk_blocks(rows + icon->offset, icon->w, icon->h, icon->stride,
+                     r.w, r.h, ui_draw_icon_emit, &dc);
+}
+
 /* See ui.h. `value`'s own address (not what it points to, same idiom
  * mu_slider_ex() uses) gives each call site a stable id with no string
  * needed. MU_OPT_HOLDFOCUS keeps a drag updating once it leaves the knob. */

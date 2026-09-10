@@ -21,6 +21,8 @@
         { "name": "arrow_left", "source": "svg", "file": "arrow-bar-left.svg",
           "upstream": "arrow-bar-left", "commit": "8275e0af7c16aa40c54ea2b90b7af83b1fe4eb4c" },
         { "name": "checkbox_on", "source": "svg", "file": "checkbox-on.svg",
-          "upstream": "checkbox-on", "commit": "8275e0af7c16aa40c54ea2b90b7af83b1fe4eb4c" }
+          "upstream": "checkbox-on", "commit": "8275e0af7c16aa40c54ea2b90b7af83b1fe4eb4c" },
+        { "name": "home", "source": "svg", "file": "home.svg",
+          "upstream": "home", "commit": "8275e0af7c16aa40c54ea2b90b7af83b1fe4eb4c" }
     ]
 }
