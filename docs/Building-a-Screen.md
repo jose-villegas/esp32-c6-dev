@@ -138,6 +138,12 @@ fifth icon; the brush screen already sits at about two thirds.
   the run for `error:` to be sure you saw an assertion.
 - **Vary the fixture's arbitrary starting condition** and confirm the
   assertion still catches what it claims.
+- **A UI suite's file-scope objects are firmware `.bss`.** Diagnostics
+  builds link every suite, and UI fixtures are exactly the ones that get
+  large - a microui context alone is 10,744 bytes, more than the
+  framebuffer-plus-grid budget has to spare. Allocate them in
+  `fixture()`, and run `tools/build_diag_check.sh`: it is the only local
+  check that sees this at all.
 
 ## Checklist before flashing
 
