@@ -161,6 +161,17 @@ Comment ({length} characters):
 {text}
 """
 
+CITED_RETRY = """You answered DELETE, but that comment points at where its \
+reasoning actually lives: {cites}. Deleting it throws away the pointer as \
+well as the duplication, and nothing in the code can recover it.
+
+Reply with the cross-reference alone - a sentence or so naming what it \
+points at, and nothing that restates what is at the destination.
+
+{text}
+"""
+
+
 RETRY = """That was {got} characters, still over {limit}. Rewrite it shorter. \
 Reply with nothing but the prose.
 
@@ -353,7 +364,10 @@ def drops_attribution(old, new):
 # correctly-wrapped citation resolve, and lets a genuinely truncated one -
 # nothing valid stitched onto the far side of the hyphen - fail to
 # resolve, which is the defect this exists to catch.
-WRAP_JOIN = re.compile(r"(\w+_)-\s+(\w+)")
+# The optional `*` absorbs a C comment gutter, so this is correct whether it
+# is handed extracted prose or raw source - a silent no-op on the latter
+# would drop exactly the citations a wrap was hiding.
+WRAP_JOIN = re.compile(r"(\w+_)-\s+\*?\s*(\w+)")
 
 
 def rejoin_wraps(text):
@@ -407,6 +421,12 @@ def source_index():
                             continue
                 _source_ids, _source_files = ids, files
     return _source_ids, _source_files
+
+
+def cited_tokens(text):
+    """Every cross-reference a comment carries - the thing a DELETE would
+    throw away along with the duplication it was right to cut."""
+    return sorted(set(CITATION.findall(rejoin_wraps(text))))
 
 
 def unresolved_citations(prose):
@@ -547,6 +567,23 @@ def trim_file(path, opts, log, results):
         prose = ask(model, PROMPT.format(limit=opts["limit"],
                     length=com.length, text=original), log)
         wants_delete, prose = split_delete(prose)
+
+        # A DELETE used to be taken at its word - the one answer that
+        # skipped response_problems() entirely, and the one the model got
+        # wrong most often: it deleted comments whose whole surviving value
+        # was the cross-reference they carried. Ask once more, naming what
+        # the comment points at; a second DELETE leaves it alone rather than
+        # dropping a pointer the code cannot recover.
+        cites = cited_tokens(original) if wants_delete else []
+        if com.own_line and wants_delete and cites:
+            prose = ask(model, CITED_RETRY.format(
+                cites=", ".join(cites[:4]), text=original), log)
+            wants_delete, prose = split_delete(prose)
+            if wants_delete or not prose:
+                results["kept"].append({
+                    "path": path, "line": com.line, "length": com.length,
+                    "reason": "deletes a cross-reference"})
+                continue
 
         if com.own_line and wants_delete:
             row = {"path": path, "line": com.line, "before": com.length,
