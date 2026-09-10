@@ -209,6 +209,39 @@ Twenty steps with a gate off is only safe when the disabled work cannot feed
 the passes that follow it in the same step — check `sand_step()`'s pass order
 before relying on it.
 
+### The harness that does the five steps
+
+`suite_sand_split.h` — permanent, unlike the gates it drives, because
+`strip-pass-gates.py` deliberately does not list it. A round writes its gates
+and one row; the harness is already there.
+
+```c
+static const split_scene_t wet = {
+    .name = "wet earth", .setup = split_enable_soak,
+    .build = build_wet_earth_scene, .seed = 53u,
+    .sgx = 0, .sgy = 1000, .gx = 0, .gy = 1000, .settle = 60,
+};
+static const char *const names[] = { "soak_dry" };
+static volatile bool *const gates[] = { &sand_step_gate_soak_dry };
+split_report(&wet, names, gates, 1, 3);
+```
+
+**A scene is its setup plus its builder plus its mid-settle pours.** Leave any
+of the three out and the number is of a different scene. The first use of this
+harness measured a soak stage at **1 µs** because it called
+`build_wet_earth_scene()` but not `sand_set_soak()`, which that row does
+*before* the builder — so nothing soaked and the gate had nothing to skip. With
+the setup restored the same gate read **31,268 µs, 32%**.
+
+**Check the whole-step figure against the row it mirrors before reading any
+phase.** The broken fixture came in 47% under its budget row; the corrected one
+lands within 3%. That one comparison catches the entire class.
+
+**A negative phase means the gates do not partition.** Switching work off made
+the step cost *more*, so something else absorbed it — gating the fall inside
+`move_liquid_grain` left its mass to the slides and read −18%. Gates partition
+between passes, not inside a function sharing a budget across its branches.
+
 ### Four rules, each learned by getting it wrong
 
 **Only within-capture comparisons are trustworthy.** Two builds of *identical*

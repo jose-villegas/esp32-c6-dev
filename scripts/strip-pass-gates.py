@@ -34,10 +34,15 @@ import sys
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 
+# suite_sand_split.h is DELIBERATELY ABSENT: the decomposition harness is
+# permanent tooling that survives a strip, unlike the gates it drives. Adding
+# it here would delete it at the end of every round. It guards itself on the
+# same option, so a stripped tree compiles it away without this script's help.
 SOURCES = [
     "launcher/main/apps/sand/sand.c",
     "launcher/main/apps/sand/sand_gas.c",
     "launcher/main/apps/sand/sand_liquid.c",
+    "launcher/main/apps/sand/sand_liquid_move.h",
     "launcher/main/apps/sand/sand_reactions.c",
     "launcher/main/apps/sand/sand_priv.h",
     "launcher/main/apps/sand/suite_sand_perf.c",

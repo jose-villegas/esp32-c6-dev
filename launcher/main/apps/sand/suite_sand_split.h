@@ -131,16 +131,13 @@ static void split_report(const split_scene_t *sc, const char *const *names,
     }
 
     /* Prints, never asserts. A residual near zero means the gates PARTITION
-     * the step; a large one means they do not, and that is information about
-     * the gates rather than a failure.
+     * the step; a large one means they do not.
      *
-     * A NEGATIVE PHASE IS THE SAME WARNING, LOUDER: switching work OFF made
-     * the step cost MORE, so something else absorbed it. Measured on this
-     * harness's first run - gating the fall inside move_liquid_grain left its
-     * mass to the slides, which then did more, and it read -18%. A gate
-     * partitions only when the work it disables cannot be picked up elsewhere
-     * in the same step: true between passes, false inside one function
-     * sharing a budget across its branches. */
+     * A NEGATIVE PHASE SAYS IT LOUDER: switching work off made the step cost
+     * MORE, so something else absorbed it. Gating the fall inside
+     * move_liquid_grain left its mass to the slides and read -18%. Gates
+     * partition between passes, not inside one function sharing a budget
+     * across its branches. */
     ESP_LOGI("device_tests", "split %s: residual %lld us of %lld",
              sc->name, (long long)(whole - accounted), (long long)whole);
 }
