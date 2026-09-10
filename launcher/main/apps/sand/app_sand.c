@@ -1440,8 +1440,11 @@ static void draw_brush_text(mu_Context *ctx, mu_Rect r, const char *str,
 /* Modeled on draw_palette() above - same "caller hit-tests via a real
  * control, sand_ui.c decides what the hit means" split, sand_ui_mode_
  * clicked() standing in for sand_ui_tile_clicked(). Unlike the palette,
- * this screen is a full panel rather than an overlay, hence COL_BACKGROUND
- * rather than UI_NO_BACKGROUND at ui_end(). */
+ * this one lays three panels over the paused simulation rather than a grid
+ * of tiles - but it keeps the palette's UI_NO_BACKGROUND for the same
+ * reason, so the frozen sand still shows through everything the panels do
+ * not cover and the screen reads as sitting ON the sandbox rather than
+ * replacing it. */
 static void draw_brush_screen(const input_t *input)
 {
     mu_Context *ctx = ui_context();
@@ -1573,7 +1576,7 @@ static void draw_brush_screen(const input_t *input)
         mu_end_window(ctx);
     }
 
-    ui_end(COL_BACKGROUND);
+    ui_end(UI_NO_BACKGROUND);
 }
 
 /*---------------------------------------------------------------------------
