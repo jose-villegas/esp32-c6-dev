@@ -1274,14 +1274,25 @@ static void test_water_wets_gunpowder_and_it_dries_out_slowly(void)
     sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
     sand_set(&s, 2, H / 2, STONE);
     sand_set(&s, 4, H / 2, STONE);
-    sand_set(&s, 3, H / 2 + 1, STONE); /* a floor: gunpowder is a powder and
-                                        * would otherwise fall out from under
-                                        * the water before it could soak */
+    /* A CLOSED WELL, not a ledge: floor under the powder AND under both
+     * diagonals, walls beside the powder AND beside the water. A keg soaks at
+     * 2 in 256, a mean of ~128 steps; over that long a loose powder slides
+     * down an open diagonal and a loose cell of water spreads off the side,
+     * and the cell under test is simply gone. Both only ever stayed put here
+     * because the old rate soaked them together within a few steps. */
+    sand_set(&s, 2, H / 2 + 1, STONE);
+    sand_set(&s, 3, H / 2 + 1, STONE);
+    sand_set(&s, 4, H / 2 + 1, STONE);
+    sand_set(&s, 2, H / 2 - 1, STONE);
+    sand_set(&s, 4, H / 2 - 1, STONE);
     sand_set(&s, 3, H / 2, GUNPOWDER_CELL(0));
     sand_set(&s, 3, H / 2 - 1, WATER);
 
+    /* Breaks the moment it wets, so this only has to be generous - and it
+     * has to be, because a keg soaks deliberately slowly (reaction_t.soaks
+     * is 2). One water neighbour at 2 in 256 is a mean of ~128 steps. */
     bool wetted = false;
-    for (int i = 0; i < 400 && !wetted; i++) {
+    for (int i = 0; i < 8000 && !wetted; i++) {
         sand_step(&s, 0, 1000, 0);
         wetted = moisture_of(sand_at(&s, 3, H / 2), gp_r) != 0;
     }
@@ -1407,6 +1418,12 @@ static void test_soaked_gunpowder_can_turn_into_oil_and_dry_never_does(void)
     const reaction_t *r = reaction_of(GUNPOWDER_BASE);
     fixture();
     sand_clear(&s);
+    /* Rolls every step, because this test is about the soaked_to EXIT, not
+     * about how long the shipped tuning makes it take. Left at the shipped
+     * period the roll loses to drying (1 in 256) by a factor of 32 and this
+     * branch is simply never reached - the test would pass on its guard and
+     * cover nothing. */
+    sand_set_soak_convert(&s, 1);
     for (int x = 0; x < W; x++) {
         sand_set(&s, x, H - 1, STONE);
         sand_set(&s, x, H - 2, with_moisture(GUNPOWDER_CELL(0), r->moist_max, r));

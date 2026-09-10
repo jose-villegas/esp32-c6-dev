@@ -163,6 +163,7 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->scatter      = 0;
     s->decay        = 0;
     s->evaporates   = 0;    /* see sand_set_evaporates() */
+    s->soak_convert = SAND_SOAK_CONVERT_PER_MATERIAL;
     s->soak         = 0;    /* nothing soaks unless asked - see
                              * sand_set_soak() */
     s->mobility     = 255;  /* full speed by default - see sand_set_mobility() */
@@ -579,6 +580,11 @@ void sand_set_soak(sand_t *s, int chance)
     } else {
         s->soak = chance > 255 ? 255 : chance;
     }
+}
+
+void sand_set_soak_convert(sand_t *s, int period)
+{
+    s->soak_convert = period > 0 ? period : SAND_SOAK_CONVERT_PER_MATERIAL;
 }
 
 void sand_set_decay(sand_t *s, int chance)

@@ -1193,7 +1193,10 @@ static void test_a_material_created_during_the_pass_stays_in_the_mask(void)
     }
     /* Saturated on arrival, so the soaked_to roll is live immediately and no
      * water is needed - water would put a second material on the board and
-     * blur what the mask is being asked about. */
+     * blur what the mask is being asked about. Rolling every step is what
+     * keeps that true: at the shipped period drying wins long before the
+     * conversion fires, and only water could hold the cell saturated. */
+    sand_set_soak_convert(&s, 1);
     sand_set(&s, 4, H - 2, with_moisture(GUNPOWDER_CELL(0), r->moist_max, r));
 
     bool turned = false;
