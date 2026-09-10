@@ -2844,6 +2844,23 @@ static void test_acid_bubbles_still_fire_once_the_block_is_asleep(void)
         "at all)");
 }
 
+/* The one assertion in this file about the BINARY rather than about time.
+ *
+ * sand_step()'s aligned(32) is attached by adjacency: define anything
+ * between the attribute and the declaration and it silently rebinds. That
+ * happened for nineteen commits and cost settled sand 11.6% (esp32c6-lgc),
+ * invisible to every diff, test and fingerprint - only objdump saw it.
+ * Portable on purpose: the pin matters on device, but what breaks is source. */
+static void test_sand_step_is_pinned_to_a_cache_line(void)
+{
+    const uintptr_t addr = (uintptr_t)&sand_step;
+
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(0u, (unsigned)(addr & 31u),
+        "sand_step() must start on a 32-byte boundary - if this fails, its "
+        "__attribute__((aligned(32))) has come unstuck from the declaration, "
+        "most likely because something was defined between the two");
+}
+
 /* --- suite -------------------------------------------------------------- */
 
 #ifdef DEVICE_BUILD
@@ -2888,6 +2905,7 @@ static void test_the_sand_app_can_still_allocate_everything_it_needs(void)
 
 void run_sand_perf_suite(void)
 {
+    RUN_TEST(test_sand_step_is_pinned_to_a_cache_line);
     RUN_TEST(test_acid_bubbles_do_not_favour_one_wall);
     RUN_TEST(test_acid_bubbles_still_fire_once_the_block_is_asleep);
 

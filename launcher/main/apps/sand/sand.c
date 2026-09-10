@@ -1076,16 +1076,11 @@ static void build_xflow(xflow_t *f, int gx, int gy)
  * sand_step_gas() already use. */
 
 
-/* Pinned to a cache-line boundary so this function's placement is not a
- * coin flip of whatever unrelated code sits before it: a host bisect found
- * sand_step()'s compiled bytes IDENTICAL across commits that never touched
- * this body, yet performance still swung between two bands in lock-step
- * with the function's own address alignment. 32, not 64: 32 bytes is this
- * chip's actual i-cache line, and 64 does not link here - ld refuses the
- * section overlap it causes with ESP-IDF's linker script. */
-__attribute__((aligned(32)))
 /* Defined here, once, rather than per translation unit - see reaction_dirs'
- * comment in sand_priv.h for what that is worth. */
+ * comment in sand_priv.h for what that is worth. Eight-byte alignment so all
+ * eight land inside one 32-byte line rather than straddling two, which is the
+ * whole point of having shrunk it. */
+__attribute__((aligned(8)))
 const int8_t reaction_dirs[4][2] = {
     {0, -1},
     {0, 1},
@@ -1093,6 +1088,15 @@ const int8_t reaction_dirs[4][2] = {
     {1, 0},
 };
 
+/* Pinned to a cache line so placement is not a coin flip of whatever sits
+ * before it: its compiled bytes stayed IDENTICAL across commits that never
+ * touched it while its timing swung between bands with its address. 64 does
+ * not link - ld refuses the section overlap against ESP-IDF's script.
+ *
+ * NOTHING MAY SIT BETWEEN THIS AND THE DECLARATION: a definition slipped in
+ * here once rebound the attribute to it, silently unpinning the function.
+ * test_sand_step_is_pinned_to_a_cache_line guards that. */
+__attribute__((aligned(32)))
 void sand_step(sand_t *s, int gx, int gy, int jostle)
 {
     /* Emitters act first per step, before gravity, mimicking
