@@ -948,6 +948,7 @@ static int snow_left_over_soil_at(uint8_t moisture)
 }
 
 
+
 /* COLD REACHES THROUGH THE MEDIUM, not just into the cell it touches.
  *
  * A snowbank on glass used to chill three rows and stop, identical at 250
@@ -977,25 +978,39 @@ static void test_cold_conducts_deep_into_a_slab(void)
         sand_step(&g, 0, 1000, 0);
     }
 
-    int deepest = slab_top - 1;
+    int deepest = slab_top - 1, shocked = 0;
     for (int y = slab_top; y < H2; y++) {
         for (int x = 0; x < W2; x++) {
             const cell_t c = sand_at(&g, x, y);
-            if (CELL_MATERIAL(c) == MAT_GLASS
-                && CELL_VARIANT(c) < SAND_AMBIENT_HEAT && y > deepest) {
+            if (CELL_MATERIAL(c) != MAT_GLASS) {
+                continue;
+            }
+            if (CELL_VARIANT(c) < SAND_AMBIENT_HEAT && y > deepest) {
                 deepest = y;
+            }
+            if (CELL_VARIANT(c) <= SAND_SHOCK_COLD) {
+                shocked++;
             }
         }
     }
     const int depth = deepest - slab_top + 1;
     free(cells);
 
-    /* Measured 31 rows with the walk and 3 without it, so the threshold sits
-     * far from both - this fails loudly on a regression rather than drifting
-     * into one. */
+    /* Measured 31 rows with the walk and 3 without, so this sits far from
+     * both and fails loudly rather than drifting. */
     TEST_ASSERT_GREATER_THAN_INT_MESSAGE(20, depth,
         "cold must conduct well down a glass slab, not stop at the cells it "
         "touches - three rows is what it managed before it could travel");
+
+    /* AND ARRIVE COLD, not merely tinted. Reach alone was not what the
+     * report asked for: a slab where every chilled cell sits one level under
+     * ambient looks weak and, more to the point, never reaches
+     * SAND_SHOCK_COLD, so heat from below cannot shatter it. Measured 47% of
+     * the slab at or below that threshold, against 12% when the walk
+     * attenuated at every cell. */
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE((W2 * (H2 - slab_top)) / 4, shocked,
+        "a quarter of the slab at least must reach SAND_SHOCK_COLD, or the "
+        "cold is too shallow for heat below to break the glass");
 }
 
 /* WET SOIL MELTS SNOW, DRY SOIL DOES NOT.

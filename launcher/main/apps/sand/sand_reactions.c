@@ -657,6 +657,15 @@ step_one_warming_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
  * carries heat. */
 #define CONDUCT_REACH 32
 
+/* Cells the cold crosses per attenuation roll - THE ONE PLACE COLD BEATS HEAT,
+ * which is what bd esp32c6-tov asked for. The heat walk rolls at every cell,
+ * so at glass's conducts of 220 it clears CONDUCT_REACH about once in a
+ * hundred; once per run of four makes that nearer one in three.
+ *
+ * Measured, 40x50 glass slab under snow at equilibrium: cells below ambient
+ * 24% -> 64%, cells cold enough to shatter when warmed 12% -> 47%. */
+#define COLD_CARRY_RUN 4
+
 static bool
 step_one_cold_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
     for (int d = 0; d < 4; d++) {
@@ -733,6 +742,7 @@ step_one_cold_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
          * BURNING cell, so no cold source could enter it. This is its mirror,
          * at the same reach, attenuating on the conductor's own `conducts` so
          * nothing new needs tuning. Free where nothing conducts. */
+        bool spent_on_heat = false;
         if ((present_pair_bits & PAIR_CONDUCTS) != 0) {
             int cx = nx, cy = ny;
             for (int depth = 1; depth < CONDUCT_REACH; depth++) {
@@ -754,13 +764,27 @@ step_one_cold_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
                 if (ct == 0) {
                     continue;   /* already as cold as the scale goes */
                 }
-                if ((int)(rng_next(&s->rng) & 0xFF) >= cr->conducts) {
+                if ((depth % COLD_CARRY_RUN) == 0
+                    && (int)(rng_next(&s->rng) & 0xFF) >= cr->conducts) {
                     break;   /* the cold did not carry this far this step */
                 }
                 s->cells[cat] = CELL_MAKE(CELL_MATERIAL(cc), (uint8_t)(ct - 1));
                 mark_rows(s, cy, cy);
                 wake_block_and_neighbors(s, cx, cy);
+                if (ct > SAND_AMBIENT_HEAT) {
+                    spent_on_heat = true;
+                }
             }
+        }
+
+        /* THE SOURCE PAYS FOR THE DEPTH TOO. Cooling something HOT has always
+         * cost the chilling cell - that is what stops snow being a free and
+         * permanent heat sink, and there is a test named for it. Reaching
+         * deeper without paying deeper would have quietly voided that, and
+         * did: the walk cooled panes several cells in while the snow above
+         * was only ever billed for the one it touched. */
+        if (spent_on_heat && try_heat_transform(s, x, y, w, h)) {
+            return false;
         }
 
         if (temp > SAND_AMBIENT_HEAT && try_heat_transform(s, x, y, w, h)) {
