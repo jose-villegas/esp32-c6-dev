@@ -255,8 +255,9 @@ static inline bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
         return false;
     }
 
-    if (sink_through_lighter_liquid(s, row, prow, x, y, tx0, ty0, w, grain,
-                                    material_by_id((material_id_t)mat_id))) {
+    if (SAND_STEP_GATED(liq_sink,
+            sink_through_lighter_liquid(s, row, prow, x, y, tx0, ty0, w, grain,
+                                        material_by_id((material_id_t)mat_id)))) {
         return true;
     }
 
@@ -265,7 +266,7 @@ static inline bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
     const bool target_occupied = (unsigned)tx0 < (unsigned)w && prow != NULL
         && !CELL_IS_EMPTY(prow[tx0]);
 
-    const int down = give_mass(s, prow, tx0, w, mass, mat_id, y, ty0);
+    const int down = SAND_STEP_GATED(liq_down, 1) ? give_mass(s, prow, tx0, w, mass, mat_id, y, ty0) : 0;
     mass -= down;
     if (down > 0) {
         moved = true;
@@ -275,7 +276,7 @@ static inline bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
         }
     }
 
-    for (int d = 0; d < 2 && mass > 0; d++) {
+    for (int d = 0; d < 2 && mass > 0 && SAND_STEP_GATED(liq_slides, 1); d++) {
         const int *slide = (d == 0) ? slide_a : slide_b;
         uint8_t *srow = dest_row(s, y + slide[1]);
         const int tx = x + slide[0], ty = y + slide[1];
