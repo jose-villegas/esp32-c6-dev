@@ -156,12 +156,12 @@ static sand_ui_t ui = {
     .brushes     = brushes,
     .modes       = brush_mode,
     .brush_count = BRUSH_COUNT,
-    /* Defaults for the brush screen's per-mode radius (Phase 5b) - the
-     * same three values POUR/ERASE/DETONATE already used before each mode
-     * had its own remembered size. */
+    /* The three values PAINT/ERASE/DETONATE already used before each mode
+     * had a slider of its own, so the brush screen opens on what the app
+     * has always done rather than on a fresh set of numbers. */
     .radius_px   = { [SAND_MODE_PAINT]    = POUR_RADIUS_PX,
-                      [SAND_MODE_ERASE]    = ERASE_RADIUS_PX,
-                      [SAND_MODE_DETONATE] = DETONATE_RADIUS_PX },
+                     [SAND_MODE_ERASE]    = ERASE_RADIUS_PX,
+                     [SAND_MODE_DETONATE] = DETONATE_RADIUS_PX },
 };
 
 /* Duration mode label stays after significant change, balancing readability

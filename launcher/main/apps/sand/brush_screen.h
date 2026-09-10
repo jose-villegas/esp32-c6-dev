@@ -6,9 +6,9 @@
  * Same split palette.h uses, for the same reason: a canvas width and height
  * go in, rects come out, nothing here calls gfx or touches hardware, which is
  * what makes the geometry host-testable (see suite_brush_screen.c) instead of
- * only judgeable by eye on the device. Phase 5b (drawing) and the state
- * machine that decides what the segments and slider DO are separate work -
- * this module only says where things go.
+ * only judgeable by eye on the device. Drawing, and the state machine that
+ * decides what the segments and slider DO, live elsewhere (app_sand.c and
+ * sand_ui.c) - this module only says where things go.
  *
  * WHICH "BRUSH" THIS SCREEN'S SEGMENTS DRIVE
  *
