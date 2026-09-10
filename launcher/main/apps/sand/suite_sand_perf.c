@@ -2431,11 +2431,26 @@ static void test_present_cost_against_the_lava_stress_scene(void)
     build_lava_stress_scene(&real);
 
     int full_bands = 0, gathered = 0, partial_bands = 0;
+    int64_t sim_us = 0, mark_us = 0, present_us = 0;
     const int measured_steps = 20;
     const int64_t mean_us = run_present_against_scene(&real, big, REAL_W,
         REAL_H, dirty_rows, row_x0, row_x1, row_n, 0, 1000, 0, 30,
-        measured_steps, &full_bands, &gathered, &partial_bands, NULL, NULL,
-        NULL);
+        measured_steps, &full_bands, &gathered, &partial_bands, &sim_us, &mark_us,
+        &present_us);
+
+    /* THE WHOLE FRAME, not just the bus. bd esp32c6-e6c: every other
+     * row here times sand_step() with no drawing, and the present rows
+     * time the bus alone, so nothing measured the frame a user actually
+     * sees. The helper already separates these three - this row was
+     * discarding them. */
+    ESP_LOGI("device_tests", "frame time, lava stress: sim %lld us/frame",
+             (long long)sim_us);
+    ESP_LOGI("device_tests", "frame time, lava stress: mark %lld us/frame",
+             (long long)mark_us);
+    ESP_LOGI("device_tests", "frame time, lava stress: present %lld us/frame",
+             (long long)present_us);
+    ESP_LOGI("device_tests", "frame time, lava stress: total %lld us/frame",
+             (long long)(sim_us + mark_us + present_us));
 
     ESP_LOGI("device_tests", "present cost, lava stress scene, %dx%d: mean "
                              "%lld us/frame over %d frames (%d full-band, "
@@ -2511,11 +2526,26 @@ static void test_present_cost_against_the_thermal_shock_scene(void)
     build_thermal_shock_scene(&real);
 
     int full_bands = 0, gathered = 0, partial_bands = 0;
+    int64_t sim_us = 0, mark_us = 0, present_us = 0;
     const int measured_steps = 10;
     const int64_t mean_us = run_present_against_scene(&real, big, REAL_W,
         REAL_H, dirty_rows, row_x0, row_x1, row_n, 0, 1000, 0, 0,
-        measured_steps, &full_bands, &gathered, &partial_bands, NULL, NULL,
-        NULL);
+        measured_steps, &full_bands, &gathered, &partial_bands, &sim_us, &mark_us,
+        &present_us);
+
+    /* THE WHOLE FRAME, not just the bus. bd esp32c6-e6c: every other
+     * row here times sand_step() with no drawing, and the present rows
+     * time the bus alone, so nothing measured the frame a user actually
+     * sees. The helper already separates these three - this row was
+     * discarding them. */
+    ESP_LOGI("device_tests", "frame time, thermal shock: sim %lld us/frame",
+             (long long)sim_us);
+    ESP_LOGI("device_tests", "frame time, thermal shock: mark %lld us/frame",
+             (long long)mark_us);
+    ESP_LOGI("device_tests", "frame time, thermal shock: present %lld us/frame",
+             (long long)present_us);
+    ESP_LOGI("device_tests", "frame time, thermal shock: total %lld us/frame",
+             (long long)(sim_us + mark_us + present_us));
 
     ESP_LOGI("device_tests", "present cost, thermal shock lattice, %dx%d: "
                              "mean %lld us/frame over %d frames (%d "
