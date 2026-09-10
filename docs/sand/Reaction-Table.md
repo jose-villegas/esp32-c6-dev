@@ -101,7 +101,7 @@ Typography carries the other three roles colour does not: *italic* is the verb d
 
 - Next to $\textcolor{#B19100}{\text{fire}}$ or $\textcolor{#BF1B00}{\text{lava}}$, it *melts* into $\textcolor{#1863A3}{\text{water}}$.
 - *Chills whatever it touches*.
-- If anything wet touches it, it *melts* **slowly**, turning into $\textcolor{#1863A3}{\text{water}}$.
+- If anything wet touches it, it *melts* **slowly**, turning into $\textcolor{#1863A3}{\text{water}}$. Soaked ground counts, more slowly the drier it is.
 - Once it has *settled*, it slowly crusts into $\textcolor{#16A0CC}{\text{ice}}$ (1 in 65536 a step, and only while at rest).
 
 ### Dirt
@@ -116,7 +116,7 @@ Typography carries the other three roles colour does not: *italic* is the verb d
 
 - Next to $\textcolor{#B19100}{\text{fire}}$ or $\textcolor{#BF1B00}{\text{lava}}$, it *melts* into $\textcolor{#1863A3}{\text{water}}$.
 - *Chills whatever it touches*.
-- If anything wet touches it, it *melts* **slowly**, turning into $\textcolor{#1863A3}{\text{water}}$.
+- If anything wet touches it, it *melts* **slowly**, turning into $\textcolor{#1863A3}{\text{water}}$. Soaked ground counts, more slowly the drier it is.
 
 ### Plant
 
