@@ -190,6 +190,133 @@ static void test_a_mapped_rect_swaps_width_and_height_on_an_odd_turn(void)
 }
 
 /*---------------------------------------------------------------------------
+ * ui_transform_icon_blocks() - a baked icon's runs, mapped under a quarter
+ * turn
+ *
+ * icon_bits/icon_stride below is a synthetic 4x4 "L" - the minimum shape
+ * that is NOT symmetric under any quarter turn, so a bug that maps only the
+ * enclosing box (MU_COMMAND_ICON's actual shipped bug - see ui.c's
+ * draw_command()) produces runs a symmetric glyph could never distinguish
+ * from correct ones. Expected geometry below is hand-derived from the
+ * matrices ui_transform_quarter_turn()'s own comment gives, not from
+ * ui_transform_rect() - see the CROSS-CHECK test further down for that
+ * independent angle too.
+ *
+ * Content bbox: col 0 is set on every row, and row 3 reaches col 2, so the
+ * bitmap's own content box is x:[0,2] y:[0,3] - 3 wide, 4 tall. At a 4x4
+ * box that is scale 1 with a zero origin on both axes (integer division:
+ * (4 - 3*1)/2 == 0, (4 - 4*1)/2 == 0), so LOCAL run coordinates below equal
+ * native bitmap coordinates - no separate scale/centre arithmetic to also
+ * get right before the transform math can be checked in isolation.
+ *-------------------------------------------------------------------------*/
+
+static const uint8_t icon_l_rows[4] = {
+    0x80, /* 1000 - col 0 */
+    0x80, /* 1000 - col 0 */
+    0x80, /* 1000 - col 0 */
+    0xE0, /* 1110 - cols 0,1,2 */
+};
+
+typedef struct {
+    icon_rect_t runs[4];
+    int         count;
+} icon_collect_t;
+
+static void icon_collect_emit(void *ctx, int x, int y, int w, int h)
+{
+    icon_collect_t *ic = ctx;
+    TEST_ASSERT_TRUE(ic->count < 4);
+    ic->runs[ic->count] = (icon_rect_t){ x, y, w, h };
+    ic->count++;
+}
+
+/* box = (10, 20, 4, 4), fixed across every quarter below. Expected physical
+ * rects were mapped BY HAND, corner to corner, from
+ * ui_transform_quarter_turn()'s own matrices (see that function's
+ * comment) - not through ui_transform_rect(), so a bug shared between it
+ * and the function under test cannot hide behind agreement between the
+ * two. The cross-check test below covers that angle separately. */
+static void assert_icon_blocks_at_quarter(int quarter, const icon_rect_t *expected,
+                                          const char *msg)
+{
+    const ui_transform_t t = ui_transform_quarter_turn(quarter, VIEW_W, VIEW_H);
+    const mu_Rect box = { 10, 20, 4, 4 };
+    icon_collect_t ic = { .count = 0 };
+
+    ui_transform_icon_blocks(t, icon_l_rows, 4, 4, 1, box, icon_collect_emit, &ic);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(4, ic.count, msg);
+    for (int i = 0; i < 4; i++) {
+        TEST_ASSERT_EQUAL_INT_MESSAGE(expected[i].x, ic.runs[i].x, msg);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(expected[i].y, ic.runs[i].y, msg);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(expected[i].w, ic.runs[i].w, msg);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(expected[i].h, ic.runs[i].h, msg);
+    }
+}
+
+static void test_icon_blocks_at_turn_0_are_unrotated(void)
+{
+    const icon_rect_t expected[4] = {
+        { 10, 20, 1, 1 }, { 10, 21, 1, 1 }, { 10, 22, 1, 1 }, { 10, 23, 3, 1 },
+    };
+    assert_icon_blocks_at_quarter(0, expected, "turn 0: runs must match the box exactly");
+}
+
+static void test_icon_blocks_at_turn_1_rotate_one_step_clockwise(void)
+{
+    const icon_rect_t expected[4] = {
+        { 347, 10, 1, 1 }, { 346, 10, 1, 1 }, { 345, 10, 1, 1 }, { 344, 10, 1, 3 },
+    };
+    assert_icon_blocks_at_quarter(1, expected,
+        "turn 1: each run must rotate with the glyph, not stay upright inside a rotated box");
+}
+
+static void test_icon_blocks_at_turn_2_rotate_two_steps(void)
+{
+    const icon_rect_t expected[4] = {
+        { 357, 427, 1, 1 }, { 357, 426, 1, 1 }, { 357, 425, 1, 1 }, { 355, 424, 3, 1 },
+    };
+    assert_icon_blocks_at_quarter(2, expected, "turn 2: runs must rotate a half turn");
+}
+
+static void test_icon_blocks_at_turn_3_rotate_three_steps_clockwise(void)
+{
+    const icon_rect_t expected[4] = {
+        { 20, 437, 1, 1 }, { 21, 437, 1, 1 }, { 22, 437, 1, 1 }, { 23, 435, 1, 3 },
+    };
+    assert_icon_blocks_at_quarter(3, expected,
+        "turn 3: each run must rotate with the glyph, not stay upright inside a rotated box");
+}
+
+/* CROSS-CHECK, independent of the hand-derived expectations above: every
+ * run, treated as its own rect and mapped straight through
+ * ui_transform_rect() - the function every other MU_COMMAND already
+ * trusts - must equal what ui_transform_icon_blocks() produced for it. */
+static void test_icon_blocks_match_ui_transform_rect_run_by_run(void)
+{
+    const mu_Rect box = { 10, 20, 4, 4 };
+    const icon_rect_t local[4] = {
+        { 0, 0, 1, 1 }, { 0, 1, 1, 1 }, { 0, 2, 1, 1 }, { 0, 3, 3, 1 },
+    };
+
+    for (int quarter = 0; quarter < 4; quarter++) {
+        const ui_transform_t t = ui_transform_quarter_turn(quarter, VIEW_W, VIEW_H);
+        icon_collect_t ic = { .count = 0 };
+        ui_transform_icon_blocks(t, icon_l_rows, 4, 4, 1, box, icon_collect_emit, &ic);
+
+        TEST_ASSERT_EQUAL_INT(4, ic.count);
+        for (int i = 0; i < 4; i++) {
+            const mu_Rect truth = ui_transform_rect(t, (mu_Rect){
+                box.x + local[i].x, box.y + local[i].y, local[i].w, local[i].h });
+            TEST_ASSERT_EQUAL_INT(truth.x, ic.runs[i].x);
+            TEST_ASSERT_EQUAL_INT(truth.y, ic.runs[i].y);
+            TEST_ASSERT_EQUAL_INT(truth.w, ic.runs[i].w);
+            TEST_ASSERT_EQUAL_INT(truth.h, ic.runs[i].h);
+        }
+    }
+}
+
+/*---------------------------------------------------------------------------
  * ui_text_glyph0_origin() - where a string's first glyph belongs, under a
  * quarter turn, for a PROPORTIONAL font
  *
@@ -436,6 +563,11 @@ void suite_ui_transform(void)
     RUN_TEST(test_turn_3_rotates_corners_three_steps_clockwise);
     RUN_TEST(test_a_mapped_rect_stays_axis_aligned_and_inside_the_viewport);
     RUN_TEST(test_a_mapped_rect_swaps_width_and_height_on_an_odd_turn);
+    RUN_TEST(test_icon_blocks_at_turn_0_are_unrotated);
+    RUN_TEST(test_icon_blocks_at_turn_1_rotate_one_step_clockwise);
+    RUN_TEST(test_icon_blocks_at_turn_2_rotate_two_steps);
+    RUN_TEST(test_icon_blocks_at_turn_3_rotate_three_steps_clockwise);
+    RUN_TEST(test_icon_blocks_match_ui_transform_rect_run_by_run);
     RUN_TEST(test_glyph0_origin_matches_ground_truth_at_every_quarter);
     RUN_TEST(test_glyph0_origin_needs_no_correction_at_turn_0_or_1);
     RUN_TEST(test_glyph0_origin_at_turn_3_is_not_the_cell_h_mistake);

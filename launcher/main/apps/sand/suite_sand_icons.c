@@ -20,7 +20,6 @@
 #include "suites.h"
 
 #include "gfx/icon.h"
-#include "gfx/icons.h"
 #include "icons_sand.h"
 
 static bool baked_bit(const icon_t *icon, int x, int y)
