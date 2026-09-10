@@ -35,7 +35,10 @@ launcher/
     │   └── icons.{h,c}         artwork no font provides   (host-tested)
     ├── ui/             microui integration, shared by the shell and apps
     │   ├── ui.{h,c}
+    │   ├── ui_pointer.{h,c}    input_t -> move/down/up events   (host-tested)
+    │   ├── ui_slider.h         geometry for an integer slider   (host-tested)
     │   ├── ui_style.h          how a control's frame looks (host-tested)
+    │   ├── ui_transform.h      the quarter-turn mapping     (host-tested)
     │   └── ui_launcher.c       the home screen
     ├── input/          the devices a finger reaches
     │   ├── touch.{h,c}         FT5x06 polling task
@@ -521,6 +524,86 @@ The geometry and the shading are pure functions in the header, the same split
 without linking `gfx.c` or even `microui.c` — nobody can eyeball five
 overlapping rectangles reliably.
 
+`ui_style.h` has a flat sibling to the bezel above: `ui_panel_spans()` is a
+face plus a plain border, for a captioned section frame that groups controls
+without inviting a press — a panel outlines a whole screen area, a bezel
+outlines one tap target, and the two would fight if a panel were lit and
+shadowed the same way.
+
+#### Text at more than one size
+
+Every `mu_Font` used to mean the same thing: `gfx_font_ui()` at the
+compile-time `GFX_GLYPH_SCALE`, no exceptions. A screen that puts a small
+caption next to a much larger value or heading needs two sizes on one
+canvas, and the obvious fix — a `ui_set_text_scale()` global read at render
+time — would be the same shape as `ui_set_text_style()` above and pay the
+same cost: a scale carried outside the command list changes what gets drawn
+without changing a single byte of it, so `hash_canvas()` cannot see the
+change and skips the repaint, leaving the old size on screen. A screen
+mixing two sizes sets the scale more than once a frame, which would mean
+calling `ui_invalidate()` every frame — permanently defeating the repaint
+skip on exactly the kind of mostly-static panel it exists for.
+
+`ui_set_font()` already gets this right, for the reason its own comment
+gives: a `mu_Font` is baked into every `mu_TextCommand`, so a font change is
+different bytes and the hash sees it unaided. `ui_set_font_scaled(font,
+scale)` carries the scale the same way rather than beside it — `mu_Font`
+points at an interned `{ font, scale }` pair, from a small fixed table in
+`ui.c`, instead of a bare `gfx_font_t`. The same pair always yields the same
+address, so a size change is a different pointer in the command list and
+the hash catches it unaided — no invalidate, no per-frame thrash, and the
+mechanism is the one the file already argues for rather than a second one
+beside it. `ui_set_font(f)` is exactly `ui_set_font_scaled(f,
+GFX_GLYPH_SCALE)`. `ui_measure_text(str)` answers what `str` would measure
+at whatever font and scale are currently set, so a caller right-aligning a
+value like `06 PX` against a caption on the same row does not have to
+re-derive the font role and scale it already set.
+
+#### App-owned artwork, and how it reaches the command list
+
+`gfx/icons.h` used to hand-draw exactly one glyph — the check mark
+microui's own checkbox needs. The run-length/scale/centre geometry behind
+it was never specific to that shape, so `icon_bitmap_blocks()` generalises
+it into a function taking any 16×16 bitmap in the same one-row-per-scanline
+format; `icon_check_blocks()` is now a thin wrapper over it, kept as its own
+entry point so `ICON_CHECK_MAX_BLOCKS` still promises a bound specific to
+that one glyph's own run count. It stays pure geometry, the same split
+`ui_style.h`'s spans use: it returns WHERE the blocks go, not how they
+reach a framebuffer, so it links and is tested on a host with no `gfx.c` or
+`microui.c` involved.
+
+`ui_draw_bitmap(ctx, rect, bitmap, color)` (`ui.c`) is what turns that
+geometry into command-list entries — one `mu_draw_rect()` per run. That is
+the whole reason it exists, rather than an app calling `gfx_fill_rect()`
+straight into the framebuffer for its own icon: artwork painted outside the
+command list is invisible to the repaint hash and survives as a stale smear
+once the control underneath it changes — the same "a style emits commands,
+not pixels" rule above, applied to an app's own artwork instead of a
+control's frame. It also means an app icon needs no new `MU_ICON_*` id and
+no patch to `components/microui/`.
+
+The icons themselves are never the shell's to own. `gfx/icons.h` stays the
+one hand-drawn glyph microui's own checkbox needs — see its own header
+comment for why `MU_ICON_CLOSE`/`COLLAPSED`/`EXPANDED` stay unbuilt, which
+is unrelated to this and still true. An app that wants a funnel, a cross, a
+starburst draws its own bitmaps in its own folder (e.g.
+`apps/sand/sand_icons.h`) and reaches `ui_draw_bitmap()` to put them in its
+own command list. Deleting the app folder deletes its icons with it, per
+"an app is a folder" above.
+
+`ui_slider_int()` (`ui.c`) is built the same way, one layer down:
+`ui/ui_slider.h` is pure geometry — the track, the filled portion and the
+knob rect for a value, and the inverse, a touch x back to a value,
+quantized and clamped — and `ui_slider_int()` turns that into
+`mu_draw_rect()` calls via `ui_panel_spans()`/`ui_bezel_spans()`. Integer
+throughout, deliberately: the design calls for a `06 PX` control, and
+`mu_slider_ex()`'s float value and `"%.2f"` thumb are the wrong shape for
+that. A slider is also the one control that actually needs the pointer to
+hold `DOWN` for the whole press rather than release on the same frame it
+pressed — see "the pressed look is on hover" above for that policy and why
+it lives in `ui_pointer.c`; without it, a drag can only jump to where a
+finger first landed and then goes deaf to everything after.
+
 #### Immediate mode versus dirty bands
 
 These fight, and the fight would have hit apps, not just the launcher.
@@ -725,8 +808,16 @@ So `feed_input()` delivers a press across two frames: position only, then the
 button-down. One frame of latency, ~24 ms, and taps register every time.
 
 **This applies to every microui control**, not just buttons — anything reacting
-to a press goes through `mu_update_control()`. Adding a slider or checkbox
-requires nothing new, but reworking input handling means preserving this.
+to a press goes through `mu_update_control()`. Adding a checkbox requires
+nothing new, but reworking input handling means preserving this.
+
+A slider needed one more thing the hover synthesis alone does not give:
+`DOWN` has to stay held for the whole press rather than release on the same
+frame it presses, or a drag can only jump to where a finger first landed and
+then goes deaf to the rest of the gesture. `ui/ui_pointer.c` is where that
+policy actually lives — see "the pressed look is on hover" under "Drawing a
+UI" above — and `ui_slider_int()` is the control that could not exist
+without it.
 
 ---
 
