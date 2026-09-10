@@ -20,13 +20,21 @@ present-cost rows are tight regression guards on a bus-bound path, not
 reduction targets.
 
 Numbers below are the 2026-09-02 capture of main at `58b1f42` (attempt 19
-merged), controls pinned at 5,907/6,002:
+merged), **except the two control rows, re-captured `--perf-scope` on
+2026-09-10 at `5b57f62`**: they now land at 5,653/5,753, not the
+5,907/6,002 the rest of this table was taken beside. Nibble 15's hot table
+doubling (2026-09-05) changed `material_of()`'s shift inside the controls'
+own hot path, so the old pair was measuring different compiled bytes; the
+new pair reproduced to ±2 µs across seven different binaries the same day.
+Every other row here is still the September 2nd number and several are
+stale by more than the controls moved - do not read a row-to-row delta off
+this table, take a capture.
 
 | Test | Measured | Target | To close |
 |---|---:|---:|---:|
 | Settled screen, nothing moves | 58 µs | 52 | re-measured and re-pegged 2026-09-10, unlike the rest of this table - the sweep stopped building a per-row context for block rows it skips whole, and the row went 269 -> 58 µs |
-| Full-size step, all falling | 5,907 µs | 5,800 | 107 µs |
-| Gravity flip, settled pile | 6,002 µs | 5,900 | 102 µs |
+| Full-size step, all falling | 5,653 µs | 5,800 | passes: 147 µs spare |
+| Gravity flip, settled pile | 5,753 µs | 5,900 | passes: 147 µs spare |
 | Mixed scene flip | 15,347 µs | 11,700 | 3,647 µs |
 | Screen of water collapsing | 20,812 µs | 14,400 | 6,412 µs |
 | Boiler, sustained boil | 30,422 µs | 28,500 | 1,922 µs |
@@ -44,9 +52,16 @@ merged), controls pinned at 5,907/6,002:
   [the layout lottery](#the-layout-lottery). `sand_step` is pinned, so
   the two control rows no longer draw a ticket; read every other swing
   against them first.
-- The present-cost falling-sand guard currently passes on a favourable
-  layout roll; deliberately not re-pegged tighter — a guard pegged to a
-  lottery ticket fails spuriously on the next roll.
+- **Both control rows now pass their own reduction targets** (2026-09-10),
+  which no other row does. Nothing has been re-pegged off that: a control
+  is there to be compared against, and tightening it to 5,088/5,178 would
+  buy a reduction target on the two rows nobody is trying to reduce.
+- The present-cost falling-sand guard was thought to pass on a favourable
+  layout roll. It does not: `gfx_present()`'s own placement was measured
+  across five addresses on 2026-09-10 and moves that row by at most 1.4%
+  (see [the layout lottery](#the-layout-lottery)). The guard is still not
+  re-pegged tighter, on the older reasoning that a bus-bound row's cost
+  follows the scene's band count, which any behaviour change moves.
 - One standing coverage gap: no budgeted row runs a tilted gravity, and
   attempt 14's off-axis cost (+29–37%) is therefore measured by nothing.
 - **Vent spam dropped from this table, not re-pegged.** The mechanism it
@@ -194,13 +209,16 @@ boundaries by unrelated functions earlier in its file growing or
 shrinking — and 2026-09-01 alone produced four distinct control
 value-pairs, two of them landed by *different binaries* to the exact
 microsecond (5,907/6,002-3). Quantised, yes; two states, no. The useful
-test is still "which pair did the controls land in". `sand_step` **draws a
-ticket like everything else** — `66a1e9b` pinned it to the 32-byte line it
-fetches by, and `00e13ce` unpinned it by accident three weeks later,
-defining `reaction_dirs` between the `aligned(32)` and the declaration so
-the attribute bound to the array instead. Putting it back was measured
-2026-09-10 and cost the two controls 4.5% while recovering nothing, so the
-pin is a determinism trade to re-decide, not a repair to apply; see
+test is still "which pair did the controls land in". `sand_step` **is out
+of the draw again** — `66a1e9b` pinned it to the 32-byte line it fetches
+by, `00e13ce` unpinned it by accident three weeks later (defining
+`reaction_dirs` between the `aligned(32)` and the declaration, so the
+attribute bound to the array), and `5b57f62` put it back **at 16, not
+32**: 32 cost the two controls 4.5% while recovering nothing, where 16 is
+nearly free — cache blocks are 32 bytes, so 16 still fixes the start
+inside a block without forcing a whole one to be skipped to get there.
+`.text.sand_step` reads `2**4` when the pin is really bound, and only
+objdump can tell you that; see
 [`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md). The
 antidote (attempt 10) stands: **keep control benchmarks in every
 capture** — when only the liquid numbers move, the cause is in the
@@ -212,8 +230,22 @@ half-row split (`Architecture.md`'s "The material budget, and what is
 left"). `material_of()` reads that shift and is inlined into the hot
 path the pinned controls exercise, so this is not the surrounding-code
 churn the pin was built to survive - the controls' own compiled bytes
-changed. 5,907/6,002-3 has not been re-captured since; treat it as
-unpinned until it is.
+changed. Re-captured 2026-09-10: the pair is **5,653/5,753**, and it held
+to ±2 µs across seven binaries whose flash layouts differed by design.
+
+**The present path does not draw the same ticket.** `gfx_present()` was
+measured on 2026-09-10 at five different addresses - offsets 16, 20, 24,
+28 and 30 within a 32-byte block, produced by padding an init-only
+function earlier in `gfx.c` - and four of the five gave the three
+present-cost rows *identical* microseconds. Only offset 30 moved
+anything, and by 1.4% at most. Pinning `gfx_present()` (and its one
+out-of-line callee, `gather_and_send()`) at 16 narrows the spread to
+0.13% but never crosses the tool's own 0.5% floor, so nothing shipped:
+these rows are bus-bound, ~2,550 µs per full band, and their cost tracks
+how many bands the scene's dirty pattern produces, not where the code
+sits. A present-cost row that jumps tens of percent is reporting a
+behaviour change, not a layout roll - read the strip-send counts in its
+log line. See bd esp32c6-ai8.
 
 ### The inlining cliff
 
