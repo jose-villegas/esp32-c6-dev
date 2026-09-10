@@ -22,6 +22,7 @@
  * links microui.c" note in run_tests.sh no longer holds.
  *===========================================================================*/
 
+#include <stdlib.h>
 #include <string.h>
 
 #include "suites.h"
@@ -39,7 +40,14 @@
 #define BTN_W 280
 #define BTN_H 64
 
-static mu_Context ctx;
+/* Heap, not a file-scope object: a mu_Context is 10,744 bytes, and the
+ * diagnostics build links every suite into firmware, where the
+ * framebuffer plus one sand grid still have to fit (check_static_ram.py).
+ * A second context in .bss fails that gate outright - which host tests,
+ * with a laptop's memory behind them, cannot notice. Allocated once and
+ * reset per test rather than per-test malloc/free: the runner has no
+ * teardown hook to free it in. */
+static mu_Context *ctx;
 static ui_pointer_t pointer;
 
 /* microui measures text through the context; the real shell hands it a font
@@ -58,11 +66,15 @@ static int stub_text_height(mu_Font font)
 
 static void fixture(void)
 {
-    memset(&ctx, 0, sizeof ctx);
+    if (ctx == NULL) {
+        ctx = malloc(sizeof *ctx);
+        TEST_ASSERT_NOT_NULL(ctx);
+    }
+    memset(ctx, 0, sizeof *ctx);
     memset(&pointer, 0, sizeof pointer);
-    mu_init(&ctx);
-    ctx.text_width  = stub_text_width;
-    ctx.text_height = stub_text_height;
+    mu_init(ctx);
+    ctx->text_width  = stub_text_width;
+    ctx->text_height = stub_text_height;
 }
 
 /* One frame of the real bridge: translate input_t exactly as ui.c's
@@ -82,29 +94,29 @@ static bool frame(bool down, bool pressed, bool released, int x, int y)
     for (int i = 0; i < n; i++) {
         switch (ev[i].kind) {
         case UI_POINTER_MOVE:
-            mu_input_mousemove(&ctx, ev[i].x, ev[i].y);
+            mu_input_mousemove(ctx, ev[i].x, ev[i].y);
             break;
         case UI_POINTER_DOWN:
-            mu_input_mousedown(&ctx, ev[i].x, ev[i].y, MU_MOUSE_LEFT);
+            mu_input_mousedown(ctx, ev[i].x, ev[i].y, MU_MOUSE_LEFT);
             break;
         case UI_POINTER_UP:
-            mu_input_mouseup(&ctx, ev[i].x, ev[i].y, MU_MOUSE_LEFT);
+            mu_input_mouseup(ctx, ev[i].x, ev[i].y, MU_MOUSE_LEFT);
             break;
         }
     }
 
     bool submitted = false;
-    mu_begin(&ctx);
-    if (mu_begin_window_ex(&ctx, "screen", mu_rect(0, 0, CANVAS_W, CANVAS_H),
+    mu_begin(ctx);
+    if (mu_begin_window_ex(ctx, "screen", mu_rect(0, 0, CANVAS_W, CANVAS_H),
                            MU_OPT_NOTITLE | MU_OPT_NORESIZE | MU_OPT_NOCLOSE |
                            MU_OPT_NOFRAME)) {
-        mu_layout_set_next(&ctx, mu_rect(BTN_X, BTN_Y, BTN_W, BTN_H), 0);
-        if (mu_button(&ctx, "GO")) {
+        mu_layout_set_next(ctx, mu_rect(BTN_X, BTN_Y, BTN_W, BTN_H), 0);
+        if (mu_button(ctx, "GO")) {
             submitted = true;
         }
-        mu_end_window(&ctx);
+        mu_end_window(ctx);
     }
-    mu_end(&ctx);
+    mu_end(ctx);
     return submitted;
 }
 
@@ -230,23 +242,23 @@ static void test_a_drag_moves_a_slider_microui_would_not_track_on_a_tap(void)
         const int n = ui_pointer_step(&pointer, &in, ev, UI_POINTER_MAX_EVENTS);
         for (int i = 0; i < n; i++) {
             if (ev[i].kind == UI_POINTER_MOVE) {
-                mu_input_mousemove(&ctx, ev[i].x, ev[i].y);
+                mu_input_mousemove(ctx, ev[i].x, ev[i].y);
             } else if (ev[i].kind == UI_POINTER_DOWN) {
-                mu_input_mousedown(&ctx, ev[i].x, ev[i].y, MU_MOUSE_LEFT);
+                mu_input_mousedown(ctx, ev[i].x, ev[i].y, MU_MOUSE_LEFT);
             } else {
-                mu_input_mouseup(&ctx, ev[i].x, ev[i].y, MU_MOUSE_LEFT);
+                mu_input_mouseup(ctx, ev[i].x, ev[i].y, MU_MOUSE_LEFT);
             }
         }
 
-        mu_begin(&ctx);
-        if (mu_begin_window_ex(&ctx, "screen", mu_rect(0, 0, CANVAS_W, CANVAS_H),
+        mu_begin(ctx);
+        if (mu_begin_window_ex(ctx, "screen", mu_rect(0, 0, CANVAS_W, CANVAS_H),
                                MU_OPT_NOTITLE | MU_OPT_NORESIZE | MU_OPT_NOCLOSE |
                                MU_OPT_NOFRAME)) {
-            mu_layout_set_next(&ctx, mu_rect(track_x, BTN_Y, track_w, BTN_H), 0);
-            mu_slider(&ctx, &value, 0, 100);
-            mu_end_window(&ctx);
+            mu_layout_set_next(ctx, mu_rect(track_x, BTN_Y, track_w, BTN_H), 0);
+            mu_slider(ctx, &value, 0, 100);
+            mu_end_window(ctx);
         }
-        mu_end(&ctx);
+        mu_end(ctx);
 
         /* Start dragging only once the press has actually landed, so the
          * movement is a drag and not a series of separate taps. */
