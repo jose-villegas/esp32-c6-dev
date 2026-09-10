@@ -944,6 +944,18 @@ stateDiagram-v2
     class Settled settledStyle
 ```
 
+**A wake buys another chance to MOVE, and nothing else.** The reactions
+pass is not sleep-gated, so a settled block still reacts; waking it only
+costs the movement sweep. That is why writes that shift a cell's heat
+nibble one level call `mark_rows()` and stop there - only `MAT_STONE` and
+`MAT_GLASS` carry a `heat_ramp`, both `KIND_STATIC`, so warmer or colder is
+no new move. Anything that does change how a cell moves changes its
+*material*, through `place_cell()`, which still wakes. Waking on heat
+instead was not free: it shook a solid ice block out of its column, and it
+put snow's crust rate - gated on `cell_settled()` - under
+`COLD_REWARM_PERIOD`, an unrelated thermal constant, moving the balance
+ceiling 9x (bd esp32c6-8ce).
+
 A settled block costs one comparison per step (`BLOCK_ACTIVE` check in
 `finalize_settling()`) instead of a full grain-by-grain sweep - this is
 the entire reason `test_a_screen_of_settled_sand_costs_almost_nothing`

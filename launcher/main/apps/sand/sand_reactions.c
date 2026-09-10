@@ -169,6 +169,17 @@ static inline bool emit_into_empty_neighbor(sand_t* s, int x, int y, int w, int 
 static inline __attribute__((always_inline)) bool try_heat_transform_given(sand_t* s, int nx, int ny, int w, int h,
                                                                            size_t at, cell_t n);
 
+/* HEAT LEVELS DO NOT WAKE: a write that only moves a cell's heat nibble one
+ * step marks its row for drawing and stops there.
+ *
+ * Waking buys another chance to MOVE, and only STONE and GLASS hold a
+ * heat_ramp - both KIND_STATIC. What does change how a cell moves changes its
+ * MATERIAL, through place_cell(), which still wakes.
+ *
+ * Waking shook a solid ice block out of its column, and put snow's crust rate
+ * under COLD_REWARM_PERIOD: at a period of 1 the balance ceiling moved 9x
+ * (bd esp32c6-8ce). */
+
 #define HEAT_FLAW_CLUMP 5
 
 /* FORCED INLINE, and that is a performance fix rather than a
@@ -233,8 +244,7 @@ try_heat_transform_given(sand_t* s, int nx, int ny, int w, int h, size_t at, cel
         }
         s->cells[at] = CELL_MAKE(CELL_MATERIAL(n), heat + 1);
         s->may_have_temperature = true;
-        mark_rows(s, ny, ny);
-        wake_block_and_neighbors(s, nx, ny);
+        mark_rows(s, ny, ny);   /* drawn, not woken - see HEAT LEVELS DO NOT WAKE */
         return true;
     }
 
@@ -794,12 +804,8 @@ step_one_cold_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
                     && (int)(rng_next(&s->rng) & 0xFF) >= cr->conducts) {
                     break;   /* the cold did not carry this far this step */
                 }
-                /* MARKED FOR DRAWING, NOT WOKEN. Waking exists so neighbours
-                 * get another chance to MOVE, and a cell that only got one
-                 * heat level colder gives nothing a new way to move - the
-                 * same argument the snow crust rule uses. Waking here shook
-                 * blocks loose often enough to slide a solid ice block out of
-                 * the column it was placed in, which a test caught. */
+                /* Drawn, not woken - see HEAT LEVELS DO NOT WAKE. This walk
+                 * is where that rule was first found and paid for. */
                 s->cells[cat] = CELL_MAKE(CELL_MATERIAL(cc), (uint8_t)(ct - 1));
                 mark_rows(s, cy, cy);
                 if (ct > SAND_AMBIENT_HEAT) {
@@ -828,8 +834,7 @@ step_one_cold_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
 
         s->cells[nat] = CELL_MAKE(CELL_MATERIAL(n), (uint8_t)(temp - 1));
         s->may_have_temperature = true;
-        mark_rows(s, ny, ny);
-        wake_block_and_neighbors(s, nx, ny);
+        mark_rows(s, ny, ny);   /* drawn, not woken - see HEAT LEVELS DO NOT WAKE */
 
         /* AND ON THROUGH THE MEDIUM. Cold stopped where it touched: snow on
          * glass chilled three rows and sat there, the same at 250 steps as at
@@ -900,8 +905,7 @@ step_one_tempered_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cons
         }
         s->cells[nat] = CELL_MAKE(CELL_MATERIAL(n), (uint8_t)(gap > 0 ? nt + 1 : nt - 1));
         s->may_have_temperature = true;
-        mark_rows(s, ny, ny);
-        wake_block_and_neighbors(s, nx, ny);
+        mark_rows(s, ny, ny);   /* drawn, not woken - see HEAT LEVELS DO NOT WAKE */
     }
 
     /* MULTIPLIES DRAIN BY SAND_WET_COOLING_FACTOR (sand.h) */
@@ -931,8 +935,7 @@ step_one_tempered_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cons
 
     const uint8_t next = (uint8_t)(temp > SAND_AMBIENT_HEAT ? temp - 1 : temp + 1);
     row[x] = CELL_MAKE(CELL_MATERIAL(c), next);
-    mark_rows(s, y, y);
-    wake_block_and_neighbors(s, x, y);
+    mark_rows(s, y, y);   /* drawn, not woken - see HEAT LEVELS DO NOT WAKE */
     return next != SAND_AMBIENT_HEAT;
 }
 
