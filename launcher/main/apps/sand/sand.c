@@ -1077,6 +1077,15 @@ static void build_xflow(xflow_t *f, int gx, int gy)
  * chip's actual i-cache line, and 64 does not link here - ld refuses the
  * section overlap it causes with ESP-IDF's linker script. */
 __attribute__((aligned(32)))
+/* Defined here, once, rather than per translation unit - see reaction_dirs'
+ * comment in sand_priv.h for what that is worth. */
+const int8_t reaction_dirs[4][2] = {
+    {0, -1},
+    {0, 1},
+    {-1, 0},
+    {1, 0},
+};
+
 void sand_step(sand_t *s, int gx, int gy, int jostle)
 {
     /* Emitters act first per step, before gravity, mimicking
