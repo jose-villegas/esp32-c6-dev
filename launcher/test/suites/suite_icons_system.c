@@ -109,7 +109,7 @@ static void test_chevron_left_matches_source_svg_rectangles(void)
 
     for (int y = 0; y < 24; y++) {
         const char *row = chevron_left_expected_rows[y];
-        TEST_ASSERT_EQUAL_INT_MESSAGE(24, (int)strnlen(row, 25),
+        TEST_ASSERT_EQUAL_INT_MESSAGE(24, (int)strlen(row),
             "a hand-transcribed expected row is not 24 characters");
         for (int x = 0; x < 24; x++) {
             const bool want = row[x] == 'X';
