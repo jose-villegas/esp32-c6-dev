@@ -429,7 +429,15 @@ sh scripts/verify-gate-strip.sh <gated-ref> <stripped-ref>
   swung -28.2%, -4.9% and +4.8% - on rows containing no liquid at all,
   against a one-file change to the liquid sweep. Read a present-cost delta
   as evidence only when it is large, repeated, and paired with a reason it
-  should have moved.
+  should have moved. **It is not `gfx_present()`'s placement.** That was
+  the standing suspect and it was measured out on 2026-09-10: five
+  addresses, offsets 16/20/24/28/30 within a 32-byte block, moved the
+  three rows by 1.4% at worst and by nothing at all in four of the five.
+  Pinning the function narrows the spread to 0.13% and never crosses the
+  0.5% floor, so no pin shipped and the mechanism behind swings like
+  u2g's -28.2% is still unidentified. Start from the strip-send counts in
+  the row's own log line - the rows are bus-bound at ~2,550 µs per full
+  band, so a big move means the scene sent a different number of bands.
 - **Size a delta against the row's own history before calling it a win.**
   Pull the same row out of the last several captures first: water has read
   20,882 / 21,093 / 21,314 / 21,942 / 20,882 us across nearby builds, a
