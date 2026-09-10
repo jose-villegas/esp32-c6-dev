@@ -10,7 +10,6 @@
  *===========================================================================*/
 #pragma once
 
-#include <limits.h>
 #include "sand_priv.h"
 
 /* WATER ONLY - see acid_bubble() (sand_reactions.c) for what replaced
@@ -184,66 +183,6 @@ static inline bool drag_allows_swap(sand_t *s, int x, int y, uint8_t id)
     return (rng_next(&s->rng) & mask) == 0u;
 }
 
-/* LAYOUT CONTROL ONLY - NOT FOR MERGE.
- *
- * Restored verbatim from before the rise pass, and deliberately never taken:
- * the guard below reads a field the compiler cannot fold, so the call site and
- * this whole body stay in sand_step()'s instruction stream while doing nothing
- * at runtime. Behaviour is the rise pass's; the code layout is the baseline's.
- *
- * That is the one variable a capture could not separate: a screen of SETTLED
- * SAND regressed 11.6% against a 4.6% floor, and the pass provably cannot run
- * there - no liquid, so sand_step_liquids() returns before it. Either removing
- * this call moved sand_step()'s layout, or the capture is noisier than its own
- * floor claims. This build answers which. */
-/* Whole cells swap by density (denser sinks) - not mass transfer, since
- * a cell cannot be part oil and part water. Denser moves DOWN, not
- * lighter rising, so it inherits the sweep's no-double-move guarantee
- * for free (a rise needs its own reversed pass, like try_bubble() in
- * sand_gas.c). NOT paced by viscosity: gating on `mobility` looks
- * obvious but PREVENTS separation rather than slowing it - throttling
- * swap and levelling together settles a tilted pair into a permanent
- * shear instead of converging. */
-/* NOT INLINED, though it lives in a header for the one caller that is.
- * Inlining move_liquid_grain() into the sweep won 18.4% on liquid scenes
- * but grew sand_step() 975 -> 1425 instructions, because the whole helper
- * chain came with it - and that growth is paid by every cell, which cost
- * the liquid-free rows 5.5%. This body is big and its success path is
- * uncommon, so it is the wrong thing to duplicate at the call site. */
-static inline bool sink_through_lighter_liquid(sand_t *s, uint8_t *row,
-                                               uint8_t *prow, int x, int y,
-                                               int tx, int ty, int w,
-                                               cell_t grain,
-                                               const material_t *mat)
-{
-    if (prow == NULL || (unsigned)tx >= (unsigned)w) {
-        return false;
-    }
-    const cell_t below = prow[tx];
-    if (CELL_IS_EMPTY(below)) {
-        return false;   /* open space - the ordinary fall handles it */
-    }
-    if (CELL_MATERIAL(below) == CELL_MATERIAL(grain)) {
-        return false;   /* more of the same liquid - give_mass() handles
-                         * it, and far better: it splits the amount */
-    }
-    const material_t *bm = material_of(below);
-    if (bm->kind != KIND_LIQUID || mat->density <= bm->density) {
-        return false;
-    }
-    if (!drag_allows_swap(s, x, y, CELL_MATERIAL(grain))) {
-        return false;
-    }
-
-    prow[tx] = grain;
-    row[x]   = below;
-
-    mark_rows(s, y, ty);
-    wake_block_and_neighbors(s, x, y);
-    wake_block_and_neighbors(s, tx, ty);
-    return true;
-}
-
 static inline bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
                        int x, int y, int dx, int dy,
                        const int *slide_a, const int *slide_b,
@@ -265,13 +204,6 @@ static inline bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
      * is what a screen of liquid usually is. */
     if (__builtin_expect(!liquid_may_move(s, mat_id), 0)) {
         return false;
-    }
-
-    /* Opaque to the optimiser: soak_convert is -1 or positive, never INT_MIN. */
-    if (s->soak_convert == INT_MIN
-        && sink_through_lighter_liquid(s, row, prow, x, y, tx0, ty0, w, grain,
-                                       material_by_id((material_id_t)mat_id))) {
-        return true;
     }
 
     /* Checked BEFORE give_mass() writes into the target - afterward it

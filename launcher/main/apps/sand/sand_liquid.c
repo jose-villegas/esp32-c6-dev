@@ -436,24 +436,22 @@ static void equalise_liquids(sand_t *s, const xflow_t *f, int sight,
 }
 
 
+/* Every other step. A whole extra traversal measured 22% of the boiler scene;
+ * halving how often it runs halved that, and 0.5 rows a step is still a drift
+ * - gas rises at about 0.7 and nobody calls that wrong.
+ *
+ * A block skip was tried first and measured worth nothing: the scenes that
+ * regress are liquid-dense, so BLOCK_LIQUID_NEAR is set nearly everywhere. */
+#define LIQUID_SORT_PERIOD 2
+
 /*-----------------------------------------------------------------------------
  * Sub-pass: a lighter liquid rises through a denser one.
  *
- * A PASS OF ITS OWN, not the denser cell sinking during the main sweep. That
- * sweep's no-double-move guarantee covers the cell which MOVES, not the one it
- * DISPLACES, so every row's water sank past the same oil in turn and carried
- * it sixteen rows in a step. Gas has always risen in its own reversed pass.
+ * A PASS OF ITS OWN, not the denser cell sinking during the main sweep, whose
+ * no-double-move guarantee covers the cell that MOVES and not the one it
+ * DISPLACES - so every row's water sank past the same oil in turn, carrying it
+ * sixteen rows in a step. Gas has always risen in its own pass.
  *---------------------------------------------------------------------------*/
-/* Every other step, not every step. This pass is a whole extra traversal and
- * a capture put it at 22% of the boiler scene; running it half as often halves
- * that, and separation is still a visible drift - gas, which nobody complains
- * about, rises at about 0.7 rows a step, so 0.5 is in the same country.
- *
- * A BLOCK SKIP WAS TRIED FIRST and measured worth nothing: the scenes that
- * regress are liquid-dense, so BLOCK_LIQUID_NEAR is set nearly everywhere and
- * the check never fires. Per-cell it was actively worse (28%), per-block it
- * landed back on 22% - the same as not having it. */
-#define LIQUID_SORT_PERIOD 2
 
 static bool float_lighter_liquids(sand_t *s, int dx, int dy)
 {

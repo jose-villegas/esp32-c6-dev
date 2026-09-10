@@ -1210,24 +1210,12 @@ static void acid_water_contest(int water_pct, int *water_left, int *acid_left)
 
 /* POUR MORE, WIN MORE - and an even pour is an even fight.
  *
- * This replaced an A/B on SAND_ACID_DILUTE_MASS_BIAS that asserted the bias
- * converted a pool FASTER than an unbiased roll. That test was reading one
- * fixture seed, where the gap was 11 parts in 3250; across eight seeds the
- * effect was real on the old sweep and reversed once liquids stopped
- * teleporting past each other, because poured acid had only been arriving
- * dispersed thanks to that bug. A margin that thin, on one seed, could not
- * tell a mechanic from an artifact.
+ * Replaced an A/B on SAND_ACID_DILUTE_MASS_BIAS reading ONE fixture seed,
+ * where the gap was 11 parts in 3250 - too thin to tell a mechanic from an
+ * artifact, and it duly reversed when liquids stopped teleporting.
  *
- * What matters in play is the outcome, so that is what is asserted: the side
- * poured more of ends up with more left, every step of the way, and neither
- * side wins a 50/50. That holds whatever the bias does internally, which is
- * the point - it cannot be inverted by a change to liquid movement without
- * this going red.
- *
- * Measured, water left / acid left: 0/920 at 10%, 10/388 at 30%, 117/130 at
- * 50%, 589/0 at 70%, 809/0 at 90%. Note how sharp the middle is - a 60/40
- * pour leaves the loser on 2 cells - so the monotonic claim is the load
- * bearing one and the even-fight claim needs its tolerance. */
+ * Measured, water left / acid left: 0/920 at 10%, 117/130 at 50%, 809/0 at
+ * 90%. The middle is sharp, so the monotonic claim carries this one. */
 static void
 test_pouring_more_of_a_liquid_wins_the_contest_against_the_other(void)
 {
