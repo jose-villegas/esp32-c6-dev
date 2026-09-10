@@ -1045,6 +1045,75 @@ static void test_snow_melts_on_wet_soil_but_not_on_dry(void)
         "about dirt rather than about the water in it");
 }
 
+/* THE BALANCE CEILING: 32 cells of snow become ice in about a minute of play.
+ *
+ * The one crust test that does NOT force the rate - the others call
+ * sand_set_crust(), so sweeping crusts through them is byte-identical and the
+ * shipped value goes untested. Measured 1809 steps. Bounded both sides: too
+ * slow nobody sees, too fast and snow stops reading as snow.
+ *
+ * No side walls - they seed the crust up the full height, so the front would
+ * travel sideways rather than into the cover's depth. */
+static void test_a_32_cell_snow_cover_turns_to_ice_in_about_a_minute(void)
+{
+    enum { GW = 56, GH = 40, X0 = 4, X1 = 52, DEPTH = 32 };
+    uint8_t *cells  = calloc(GW * GH, 1);
+    uint8_t *blocks = calloc((size_t)((GW + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
+                           * (size_t)((GH + SAND_BLOCK_H - 1) / SAND_BLOCK_H), 1);
+    TEST_ASSERT_NOT_NULL(cells);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t g;
+    memset(&g, 0, sizeof g);
+    sand_init(&g, cells, GW, GH, 71u);
+    sand_enable_sleeping(&g, blocks);
+
+    for (int x = 0; x < GW; x++) {
+        sand_set(&g, x, GH - 1, STONE);
+    }
+    for (int y = GH - 1 - DEPTH; y < GH - 1; y++) {
+        for (int x = X0; x < X1; x++) {
+            sand_set(&g, x, y, SNOW);
+        }
+    }
+    for (int i = 0; i < 200; i++) {
+        sand_step(&g, 0, 1000, 0);
+    }
+
+    int almost_at = -1;
+    for (int i = 1; i <= 6000 && almost_at < 0; i++) {
+        sand_step(&g, 0, 1000, 0);
+        int ice = 0, total = 0;
+        for (int y = 0; y < GH; y++) {
+            for (int x = X0; x < X1; x++) {
+                const int m = CELL_MATERIAL(sand_at(&g, x, y));
+                if (m == MAT_EXTENDED) {
+                    ice++;
+                    total++;
+                } else if (m == MAT_SNOW) {
+                    total++;
+                }
+            }
+        }
+        if (total != 0 && ice * 10 >= total * 9) {
+            almost_at = i;
+        }
+    }
+    free(cells);
+    free(blocks);
+
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, almost_at,
+        "a 32 cell cover of snow must end up almost entirely ice - measured "
+        "1809 steps; never getting there means the shipped crusts rate cannot "
+        "reach the balance ceiling at all, which is what a byte-wide field "
+        "against a 65536 roll used to guarantee");
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(600, almost_at,
+        "and must not get there in seconds - snow landing on anything would "
+        "stop reading as snow");
+    TEST_ASSERT_LESS_THAN_INT_MESSAGE(4000, almost_at,
+        "nor take several minutes - the ceiling this pins is about one");
+}
+
 /* AIR IS NOT A MATERIAL, so an exposed surface does not crust - otherwise a
  * drift rims its whole outline in ice.
  *
@@ -1064,7 +1133,7 @@ static void test_snow_does_not_crust_against_open_air(void)
     memset(&g, 0, sizeof g);
     sand_init(&g, cells, GW, GH, 71u);
     sand_enable_sleeping(&g, blocks);
-    sand_set_crust(&g, 256);
+    sand_set_crust(&g, 4);   /* 4 in CRUST_ROLL_MAX, as 256 in 65536 was */
 
     for (int x = 0; x < GW; x++) {
         sand_set(&g, x, GH - 1, STONE);
@@ -1126,7 +1195,7 @@ static void test_a_snowbank_crusts_on_its_faces_and_thickens_slowly_inward(void)
     memset(&g, 0, sizeof g);
     sand_init(&g, cells, GW, GH, 71u);
     sand_enable_sleeping(&g, blocks);
-    sand_set_crust(&g, 256);   /* the shipped rate is minutes, not frames */
+    sand_set_crust(&g, 4);   /* the shipped rate is minutes, not frames */
 
     /* WALLED, and resting on the floor. Snow is a powder: a block of it left
      * in mid-air collapses into rubble, and the first version of this measured
@@ -1194,8 +1263,8 @@ static void test_a_snowbank_crusts_on_its_faces_and_thickens_slowly_inward(void)
  * ENABLED for any of it: cell_settled() reads block_state, and with sleeping
  * off nothing is ever known to be at rest, so the rule correctly never fires.
  *
- * sand_set_crust() forces the roll because the shipped rate is 1 in 65536 a
- * step - minutes of crusting, not frames. */
+ * sand_set_crust() forces the roll because the shipped rate is a handful in
+ * CRUST_ROLL_MAX a step - minutes of crusting, not frames. */
 static void test_a_settled_snowbank_crusts_to_ice(void)
 {
     uint8_t *cells  = calloc(W * H, 1);
@@ -1207,7 +1276,7 @@ static void test_a_settled_snowbank_crusts_to_ice(void)
     sand_t snow_sim;
     sand_init(&snow_sim, cells, W, H, 41u);
     sand_enable_sleeping(&snow_sim, blocks);
-    sand_set_crust(&snow_sim, 65535);   /* every settled snow cell, every step */
+    sand_set_crust(&snow_sim, CRUST_ROLL_MAX);   /* every settled snow cell, every step */
 
     for (int x = 0; x < W; x++) {
         sand_set(&snow_sim, x, H - 1, STONE);
@@ -1235,7 +1304,7 @@ static void test_a_settled_snowbank_crusts_to_ice(void)
     memset(cells, 0, W * H);
     sand_init(&snow_sim, cells, W, H, 41u);
     sand_enable_sleeping(&snow_sim, blocks);
-    sand_set_crust(&snow_sim, 65535);
+    sand_set_crust(&snow_sim, CRUST_ROLL_MAX);
 
     for (int x = 0; x < W; x++) {
         sand_set(&snow_sim, x, H - 1, STONE);
@@ -2151,6 +2220,7 @@ void run_sand_combustion_suite(void)
     RUN_TEST(test_a_settled_snowbank_crusts_to_ice);
     RUN_TEST(test_a_snowbank_crusts_on_its_faces_and_thickens_slowly_inward);
     RUN_TEST(test_snow_does_not_crust_against_open_air);
+    RUN_TEST(test_a_32_cell_snow_cover_turns_to_ice_in_about_a_minute);
     RUN_TEST(test_a_fire_buried_on_all_four_sides_goes_out);
     RUN_TEST(test_a_material_created_during_the_pass_stays_in_the_mask);
     RUN_TEST(test_sand_alone_lets_the_moisture_pass_switch_off_again);

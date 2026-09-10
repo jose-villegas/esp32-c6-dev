@@ -464,7 +464,7 @@ static void scene_snow_thaw(sand_t *s)
  * 1 in 65536 a bank crusts over minutes, and 300 steps would show nothing. */
 static void scene_snow_crust(sand_t *s)
 {
-    sand_set_crust(s, 256);
+    sand_set_crust(s, 4);
 
     for (int x = 0; x < FP_W; x++) {
         sand_set(s, x, FP_H - 1, FP_STONE);

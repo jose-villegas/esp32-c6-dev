@@ -959,7 +959,7 @@ crust_faces(const sand_t* s, int x, int y, int w, int h, uint8_t mine,
 /* How much more slowly a shell thickens than it starts. A period, not a
  * divisor: crusts is a handful out of 65536, so dividing it floors to zero and
  * the shell would never widen at all. */
-#define CRUST_WIDEN_PERIOD 16
+#define CRUST_WIDEN_PERIOD 8
 
 /* Fixed blast radius. Cascade ignition simulates lid giving way. Tune on
  * device. */
@@ -1882,7 +1882,7 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
                 && (((unsigned)s->step_phase + (unsigned)x * 5u + (unsigned)y * 33u)
                     & (CRUST_WIDEN_PERIOD - 1u)) == 0u);
         if (may_crust
-            && (int)(rng_next(&s->rng) & 0xFFFF) < ((s->crust >= 0) ? s->crust : r->crusts)) {
+            && (int)(rng_next(&s->rng) & (CRUST_ROLL_MAX - 1)) < ((s->crust >= 0) ? s->crust : r->crusts)) {
             REACTION_DOC(crusts_to, "what a settled cell slowly crusts into");
             row[x] = (cell_t)r->crusts_to;
             latch_content_flags(s, row[x]);

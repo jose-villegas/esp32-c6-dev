@@ -448,9 +448,15 @@ typedef struct {
     /* MAT_SAND closes loop; glass to sand when shocked. */
     uint8_t shatters_to;
 
-    /* SETTLED-ONLY and extremely rare: a cell at rest slowly becomes
-     * crusts_to. The roll is 16-bit at its read site, not the usual 8, since
-     * 1 in 256 a step is not slow once a bank holds a thousand cells. */
+    /* SETTLED-ONLY: a cell at rest slowly becomes crusts_to. Rolled against
+     * CRUST_ROLL_MAX, not the usual 256, because this is the one rate a whole
+     * bank pays at once.
+     *
+     * The denominator used to be 65536, chosen when EVERY settled cell was
+     * eligible. Only cells with a face on another material are now, which is
+     * a thin skin rather than the bank, and against that population 65536 put
+     * the fastest expressible rate - this field is a byte, so 255 - at over an
+     * hour to convert a 32-cell cover. */
     uint8_t crusts;
     uint8_t crusts_to;
 
@@ -464,6 +470,9 @@ typedef struct {
     uint8_t stride_pad3;
     uint8_t stride_pad4;
 } reaction_t;
+
+/* Denominator of the crusts roll. A power of two so the read site masks. */
+#define CRUST_ROLL_MAX 1024
 
 _Static_assert(sizeof(reaction_t) == 64, "reaction_of()'s stride must stay a power of two - resize stride_pad");
 
