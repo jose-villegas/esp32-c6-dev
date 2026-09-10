@@ -263,6 +263,7 @@ don't read all of them per session:
 | | |
 |---|---|
 | [`docs/Launcher-Architecture.md`](docs/Launcher-Architecture.md) | Shell/app contract, frame loop, adding an app, microui integration, why not LVGL |
+| [`docs/UI-Lessons.md`](docs/UI-Lessons.md) | Discovery narrative for the UI layer - what building the first complex screen cost, and the traps it found |
 | [`docs/sand/README.md`](docs/sand/README.md) | Index into the sand app's own doc set |
 | [`docs/sand/Sand-Simulation.md`](docs/sand/Sand-Simulation.md) | The sand app: materials, liquid model, momentum, performance budget |
 | [`docs/sand/Architecture.md`](docs/sand/Architecture.md) | Single-page map of `main/apps/sand/`'s shape - the grid byte, material table, file split |
