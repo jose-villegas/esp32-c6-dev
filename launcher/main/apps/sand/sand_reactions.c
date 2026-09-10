@@ -661,6 +661,26 @@ step_one_cold_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
             return false;
         }
 
+        /* AND FROM WET SOIL, which is water too, just bound in grains. The
+         * test above reads the neighbour's KIND, and dirt carries its water
+         * as a moisture nibble, so a soaked bank looked dry to it.
+         *
+         * Scaled by wetness and halved: bound water reaches the snow more
+         * slowly than free, and soil under about half saturation melts
+         * nothing. The rate is computed BEFORE the roll so dry ground draws
+         * no random number and cannot move the stream. */
+        if (r->thaws != 0 && r->heats_to != 0 && nr->dries != 0 && nr->moist_max != 0) {
+            const uint8_t wet = moisture_of(n, nr);
+            const int rate = (int)r->thaws * (int)wet / ((int)nr->moist_max * 2);
+            if (rate > 0 && (int)(rng_next(&s->rng) & 0xFF) < rate) {
+                /* The soil pays for it, or one damp cell melts a whole bank. */
+                s->cells[nat] = soil_set_moisture(n, (uint8_t)(wet - 1), 0);
+                mark_rows(s, ny, ny);
+                place_reacted(s, x, y, (size_t)y * (size_t)w + (size_t)x, (material_id_t)r->heats_to);
+                return false;
+            }
+        }
+
         if (r->chills == 0 || nr->heat_ramp == 0) {
             continue;
         }
