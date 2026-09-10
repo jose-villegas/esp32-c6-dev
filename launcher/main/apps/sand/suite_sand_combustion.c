@@ -927,6 +927,55 @@ static void test_pouring_stone_never_arms_the_reactions_pass(void)
 }
 
 
+/* BURYING A FIRE PUTS IT OUT - one of only two ways fire ends, and asserted
+ * nowhere until now: the whole suite passed with smothering disabled outright
+ * (bd esp32c6-dxj).
+ *
+ * Stone, because sand falls and the arrangement must still be one when the
+ * reactions pass arrives. THE OILED CELL IS THE POINT: without a control this
+ * passes just as well on a board where fire merely decays, which is the other
+ * way fire ends and has nothing to do with burial. One step, because
+ * smothering carries no roll. */
+static void test_a_fire_buried_on_all_four_sides_goes_out(void)
+{
+    fixture();
+
+    /* Fire is KIND_GAS, so both cells are boxed on all EIGHT neighbours -
+     * leaving a corner open just lets it escape diagonally, and the cell
+     * reads empty for a reason that has nothing to do with burial. */
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            if (dx == 0 && dy == 0) {
+                continue;
+            }
+            sand_set(&s, 2 + dx, 3 + dy, STONE);
+            sand_set(&s, 5 + dx, 3 + dy, STONE);
+        }
+    }
+    sand_set(&s, 2, 3, FIRE);
+    sand_set(&s, 5, 3, FIRE);
+
+    /* THE CONTROL, and the only difference between the two cells: one
+     * cardinal is oil instead of stone. neighbor_smothers() rejects any
+     * KIND_LIQUID whatever its density, so this cell is boxed in just as
+     * tightly and is NOT smothered. Oil rather than water because water
+     * quenches, which would end the fire by the other route and prove
+     * nothing. */
+    sand_set(&s, 5, 4, OIL);
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(MAT_FIRE, CELL_MATERIAL(sand_at(&s, 2, 3)),
+        "a fire covered on all four cardinals by a denser non-liquid must go "
+        "out - burying a fire is how you put it out, and smothered() carries "
+        "no roll, so one step is enough");
+
+    TEST_ASSERT_EQUAL_MESSAGE(MAT_FIRE, CELL_MATERIAL(sand_at(&s, 5, 3)),
+        "control: the same cell with ONE side open must still be burning - "
+        "otherwise this test is measuring fire decaying on its own and would "
+        "pass with smothering removed entirely");
+}
+
 /* A MATERIAL THIS PASS CREATES MUST SURVIVE THE PASS'S OWN WRITE-BACK.
  *
  * The reactions walk logs a cell's material, then a stage may convert that
@@ -1757,6 +1806,7 @@ void run_sand_combustion_suite(void)
     RUN_TEST(test_fire_burning_out_marks_its_row_dirty);
     RUN_TEST(test_fire_spreads_through_a_connected_pocket_in_one_step);
     RUN_TEST(test_pouring_stone_never_arms_the_reactions_pass);
+    RUN_TEST(test_a_fire_buried_on_all_four_sides_goes_out);
     RUN_TEST(test_a_material_created_during_the_pass_stays_in_the_mask);
     RUN_TEST(test_sand_alone_lets_the_moisture_pass_switch_off_again);
     RUN_TEST(test_placing_fire_arms_both_gas_and_fire_passes);
