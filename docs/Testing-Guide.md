@@ -550,7 +550,17 @@ against.
    `RUN_TEST` line. A suite can be portable and still have a device-only
    section — the sand suite (`suite_sand_*.c`) runs its rules on a host and
    its performance checks (`suite_sand_perf.c`) only on the chip.
-5. Break the implementation, confirm red, restore.
+5. **Keep big fixtures off `.bss`.** A suite's file-scope objects are
+   firmware static data in a diagnostics build, charged against the same
+   budget as everything else - and that budget is tight enough to fail on
+   one careless object. A microui context added to a suite this way cost
+   10,744 bytes and broke `check_static_ram.py`'s "one grid fits" gate
+   outright. Neither the host runner (a laptop's memory behind it) nor a
+   release build (which links no suites) can see it. Allocate anything
+   large in `fixture()` instead, as `suite_sand_liquid_depth.c` already
+   does, and run `tools/build_diag_check.sh` before pushing rather than
+   finding out from a pull request.
+6. Break the implementation, confirm red, restore.
 
 ---
 

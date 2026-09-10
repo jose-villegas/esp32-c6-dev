@@ -3,7 +3,7 @@
 # Build the launcher's firmware and flash it to the device.
 #
 # Usage:
-#   tools/build_flash.sh [--dev|--diag] [COM_PORT] [IDF_EXPORT]
+#   tools/build_flash.sh [--dev|--diag] [--build-only] [COM_PORT] [IDF_EXPORT]
 #
 #   --dev       build the DEVELOPMENT image instead of the release one, and
 #               leave it on the board: development-only logging and
@@ -13,6 +13,12 @@
 #               leave it on the board: everything --dev gets you, plus the
 #               on-device test suites and Diagnostics' own button for
 #               running them. See below.
+#   --build-only  build and stop: no device needed, nothing flashed.
+#               Every idf.py build runs tools/check_static_ram.py, and
+#               --diag is the only variant where the test suites' own
+#               static data counts against the framebuffer-plus-grid
+#               budget - so this is how that gate gets exercised on a
+#               laptop instead of on a pull request.
 #   COM_PORT    serial port the device is on. Default: COM3.
 #   IDF_EXPORT  path to ESP-IDF's export script - export.bat on Windows,
 #               export.sh elsewhere. Default: this project's usual install.
@@ -60,11 +66,13 @@
 set -euo pipefail
 
 VARIANT=release
+BUILD_ONLY=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --dev)     VARIANT=dev; shift ;;
         -d|--diag) VARIANT=diag; shift ;;
+        --build-only) BUILD_ONLY=1; shift ;;
         -h|--help) sed -n '2,53p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         --)        shift; break ;;
         -*)        echo "unknown option: $1" >&2; exit 2 ;;
@@ -127,6 +135,14 @@ if [ ! -f "$LAUNCHER_DIR/$BUILD_DIR/launcher.bin" ]; then
     echo "build reported success but produced no binary at" >&2
     echo "  $LAUNCHER_DIR/$BUILD_DIR/launcher.bin" >&2
     exit 1
+fi
+
+if [ "$BUILD_ONLY" -eq 1 ]; then
+    # The build itself already ran the gates that matter here - the
+    # static-RAM prediction among them - so reaching this line IS the
+    # result. Nothing is flashed and no device has to be attached.
+    echo "=== Done - $BUILD_DIR built, nothing flashed ==="
+    exit 0
 fi
 
 echo "=== Flashing to $COM_PORT ==="
