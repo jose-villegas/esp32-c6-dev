@@ -1002,20 +1002,26 @@ static void test_cold_conducts_deep_into_a_slab(void)
     const int depth = deepest - slab_top + 1;
     free(cells);
 
-    /* Measured 31 rows with the walk and 3 without, so this sits far from
-     * both and fails loudly rather than drifting. */
-    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(20, depth,
+    /* Measured 11 rows with the walk and 3 without, so this sits between them
+     * and fails loudly rather than drifting.
+     *
+     * It was 31, on a reach shared with heat. Thirty-two cells of cold read as
+     * unrealistic in play, so cold got its own COLD_REACH at a third of it -
+     * the walk still has to travel several times what a bare contact gives,
+     * which is what this pins, but it no longer crosses a whole screen. */
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(6, depth,
         "cold must conduct well down a glass slab, not stop at the cells it "
         "touches - three rows is what it managed before it could travel");
 
     /* AND ARRIVE COLD, not merely tinted. Reach alone was not what the
      * report asked for: a slab where every chilled cell sits one level under
-     * ambient looks weak and, more to the point, never reaches
-     * SAND_SHOCK_COLD, so heat from below cannot shatter it. Measured 43% of
-     * the slab at or below that threshold, against 12% when the walk
-     * attenuated at every cell. */
-    TEST_ASSERT_GREATER_THAN_INT_MESSAGE((W2 * (H2 - slab_top)) / 4, shocked,
-        "a quarter of the slab at least must reach SAND_SHOCK_COLD, or the "
+     * ambient looks weak and never reaches SAND_SHOCK_COLD, so heat from
+     * below cannot shatter it. Measured 20% at or below that threshold,
+     * against 12% when the walk attenuated at every cell. It was 43% on the
+     * old reach shared with heat; a third of the reach costs most of that,
+     * and what matters is that glass still arrives cold enough to break. */
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE((W2 * (H2 - slab_top)) / 6, shocked,
+        "a sixth of the slab at least must reach SAND_SHOCK_COLD, or the "
         "cold is too shallow for heat below to break the glass");
 }
 

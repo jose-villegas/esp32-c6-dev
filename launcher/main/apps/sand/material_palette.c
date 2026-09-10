@@ -106,7 +106,18 @@
 /* Shock breaks largest step: material shatters, not cools. Different
  * behaviors should look distinct. */
 
-#define GLASS_FROST   0xD6EEF8
+/* CYAN, and only the cold END of the ramp - the shimmer keeps its own pale
+ * target below. One constant did both jobs, which is why cooling was hard to
+ * see: a chilling cell moved toward the very colour the per-cell shimmer
+ * already blended toward.
+ *
+ * Cyan also holds saturation as it cools. The old ramp took red 46 -> 214, so
+ * cold glass washed out to near-white; this leaves red near 95. */
+#define GLASS_FROST   0x5FE6F0
+
+/* Where a cell's per-cell shimmer blends TO. Was GLASS_FROST; kept at that
+ * old value so ambient glass renders exactly as it always has. */
+#define GLASS_SHIMMER 0xD6EEF8
 #define GLASS_AMBIENT 0x2E6B85
 #define GLASS_NEUTRAL 0x8C7E70
 #define GLASS_GLOW    0xC8701E
@@ -407,9 +418,9 @@ static const gfx_color_t palette[256] = {
 #define GLASS_EDGE_RGB(v) GLASS_RGB(GLASS_EDGE_V(v))
 #define STONE_EDGE_RGB(v) LERP(STONE_RGB(v), STONE_RGB(SAND_AMBIENT_HEAT), 10)
 
-/* GLASS_FROST via COOL. Mix WARM/HOT for icy blue to muddy yellow-green.
+/* GLASS_SHIMMER via COOL. Mix WARM/HOT for icy blue to muddy yellow-green.
  * White stays, brighter. */
-#define GLASS_GRADIENT_HI(v) ((v) <= SAND_AMBIENT_HEAT ? GLASS_FROST : 0xFFFFFF)
+#define GLASS_GRADIENT_HI(v) ((v) <= SAND_AMBIENT_HEAT ? GLASS_SHIMMER : 0xFFFFFF)
 
 #define STONE_DARK(rgb)     LERP((rgb), 0x000000, 3)
 #define STONE_LIGHT(rgb)    LERP((rgb), 0xFFFFFF, 3)
