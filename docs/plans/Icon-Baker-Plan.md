@@ -288,8 +288,31 @@ failure mode CLAUDE.md's convention is written to prevent.
    not the same density - and two sets that nearly match read worse than two
    that clearly differ. Judge it with both on screen, not in the abstract.
 
-5. **`_Static_assert` the run counts**, and retire the hand-maintained cap
-   test standing in for it today.
+5. **Structural asserts, and a per-atlas total.**
+
+   This phase was planned as "`_Static_assert` the run counts, turning a
+   runtime cliff into a build error" - but the cliff it named was
+   `ui_draw_bitmap()`'s 48-slot stack buffer, and phase 3 deleted that
+   outright. There is no per-icon ceiling left to assert against beyond
+   `icon_t.blocks` being a `uint8_t`, which the generator already rejects
+   above. Recorded rather than quietly reinterpreted, because a plan that
+   still describes a solved problem sends the next reader looking for it.
+
+   What is genuinely left is smaller: emit `_Static_assert`s in each
+   generated header for facts a consumer's compile can then check - every
+   offset inside the blob, the blob's size equal to the sum of each icon's
+   `h * stride`, `blocks` within its type - so a generator bug fails at the
+   call site rather than at runtime. Plus a per-atlas total block count, so
+   a screen can assert its own icon budget.
+
+   **The real successor to "turn the cliff into a build error" is not a
+   static assert.** It is a host test that builds a screen's actual command
+   list and asserts it fits `MU_COMMANDLIST_SIZE` - possible now that
+   `microui.c` links into the host build, and better than anything per-icon
+   because it measures the whole screen (panels, bezels, text and icons)
+   rather than the icon share alone. Tracked separately; the brush screen
+   sits at roughly 5.4 KiB of 8 KiB, currently visible only through a
+   development-build log on a device someone is holding.
 
 **Phase 4 is the real acceptance test of everything before it.** The four
 sand icons are already pinned by structural assertions, so baking them must
