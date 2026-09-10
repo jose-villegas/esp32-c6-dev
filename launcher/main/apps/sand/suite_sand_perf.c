@@ -373,10 +373,10 @@ static void test_a_screen_of_settled_sand_costs_almost_nothing(void)
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(REAL_W * REAL_H, grains,
         "and nothing may have moved");
-    /* Re-based 2026-08-26: measured 260 -> target 235 (measured * 0.9,
-     * rounded) - see FULL_STEP_BUDGET_US's comment for the uniform
-     * re-base. Down from 300, which had become pure headroom. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(235, (int)per_step,
+    /* Re-pegged at measured * 0.9 from the first capture after the sweep
+     * stopped building a per-row context for a block row it was going to
+     * skip whole (esp32c6-lgc): 58 us, where the same board cost 269. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(52, (int)per_step,
         "sand that is not moving must cost almost nothing - if this fails, "
         "rows are being examined that had no reason to be");
 }
