@@ -1,12 +1,18 @@
 # UI Lessons
 
-The discovery narrative for the UI layer - the bugs found while building the
-sand app's brush screen and the reasoning behind each fix, in the order they
-came up. For how the UI actually works today, read
-[`Launcher-Architecture.md`](Launcher-Architecture.md) instead; the two are
-deliberately separate, one a reference and the other a history, exactly as
-[`sand/Simulation-Lessons.md`](sand/Simulation-Lessons.md) sits beside
-[`sand/Sand-Simulation.md`](sand/Sand-Simulation.md).
+**If you are here to build a screen, you want
+[`Building-a-Screen.md`](Building-a-Screen.md) instead** - the instructions,
+with every rule below already distilled into something you can follow. This
+page is the record behind it: what each of those rules cost to learn, in the
+order it came up. Same division the performance docs use, where
+[`sand/Perf-Round-Guide.md`](sand/Perf-Round-Guide.md) is the procedure and
+[`sand/Performance-Tuning-Attempts.md`](sand/Performance-Tuning-Attempts.md)
+is the record.
+
+Kept because a rule whose reason is lost gets deleted by the next person who
+finds it inconvenient - but the rule itself belongs in the guide, not here.
+For how the UI works today, read
+[`Launcher-Architecture.md`](Launcher-Architecture.md).
 
 The brush screen was the first UI in this shell more complicated than a list
 of buttons: two text sizes, a segmented control, a draggable slider, icons,
