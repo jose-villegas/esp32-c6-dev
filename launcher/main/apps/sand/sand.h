@@ -126,6 +126,10 @@ typedef struct sand_s {
 
     /* See sand_set_soak(). 0, the default, means nothing soaks. */
     int      soak;
+    /* Steps between a saturated cell's conversion rolls, or
+     * SAND_SOAK_CONVERT_PER_MATERIAL for the built-in period. A test that
+     * wants the conversion ITSELF, not the rate it ships at, sets 1. */
+    int      soak_convert;
 
     /* Steps before another fuse blast may fire: set to cooldown on explosion,
      * ticked down each reactions pass. Cross-step state for fuse model,
@@ -447,6 +451,11 @@ void sand_set_evaporates(sand_t *s, int chance);
  * SAND_SOAK_PER_MATERIAL. */
 void sand_set_soak(sand_t *s, int chance);
 #define SAND_SOAK_PER_MATERIAL (-1)
+
+/* Overrides how often a saturated cell rolls to become soaked_to. Must be a
+ * power of two - the gate is a mask, see SOAKED_CONVERT_PERIOD. */
+void sand_set_soak_convert(sand_t *s, int period);
+#define SAND_SOAK_CONVERT_PER_MATERIAL (-1)
 
 /* Flame catch chance per adjacent burning cell per step, 1 in 256.
  * Flammability in material.h's reaction_t. Defaults to material-specific

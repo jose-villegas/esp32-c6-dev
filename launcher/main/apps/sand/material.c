@@ -746,8 +746,9 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_CODES] = {
 
 /* catches through volume, not just face */
 
-/* soaks = 60: water wets it - moisture climbs, water is consumed - dirt's
- * own rate. */
+/* soaks = 2, far under dirt's 60: a keg must sit VISIBLY wet for a good while
+ * before anything happens to it. Measured, powder under standing water:
+ * saturation at 7 steps when this was dirt's rate, 293 now. */
 
 /* soaks_to = 0: stays gunpowder while it wets, only wetter, same as
  * dirt. */
@@ -766,7 +767,7 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_CODES] = {
         .explodes = SAND_GUNPOWDER_BLAST_RADIUS,                                                                       \
         .needs_air = 0,                                                                                                \
         .dissolvable = 200,                                                                                            \
-        .soaks = 60,                                                                                                   \
+        .soaks = 2,                                                                                                    \
         .soaks_to = 0,                                                                                                 \
         .tones = GUNPOWDER_TONES,                                                                                      \
         .moist_max = GUNPOWDER_MOIST_MAX,                                                                              \
