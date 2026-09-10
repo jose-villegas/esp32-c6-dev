@@ -156,7 +156,16 @@ build.
 ### Includes are layer-qualified
 
 `"gfx/gfx.h"`, not `"gfx.h"`, even between files in the same folder — so an
-app reaching past `ui` into `gfx` is visible at the include line. Layers:
+app reaching past `ui` into `gfx` is visible at the include line.
+
+**Comments obey the same direction as includes.** A file in `gfx/`, `ui/`,
+`boot/`, `util/` or `test/suites/` must not name a particular app — an app
+is a folder designed to be deleted whole, so a lower layer naming one is a
+dangling reference by construction, and the comment survives the code it
+described. Say what shape of caller needs the thing ("a checkbox toggle", "a
+per-tile badge"), or state the rule a caller must follow, rather than naming
+the file that currently does it. An app's own files may name anything below
+them freely; that direction is the one that cannot dangle. Layers:
 `boot/` (runs once, before the frame loop exists), `gfx/` (the one
 framebuffer + primitives), `ui/` (microui integration), `input/` (touch,
 gesture), `util/` (pure arithmetic), `apps/`.
