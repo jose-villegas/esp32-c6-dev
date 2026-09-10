@@ -382,14 +382,13 @@ cool_off_chain(sand_t* s, int x, int y, int w, int h, uint8_t product, int chanc
 
 /* A saturated cell only rolls its conversion one step in this many.
  *
- * soaked_chance FLOORS AT 1 IN 256, because the roll is rng_next() & 0xFF, so
- * that field alone cannot express "magnitudes slower" - and it is shared with
- * every other material that declares soaked_to, so widening it is not a local
- * edit. Spacing the roll is, and it costs no draw on the steps it skips.
+ * soaked_chance FLOORS AT 1 IN 256 - the roll is rng_next() & 0xFF - and is
+ * shared with every material declaring soaked_to, so widening it is not a
+ * local edit. Spacing the roll is, and costs no draw on the steps it skips.
  *
- * Measured, powder under standing water: first oil at 18 steps before, 1753
- * with this and the slower soaks. */
-#define SOAKED_CONVERT_PERIOD 256
+ * Measured, powder under standing water: first oil at 18 steps before, ~400
+ * here. 256 was tried first and plays as "submerged powder never converts". */
+#define SOAKED_CONVERT_PERIOD 64
 
 /* Splits cell for input/output. Soaks UNIT, transforms or increases variant.
  * Drying decreases variant. Returns true if wet/near liquid. Prevents
