@@ -8,11 +8,17 @@
  * bit packing reproduce known-good artwork exactly, not merely that they
  * round-trip against themselves. suite_icons.c is untouched by this file and
  * stays the independent witness.
+ *
+ * Everything else in this file works over EVERY baked icon by index, never
+ * assuming a 16-wide/2-byte-stride shape - the atlas mixes the 16x16
+ * PNG-sourced check mark with 24x24 SVG-sourced imports, and icon_t's own
+ * w/h/stride fields are what make that mixing safe.
  *===========================================================================*/
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "unity.h"
 #include "suites.h"
@@ -46,43 +52,101 @@ static void test_check_matches_icon_check_bitmap_exactly(void)
 }
 
 /* A run-length walk of the UNPACKED rows, independent of count_runs() in
- * gen_icons.py - proving the baked `blocks` field against what the bytes
+ * gen_icons.py - proving every baked `blocks` field against what the bytes
  * actually contain, not against the generator's own count of what it
- * intended to write. */
-static void test_check_run_count_matches_baked_blocks(void)
+ * intended to write. Covers both the PNG-sourced check mark and every
+ * SVG-sourced import, whatever their own w/h/stride happen to be. */
+static void test_all_icons_blocks_match_actual_run_length(void)
 {
-    const icon_t *icon = &icon_system_table[ICON_SYSTEM_CHECK];
-    int total = 0;
-    for (int y = 0; y < icon->h; y++) {
-        bool in_run = false;
-        for (int x = 0; x < icon->w; x++) {
-            const bool on = baked_bit(icon, x, y);
-            if (on && !in_run) {
-                total++;
+    for (int id = 0; id < ICON_SYSTEM_COUNT; id++) {
+        const icon_t *icon = &icon_system_table[id];
+        int total = 0;
+        for (int y = 0; y < icon->h; y++) {
+            bool in_run = false;
+            for (int x = 0; x < icon->w; x++) {
+                const bool on = baked_bit(icon, x, y);
+                if (on && !in_run) {
+                    total++;
+                }
+                in_run = on;
             }
-            in_run = on;
         }
+        TEST_ASSERT_EQUAL_INT_MESSAGE(icon->blocks, total,
+            "icon_t.blocks does not match an actual run-length walk of the "
+            "unpacked rows for some icon in icon_system_table - the baked "
+            "count and the real bytes disagree");
     }
-    TEST_ASSERT_EQUAL_INT_MESSAGE(icon->blocks, total,
-        "icon_t.blocks does not match an actual run-length walk of the "
-        "unpacked rows - the baked count and the real bytes disagree");
 }
 
-static void test_check_struct_fields_are_self_consistent(void)
+static void test_all_icons_struct_fields_are_self_consistent(void)
 {
-    const icon_t *icon = &icon_system_table[ICON_SYSTEM_CHECK];
-    TEST_ASSERT_EQUAL_INT_MESSAGE((icon->w + 7) / 8, icon->stride,
-        "stride is not (w + 7) / 8");
-    TEST_ASSERT_TRUE_MESSAGE(
-        (size_t)icon->offset + (size_t)icon->stride * icon->h <= sizeof(icon_system_rows),
-        "icon's rows run past the end of icon_system_rows[]");
+    for (int id = 0; id < ICON_SYSTEM_COUNT; id++) {
+        const icon_t *icon = &icon_system_table[id];
+        TEST_ASSERT_EQUAL_INT_MESSAGE((icon->w + 7) / 8, icon->stride,
+            "stride is not (w + 7) / 8 for some icon in icon_system_table");
+        TEST_ASSERT_TRUE_MESSAGE(
+            (size_t)icon->offset + (size_t)icon->stride * icon->h <= sizeof(icon_system_rows),
+            "an icon's rows run past the end of icon_system_rows[]");
+    }
+}
+
+/* design/icons/system/chevron-left.svg's 7 rectangles, traced BY HAND from
+ * its path data rather than by calling gen_icons.py's SVG reader - a green
+ * result proves the baked bytes against the source file, not the parser's
+ * own idea of what it read. */
+static const char *const chevron_left_expected_rows[24] = {
+    "........................", /* row 0 */
+    "........................",
+    "........................",
+    "........................",
+    "........................",
+    "..............XX........", /* row 5 */
+    "..............XX........",
+    "............XX..........",
+    "............XX..........",
+    "..........XX............",
+    "..........XX............", /* row 10 */
+    "........XX..............",
+    "........XX..............",
+    "..........XX............",
+    "..........XX............",
+    "............XX..........", /* row 15 */
+    "............XX..........",
+    "..............XX........",
+    "..............XX........",
+    "........................",
+    "........................", /* row 20 */
+    "........................",
+    "........................",
+    "........................",
+};
+
+static void test_chevron_left_matches_source_svg_rectangles(void)
+{
+    const icon_t *icon = &icon_system_table[ICON_SYSTEM_CHEVRON_LEFT];
+    TEST_ASSERT_EQUAL_INT(24, icon->w);
+    TEST_ASSERT_EQUAL_INT(24, icon->h);
+
+    for (int y = 0; y < 24; y++) {
+        const char *row = chevron_left_expected_rows[y];
+        TEST_ASSERT_EQUAL_INT_MESSAGE(24, (int)strnlen(row, 25),
+            "a hand-transcribed expected row is not 24 characters");
+        for (int x = 0; x < 24; x++) {
+            const bool want = row[x] == 'X';
+            const bool got = baked_bit(icon, x, y);
+            TEST_ASSERT_EQUAL_INT_MESSAGE(want, got,
+                "baked chevron_left diverges from chevron-left.svg's own "
+                "rectangles - see the message above for row/col");
+        }
+    }
 }
 
 void run_icons_system_suite(void)
 {
     RUN_TEST(test_check_matches_icon_check_bitmap_exactly);
-    RUN_TEST(test_check_run_count_matches_baked_blocks);
-    RUN_TEST(test_check_struct_fields_are_self_consistent);
+    RUN_TEST(test_all_icons_blocks_match_actual_run_length);
+    RUN_TEST(test_all_icons_struct_fields_are_self_consistent);
+    RUN_TEST(test_chevron_left_matches_source_svg_rectangles);
 }
 
 SUITE_REGISTER(run_icons_system_suite);
