@@ -505,9 +505,9 @@ mouse, hover means "the pointer is near" and focus means "the button is
 held"; on a touchscreen the pointer does not exist until a finger is already
 on the glass, so hover *is* contact.
 
-Since Phase 1 of `docs/plans/Sand-Brush-Screen-Plan.md` (`ui_pointer.c`), the
-pointer holds `DOWN` for the whole press instead of releasing the same frame
-it presses, so `MU_COLOR_BUTTONFOCUS` now covers most of a tap on its own —
+The pointer holds `DOWN` for the whole press instead of releasing the same
+frame it presses — `ui_pointer.c` is where that policy lives — so
+`MU_COLOR_BUTTONFOCUS` now covers most of a tap on its own —
 microui keeps a control focused for as long as `mouse_down` stays true,
 `MU_OPT_HOLDFOCUS` or not. What still needs hover is the one synthesized
 frame *before* `DOWN` lands (see `feed_input()`'s comment): the pointer is

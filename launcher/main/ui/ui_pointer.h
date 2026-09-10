@@ -38,5 +38,7 @@ typedef struct {
 } ui_pointer_t;
 
 /* Feed one frame's input_t; get back 0-UI_POINTER_MAX_EVENTS events in `out`,
- * in playback order. Returns the count written (never more than `max`). */
-int ui_pointer_step(ui_pointer_t* p, const input_t* input, ui_pointer_event_t* out, int max);
+ * in playback order. Returns the count written, or 0 if `max` can't hold the
+ * largest possible result - ui_bezel_spans()'s all-or-nothing rule, so a
+ * partial count never lets a caller read past a too-small array. */
+int ui_pointer_step(ui_pointer_t *p, const input_t *input, ui_pointer_event_t *out, int max);

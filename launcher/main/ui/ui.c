@@ -282,6 +282,10 @@ void ui_init(void)
  * to happen. */
 static ui_pointer_t pointer;
 
+/* Also where ui_pointer_step()'s off-screen park point (-1, -1) gets mapped:
+ * under a translating transform, logical "off-screen" is not necessarily
+ * (-1, -1) either, so the park needs the same inverse as a real touch to
+ * stay outside whatever the logical canvas currently is. */
 static void to_logical(int x, int y, int *lx, int *ly)
 {
     ui_transform_t inv;
