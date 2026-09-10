@@ -600,19 +600,37 @@ static void test_each_material_is_painted_the_way_it_should_be(void)
     }
 }
 
-/* Glass has a grain too - no longer required to stay quieter than
- * stone's, now that it runs all the way to GLASS_FROST rather than
- * wobbling a couple of fifteenths either side of its own colour. A wider
- * swing than stone's is the deliberate design now, not a bug to catch. */
-static void test_glass_grain_is_quieter_than_stone(void)
+/* Glass has a grain, and it must stay INSIDE its own heat level.
+ *
+ * It used to run all the way to GLASS_FROST - deliberate, and also why cold
+ * could not be read on glass: the grain spanned the whole range cooling moves
+ * through, so an ambient cell could render any colour a chilled one could.
+ *
+ * The two want the same axis and only one can have it. The grain is now a lift
+ * from the cell's own colour, under half the gap between heat levels. That
+ * makes it coarser - adjacent hashes no longer resolve apart, so this compares
+ * opposite ends. */
+static void test_glass_grain_varies_but_stays_inside_its_heat_level(void)
 {
-    gfx_color_t g0[3], g1[3];
-    material_colours(CELL_MAKE(MAT_GLASS, SAND_AMBIENT_HEAT), 0u, 0u, 255u, g0);
-    material_colours(CELL_MAKE(MAT_GLASS, SAND_AMBIENT_HEAT), 3u, 0u, 255u, g1);
-
-    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, colour_gap(g0[0], g1[0]),
+    gfx_color_t lo[3], hi[3];
+    material_colours(CELL_MAKE(MAT_GLASS, SAND_AMBIENT_HEAT), 0u, 0u, 255u, lo);
+    material_colours(CELL_MAKE(MAT_GLASS, SAND_AMBIENT_HEAT), 128u, 0u, 255u, hi);
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, colour_gap(lo[0], hi[0]),
         "glass must vary from cell to cell at all - without it a pane is "
         "one flat fill, which is what the grain exists to undo");
+
+    /* THE LOAD-BEARING HALF: no cell of one heat level may render as a cell
+     * of the next. This is what the old wide grain broke. */
+    for (unsigned h = 0; h < 256u; h += 16u) {
+        gfx_color_t warm[3], cold[3];
+        material_colours(CELL_MAKE(MAT_GLASS, SAND_AMBIENT_HEAT), h, 0u, 255u, warm);
+        for (unsigned h2 = 0; h2 < 256u; h2 += 16u) {
+            material_colours(CELL_MAKE(MAT_GLASS, SAND_AMBIENT_HEAT - 1), h2, 0u, 255u, cold);
+            TEST_ASSERT_NOT_EQUAL_MESSAGE(warm[0], cold[0],
+                "a chilled glass cell must never render the same colour as an "
+                "ambient one - that is what made cold unreadable on glass");
+        }
+    }
 }
 
 /* Stone's speckle comes from the cell's POSITION, not from its variant.
@@ -1029,7 +1047,7 @@ void run_sand_tone_suite(void)
     RUN_TEST(test_snow_cracks_glass_but_not_stone);
     RUN_TEST(test_an_edge_shows_less_temperature_than_the_body);
     RUN_TEST(test_each_material_is_painted_the_way_it_should_be);
-    RUN_TEST(test_glass_grain_is_quieter_than_stone);
+    RUN_TEST(test_glass_grain_varies_but_stays_inside_its_heat_level);
     RUN_TEST(test_stone_speckles_by_position_at_every_temperature);
     RUN_TEST(test_cullet_shades_are_four_distinct_tints);
     RUN_TEST(test_cullet_changes_colour_as_the_phase_advances);

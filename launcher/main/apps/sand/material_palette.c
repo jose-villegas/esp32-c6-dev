@@ -407,9 +407,23 @@ static const gfx_color_t palette[256] = {
 #define GLASS_EDGE_RGB(v) GLASS_RGB(GLASS_EDGE_V(v))
 #define STONE_EDGE_RGB(v) LERP(STONE_RGB(v), STONE_RGB(SAND_AMBIENT_HEAT), 10)
 
-/* GLASS_FROST via COOL. Mix WARM/HOT for icy blue to muddy yellow-green.
- * White stays, brighter. */
-#define GLASS_GRADIENT_HI(v) ((v) <= SAND_AMBIENT_HEAT ? GLASS_FROST : 0xFFFFFF)
+/* Top of a glass cell's own sparkle: the same colour with its tint drained.
+ *
+ * IT USED TO BE GLASS_FROST, which is why cold could not be read on glass - an
+ * ambient pane then spanned the whole range cooling moves through, so every
+ * cold band sat inside the ambient one.
+ *
+ * SIDEWAYS, NOT ALONG. Cooling moves glass along brightness, so a brighter
+ * sparkle competes for that axis and must stay small. Draining tint moves
+ * across it, so the swing can be wide - 49 at ambient against the 28 a
+ * brightness lift was limited to.
+ *
+ * Evaluates rgb three times; only ever passed a variable. */
+#define GLASS_GREY(rgb)                                                                                                \
+    (((((rgb) >> 16) & 0xFFu) + (((rgb) >> 8) & 0xFFu) + ((rgb) & 0xFFu)) / 3u)
+#define GLASS_GRADIENT_HI(rgb)                                                                                         \
+    ((GLASS_GREY(rgb) << 16) | (GLASS_GREY(rgb) << 8) | GLASS_GREY(rgb))
+
 
 #define STONE_DARK(rgb)     LERP((rgb), 0x000000, 3)
 #define STONE_LIGHT(rgb)    LERP((rgb), 0xFFFFFF, 3)
@@ -898,7 +912,7 @@ material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_col
              * GFX_RGB(). gfx_color_t drops red byte, causing "glass reads
              * green under heat". */
             const uint32_t base = edge ? GLASS_EDGE_RGB(v) : GLASS_RGB(v);
-            out[0] = GFX_RGB(LERP8(base, GLASS_GRADIENT_HI(v), frac));
+            out[0] = GFX_RGB(LERP8(base, GLASS_GRADIENT_HI(base), frac));
             out[1] = out[0];
             out[2] = out[0];
             return MATERIAL_SPECKLED;
