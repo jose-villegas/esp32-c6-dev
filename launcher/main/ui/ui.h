@@ -190,9 +190,9 @@ static inline mu_Rect ui_centered_rect(int canvas_w, int w, int h, int y)
 /* UI_DRAW_BITMAP_MAX_BLOCKS: ui_draw_bitmap()'s stack buffer, smaller than
  * ICON_BITMAP_MAX_BLOCKS (128, gfx/icons.h) on purpose - 128 icon_rect_t is
  * ~2 KB of UI-task stack for a worst case no shipped artwork gets near.
- * apps/sand/suite_sand_icons.c is what keeps that promise: it asserts every
- * shipped bitmap's block count, at the sizes the screen actually draws
- * them, fits under this cap. Raise it there first if a new icon does not. */
+ * What keeps that promise is a suite beside the artwork itself, asserting
+ * every bitmap's block count at the sizes it is actually drawn - artwork
+ * belongs to whoever owns it, so the check does too. */
 #define UI_DRAW_BITMAP_MAX_BLOCKS 48
 
 /* Draws a 16x16 bitmap in icon_check_bitmap's format (gfx/icons.h) filling
