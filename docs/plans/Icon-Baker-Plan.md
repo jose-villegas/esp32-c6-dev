@@ -233,29 +233,70 @@ failure mode CLAUDE.md's convention is written to prevent.
 
 ## Phases
 
-1. **Generator plus the system set.** `gen_icons.py`, `design/icons/system.*`,
-   `gfx/icons_system.h`. Migrate the check mark: `icon_check()` fetches from
-   the table, and `ui.c`'s `MU_ICON_CHECK` path is unchanged for callers.
-   **Record `check_static_ram.py`'s reported number before and after** — a
-   baked set must move it by exactly zero, and this is the phase that proves
-   the placement claim above instead of asserting it.
-2. **The packed format, and a streaming draw.** Stride-aware run extraction
-   (it was already generalized once, in Phase 3, from the check mark to any
-   16-wide bitmap — this is the same move a second time), reshaped as an
-   iterator so `ui_draw_icon()` emits each rect as it is found rather than
-   buffering all of them on the stack. Keep the array-returning form for
-   host tests, or have the test supply a collecting callback; either way the
-   firmware path must not put an icon-sized array on the UI task's stack.
-3. **Migrate sand's four.** Delete `sand_icons.h`.
-4. **`_Static_assert` the run counts**, and retire the hand-maintained cap
-   test that stands in for it today.
+1. **The generator, proved against artwork we already trust.** `gen_icons.py`
+   reading a PNG atlas, `design/icons/system.*`, `gfx/icons_system.h`.
+   Purely additive: nothing is rewired, and the acceptance test is that the
+   baked check mark is bit-for-bit the shape `icon_check_bitmap` already
+   holds, with `suite_icons.c` green and untouched as the independent
+   witness. **Record `check_static_ram.py`'s number before and after** — a
+   baked set must move it by exactly zero, which is what proves the flash
+   placement claimed above rather than asserting it.
 
-**Phase 3 is the real acceptance test of phases 1 and 2.** The four sand
-icons are already pinned by structural assertions, so drawing them into a
-PNG and baking must produce output that passes `suite_sand_icons.c`
-unchanged. A generator that cannot reproduce known-good artwork is not ready
-to be handed new artwork — and that is a check with teeth, unlike eyeballing
-a fresh bake and deciding it looks fine.
+2. **An SVG reader, and a real system atlas.** Source:
+   [pixelarticons](https://github.com/halfmage/pixelarticons), MIT (Gerrit
+   Halfmann, 2019), 1,036 free icons on a strict 24x24 grid with no
+   anti-aliasing.
+
+   **Why SVG turns out to be the easy format, not the hard one.** Their
+   icons are a single `<path>` of nothing but `M`/`H`/`V`/`h`/`v`/`Z` at
+   integer coordinates - every subpath is an axis-aligned rectangle, almost
+   always 2x2. Verified directly against `check.svg` and `close.svg`. So the
+   reader extracts rectangles and fills a grid **exactly**: no rasterizer,
+   no Pillow, no threshold, and therefore none of the "silently rounding
+   produces a glyph nobody drew" risk the PNG reader has to guard against.
+   A ~30-line parser, and the same stdlib-only rule the rest of the
+   generator already follows.
+
+   Be as strict here as the PNG reader is about anti-aliasing: a curve, an
+   arc, or a non-integer coordinate is a **rejection**, not something to
+   approximate. The whole reason this source is safe is that it never needs
+   approximating.
+
+   **Bake only what the manifest names.** They publish a thousand icons; we
+   want on the order of eight - check, close, info, alert, the chevrons,
+   back, home. Flash cost is what we use.
+
+   **Provenance is a first-class requirement, not paperwork.** The reason
+   the defaulticon set was rejected is that its upstream had disappeared,
+   leaving its licence unverifiable for an asset that would live in this
+   tree permanently. So: carry the MIT notice in `design/icons/`, name it in
+   the generated banner, and **pin the upstream commit in the manifest** so
+   a re-bake years from now is reproducible and the provenance is still
+   checkable.
+
+3. **The packed format's streaming draw.** Stride-aware run extraction
+   reshaped as an iterator, so `ui_draw_icon()` emits each rect as it is
+   found rather than buffering an icon-sized array on the UI task's stack -
+   see the RAM section above for why that is the one place the current
+   design fails its own constraint. Keep an array-returning form for host
+   tests, or have the test supply a collecting callback.
+
+4. **Migrate sand's four.** Delete `sand_icons.h`.
+
+   Decide here whether they get redrawn: ours are 2px strokes on a 16 grid
+   (about 8x8 blocks), pixelarticons are 2px on 24 (about 12x12). Close, but
+   not the same density - and two sets that nearly match read worse than two
+   that clearly differ. Judge it with both on screen, not in the abstract.
+
+5. **`_Static_assert` the run counts**, and retire the hand-maintained cap
+   test standing in for it today.
+
+**Phase 4 is the real acceptance test of everything before it.** The four
+sand icons are already pinned by structural assertions, so baking them must
+produce output that passes `suite_sand_icons.c` unchanged. A generator that
+cannot reproduce known-good artwork is not ready to be handed new artwork -
+a check with teeth, unlike eyeballing a fresh bake and deciding it looks
+fine.
 
 ## Considered and rejected
 
@@ -263,10 +304,20 @@ a fresh bake and deciding it looks fine.
   40-icon set becomes 40 files and you lose seeing the set together, which is
   what an atlas is for. Worth reconsidering if hand-editing grid coordinates
   turns out to be the annoying part in practice.
-- **SVG sources.** Needs a rasterizer in the build, and these are pixel art:
-  the grid IS the design, not an approximation of a curve that happens to be
-  sampled. `icons.h`'s own comment on hand-placed versus generated diagonals
-  is the same argument.
+- **SVG sources needing a rasterizer.** Rejected, and then partly reinstated
+  once the sources were actually read: a general SVG needs rasterizing, and
+  these are pixel art, where the grid IS the design rather than a sampled
+  approximation of a curve. But pixelarticons' SVGs contain only integer
+  axis-aligned rectangles, so reading them is grid extraction, not
+  rasterization - see phase 2. The rejection stands for SVG in general and
+  falls for this specific, verified shape of file.
+
+- **The defaulticon set** (16x16 monochrome PNGs, thin silhouettes).
+  Rejected on two counts, either sufficient: its upstream
+  (`defaulticon.com`) no longer resolves, so the licence cannot be verified
+  for something checked in permanently; and the style is fine 1px-stroke
+  silhouettes against our chunky 2px strokes, which reads as accidental when
+  the two sit on one screen.
 - **Runtime lookup by name string.** Costs a comparison per draw and throws
   away the enum's typo-catching. Names are for the manifest; ids are for the
   code.
