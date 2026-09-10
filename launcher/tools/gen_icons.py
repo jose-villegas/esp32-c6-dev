@@ -110,12 +110,17 @@ import textwrap
 import zlib
 from pathlib import Path
 
-# ui.h's UI_DRAW_BITMAP_MAX_BLOCKS: ui_draw_bitmap()'s stack buffer today.
-# An icon whose baked run count exceeds this cannot be drawn through that
-# path without overflowing it - see this file's own top comment on why the
-# cap is checked here, at bake time, rather than left for a caller to find
-# by overflowing a stack array.
-RUN_COUNT_CAP = 48
+# icon_t.blocks (gfx/icon.h) is a uint8_t - the real remaining bound now
+# that ui_draw_icon() (ui.c) streams runs instead of collecting them into a
+# stack buffer. A count above 255 would silently wrap that field rather
+# than fail loudly, so this stays a hard rejection, not a raise-when-
+# convenient number.
+#
+# This is NOT the only budget: microui's command list (MU_COMMANDLIST_SIZE,
+# 8 KiB) is a separate, still-live ceiling a run count does not lift - a
+# 46-run icon alone is roughly 1.3 KiB of it. Detailed artwork is now
+# possible; it is not free.
+RUN_COUNT_CAP = 255
 
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -751,9 +756,8 @@ def main(argv):
         blocks = count_runs(bits, iw, ih)
         if blocks > RUN_COUNT_CAP:
             die("%s: icon %r bakes to %d runs, over RUN_COUNT_CAP (%d) - "
-                "ui_draw_bitmap()'s stack buffer (UI_DRAW_BITMAP_MAX_BLOCKS, "
-                "ui.h) cannot hold this icon's shape; simplify the artwork "
-                "or raise both caps together" % (json_path, name, blocks, RUN_COUNT_CAP))
+                "icon_t.blocks (gfx/icon.h) is a uint8_t and would silently "
+                "wrap; simplify the artwork" % (json_path, name, blocks, RUN_COUNT_CAP))
 
         baked.append((name, iw, ih, stride, offset, blocks, packed))
         offset += len(packed)

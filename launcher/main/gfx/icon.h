@@ -39,3 +39,73 @@ typedef struct {
     uint8_t  stride;   /* bytes per row: (w + 7) / 8, MSB is column 0 */
     uint8_t  blocks;   /* baked run-length rect count - see gen_icons.py */
 } icon_t;
+
+/* icon_walk_blocks()'s output: one contiguous horizontal run, already scaled
+ * and positioned relative to the destination box's own origin (0, 0) - the
+ * caller adds its box's x/y, same convention icon_bitmap_blocks() (icons.h)
+ * uses for its output array. */
+typedef void (*icon_emit_fn)(void *ctx, int x, int y, int w, int h);
+
+/* Streaming twin of icon_bitmap_blocks() (icons.h): same fit-to-box and
+ * content-bbox centring, but EMITS each run instead of collecting, so
+ * per-draw stack is O(1) in the icon's size. `rows`/`iw`/`ih`/`stride` are
+ * an icon_t's own fields plus its table's rows[] blob.
+ *
+ * Callback indirection is fine: icons draw once per hash-skipped canvas
+ * repaint (ui.c), not a hot loop - don't turn this into an array without
+ * measuring first. */
+static inline void icon_walk_blocks(const uint8_t *rows, int iw, int ih, int stride,
+                                    int box_w, int box_h,
+                                    icon_emit_fn emit, void *ctx)
+{
+    const int scale_w = box_w / iw;
+    const int scale_h = box_h / ih;
+    int scale = (scale_w < scale_h) ? scale_w : scale_h;
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    /* Fresh scan of the content bounding box every call, same reasoning as
+     * icon_bitmap_blocks(): a glyph rarely fills its whole iw x ih grid, so
+     * centring the declared size rather than the ink would off-centre the
+     * visible content by however wide that margin is. */
+    int min_x = iw, max_x = -1;
+    int min_row = ih, max_row = -1;
+    for (int y = 0; y < ih; y++) {
+        const uint8_t *row = rows + (size_t)y * stride;
+        for (int x = 0; x < iw; x++) {
+            if (row[x / 8] & (uint8_t)(0x80 >> (x % 8))) {
+                if (x < min_x) { min_x = x; }
+                if (x > max_x) { max_x = x; }
+                if (y < min_row) { min_row = y; }
+                if (y > max_row) { max_row = y; }
+            }
+        }
+    }
+    if (max_x < 0) {
+        return; /* every baked icon is non-empty (gen_icons.py rejects an
+                  * empty cell), but an empty bitmap has no runs to emit. */
+    }
+
+    const int content_w = max_x - min_x + 1;
+    const int content_h = max_row - min_row + 1;
+    const int origin_x = (box_w - content_w * scale) / 2 - min_x * scale;
+    const int origin_y = (box_h - content_h * scale) / 2 - min_row * scale;
+
+    for (int y = 0; y < ih; y++) {
+        const uint8_t *row = rows + (size_t)y * stride;
+        int x = 0;
+        while (x < iw) {
+            if (!(row[x / 8] & (uint8_t)(0x80 >> (x % 8)))) {
+                x++;
+                continue;
+            }
+            const int run_start = x;
+            while (x < iw && (row[x / 8] & (uint8_t)(0x80 >> (x % 8)))) {
+                x++;
+            }
+            emit(ctx, origin_x + run_start * scale, origin_y + y * scale,
+                 (x - run_start) * scale, scale);
+        }
+    }
+}
