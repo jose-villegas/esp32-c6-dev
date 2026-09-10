@@ -920,20 +920,22 @@ step_one_tempered_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cons
     return next != SAND_AMBIENT_HEAT;
 }
 
-/* Whether this cell has a face on something that is neither itself nor its
- * own crust.
+/* How this cell is exposed: on a foreign face, on its own crust, or neither.
  *
- * A crust is a SHELL: without this the roll fires anywhere a bank is at rest,
- * so the most buried cell ices as readily as the exposed one.
+ * A crust is a SHELL that GROWS INWARD, and the two happen at very different
+ * rates - which is why they are counted apart. A foreign face is where ice
+ * starts; a face on ice already formed is how the shell thickens, and that
+ * must be far slower or the front just eats the bank.
  *
- * THE CRUST MUST NOT COUNT AS ITS OWN BORDER - hence two materials. Counting
- * it ices the whole bank anyway, just slower: each ring turns, and the one
- * behind it then faces something that is not snow.
- *
- * Off-grid is not a face; the screen edge would rim a bank in ice. */
-static inline bool
-touches_something_else(const sand_t* s, int x, int y, int w, int h, uint8_t mine,
-                       uint8_t becomes) {
+ * Neither face means interior, which never crusts. Off-grid is not a face;
+ * the screen edge would rim a bank in ice. */
+#define FACE_FOREIGN 1u
+#define FACE_CRUST   2u
+
+static inline unsigned
+crust_faces(const sand_t* s, int x, int y, int w, int h, uint8_t mine,
+            uint8_t becomes) {
+    unsigned faces = 0;
     for (int d = 0; d < 4; d++) {
         const int nx = x + reaction_dirs[d][0];
         const int ny = y + reaction_dirs[d][1];
@@ -941,12 +943,19 @@ touches_something_else(const sand_t* s, int x, int y, int w, int h, uint8_t mine
             continue;
         }
         const uint8_t m = CELL_MATERIAL(s->cells[(size_t)ny * (size_t)w + (size_t)nx]);
-        if (m != mine && m != becomes) {
-            return true;
+        if (m == becomes) {
+            faces |= FACE_CRUST;
+        } else if (m != mine) {
+            faces |= FACE_FOREIGN;
         }
     }
-    return false;
+    return faces;
 }
+
+/* How much more slowly a shell thickens than it starts. A period, not a
+ * divisor: crusts is a handful out of 65536, so dividing it floors to zero and
+ * the shell would never widen at all. */
+#define CRUST_WIDEN_PERIOD 16
 
 /* Fixed blast radius. Cascade ignition simulates lid giving way. Tune on
  * device. */
@@ -1860,9 +1869,15 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
          * BLOCK_SETTLED on the very bank whose stillness allowed this, so the
          * crust would form one cell and stall; and nothing needs waking,
          * because snow becoming ice only makes the board more solid. */
-        if (r->crusts != 0 && cell_settled(s, x, y)
-            && touches_something_else(s, x, y, w, h, CELL_MATERIAL(c),
-                                      CELL_MATERIAL((cell_t)r->crusts_to))
+        const unsigned faces = (r->crusts != 0 && cell_settled(s, x, y))
+            ? crust_faces(s, x, y, w, h, CELL_MATERIAL(c),
+                          CELL_MATERIAL((cell_t)r->crusts_to))
+            : 0u;
+        const bool may_crust = ((faces & FACE_FOREIGN) != 0)
+            || (((faces & FACE_CRUST) != 0)
+                && (((unsigned)s->step_phase + (unsigned)x * 5u + (unsigned)y * 33u)
+                    & (CRUST_WIDEN_PERIOD - 1u)) == 0u);
+        if (may_crust
             && (int)(rng_next(&s->rng) & 0xFFFF) < ((s->crust >= 0) ? s->crust : r->crusts)) {
             REACTION_DOC(crusts_to, "what a settled cell slowly crusts into");
             row[x] = (cell_t)r->crusts_to;

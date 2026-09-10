@@ -1045,16 +1045,13 @@ static void test_snow_melts_on_wet_soil_but_not_on_dry(void)
         "about dirt rather than about the water in it");
 }
 
-/* THE CRUST IS A SHELL, and the inside of the bank stays powder.
+/* A CRUST STARTS AT THE FACES AND THICKENS INWARD, never reaching the core.
  *
- * Ice belongs where snow meets something else. It used to form mid-drift just
- * as readily, because the rule asked only whether the bank was at rest, and a
- * bank iced all the way through is not a crust but a block of ice.
- *
- * Measured here without the border test: 71 of 74 cells two deep were ice.
- * The interior assertion carries this test; the ring one only proves the rule
- * still fires. */
-static void test_a_snowbank_crusts_on_its_faces_and_stays_powder_inside(void)
+ * Three claims, one per assertion below. Measured at 4000 steps, ice per
+ * depth: ring 90/90, then 48/82, 21/74, 4/66, 1/50. Without the border test
+ * the bank ices flat - 71 of 74 two deep - and without the slower widening
+ * rate the front eats inward and does the same. */
+static void test_a_snowbank_crusts_on_its_faces_and_thickens_slowly_inward(void)
 {
     enum { GW = 40, GH = 40, X0 = 8, X1 = 32, YTOP = 16, YBOT = GH - 2 };
     uint8_t *cells  = calloc(GW * GH, 1);
@@ -1085,11 +1082,14 @@ static void test_a_snowbank_crusts_on_its_faces_and_stays_powder_inside(void)
         }
     }
 
-    for (int i = 0; i < 1000; i++) {
+    /* Long enough for the second layer to be well under way - widening is
+     * deliberately slow, and at 1000 steps it has barely started. */
+    for (int i = 0; i < 4000; i++) {
         sand_step(&g, 0, 1000, 0);
     }
 
-    int ring_ice = 0, ring_total = 0, inside_ice = 0;
+    int ring_ice = 0, ring_total = 0;
+    int next_ice = 0, next_total = 0, core_ice = 0, core_total = 0;
     for (int y = YTOP; y <= YBOT; y++) {
         for (int x = X0; x < X1; x++) {
             int depth = x - X0;
@@ -1098,12 +1098,16 @@ static void test_a_snowbank_crusts_on_its_faces_and_stays_powder_inside(void)
             if (YBOT - y < depth)   { depth = YBOT - y; }
 
             const cell_t c = sand_at(&g, x, y);
-            const bool is_ice = CELL_MATERIAL(c) == MAT_EXTENDED;
+            const int is_ice = (CELL_MATERIAL(c) == MAT_EXTENDED) ? 1 : 0;
             if (depth == 0) {
                 ring_total++;
-                ring_ice += is_ice ? 1 : 0;
-            } else if (depth >= 2) {
-                inside_ice += is_ice ? 1 : 0;
+                ring_ice += is_ice;
+            } else if (depth == 1) {
+                next_total++;
+                next_ice += is_ice;
+            } else if (depth >= 3) {
+                core_total++;
+                core_ice += is_ice;
             }
         }
     }
@@ -1112,10 +1116,13 @@ static void test_a_snowbank_crusts_on_its_faces_and_stays_powder_inside(void)
 
     TEST_ASSERT_GREATER_THAN_INT_MESSAGE(ring_total * 3 / 4, ring_ice,
         "setup: the exposed faces of a settled bank must actually crust, or "
-        "the interior assertion below passes on a bank that never iced at all");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(0, inside_ice,
-        "no cell two or more deep inside a snowbank may become ice - a crust "
-        "forms where snow meets something else, not in the body of the drift");
+        "everything below passes on a bank that never iced at all");
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(next_total / 8, next_ice,
+        "the layer behind the shell must ice too - a crust thickens inward "
+        "from the face it started on, it is not frozen at one cell forever");
+    TEST_ASSERT_LESS_THAN_INT_MESSAGE(core_total / 4, core_ice,
+        "but the core of a drift must still be mostly powder - a bank iced "
+        "all the way through is not a crust, it is a block of ice");
 }
 
 /* A SETTLED SNOWBANK CRUSTS OVER; A FALLING ONE DOES NOT.
@@ -2080,7 +2087,7 @@ void run_sand_combustion_suite(void)
     RUN_TEST(test_cold_conducts_deep_into_a_slab);
     RUN_TEST(test_snow_melts_on_wet_soil_but_not_on_dry);
     RUN_TEST(test_a_settled_snowbank_crusts_to_ice);
-    RUN_TEST(test_a_snowbank_crusts_on_its_faces_and_stays_powder_inside);
+    RUN_TEST(test_a_snowbank_crusts_on_its_faces_and_thickens_slowly_inward);
     RUN_TEST(test_a_fire_buried_on_all_four_sides_goes_out);
     RUN_TEST(test_a_material_created_during_the_pass_stays_in_the_mask);
     RUN_TEST(test_sand_alone_lets_the_moisture_pass_switch_off_again);
