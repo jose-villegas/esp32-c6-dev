@@ -86,3 +86,57 @@ static const icon_t icon_system_table[ICON_SYSTEM_COUNT] = {
     [ICON_SYSTEM_CHECKBOX_ON] = { .offset = 608, .w = 24, .h = 24, .stride = 3, .blocks = 46 },
     [ICON_SYSTEM_HOME] = { .offset = 680, .w = 24, .h = 24, .stride = 3, .blocks = 50 },
 };
+
+/* Rects every icon here emits if all are drawn once - a
+ * command-list cost, not just a count. */
+#define ICON_SYSTEM_TOTAL_BLOCKS 314
+
+/* Pins this table against its own blob, so a bad offset or
+ * stride is a compile error where the header is included rather
+ * than a wrong glyph at draw time. */
+_Static_assert(sizeof icon_system_rows == 752,
+               "icon_system_rows was rebaked without its offsets");
+_Static_assert(0 + 16 * 2 <= (int)sizeof icon_system_rows,
+               "icon check runs past the end of icon_system_rows");
+_Static_assert(2 == (16 + 7) / 8,
+               "icon check stride does not match its width");
+_Static_assert(32 + 24 * 3 <= (int)sizeof icon_system_rows,
+               "icon close runs past the end of icon_system_rows");
+_Static_assert(3 == (24 + 7) / 8,
+               "icon close stride does not match its width");
+_Static_assert(104 + 24 * 3 <= (int)sizeof icon_system_rows,
+               "icon info runs past the end of icon_system_rows");
+_Static_assert(3 == (24 + 7) / 8,
+               "icon info stride does not match its width");
+_Static_assert(176 + 24 * 3 <= (int)sizeof icon_system_rows,
+               "icon alert runs past the end of icon_system_rows");
+_Static_assert(3 == (24 + 7) / 8,
+               "icon alert stride does not match its width");
+_Static_assert(248 + 24 * 3 <= (int)sizeof icon_system_rows,
+               "icon chevron_left runs past the end of icon_system_rows");
+_Static_assert(3 == (24 + 7) / 8,
+               "icon chevron_left stride does not match its width");
+_Static_assert(320 + 24 * 3 <= (int)sizeof icon_system_rows,
+               "icon chevron_right runs past the end of icon_system_rows");
+_Static_assert(3 == (24 + 7) / 8,
+               "icon chevron_right stride does not match its width");
+_Static_assert(392 + 24 * 3 <= (int)sizeof icon_system_rows,
+               "icon chevron_up runs past the end of icon_system_rows");
+_Static_assert(3 == (24 + 7) / 8,
+               "icon chevron_up stride does not match its width");
+_Static_assert(464 + 24 * 3 <= (int)sizeof icon_system_rows,
+               "icon chevron_down runs past the end of icon_system_rows");
+_Static_assert(3 == (24 + 7) / 8,
+               "icon chevron_down stride does not match its width");
+_Static_assert(536 + 24 * 3 <= (int)sizeof icon_system_rows,
+               "icon arrow_left runs past the end of icon_system_rows");
+_Static_assert(3 == (24 + 7) / 8,
+               "icon arrow_left stride does not match its width");
+_Static_assert(608 + 24 * 3 <= (int)sizeof icon_system_rows,
+               "icon checkbox_on runs past the end of icon_system_rows");
+_Static_assert(3 == (24 + 7) / 8,
+               "icon checkbox_on stride does not match its width");
+_Static_assert(680 + 24 * 3 <= (int)sizeof icon_system_rows,
+               "icon home runs past the end of icon_system_rows");
+_Static_assert(3 == (24 + 7) / 8,
+               "icon home stride does not match its width");
