@@ -224,8 +224,14 @@ def added_lines(ref, path):
 
 
 def file_at_ref(ref, path):
+    # text=True alone decodes with the platform default (cp1252 on
+    # Windows), which mangles any non-ASCII byte a source file carries (an
+    # em dash, say) into extra characters - harmless for ASCII-only files,
+    # but it makes --comments-only misreport a real code change on one
+    # that isn't. Source files are UTF-8; decode them as such.
     r = subprocess.run(["git", "show", f"{ref}:{path}"],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
     return None if r.returncode else r.stdout
 
 
