@@ -81,6 +81,7 @@ $TEST_DIR/suites/suite_gfx_color.c
 $TEST_DIR/suites/suite_gfx_font.c
 $TEST_DIR/suites/suite_gfx_font_roles.c
 $TEST_DIR/suites/suite_icons.c
+$TEST_DIR/suites/suite_icons_system.c
 $TEST_DIR/suites/suite_ui_style.c
 $TEST_DIR/suites/suite_ui_transform.c
 $TEST_DIR/suites/suite_ui_centered_rect.c

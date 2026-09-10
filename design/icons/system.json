@@ -1,0 +1,7 @@
+{
+    "cell_w": 16,
+    "cell_h": 16,
+    "icons": [
+        { "name": "check", "col": 0, "row": 0 }
+    ]
+}
