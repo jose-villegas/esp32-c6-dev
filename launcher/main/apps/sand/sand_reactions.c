@@ -932,26 +932,49 @@ step_one_tempered_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cons
 #define FACE_FOREIGN 1u
 #define FACE_CRUST   2u
 
+/* How much crust a cell must be backed by before it joins one, over all eight
+ * neighbours.
+ *
+ * EIGHT, BECAUSE FOUR CANNOT EXPRESS IT. A snow cell on a fully iced row has
+ * one orthogonal ice neighbour, so any threshold above one stalls a flat front
+ * and the cover never finishes. Over eight it has three, so three is the least
+ * that advances a flat front while refusing a cell brushing a corner. */
+#define CRUST_WIDEN_MIN_ICE 3
+
 static inline unsigned
 crust_faces(const sand_t* s, int x, int y, int w, int h, uint8_t mine,
             uint8_t becomes) {
     unsigned faces = 0;
-    for (int d = 0; d < 4; d++) {
-        const int nx = x + reaction_dirs[d][0];
-        const int ny = y + reaction_dirs[d][1];
+    unsigned crust_seen = 0;
+    bool open = false;
+    for (int d = 0; d < 8; d++) {
+        const int *dir = ring_dir(d);
+        const int nx = x + dir[0];
+        const int ny = y + dir[1];
         if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
             continue;
         }
         const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
         if (CELL_IS_EMPTY(n)) {
+            open = true;
             continue;
         }
         const uint8_t m = CELL_MATERIAL(n);
         if (m == becomes) {
-            faces |= FACE_CRUST;
-        } else if (m != mine) {
+            crust_seen++;
+        } else if (m != mine && (dir[0] == 0 || dir[1] == 0)) {
+            /* A FOREIGN face stays orthogonal: touching a wall at the corner
+             * is not resting against it, and counting it ices the diagonal
+             * staircase a poured pile leaves along any slope. */
             faces |= FACE_FOREIGN;
         }
+    }
+    /* THE RIM STAYS SNOW: open space anywhere around it makes this the drift's
+     * own surface, and a surface does not thicken a crust forming underneath
+     * it. Only widening is held to this - a cell pressed against a wall still
+     * seeds, or a cover would never start. */
+    if (!open && crust_seen >= CRUST_WIDEN_MIN_ICE) {
+        faces |= FACE_CRUST;
     }
     return faces;
 }

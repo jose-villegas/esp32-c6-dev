@@ -1045,16 +1045,16 @@ static void test_snow_melts_on_wet_soil_but_not_on_dry(void)
         "about dirt rather than about the water in it");
 }
 
-/* THE BALANCE CEILING: 32 cells of snow become ice in about a minute of play.
+/* THE BALANCE CEILING: 32 cells of snow reach 90% ice in about three minutes.
  *
  * The one crust test that does NOT force the rate - the others call
  * sand_set_crust(), so sweeping crusts through them is byte-identical and the
- * shipped value goes untested. Measured 1809 steps. Bounded both sides: too
- * slow nobody sees, too fast and snow stops reading as snow.
+ * shipped value goes untested. Measured 5881 steps.
  *
- * No side walls - they seed the crust up the full height, so the front would
- * travel sideways rather than into the cover's depth. */
-static void test_a_32_cell_snow_cover_turns_to_ice_in_about_a_minute(void)
+ * 90% and not all: the rim never crusts, so a cover this shape tops out just
+ * over 90%. No side walls - they seed the crust up the full height, and the
+ * front would travel sideways rather than into the cover's depth. */
+static void test_a_32_cell_snow_cover_turns_to_ice_in_about_three_minutes(void)
 {
     enum { GW = 56, GH = 40, X0 = 4, X1 = 52, DEPTH = 32 };
     uint8_t *cells  = calloc(GW * GH, 1);
@@ -1081,7 +1081,7 @@ static void test_a_32_cell_snow_cover_turns_to_ice_in_about_a_minute(void)
     }
 
     int almost_at = -1;
-    for (int i = 1; i <= 6000 && almost_at < 0; i++) {
+    for (int i = 1; i <= 20000 && almost_at < 0; i++) {
         sand_step(&g, 0, 1000, 0);
         int ice = 0, total = 0;
         for (int y = 0; y < GH; y++) {
@@ -1099,19 +1099,40 @@ static void test_a_32_cell_snow_cover_turns_to_ice_in_about_a_minute(void)
             almost_at = i;
         }
     }
+    /* AND THE SKIN IS STILL SNOW. Ice grows inside the drift; the surface it
+     * is growing under does not join it, which is why the ceiling above is
+     * 90% and not everything. The cover's own top row - open sky above every
+     * cell of it. Read BEFORE the frees, not after. */
+    int skin_snow = 0, skin_total = 0;
+    for (int x = X0; x < X1; x++) {
+        for (int y = 0; y < GH; y++) {
+            const int m = CELL_MATERIAL(sand_at(&g, x, y));
+            if (m != MAT_SNOW && m != MAT_EXTENDED) {
+                continue;
+            }
+            skin_total++;
+            skin_snow += (m == MAT_SNOW) ? 1 : 0;
+            break;   /* topmost cell of this column only */
+        }
+    }
+
     free(cells);
     free(blocks);
 
     TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, almost_at,
-        "a 32 cell cover of snow must end up almost entirely ice - measured "
-        "1809 steps; never getting there means the shipped crusts rate cannot "
-        "reach the balance ceiling at all, which is what a byte-wide field "
-        "against a 65536 roll used to guarantee");
-    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(600, almost_at,
-        "and must not get there in seconds - snow landing on anything would "
-        "stop reading as snow");
-    TEST_ASSERT_LESS_THAN_INT_MESSAGE(4000, almost_at,
-        "nor take several minutes - the ceiling this pins is about one");
+        "a 32 cell cover of snow must end up 90% ice - measured 5881 steps; "
+        "never getting there means the shipped crusts rate cannot reach the "
+        "balance ceiling at all, which is what a byte-wide field against a "
+        "65536 roll used to guarantee");
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(2000, almost_at,
+        "and must not get there in a few seconds - snow landing on anything "
+        "would stop reading as snow");
+    TEST_ASSERT_LESS_THAN_INT_MESSAGE(12000, almost_at,
+        "nor take ten minutes - the ceiling this pins is about three");
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(skin_total * 3 / 4, skin_snow,
+        "the drift's own surface must still be snow after the inside has "
+        "iced - a cell with open space beside it is the rim, and the rim does "
+        "not thicken a crust forming under it");
 }
 
 /* AIR IS NOT A MATERIAL, so an exposed surface does not crust - otherwise a
@@ -2220,7 +2241,7 @@ void run_sand_combustion_suite(void)
     RUN_TEST(test_a_settled_snowbank_crusts_to_ice);
     RUN_TEST(test_a_snowbank_crusts_on_its_faces_and_thickens_slowly_inward);
     RUN_TEST(test_snow_does_not_crust_against_open_air);
-    RUN_TEST(test_a_32_cell_snow_cover_turns_to_ice_in_about_a_minute);
+    RUN_TEST(test_a_32_cell_snow_cover_turns_to_ice_in_about_three_minutes);
     RUN_TEST(test_a_fire_buried_on_all_four_sides_goes_out);
     RUN_TEST(test_a_material_created_during_the_pass_stays_in_the_mask);
     RUN_TEST(test_sand_alone_lets_the_moisture_pass_switch_off_again);
