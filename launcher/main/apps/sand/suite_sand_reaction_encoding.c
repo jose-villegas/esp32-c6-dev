@@ -6,6 +6,7 @@
  * past 32,000 lines across 500+ tests. Shared fixtures and assertion helpers
  * live in suite_sand_common.{c,h} - see that header.
  *===========================================================================*/
+#include <limits.h>
 #include <math.h>   /* not every file in the split still needs atan2()/M_PI,
                      * but every file inherited suite_sand.c's own include
                      * block rather than being pruned by hand, to keep the
@@ -1156,18 +1157,108 @@ pour_and_measure_tap_gain(material_id_t pool, material_id_t tap, int bias)
     return tap_now;
 }
 
-static void
-test_a_relentless_pour_of_acid_overwhelms_a_pool_of_water(void)
+/* Pour water from one tap and acid from the other, splitting a fixed total
+ * between them, and see what survives. */
+static void acid_water_contest(int water_pct, int *water_left, int *acid_left)
 {
-    const int tap_now_unbiased = pour_and_measure_tap_gain(MAT_WATER, MAT_ACID, 0);
-    const int tap_now_biased   = pour_and_measure_tap_gain(MAT_WATER, MAT_ACID, -1);
+    enum { GW = 40, GH = 32, TAPW = 20, TAP0 = 10, POUR = 150, SETTLE = 250 };
+    uint8_t *cells = calloc(GW * GH, 1);
+    TEST_ASSERT_NOT_NULL(cells);
 
-    TEST_ASSERT_GREATER_THAN_MESSAGE(tap_now_unbiased, tap_now_biased,
-        "SAND_ACID_DILUTE_MASS_BIAS is supposed to let a sustained excess "
-        "of acid convert the water pool FASTER than an unbiased coin "
-        "flip does in the same window - identically seeded runs, forced "
-        "to bias 0 vs the real default, ended up converting the same "
-        "amount, so the mechanism is not doing anything measurable");
+    sand_t g;
+    memset(&g, 0, sizeof g);
+    sand_init(&g, cells, GW, GH, 5u);
+    for (int x = 0; x < GW; x++) {
+        sand_set(&g, x, GH - 1, STONE);
+    }
+    for (int y = 6; y < GH; y++) {
+        sand_set(&g, 4, y, STONE);
+        sand_set(&g, GW - 5, y, STONE);
+    }
+
+    const int wcols = (TAPW * water_pct + 50) / 100;
+    for (int i = 0; i < POUR; i++) {
+        for (int c = 0; c < TAPW; c++) {
+            const int x = TAP0 + c;
+            if (!CELL_IS_EMPTY(sand_at(&g, x, 7))) {
+                continue;
+            }
+            sand_set(&g, x, 7, (c < wcols) ? CELL_MAKE(MAT_WATER, MASS_MAX)
+                                           : CELL_MAKE(MAT_ACID, MASS_MAX));
+        }
+        sand_step(&g, 0, 1000, 0);
+    }
+    for (int i = 0; i < SETTLE; i++) {
+        sand_step(&g, 0, 1000, 0);
+    }
+
+    int wn = 0, an = 0;
+    for (int y = 0; y < GH; y++) {
+        for (int x = 0; x < GW; x++) {
+            const int m = CELL_MATERIAL(sand_at(&g, x, y));
+            if (m == MAT_WATER) {
+                wn++;
+            } else if (m == MAT_ACID) {
+                an++;
+            }
+        }
+    }
+    free(cells);
+    *water_left = wn;
+    *acid_left = an;
+}
+
+/* POUR MORE, WIN MORE - and an even pour is an even fight.
+ *
+ * Replaced an A/B on SAND_ACID_DILUTE_MASS_BIAS reading ONE fixture seed,
+ * where the gap was 11 parts in 3250 - too thin to tell a mechanic from an
+ * artifact, and it duly reversed when liquids stopped teleporting.
+ *
+ * Measured, water left / acid left: 0/920 at 10%, 117/130 at 50%, 809/0 at
+ * 90%. The middle is sharp, so the monotonic claim carries this one. */
+static void
+test_pouring_more_of_a_liquid_wins_the_contest_against_the_other(void)
+{
+    int last_water = -1, last_acid = INT_MAX - 8;
+    int even_water = 0, even_acid = 0;
+
+    for (int pct = 10; pct <= 90; pct += 10) {
+        int w = 0, a = 0;
+        acid_water_contest(pct, &w, &a);
+
+        char why[192];
+        snprintf(why, sizeof why,
+            "pouring %d%% water left %d water and %d acid, against %d and %d "
+            "at the previous step - more of a liquid poured must never leave "
+            "less of it standing", pct, w, a, last_water, last_acid);
+        /* SLACK, because the tail is quantised: once a side is beaten down
+         * to nothing it reads 0, 1, 0 across neighbouring ratios and a strict
+         * ordering fails on a single cell. The trend is the claim. */
+        enum { WOBBLE = 5 };
+        TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(last_water - WOBBLE, w, why);
+        TEST_ASSERT_LESS_OR_EQUAL_INT_MESSAGE(last_acid + WOBBLE, a, why);
+        last_water = w;
+        last_acid = a;
+
+        if (pct == 50) {
+            even_water = w;
+            even_acid = a;
+        }
+    }
+
+    /* An even pour must be an even fight. Wide, because the contest is
+     * winner-takes-all near the middle and a small seed-level lean is
+     * amplified - it is there to catch a rout, not to pin a ratio. */
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, even_water,
+        "an even pour of water against acid must leave some water - if one "
+        "side is wiped out at 50/50 the two are not balanced at all");
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, even_acid,
+        "and must leave some acid, for the same reason");
+    TEST_ASSERT_LESS_THAN_INT_MESSAGE(even_water * 4, even_acid,
+        "neither side may rout the other from an even pour - acid ran away "
+        "with it");
+    TEST_ASSERT_LESS_THAN_INT_MESSAGE(even_acid * 4, even_water,
+        "nor may water rout acid from an even pour");
 }
 
 /* NOT an A/B bias comparison, unlike the sibling test above - measured
@@ -2709,7 +2800,7 @@ void run_sand_reaction_encoding_suite(void)
     RUN_TEST(test_acid_fizzes_while_it_eats);
     RUN_TEST(test_the_fizz_rises_out_of_the_acid);
     RUN_TEST(test_acid_and_water_dilute_each_other);
-    RUN_TEST(test_a_relentless_pour_of_acid_overwhelms_a_pool_of_water);
+    RUN_TEST(test_pouring_more_of_a_liquid_wins_the_contest_against_the_other);
     RUN_TEST(test_a_relentless_pour_of_water_overwhelms_a_pool_of_acid);
     RUN_TEST(test_the_dilution_split_favours_neither_side);
     RUN_TEST(test_water_winning_the_dilution_boils_the_water_cell_to_steam);
