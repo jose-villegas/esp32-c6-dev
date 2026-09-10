@@ -133,6 +133,7 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->h          = h;
     rng_seed(&s->rng, seed);
     s->pour_phase = 0;
+    s->step_phase = 0;
     s->sweep_flip = false;
     s->liquid_flip = false;
     s->gas_flip   = false;
@@ -1093,6 +1094,8 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
      * Runs unconditionally, even in free fall, ensuring "once per
      * sand_step()". */
     build_sweep_tables();
+
+    s->step_phase++;
 
     emit_from_emitters(s);
 
