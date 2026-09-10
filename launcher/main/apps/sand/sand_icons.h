@@ -63,27 +63,32 @@ static const uint16_t icon_erase_bitmap[ICON_BITMAP_SIZE] = {
     0b1100000000000011,
 };
 
-/* A burst: a solid horizontal beam (the widest ray, reading as the main
- * shockwave) crossing a shorter vertical ray and four diagonal ticks. Every
- * ray pairs with its mirror on both axes, so the whole glyph is symmetric
- * top-bottom and left-right. */
+/* A four-pointed sparkle: one connected body whose sides curve inward, so
+ * the four arms taper to a spike instead of reading as a plus sign.
+ * Symmetric on both axes.
+ *
+ * Deliberately not a starburst with separate diagonal rays. A ray drawn one
+ * pixel wide survives only at scale 1: every scale above it turns each pixel
+ * into a detached block, and the glyph reads as scattered dots around a
+ * blob rather than as anything radiating. Everything here is contiguous at
+ * any integer scale. */
 static const uint16_t icon_boom_bitmap[ICON_BITMAP_SIZE] = {
-    0b0000000000000000,
     0b0000000110000000,
-    0b0010000110000100,
-    0b0001000110001000,
-    0b0000100110010000,
-    0b0000010110100000,
-    0b0000001111000000,
-    0b0111111111111110,
-    0b0111111111111110,
-    0b0000001111000000,
-    0b0000010110100000,
-    0b0000100110010000,
-    0b0001000110001000,
-    0b0010000110000100,
     0b0000000110000000,
-    0b0000000000000000,
+    0b0000000110000000,
+    0b0000001111000000,
+    0b0000011111100000,
+    0b0000111111110000,
+    0b0011111111111100,
+    0b1111111111111111,
+    0b1111111111111111,
+    0b0011111111111100,
+    0b0000111111110000,
+    0b0000011111100000,
+    0b0000001111000000,
+    0b0000000110000000,
+    0b0000000110000000,
+    0b0000000110000000,
 };
 
 /* A lowercase i: a square dot over a taller stem, one blank row of air
