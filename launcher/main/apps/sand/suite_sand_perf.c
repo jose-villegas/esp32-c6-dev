@@ -166,6 +166,7 @@ void sand_host_probe_run_full_step_control(void)
  * configurations: a disabled pass leaves a different grid behind, so
  * reusing one scene would have each configuration measuring a board the
  * previous one shaped. */
+#if CONFIG_LAUNCHER_SAND_PASS_GATES
 /*---------------------------------------------------------------------------
  * The single-step decomposition harness.
  *
@@ -189,7 +190,15 @@ void sand_host_probe_run_full_step_control(void)
  *-------------------------------------------------------------------------*/
 typedef struct {
     const char *name;
+    /* EVERYTHING THE BUDGET ROW DOES, not just its builder. The first use of
+     * this harness measured a soak stage at 1 us because the row it copied
+     * calls sand_set_soak() BEFORE the builder and the harness did not - so
+     * nothing soaked, and the gate had nothing to skip. A scene is its setup
+     * plus its builder plus whatever it does mid-settle; leave any of that
+     * out and the number is of a different scene. */
+    void      (*setup)(sand_t *s);   /* NULL when the scene needs none */
     void      (*build)(sand_t *s);   /* suite_sand_scenes.h shape */
+    void      (*during)(sand_t *s, int step);  /* pours, rain - NULL if none */
     uint32_t    seed;
     int         sgx, sgy;            /* gravity while settling */
     int         gx, gy;              /* gravity for the timed step - differs
@@ -214,9 +223,15 @@ static int64_t split_single_step_us(const split_scene_t *sc,
         sand_t real;
         sand_init(&real, big, REAL_W, REAL_H, sc->seed);
         sand_enable_sleeping(&real, blocks);
+        if (sc->setup != NULL) {
+            sc->setup(&real);
+        }
         sc->build(&real);
 
         for (int i = 0; i < sc->settle; i++) {
+            if (sc->during != NULL) {
+                sc->during(&real, i);
+            }
             sand_step(&real, sc->sgx, sc->sgy, 0);
         }
 
@@ -289,6 +304,7 @@ static void build_settled_pool_for_split(sand_t *s)
     }
 }
 
+#if CONFIG_LAUNCHER_SAND_PASS_GATES
 /* WHERE THE SETTLED POOL'S MOVE WORK GOES - bd esp32c6-2u7, which asks what
  * step_one_grain() spends its time on and how much is dispatch rather than
  * the moves themselves.
@@ -304,7 +320,7 @@ static void test_the_settled_pool_move_work_splits_into_its_phases(void)
 {
     static const split_scene_t pool = {
         .name = "settled pool", .build = build_settled_pool_for_split,
-        .seed = 17u,
+        .seed = 17u,   /* no setup and no pours - see its budget row */
         .sgx = 0, .sgy = 1000,      /* settle upright */
         .gx = 1000, .gy = 0,        /* then turn it on its side */
         .settle = 300,
@@ -316,6 +332,25 @@ static void test_the_settled_pool_move_work_splits_into_its_phases(void)
                                             &sand_step_gate_liq_down,
                                             &sand_step_gate_liq_slides };
     split_report(&pool, names, gates, 4, 3);
+}
+#endif
+
+#endif
+
+#if CONFIG_LAUNCHER_SAND_PASS_GATES
+/* The setup both the wet-earth and plant-bed budget rows do before their
+ * builders, and the plant bed's timed pours - copied from those rows so the
+ * decomposition measures the same scene they do. */
+static void split_enable_soak(sand_t *s)
+{
+    sand_set_soak(s, SAND_SOAK_PER_MATERIAL);
+}
+
+static void split_plant_bed_rain(sand_t *s, int step)
+{
+    if (step == PLANT_BED_RAIN_A || step == PLANT_BED_RAIN_B) {
+        plant_bed_rain(s);
+    }
 }
 
 /* WHAT THE SOAK/DRY STAGE COSTS - bd esp32c6-pz7, which proposes replacing
@@ -329,14 +364,17 @@ static void test_the_settled_pool_move_work_splits_into_its_phases(void)
 static void test_the_soak_stage_costs_what_it_costs(void)
 {
     static const split_scene_t wet = {
-        .name = "wet earth", .build = build_wet_earth_scene, .seed = 53u,
+        .name = "wet earth", .setup = split_enable_soak,
+        .build = build_wet_earth_scene, .seed = 53u,
         .sgx = 0, .sgy = 1000, .gx = 0, .gy = 1000, .settle = 60,
     };
     static const char *const names[] = { "soak_dry" };
     static volatile bool *const gates[] = { &sand_step_gate_soak_dry };
     split_report(&wet, names, gates, 1, 3);
 }
+#endif
 
+#if CONFIG_LAUNCHER_SAND_PASS_GATES
 /* WHAT THE PLANT STAGES COST - bd esp32c6-71g, whose divide-removal work has
  * been held back twice for want of evidence the plant code is worth attacking.
  *
@@ -348,13 +386,16 @@ static void test_the_soak_stage_costs_what_it_costs(void)
 static void test_the_plant_stages_cost_what_they_cost(void)
 {
     static const split_scene_t bed = {
-        .name = "plant bed", .build = build_plant_bed_scene, .seed = 11u,
+        .name = "plant bed", .setup = split_enable_soak,
+        .build = build_plant_bed_scene, .during = split_plant_bed_rain,
+        .seed = 11u,
         .sgx = 0, .sgy = 1000, .gx = 0, .gy = 1000, .settle = 400,
     };
     static const char *const names[] = { "plant_stages" };
     static volatile bool *const gates[] = { &sand_step_gate_plant_stages };
     split_report(&bed, names, gates, 1, 3);
 }
+#endif
 
 /* The board both water_scene_us_per_step() and water_scene_single_step_us()
  * below measure, factored out so the two timing techniques cannot drift into
