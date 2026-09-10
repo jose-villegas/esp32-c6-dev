@@ -1855,6 +1855,15 @@ sand_step_reactions(sand_t* s) {
             max_smothering_density = mm->density;
         }
     }
+    /* CLEARED HERE so a bit latch_content_flags() ORs in mid-pass survives the
+     * write-back below. Assigning the walk's census there instead dropped any
+     * cell this pass CREATED at its own coordinates - the walk logged the old
+     * material and never returns (bd esp32c6-cxx).
+     *
+     * Only the mask can be cleared here. The six may_have_* bools are read
+     * per cell as live gates by stage_warm and the plant stages, so they keep
+     * the clear-at-the-end rule below. */
+    s->may_have_materials = 0;
     seen_materials = 0;
 
     const int w = s->w;
@@ -1883,10 +1892,9 @@ sand_step_reactions(sand_t* s) {
     if (!(found & FOUND_CONDENSING)) {
         s->may_have_condenser = false;
     }
-    /* Recomputed from what this pass actually walked, so it narrows as well as
-     * widens - the same shape as may_have_burning above. A material that burnt
-     * away stops arming the rejects that name it. */
-    s->may_have_materials = seen_materials;
+    /* Same shape as the flags above: OR, so a material created mid-pass by
+     * place_cell() keeps the bit it just latched. */
+    s->may_have_materials |= seen_materials;
 
     /* may_have_heat_holder NOT cleared; clearing at end is wrong. */
 
