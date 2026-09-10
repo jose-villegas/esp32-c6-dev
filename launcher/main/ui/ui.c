@@ -33,6 +33,7 @@
 #include "gfx/gfx.h"
 #include "gfx/gfx_font_roles.h"
 #include "gfx/icons.h"
+#include "ui/ui_pointer.h"
 
 static const char *TAG = "ui";
 
@@ -95,14 +96,11 @@ static int measure_text_height(mu_Font font)
  *
  * WHY THE PRESSED LOOK IS ON HOVER, NOT ONLY ON FOCUS
  *
- * On a mouse, hover means "the pointer is near" and focus means "the button is
- * held". A touchscreen has no such distinction: the pointer does not exist
- * until a finger is already on the glass, so hover IS contact. Following
- * feed_input()'s sequence below, a tap renders MU_COLOR_BUTTONHOVER for every
- * frame the finger is down and MU_COLOR_BUTTONFOCUS for the single frame the
- * press lands on. Sinking the bezel only on focus would therefore flash it for
- * one frame out of a press that lasts dozens, which reads as a glitch rather
- * than as a button going in.
+ * On a mouse, hover means the pointer is near; focus means the button is
+ * held. Touch has neither until contact, so hover IS contact. The pointer
+ * now holds DOWN for the whole press, so focus covers most of a tap on its
+ * own - but the one synthesized hover frame before DOWN lands has no focus
+ * yet, so hover still has to key the sunken look too.
  *-------------------------------------------------------------------------*/
 
 static bool is_button_frame(int colorid)
@@ -282,8 +280,7 @@ void ui_init(void)
  * rather than where it now visibly is. This is the one place touch enters
  * microui, which is exactly why it is also the one place this mapping needs
  * to happen. */
-static bool press_pending;
-static int  press_x, press_y; /* physical; mapped to logical at each use */
+static ui_pointer_t pointer;
 
 static void to_logical(int x, int y, int *lx, int *ly)
 {
@@ -301,45 +298,34 @@ static void to_logical(int x, int y, int *lx, int *ly)
     ui_transform_point(inv, x, y, lx, ly);
 }
 
-static void feed_input(const input_t *input)
+/* One ui_pointer_t event, mapped to logical and replayed into microui. The
+ * policy itself - hover, then hold down until the real release, park
+ * off-screen when idle - lives in ui_pointer_step(); this only translates
+ * and dispatches what it returns. */
+static void replay_pointer_event(const ui_pointer_event_t *e)
 {
     int lx, ly;
+    to_logical(e->x, e->y, &lx, &ly);
 
-    if (input->pressed) {
-        /* Frame 1 of the tap: position only, so hover resolves. */
-        press_pending = true;
-        press_x = input->x;
-        press_y = input->y;
-        to_logical(press_x, press_y, &lx, &ly);
+    switch (e->kind) {
+    case UI_POINTER_MOVE:
         mu_input_mousemove(&ctx, lx, ly);
-        return;
-    }
-
-    if (press_pending) {
-        /* Frame 2: now the press itself lands on a hovered control. */
-        press_pending = false;
-        to_logical(press_x, press_y, &lx, &ly);
-        mu_input_mousemove(&ctx, lx, ly);
+        break;
+    case UI_POINTER_DOWN:
         mu_input_mousedown(&ctx, lx, ly, MU_MOUSE_LEFT);
-        /* Release immediately. Holding is not meaningful for these controls,
-         * and it keeps a lifted finger from leaving the button stuck down if
-         * the release edge arrives while we are still mid-tap. */
+        break;
+    case UI_POINTER_UP:
         mu_input_mouseup(&ctx, lx, ly, MU_MOUSE_LEFT);
-        return;
+        break;
     }
+}
 
-    if (input->down) {
-        to_logical(input->x, input->y, &lx, &ly);
-        mu_input_mousemove(&ctx, lx, ly);
-    } else {
-        /* Park the pointer off-screen so nothing sits in a hover state
-         * while no finger is touching. Mapped like every other point here
-         * rather than passed straight through: under a translating
-         * transform, the logical origin's "off-screen" neighbourhood is
-         * not necessarily (-1, -1) any more, and mapping keeps this
-         * parked outside whatever the logical canvas currently is. */
-        to_logical(-1, -1, &lx, &ly);
-        mu_input_mousemove(&ctx, lx, ly);
+static void feed_input(const input_t *input)
+{
+    ui_pointer_event_t events[UI_POINTER_MAX_EVENTS];
+    const int n = ui_pointer_step(&pointer, input, events, UI_POINTER_MAX_EVENTS);
+    for (int i = 0; i < n; i++) {
+        replay_pointer_event(&events[i]);
     }
 }
 
