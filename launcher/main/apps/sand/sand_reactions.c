@@ -979,9 +979,17 @@ crust_faces(const sand_t* s, int x, int y, int w, int h, uint8_t mine,
     return faces;
 }
 
-/* How much more slowly a shell thickens than it starts. A period, not a
- * divisor: crusts is a handful out of 65536, so dividing it floors to zero and
- * the shell would never widen at all. */
+/* How often each of the two paths gets to roll. Periods, not divisors on the
+ * chance: crusts is a small count, so dividing floors to zero.
+ *
+ * SEEDING NEEDS A CLOCK TOO. Ungated it rolls every step, so a whole contact
+ * face turned within a second of settling while the shell behind it took
+ * minutes - the crust appeared rather than formed. Still the faster of the
+ * two, being what starts a shell, but no longer instant.
+ *
+ * The stagger multipliers differ per path so the two do not come due
+ * together. */
+#define CRUST_SEED_PERIOD  4
 #define CRUST_WIDEN_PERIOD 8
 
 /* Fixed blast radius. Cascade ignition simulates lid giving way. Tune on
@@ -1900,10 +1908,14 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
             ? crust_faces(s, x, y, w, h, CELL_MATERIAL(c),
                           CELL_MATERIAL((cell_t)r->crusts_to))
             : 0u;
-        const bool may_crust = ((faces & FACE_FOREIGN) != 0)
-            || (((faces & FACE_CRUST) != 0)
-                && (((unsigned)s->step_phase + (unsigned)x * 5u + (unsigned)y * 33u)
-                    & (CRUST_WIDEN_PERIOD - 1u)) == 0u);
+        const unsigned phase = (unsigned)s->step_phase;
+        const bool seed_due = ((faces & FACE_FOREIGN) != 0)
+            && ((phase + (unsigned)x * 11u + (unsigned)y * 7u)
+                & (CRUST_SEED_PERIOD - 1u)) == 0u;
+        const bool widen_due = ((faces & FACE_CRUST) != 0)
+            && ((phase + (unsigned)x * 5u + (unsigned)y * 33u)
+                & (CRUST_WIDEN_PERIOD - 1u)) == 0u;
+        const bool may_crust = seed_due || widen_due;
         if (may_crust
             && (int)(rng_next(&s->rng) & (CRUST_ROLL_MAX - 1)) < ((s->crust >= 0) ? s->crust : r->crusts)) {
             REACTION_DOC(crusts_to, "what a settled cell slowly crusts into");

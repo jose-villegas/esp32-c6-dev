@@ -1049,7 +1049,7 @@ static void test_snow_melts_on_wet_soil_but_not_on_dry(void)
  *
  * The one crust test that does NOT force the rate - the others call
  * sand_set_crust(), so sweeping crusts through them is byte-identical and the
- * shipped value goes untested. Measured 5881 steps.
+ * shipped value goes untested. Measured 5855 steps.
  *
  * 90% and not all: the rim never crusts, so a cover this shape tops out just
  * over 90%. No side walls - they seed the crust up the full height, and the
@@ -1120,7 +1120,7 @@ static void test_a_32_cell_snow_cover_turns_to_ice_in_about_three_minutes(void)
     free(blocks);
 
     TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, almost_at,
-        "a 32 cell cover of snow must end up 90% ice - measured 5881 steps; "
+        "a 32 cell cover of snow must end up 90% ice - measured 5855 steps; "
         "never getting there means the shipped crusts rate cannot reach the "
         "balance ceiling at all, which is what a byte-wide field against a "
         "65536 roll used to guarantee");
@@ -1234,9 +1234,10 @@ static void test_a_snowbank_crusts_on_its_faces_and_thickens_slowly_inward(void)
         }
     }
 
-    /* Long enough for the second layer to be well under way - widening is
-     * deliberately slow, and at 1000 steps it has barely started. */
-    for (int i = 0; i < 4000; i++) {
+    /* Long enough for the second layer to be well under way. Both paths are
+     * deliberately slow now - seeding as well as widening - so this is a
+     * multiple of what the shape needs, not a rate being measured. */
+    for (int i = 0; i < 12000; i++) {
         sand_step(&g, 0, 1000, 0);
     }
 

@@ -468,9 +468,9 @@ const reaction_t reactions[MATERIAL_MAX] = {
             /* A bank that has stopped moving crusts over. 1 against a 16-bit
              * roll is ~1 cell per 65 steps on a thousand-cell bank, which
              * reads as a crust forming rather than a flash freeze. */
-            .crusts = 55,  /* out of CRUST_ROLL_MAX a settled, bordered cell.
+            .crusts = 60,  /* out of CRUST_ROLL_MAX a settled, bordered cell.
                             * Set by the balance ceiling, not by feel: a 32
-                            * cell deep cover of snow is 90% ice after 5881
+                            * cell deep cover of snow is 90% ice after 5855
                             * steps, about three minutes of play. */
             .crusts_to = MATX(MATX_ICE),
         },
