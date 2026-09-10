@@ -2303,16 +2303,16 @@ static void emit_shatter(const reaction_t *r)
            cause_marked("shatters_to", 0));
 }
 
-/* The rate is out of 65536, not 256: this roll is 16-bit at its read site
- * precisely because one in 256 a step is not slow once a bank holds a
- * thousand cells. Printing it against the usual denominator would overstate
- * it by 256x. */
+/* CRUST_ROLL_MAX, not the usual 256, and not a literal either - the
+ * denominator has already moved once, and printing a stale one states the
+ * wrong probability rather than merely reading oddly. */
 static void emit_crust(const reaction_t *r)
 {
     if (r->crusts == 0 || r->crusts_to == 0) return;
     printf("- Once it has *settled*, it slowly crusts into %s "
-           "(%u in 65536 a step, and only while at rest).\n",
-           mat_span_v(r->crusts_to), (unsigned)r->crusts);
+           "(%u in %u a step, and only while at rest).\n",
+           mat_span_v(r->crusts_to), (unsigned)r->crusts,
+           (unsigned)CRUST_ROLL_MAX);
 }
 
 static void emit_material_section(const char *name, const reaction_t *r,
