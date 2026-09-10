@@ -22,18 +22,7 @@
 #pragma once
 
 #include "material.h"
-
-/* Same mixing constants as material_grain_hash() (material_palette.h) -
- * this header stays free of that file's gfx_color_t dependency by keeping
- * its own copy rather than including it. */
-static inline unsigned sand_swatch_hash(int col, int row)
-{
-    unsigned h = (unsigned)col * 0x9E3779B9u ^ (unsigned)row * 0x85EBCA6Bu;
-    h ^= h >> 15;
-    h *= 0x2C1B3C6Du;
-    h ^= h >> 12;
-    return h;
-}
+#include "material_palette.h"
 
 /* The cell to paint at (col, row) of an N x N swatch for brush cell `spec`.
  *
@@ -57,6 +46,6 @@ static inline cell_t sand_swatch_cell(cell_t spec, int col, int row, int cells)
         return CELL_MAKE(material, 0);
     }
 
-    const uint8_t variant = (uint8_t)(sand_swatch_hash(col, row) % (unsigned)span);
+    const uint8_t variant = (uint8_t)(material_grain_hash(col, row) % (unsigned)span);
     return CELL_MAKE(material, variant);
 }
