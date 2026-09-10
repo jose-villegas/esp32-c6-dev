@@ -474,7 +474,7 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
 
             int give, cost, recv_m;
             if (nr->soaks_to != 0) {
-                give = held / 2;
+                give = (int)((unsigned)held >> 1);
                 if (give == 0) {
                     continue; /* not enough to bind a grain */
                 }
@@ -485,6 +485,11 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
             } else if (same_species(n, c) && !cell_is_burning(n)) {
                 /* Moisture_of() reads lit fuse as 0. Gap calc overwrites lit
                  * byte. */
+                /* SIGNED ON PURPOSE, unlike the three halvings above: a
+                 * WETTER neighbour makes this negative and the lines below
+                 * depend on it, moving moisture the other way. Casting it
+                 * unsigned turns a small negative into a huge positive
+                 * (bd esp32c6-pz7). */
                 give = (held - moisture_of(n, nr)) / 2;
                 if (give == 0) {
                     continue; /* already even with this one */
@@ -546,11 +551,11 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
             const cell_t below = s->cells[nat];
             const reaction_t* br = reaction_of(below);
 
-            int give = (held + 1) / 2;
+            int give = (int)(((unsigned)held + 1u) >> 1);
             int cost = give;
             int recv_m;
             if (br->soaks_to != 0) {
-                give = held / 2;
+                give = (int)((unsigned)held >> 1);
                 if (give == 0) {
                     return true; /* too little to bind a grain */
                 }
