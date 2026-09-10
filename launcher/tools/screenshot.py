@@ -1,4 +1,4 @@
-"""Request a screenshot from the device and save it as a .bmp.
+"""Request a screenshot from the device and save it as a lossless .png.
 
 Invoked by screenshot.sh. Kept in Python because pyserial ships inside
 ESP-IDF's environment and behaves the same on every platform, which a shell
@@ -16,9 +16,17 @@ list), and a SCREENSHOT_END line. Anything else on the wire - ordinary
 ESP_LOG output, in particular - is ignored rather than treated as an
 error, since the device keeps logging normally while it streams.
 
-Writes the .bmp at `--out`, a same-named .png beside it (requires Pillow -
-see the import below), and, if a SCREENSHOT_STATE: line arrived, a same-named
-.json beside that.
+The device streams its frame as a 24bpp BMP (see screenshot_bmp_header() in
+util/screenshot.h) - the simplest thing to emit from a microcontroller with
+no image library on it - but nothing here ever writes that BMP to disk:
+bmp_bytes_to_png() below converts it to PNG entirely in memory, and `--out`
+gets only the PNG. This is genuinely lossless, not just smaller - PNG's
+compression is DEFLATE, the same as zlib/gzip, so every pixel round-trips
+exactly; this is not JPEG. Standard library only (zlib + struct), no
+Pillow - Pillow is not installed in the ESP-IDF python env this script
+actually runs under, so depending on it used to mean silently getting no
+image at all. Also writes a same-named .json beside the .png if a
+SCREENSHOT_STATE: line arrived.
 """
 
 import argparse
@@ -26,15 +34,12 @@ import base64
 import json
 import os
 import re
+import struct
 import sys
 import time
+import zlib
 
 import serial
-
-try:
-    from PIL import Image
-except ImportError:
-    Image = None
 
 BEGIN_RE = re.compile(r"^SCREENSHOT_BEGIN size=(\d+)$")
 DATA_PREFIX = "SCREENSHOT_DATA:"
@@ -44,11 +49,79 @@ END_LINE = "SCREENSHOT_END"
 TRIGGER = b"SCREENSHOT\n"
 
 
+def _png_chunk(tag: bytes, data: bytes) -> bytes:
+    """One PNG chunk: 4-byte big-endian length, the 4-byte type, the data,
+    then a big-endian CRC32 over type+data - the whole file is just these
+    end to end after the fixed 8-byte signature."""
+    return (struct.pack(">I", len(data)) + tag + data +
+            struct.pack(">I", zlib.crc32(tag + data) & 0xffffffff))
+
+
+def bmp_bytes_to_png(bmp: bytes) -> bytes:
+    """Converts an in-memory 24bpp BMP - the exact bytes screenshot_dump()
+    streams, see screenshot_bmp_header()'s own comment for the byte layout
+    - into an in-memory PNG. No Pillow, no temp file: a minimal PNG is just
+    the 8-byte signature, an IHDR chunk, one IDAT chunk holding
+    zlib.compress() of the raw scanlines (each prefixed with a filter byte;
+    0 = "None" is correct and simplest here), and an empty IEND chunk.
+
+    Two orderings BMP and PNG disagree on, both handled below: BMP stores
+    rows bottom-up (screenshot_bmp_header() always writes a positive
+    biHeight - see its own comment) while PNG wants top-down, and BMP's
+    pixel order is B,G,R while PNG wants R,G,B. Getting either backwards
+    produces an image that LOOKS like a real screenshot - upside-down, or
+    blue-tinted - which is worse than no image at all.
+
+    Width/height/row-stride are read out of the BMP header rather than
+    assumed, so this keeps working unchanged if the panel resolution ever
+    does - the same "trust what the device announced" reasoning the
+    SCREENSHOT_BEGIN size check in main() already applies.
+    """
+    if bmp[0:2] != b"BM":
+        raise ValueError("not a BMP: missing the 'BM' signature")
+
+    pixel_offset, = struct.unpack_from("<I", bmp, 10)
+    width, height = struct.unpack_from("<ii", bmp, 18)
+    bits_per_pixel, = struct.unpack_from("<H", bmp, 28)
+    if bits_per_pixel != 24:
+        raise ValueError(f"expected a 24bpp BMP, got {bits_per_pixel}bpp")
+    if height <= 0:
+        # screenshot_bmp_header() only ever writes a positive (bottom-up)
+        # height - a value <= 0 here means this isn't this tool's BMP.
+        raise ValueError(f"expected a positive (bottom-up) height, got {height}")
+
+    stride = ((width * 3 + 3) // 4) * 4     # BMP pads every row to 4 bytes
+
+    scanlines = []
+    for image_row in range(height):
+        # BMP's first stored row is the BOTTOM of the image; PNG's first
+        # written row is the TOP - so PNG row N reads BMP's stored row
+        # (height - 1 - N).
+        bmp_row = height - 1 - image_row
+        row_start = pixel_offset + bmp_row * stride
+        bgr = bmp[row_start:row_start + width * 3]
+
+        rgb = bytearray(len(bgr))
+        rgb[0::3], rgb[1::3], rgb[2::3] = bgr[2::3], bgr[1::3], bgr[0::3]
+        scanlines.append(b"\x00" + bytes(rgb))    # filter byte 0 = None
+
+    raw = b"".join(scanlines)
+
+    png = b"\x89PNG\r\n\x1a\n"
+    png += _png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+    png += _png_chunk(b"IDAT", zlib.compress(raw, 6))
+    png += _png_chunk(b"IEND", b"")
+    return png
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", required=True)
     ap.add_argument("--baud", type=int, default=115200)
-    ap.add_argument("--out", required=True)
+    ap.add_argument("--out", required=True,
+                    help="output path; any extension given is replaced "
+                         "with .png (the .json state snapshot lands beside "
+                         "it under the same stem)")
     ap.add_argument("--timeout", type=float, default=90.0,
                     help="seconds to wait for the whole capture to arrive - "
                          "a full 368x448 frame is roughly 650 KB of base64 "
@@ -155,18 +228,13 @@ def main() -> int:
                     if len(data) != total_size:
                         print(f"warning: decoded {len(data)} bytes but the "
                               f"device announced {total_size}", file=sys.stderr)
-                    with open(args.out, "wb") as f:
-                        f.write(data)
-                    print(f"wrote {args.out} ({len(data)} bytes)")
 
-                    if Image is not None:
-                        png_path = os.path.splitext(args.out)[0] + ".png"
-                        Image.open(args.out).save(png_path)
-                        print(f"wrote {png_path}")
-                    else:
-                        print("Pillow not installed - skipping .png "
-                              "conversion (pip install Pillow to enable it)",
-                              file=sys.stderr)
+                    png = bmp_bytes_to_png(data)
+                    png_path = os.path.splitext(args.out)[0] + ".png"
+                    with open(png_path, "wb") as f:
+                        f.write(png)
+                    print(f"wrote {png_path} ({len(png)} bytes, converted "
+                          f"losslessly from a {len(data)}-byte BMP capture)")
 
                     if state_json is not None:
                         state_path = os.path.splitext(args.out)[0] + ".json"

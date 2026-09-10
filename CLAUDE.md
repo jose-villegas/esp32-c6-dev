@@ -49,9 +49,10 @@ markdown report into their own `tools/results/`:
 ~90 s environment-activation cost.
 
 `./launcher/tools/screenshot.sh` captures the device's current screen to a
-`.bmp` plus a `.json` state snapshot, over the same serial connection — needs
-neither `idf.py` nor PowerShell, but only works on development builds
-(`build_flash_dev.sh` / `build_flash.sh --diag`), not release.
+lossless `.png` plus a `.json` state snapshot, over the same serial
+connection — needs neither `idf.py` nor PowerShell, but only works on
+development builds (`build_flash_dev.sh` / `build_flash.sh --diag`), not
+release.
 
 Formatting (only on files you just wrote or edited — this repo has no house
 C style guide, match the surrounding file; do not reformat pre-existing
