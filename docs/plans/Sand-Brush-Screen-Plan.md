@@ -22,6 +22,9 @@ predicted by it:
   segment above already reads POUR). `suite_brush_screen.c` now measures
   every fixed string on this screen against its own rect at both
   orientations, which is what caught it - not eyeballed on a screenshot.
+  Put to the maintainer with the alternatives (smaller caption, or the value
+  on its own line) and accepted as-is, so the shorter wording is the design
+  now rather than a deviation from it.
 
 Deliberately deferred, unchanged from the plan: the info button draws but
 has no handler behind it (a separate, unbuilt panel), and nothing on either
