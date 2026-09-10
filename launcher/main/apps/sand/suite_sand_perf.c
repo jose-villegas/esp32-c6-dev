@@ -872,6 +872,15 @@ static void test_a_growing_plant_bed_fits_in_the_frame_budget(void)
         "target at measured x 0.9, so failing means the work is not done yet");
 }
 
+#ifdef SAND_HOST_PROBE
+/* Host-only timing probe - the growing plant bed (see the full-step control's
+ * own wrapper for the pattern). */
+void sand_host_probe_run_plant_bed(void)
+{
+    test_a_growing_plant_bed_fits_in_the_frame_budget();
+}
+#endif
+
 static void test_a_campfire_on_a_sand_bed_fits_in_the_frame_budget(void)
 {
     uint8_t *big    = malloc(REAL_W * REAL_H);
