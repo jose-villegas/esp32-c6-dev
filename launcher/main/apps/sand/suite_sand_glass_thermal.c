@@ -588,8 +588,12 @@ static void test_a_frosted_pane_warms_back_to_room_temperature(void)
         sand_set(&s, x, H - 2, CELL_MAKE(MAT_GLASS, 0));   /* fully frosted */
     }
 
+    /* Breaks the moment it reaches ambient, so the cap only has to be
+     * generous, not tuned - and it must be, because how LONG frost lingers is
+     * the rewarm period's business and moves when that is retuned. Measured
+     * 7786 steps at COLD_REWARM_PERIOD 32. */
     int coldest = 0;
-    for (int i = 0; i < 3000; i++) {
+    for (int i = 0; i < 24000; i++) {
         sand_step(&s, 0, 1000, 0);
         coldest = MATERIAL_VARIANTS;
         for (int x = 1; x < W - 1; x++) {
