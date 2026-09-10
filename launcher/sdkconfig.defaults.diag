@@ -20,3 +20,4 @@ CONFIG_LAUNCHER_DEVELOPMENT=y
 # same wrong number - two budgets were once pegged from such rows). The
 # release image keeps its watchdog; this is diag-only.
 CONFIG_ESP_TASK_WDT_INIT=n
+CONFIG_LAUNCHER_SAND_PASS_GATES=y

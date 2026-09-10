@@ -1737,7 +1737,7 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
         /* Cheap tests first: field, may_have_liquid, then neighbour scan. */
     stage_soak_dry:
         if ((r->soaks != 0 || r->dries != 0)
-            && step_one_soaking_cell(s, row, x, y, w, h, r)) {
+            && SAND_STEP_GATED(soak_dry, step_one_soaking_cell(s, row, x, y, w, h, r))) {
             found |= FOUND_MOISTURE;
             continue;
         }
@@ -1757,7 +1757,7 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
             }
         }
     stage_root:
-        if (r->roots != 0 && c == (cell_t)r->roots_to && s->may_have_moisture) {
+        if (SAND_STEP_GATED(plant_stages, r->roots != 0) && c == (cell_t)r->roots_to && s->may_have_moisture) {
             /* Conduct first, tip growth level constraint. */
             if (step_one_conducting_cell(s, x, y, w, h, r)) {
                 found |= FOUND_MOISTURE;
@@ -1768,7 +1768,7 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
             continue;
         }
     stage_grow:
-        if (r->grows != 0 && s->may_have_moisture) {
+        if (SAND_STEP_GATED(plant_stages, r->grows != 0) && s->may_have_moisture) {
             step_one_growing_cell(s, x, y, w, h, r);
             found |= FOUND_MOISTURE;
             continue;
@@ -1776,7 +1776,7 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
         /* Budding. Same gate as growing, and reached by unlit wood, which
          * falls through every branch above it. */
     stage_sprout:
-        if (r->sprouts != 0 && s->may_have_moisture) {
+        if (SAND_STEP_GATED(plant_stages, r->sprouts != 0) && s->may_have_moisture) {
             if (step_one_sprouting_cell(s, x, y, w, h, r)) {
                 found |= FOUND_MOISTURE;
             }
@@ -1784,7 +1784,7 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
         /* Budding, on the same gate. Reached by wood, which falls through
          * every branch above it. */
     stage_bud:
-        if (r->buds != 0 && s->may_have_moisture) {
+        if (SAND_STEP_GATED(plant_stages, r->buds != 0) && s->may_have_moisture) {
             if (step_one_budding_cell(s, x, y, w, h, r)) {
                 found |= FOUND_MOISTURE;
             }
