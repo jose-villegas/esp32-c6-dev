@@ -45,6 +45,22 @@ static uint64_t canvas_hash[MU_CONTAINERPOOL_SIZE];
 static mu_Context ctx;
 static bool       invalidated = true;
 
+#if CONFIG_LAUNCHER_DEVELOPMENT
+/* MU_COMMANDLIST_SIZE (8 KiB, microui.h) was sized against an estimate, not
+ * a measurement - this makes it one. Logs only on a new high, so a screen
+ * that has already shown its worst frame costs nothing more to watch. */
+static int command_list_high_water;
+
+static void report_command_list_high_water(int used)
+{
+    if (used > command_list_high_water) {
+        command_list_high_water = used;
+        ESP_LOGI(TAG, "command list high water: %d / %d bytes",
+                 used, MU_COMMANDLIST_SIZE);
+    }
+}
+#endif
+
 static ui_button_style_t  button_style;
 /* The style in force for the rest of this frame, and microui's own frame
  * painter, kept so UI_BUTTON_FLAT and every non-button frame stay exactly
@@ -759,6 +775,10 @@ static bool repaint_marked_canvases(int n, const bool *repaint,
 bool ui_end(uint32_t background_rgb)
 {
     mu_end(&ctx);
+
+#if CONFIG_LAUNCHER_DEVELOPMENT
+    report_command_list_high_water(ctx.command_list.idx);
+#endif
 
     const int n = ctx.root_list.idx;
     bool repaint[MU_ROOTLIST_SIZE] = { false };
