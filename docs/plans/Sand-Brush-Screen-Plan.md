@@ -1,7 +1,34 @@
 # Plan: the sand app's brush screen, and the UI primitives it needs
 
-**Status**: planned 2026-09-10, not built. Branch
-`claude/sand-app-second-screen-990ad2`.
+**Status**: built 2026-09-10. Branch `claude/sand-app-second-screen-990ad2`,
+phases 1-6 plus this doc pass, all seven landing on the branch before merge.
+Two divergences from the plan below, both found during implementation, not
+predicted by it:
+
+- **Phase 2's `ui_set_text_scale()` never shipped.** The plan sketched a
+  render-time global; what landed instead is `ui_set_font_scaled()`, which
+  interns `{ font, scale }` pairs so `mu_Font` itself carries the scale -
+  the same reason `ui_set_font()` already needed no `ui_invalidate()`. A
+  global read at render time would have needed invalidating on every size
+  change, and a screen mixing two sizes hits that every frame, permanently
+  defeating the repaint skip. See
+  [`Launcher-Architecture.md`](../Launcher-Architecture.md#text-at-more-than-one-size)
+  for the full argument, already written up beside `ui_set_font()` in
+  `ui.c` before this plan even reused it.
+- **The size caption reads `POUR SIZE`, not `POUR BRUSH SIZE`.** At 368px
+  portrait the caption row is 232px once the value box takes its 80, and
+  the design's wording needs 240. The dropped word carries no information
+  the panel doesn't already say twice over (it's the brush screen; the
+  segment above already reads POUR). `suite_brush_screen.c` now measures
+  every fixed string on this screen against its own rect at both
+  orientations, which is what caught it - not eyeballed on a screenshot.
+
+Deliberately deferred, unchanged from the plan: the info button draws but
+has no handler behind it (a separate, unbuilt panel), and nothing on either
+screen persists across an app restart - brush, mode and every radius reset
+with `sand_ui_t` the same way everything else in it already does.
+
+---
 
 The sand app gets a second full-screen panel — a **brush screen** — from a
 supplied pixel-art design: the current material with its name and an info
