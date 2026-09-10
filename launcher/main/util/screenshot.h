@@ -24,8 +24,9 @@
  * screenshot_start()/screenshot_take_request()/screenshot_dump() below are
  * only ever CALLED under CONFIG_LAUNCHER_DEVELOPMENT (see main.c) - a
  * release build has nobody watching the serial console to type SCREENSHOT
- * into, the same reasoning app_sand.c's frame-timing averages are gated on
- * (see docs/Testing-Guide.md's "Development-only instrumentation" section).
+ * into, the same reasoning an app's own developer-only instrumentation
+ * (e.g. rolling frame-timing averages) is gated on (see
+ * docs/Testing-Guide.md's "Development-only instrumentation" section).
  * Declared unconditionally here regardless, the same way the rest of this
  * header stays plain C with no #if of its own - main.c is what decides
  * whether anything ever calls them.

@@ -15,7 +15,7 @@
  * check_temperature() already proved safe on this chip - duplicated rather
  * than shared because post.c's version is `static` and tangled with its own
  * POST report() call, and five lines is cheaper to keep independent than to
- * detangle (same reasoning main.c and app_sand.c each keep their own copy of
+ * detangle (same reasoning main.c and an app each keep their own copy of
  * the IMU's gravity-axis mapping). Not for every frame - fine for the
  * occasional snapshot device_state_read() is for. */
 static bool read_die_temperature(float *out_celsius)
