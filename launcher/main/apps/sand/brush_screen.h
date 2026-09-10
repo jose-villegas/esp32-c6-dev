@@ -65,6 +65,27 @@ typedef struct {
     mu_Rect slider_track;
 } brush_screen_layout_t;
 
+/* The scale every caption and segment label on this screen is drawn at.
+ * It lives here, beside the rects those strings have to fit inside, because
+ * the two only mean anything together: suite_brush_screen.c measures the
+ * strings below against their own rects at this scale, which is what caught
+ * "POUR BRUSH SIZE" overflowing its row in portrait. */
+#define BRUSH_SCREEN_CAPTION_SCALE 2
+
+/* The screen's fixed strings. Here rather than at the drawing call site so
+ * the fit check above can reach them - a caption the layout has never seen
+ * is a caption nothing can prove fits. */
+#define BRUSH_SCREEN_MATERIAL_CAPTION "MATERIAL"
+#define BRUSH_SCREEN_MODE_CAPTION     "BRUSH MODE"
+
+/* The segment's own label, and the size row's caption naming whichever mode
+ * is selected - "POUR SIZE" rather than the design's "POUR BRUSH SIZE",
+ * which needs 240px of a row that is only 232px wide once the value has its
+ * 80. The dropped word is the one carrying no information: the panel is
+ * already the brush screen and the segment above already says POUR. */
+const char *brush_screen_segment_label(brush_screen_segment_t seg);
+const char *brush_screen_size_caption(brush_screen_segment_t seg);
+
 /* Fills `out` for a `screen_w` x `screen_h` canvas - the LOGICAL canvas
  * (ui_width()/ui_height()), which swap under a quarter turn, exactly as
  * palette_tile_rect() takes them. Never reads GFX_WIDTH/GFX_HEIGHT. */

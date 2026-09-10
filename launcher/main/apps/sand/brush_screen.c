@@ -149,3 +149,21 @@ void brush_screen_layout(int screen_w, int screen_h, brush_screen_layout_t *out)
     layout_mode(out->mode_panel, out);
     layout_size(out->size_panel, out);
 }
+
+static const char *const SEGMENT_LABELS[BRUSH_SCREEN_SEGMENT_COUNT] = {
+    "POUR", "ERASE", "BOOM",
+};
+
+static const char *const SIZE_CAPTIONS[BRUSH_SCREEN_SEGMENT_COUNT] = {
+    "POUR SIZE", "ERASE SIZE", "BOOM SIZE",
+};
+
+const char *brush_screen_segment_label(brush_screen_segment_t seg)
+{
+    return SEGMENT_LABELS[seg];
+}
+
+const char *brush_screen_size_caption(brush_screen_segment_t seg)
+{
+    return SIZE_CAPTIONS[seg];
+}
