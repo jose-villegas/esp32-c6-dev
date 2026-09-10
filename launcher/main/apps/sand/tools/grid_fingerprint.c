@@ -454,6 +454,28 @@ static void scene_snow_thaw(sand_t *s)
     }
 }
 
+/* A QUIET snow bank - the only shape that can show the crust rule.
+ *
+ * scene_snow_thaw cannot: it melts and drifts all window, so its blocks never
+ * rest and a rest-gated rule correctly never fires. Tried, and its hash came
+ * back identical with sleeping on and the roll forced.
+ *
+ * Snow on stone, nothing else. Roll forced for scene_sealed_lava's reason: at
+ * 1 in 65536 a bank crusts over minutes, and 300 steps would show nothing. */
+static void scene_snow_crust(sand_t *s)
+{
+    sand_set_crust(s, 256);
+
+    for (int x = 0; x < FP_W; x++) {
+        sand_set(s, x, FP_H - 1, FP_STONE);
+    }
+    for (int y = FP_H - 9; y < FP_H - 1; y++) {
+        for (int x = 4; x < FP_W - 4; x++) {
+            sand_set(s, x, y, FP_SNOW);
+        }
+    }
+}
+
 /* GRAVITY IS PER SCENE, and the six original rows keep the straight-down
  * vector they were baselined with - their hashes must not move.
  *
@@ -470,26 +492,42 @@ static const struct {
     uint32_t    seed;
     int         gx;
     int         gy;
+    int         sleeping;   /* 0 for every original row - see the two at the end */
 } SCENES[] = {
-    { "dry_fall",    scene_dry_fall,    7u,  0,    1000 },
-    { "water_pool",  scene_water_pool,  11u, 0,    1000 },
-    { "lava_quench", scene_lava_quench, 23u, 0,    1000 },
-    { "fire_gas",    scene_fire_gas,    31u, 0,    1000 },
-    { "sealed_lava", scene_sealed_lava, 41u, 0,    1000 },
-    { "wet_earth",   scene_wet_earth,   53u, 0,    1000 },
+    { "dry_fall",    scene_dry_fall,    7u,  0,    1000, 0 },
+    { "water_pool",  scene_water_pool,  11u, 0,    1000, 0 },
+    { "lava_quench", scene_lava_quench, 23u, 0,    1000, 0 },
+    { "fire_gas",    scene_fire_gas,    31u, 0,    1000, 0 },
+    { "sealed_lava", scene_sealed_lava, 41u, 0,    1000, 0 },
+    { "wet_earth",   scene_wet_earth,   53u, 0,    1000, 0 },
 
     /* Same builders, held sideways and cornerwise. */
-    { "gas_land",    scene_fire_gas,    31u, 1000, 0    },
-    { "water_diag",  scene_water_pool,  11u, 1000, 1000 },
+    { "gas_land",    scene_fire_gas,    31u, 1000, 0, 0 },
+    { "water_diag",  scene_water_pool,  11u, 1000, 1000, 0 },
 
     /* The only row here in which anything grows - see the builder. */
-    { "plant_bed",   scene_plant_bed,   11u, 0,    1000 },
+    { "plant_bed",   scene_plant_bed,   11u, 0,    1000, 0 },
 
     /* The only row here that puts acid on the board at all. */
-    { "acid_bath",   scene_acid_bath,   67u, 0,    1000 },
+    { "acid_bath",   scene_acid_bath,   67u, 0,    1000, 0 },
 
     /* Likewise snow, ice and deliberately-placed smoke. */
-    { "snow_thaw",   scene_snow_thaw,   71u, 0,    1000 },
+    { "snow_thaw",   scene_snow_thaw,   71u, 0,    1000, 0 },
+
+    /* SLEEPING ON, which every row above leaves OFF though the app runs with it
+     * ON. cell_settled() answers false when block_state is NULL, so no
+     * settled-gated rule could fire anywhere here (bd esp32c6-1x9).
+     *
+     * EXTRA rows, not switched originals, so no existing hash moves - and the
+     * pair is the point: block sleep claims to change nothing, and two rows
+     * differing only in sleeping are what check that. They come back
+     * byte-identical to their awake twins, which is that claim measured. */
+    { "snow_asleep", scene_snow_thaw,   71u, 0,    1000, 1 },
+    { "pool_asleep", scene_water_pool,  11u, 0,    1000, 1 },
+
+    /* And the one row where a SETTLED-gated rule actually fires - see the
+     * builder for why the rate is forced. */
+    { "snow_crust",  scene_snow_crust,  71u, 0,    1000, 1 },
 };
 
 int main(void)
@@ -528,6 +566,17 @@ int main(void)
          * loop is allowed to optimise them, so a change there must show
          * up here. */
         sand_enable_impulses(&s, impulses, cell_count);
+        uint8_t *blocks = NULL;
+        if (SCENES[i].sleeping) {
+            blocks = calloc((size_t)s.block_cols * (size_t)s.block_rows, 1);
+            if (blocks == NULL) {
+                fprintf(stderr, "grid_fingerprint: out of memory for blocks\n");
+                free(cells);
+                free(impulses);
+                return 1;
+            }
+            sand_enable_sleeping(&s, blocks);
+        }
         SCENES[i].build(&s);
 
         /* Gravity pinned PER SCENE and jostle fixed: this tool answers "did
@@ -551,6 +600,7 @@ int main(void)
 
         free(cells);
         free(impulses);
+        free(blocks);
     }
 
     return 0;
