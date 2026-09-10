@@ -651,6 +651,12 @@ step_one_warming_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
 
 /* COLD melts, pulls temp, cracks if hot. Chilling, melting snow. Warm liquid
  * aids survival. */
+/* Bounds both conduction walks - conduct_heat() out of a burning cell and the
+ * cold walk in step_one_cold_cell(). See "THE BOILER" for the rationale, and
+ * note the two share it deliberately: a medium carries cold as far as it
+ * carries heat. */
+#define CONDUCT_REACH 32
+
 static bool
 step_one_cold_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
     for (int d = 0; d < 4; d++) {
@@ -718,6 +724,44 @@ step_one_cold_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
         s->may_have_temperature = true;
         mark_rows(s, ny, ny);
         wake_block_and_neighbors(s, nx, ny);
+
+        /* AND ON THROUGH THE MEDIUM. Cold stopped where it touched: snow on
+         * glass chilled three rows and sat there, the same at 250 steps as at
+         * 1000.
+         *
+         * conduct_heat() has walked conductors all along but only out of a
+         * BURNING cell, so no cold source could enter it. This is its mirror,
+         * at the same reach, attenuating on the conductor's own `conducts` so
+         * nothing new needs tuning. Free where nothing conducts. */
+        if ((present_pair_bits & PAIR_CONDUCTS) != 0) {
+            int cx = nx, cy = ny;
+            for (int depth = 1; depth < CONDUCT_REACH; depth++) {
+                cx += reaction_dirs[d][0];
+                cy += reaction_dirs[d][1];
+                if ((unsigned)cx >= (unsigned)w || (unsigned)cy >= (unsigned)h) {
+                    break;
+                }
+                const size_t cat = (size_t)cy * (size_t)w + (size_t)cx;
+                const cell_t cc = s->cells[cat];
+                if (CELL_IS_EMPTY(cc)) {
+                    break;
+                }
+                const reaction_t* cr = reaction_of(cc);
+                if (cr->conducts == 0 || cr->heat_ramp == 0) {
+                    break;   /* the medium ends here */
+                }
+                const uint8_t ct = CELL_VARIANT(cc);
+                if (ct == 0) {
+                    continue;   /* already as cold as the scale goes */
+                }
+                if ((int)(rng_next(&s->rng) & 0xFF) >= cr->conducts) {
+                    break;   /* the cold did not carry this far this step */
+                }
+                s->cells[cat] = CELL_MAKE(CELL_MATERIAL(cc), (uint8_t)(ct - 1));
+                mark_rows(s, cy, cy);
+                wake_block_and_neighbors(s, cx, cy);
+            }
+        }
 
         if (temp > SAND_AMBIENT_HEAT && try_heat_transform(s, x, y, w, h)) {
             return false;
@@ -963,10 +1007,6 @@ try_flare(sand_t* s, int x, int y, int w, int h, const material_t* mat, uint8_t 
     }
     return emit_against_gravity(s, x, y, w, h, MAT_FIRE);
 }
-
-/* Bounds conduct_heat() walk - see "THE BOILER" for rationale. Caps cold
- * pass. */
-#define CONDUCT_REACH 32
 
 /* Attempts direct connection, fails. Rolls `conducts` to CONDUCT_REACH. Stops
  * on failure, off-grid, or empty. Liquid boils, fuel ignites, neighbors warm.

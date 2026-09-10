@@ -947,6 +947,57 @@ static int snow_left_over_soil_at(uint8_t moisture)
     return count_cells_of(MAT_SNOW);
 }
 
+
+/* COLD REACHES THROUGH THE MEDIUM, not just into the cell it touches.
+ *
+ * A snowbank on glass used to chill three rows and stop, identical at 250
+ * steps and at 1000. The slab is deliberately taller than CONDUCT_REACH, so a
+ * pass means the cold travelled rather than simply hitting the bottom. */
+static void test_cold_conducts_deep_into_a_slab(void)
+{
+    const int W2 = 40, H2 = 60;
+    const int slab_top = 10;
+    uint8_t *cells = calloc(W2 * H2, 1);
+    TEST_ASSERT_NOT_NULL(cells);
+
+    sand_t g;
+    sand_init(&g, cells, W2, H2, 7u);
+    for (int y = slab_top; y < H2; y++) {
+        for (int x = 0; x < W2; x++) {
+            sand_set(&g, x, y, CELL_MAKE(MAT_GLASS, SAND_AMBIENT_HEAT));
+        }
+    }
+    for (int y = 6; y < slab_top; y++) {
+        for (int x = 0; x < W2; x++) {
+            sand_set(&g, x, y, SNOW);
+        }
+    }
+
+    for (int i = 0; i < 250; i++) {
+        sand_step(&g, 0, 1000, 0);
+    }
+
+    int deepest = slab_top - 1;
+    for (int y = slab_top; y < H2; y++) {
+        for (int x = 0; x < W2; x++) {
+            const cell_t c = sand_at(&g, x, y);
+            if (CELL_MATERIAL(c) == MAT_GLASS
+                && CELL_VARIANT(c) < SAND_AMBIENT_HEAT && y > deepest) {
+                deepest = y;
+            }
+        }
+    }
+    const int depth = deepest - slab_top + 1;
+    free(cells);
+
+    /* Measured 31 rows with the walk and 3 without it, so the threshold sits
+     * far from both - this fails loudly on a regression rather than drifting
+     * into one. */
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(20, depth,
+        "cold must conduct well down a glass slab, not stop at the cells it "
+        "touches - three rows is what it managed before it could travel");
+}
+
 /* WET SOIL MELTS SNOW, DRY SOIL DOES NOT.
  *
  * Snow melted only against open water before this, because the thaw test
@@ -1932,6 +1983,7 @@ void run_sand_combustion_suite(void)
     RUN_TEST(test_fire_burning_out_marks_its_row_dirty);
     RUN_TEST(test_fire_spreads_through_a_connected_pocket_in_one_step);
     RUN_TEST(test_pouring_stone_never_arms_the_reactions_pass);
+    RUN_TEST(test_cold_conducts_deep_into_a_slab);
     RUN_TEST(test_snow_melts_on_wet_soil_but_not_on_dry);
     RUN_TEST(test_a_settled_snowbank_crusts_to_ice);
     RUN_TEST(test_a_fire_buried_on_all_four_sides_goes_out);
