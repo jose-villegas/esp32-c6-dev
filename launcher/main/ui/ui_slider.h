@@ -53,6 +53,17 @@ static inline mu_Rect ui_slider_knob_rect(mu_Rect track, int lo, int hi, int val
     return (mu_Rect){ x, track.y, w, track.h };
 }
 
+/* Where the knob's centre sits for `value` - the point a finger is
+ * actually placing when it drags. ui_slider_value_at_x() inverts THIS,
+ * not the knob's left edge: map the finger to the edge instead and the
+ * knob rides half its own width to the right of the thumb pushing it. */
+static inline int ui_slider_knob_center_x(mu_Rect track, int lo, int hi, int value,
+                                          int knob_w)
+{
+    const mu_Rect knob = ui_slider_knob_rect(track, lo, hi, value, knob_w);
+    return knob.x + knob.w / 2;
+}
+
 /* The filled portion of the track, from its left edge to the knob's
  * centre - the part of the design already "passed" by the current value. */
 static inline mu_Rect ui_slider_fill_rect(mu_Rect track, int lo, int hi, int value, int knob_w)
@@ -64,8 +75,8 @@ static inline mu_Rect ui_slider_fill_rect(mu_Rect track, int lo, int hi, int val
 
 /* Touch x within `track` -> the value it represents, quantized to `step`
  * and clamped to [lo, hi]. Out-of-range x clamps, never wraps. `step <= 0`
- * falls back to 1. Mirrors ui_slider_knob_rect()'s rounding so the two are
- * exact inverses - see suite_ui_slider.c's round-trip test. */
+ * falls back to 1. The exact inverse of ui_slider_knob_center_x(), not of
+ * the knob's left edge - see that function for why. */
 static inline int ui_slider_value_at_x(mu_Rect track, int lo, int hi, int knob_w, int step, int x)
 {
     const int range = hi - lo;
@@ -74,7 +85,8 @@ static inline int ui_slider_value_at_x(mu_Rect track, int lo, int hi, int knob_w
     }
     const int s     = (step > 0) ? step : 1;
     const int travel = ui_slider_travel(track, knob_w);
-    const int off   = mu_clamp(x - track.x, 0, mu_max(travel, 0));
+    const int w      = ui_slider_knob_w(track, knob_w);
+    const int off   = mu_clamp(x - track.x - w / 2, 0, mu_max(travel, 0));
     const int raw   = (travel > 0) ? lo + ui_slider_round_div(off * range, travel) : lo;
     const int steps = ui_slider_round_div((raw - lo), s);
     return mu_clamp(lo + steps * s, lo, hi);

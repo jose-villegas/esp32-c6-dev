@@ -8,6 +8,8 @@
  * is checked directly rather than by looking at a screenshot.
  *===========================================================================*/
 
+#include <stdlib.h>
+
 #include "suites.h"
 #include "unity.h"
 
@@ -19,8 +21,8 @@ typedef struct {
     int     lo, hi, step;
 } slider_fixture_t;
 
-static slider_fixture_t
-fixture(void) {
+static slider_fixture_t fixture(void)
+{
     return (slider_fixture_t){
         .track  = (mu_Rect){ 40, 100, 200, 24 },
         .knob_w = 40,
@@ -33,28 +35,49 @@ fixture(void) {
  * time a finger touches it without moving.
  *---------------------------------------------------------------------------*/
 
-static void
-test_round_trip_holds_for_every_value_in_range(void) {
+static void test_round_trip_holds_for_every_value_in_range(void)
+{
     const slider_fixture_t f = fixture();
 
     for (int v = f.lo; v <= f.hi; v++) {
-        const mu_Rect knob = ui_slider_knob_rect(f.track, f.lo, f.hi, v, f.knob_w);
-        const int back = ui_slider_value_at_x(f.track, f.lo, f.hi, f.knob_w, f.step, knob.x);
+        const int cx = ui_slider_knob_center_x(f.track, f.lo, f.hi, v, f.knob_w);
+        const int back = ui_slider_value_at_x(f.track, f.lo, f.hi, f.knob_w, f.step, cx);
         TEST_ASSERT_EQUAL_INT_MESSAGE(v, back,
-            "value -> knob.x -> value must round-trip exactly, or a finger "
+            "value -> knob centre -> value must round-trip exactly, or a finger "
             "resting on the knob without moving would drift its value");
     }
 }
 
-static void
-test_round_trip_holds_at_a_coarser_step(void) {
+static void test_round_trip_holds_at_a_coarser_step(void)
+{
     const slider_fixture_t f = fixture();
     const int lo = 0, hi = 100, step = 5;
 
     for (int v = lo; v <= hi; v += step) {
-        const mu_Rect knob = ui_slider_knob_rect(f.track, lo, hi, v, f.knob_w);
-        const int back = ui_slider_value_at_x(f.track, lo, hi, f.knob_w, step, knob.x);
+        const int cx = ui_slider_knob_center_x(f.track, lo, hi, v, f.knob_w);
+        const int back = ui_slider_value_at_x(f.track, lo, hi, f.knob_w, step, cx);
         TEST_ASSERT_EQUAL_INT(v, back);
+    }
+}
+
+/* What "the knob follows your thumb" means precisely: of every value the
+ * slider can hold, the one it picks puts its knob centre nearest the touch.
+ * Asserted against all the candidates rather than a tolerance in pixels, so
+ * it stays true whatever the track width and range are. */
+static void test_a_touch_picks_the_value_whose_knob_centres_nearest_it(void)
+{
+    const slider_fixture_t f = fixture();
+
+    for (int x = f.track.x - 20; x <= f.track.x + f.track.w + 20; x++) {
+        const int v = ui_slider_value_at_x(f.track, f.lo, f.hi, f.knob_w, f.step, x);
+        const int dv = abs(ui_slider_knob_center_x(f.track, f.lo, f.hi, v, f.knob_w) - x);
+
+        for (int u = f.lo; u <= f.hi; u++) {
+            const int du = abs(ui_slider_knob_center_x(f.track, f.lo, f.hi, u, f.knob_w) - x);
+            TEST_ASSERT_TRUE_MESSAGE(dv <= du,
+                "the knob must land under the finger, not half its width to "
+                "one side of it");
+        }
     }
 }
 
@@ -62,8 +85,8 @@ test_round_trip_holds_at_a_coarser_step(void) {
  * The knob never leaves the track.
  *---------------------------------------------------------------------------*/
 
-static void
-test_knob_sits_flush_inside_the_track_at_lo_and_hi(void) {
+static void test_knob_sits_flush_inside_the_track_at_lo_and_hi(void)
+{
     const slider_fixture_t f = fixture();
 
     const mu_Rect at_lo = ui_slider_knob_rect(f.track, f.lo, f.hi, f.lo, f.knob_w);
@@ -76,8 +99,8 @@ test_knob_sits_flush_inside_the_track_at_lo_and_hi(void) {
         "not run past it or stop short");
 }
 
-static void
-test_knob_stays_inside_the_track_everywhere_between(void) {
+static void test_knob_stays_inside_the_track_everywhere_between(void)
+{
     const slider_fixture_t f = fixture();
 
     for (int v = f.lo; v <= f.hi; v++) {
@@ -94,8 +117,8 @@ test_knob_stays_inside_the_track_everywhere_between(void) {
  * Quantization and clamping of a touch.
  *---------------------------------------------------------------------------*/
 
-static void
-test_a_touch_quantizes_to_the_nearest_step(void) {
+static void test_a_touch_quantizes_to_the_nearest_step(void)
+{
     const slider_fixture_t f = fixture();
     const int lo = 0, hi = 100, step = 10;
 
@@ -107,8 +130,8 @@ test_a_touch_quantizes_to_the_nearest_step(void) {
     }
 }
 
-static void
-test_a_touch_beyond_either_end_clamps_not_wraps(void) {
+static void test_a_touch_beyond_either_end_clamps_not_wraps(void)
+{
     const slider_fixture_t f = fixture();
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(f.lo,
@@ -123,8 +146,8 @@ test_a_touch_beyond_either_end_clamps_not_wraps(void) {
  * The filled portion.
  *---------------------------------------------------------------------------*/
 
-static void
-test_fill_width_never_exceeds_the_track(void) {
+static void test_fill_width_never_exceeds_the_track(void)
+{
     const slider_fixture_t f = fixture();
 
     for (int v = f.lo; v <= f.hi; v++) {
@@ -134,8 +157,8 @@ test_fill_width_never_exceeds_the_track(void) {
     }
 }
 
-static void
-test_fill_width_grows_with_value(void) {
+static void test_fill_width_grows_with_value(void)
+{
     const slider_fixture_t f = fixture();
 
     const mu_Rect low  = ui_slider_fill_rect(f.track, f.lo, f.hi, f.lo, f.knob_w);
@@ -151,8 +174,8 @@ test_fill_width_grows_with_value(void) {
  * wider than its track.
  *---------------------------------------------------------------------------*/
 
-static void
-test_lo_equals_hi_returns_lo_without_dividing_by_zero(void) {
+static void test_lo_equals_hi_returns_lo_without_dividing_by_zero(void)
+{
     const slider_fixture_t f = fixture();
 
     const mu_Rect k = ui_slider_knob_rect(f.track, 5, 5, 5, f.knob_w);
@@ -162,8 +185,8 @@ test_lo_equals_hi_returns_lo_without_dividing_by_zero(void) {
         "with no range at all, every touch must resolve to the one value there is");
 }
 
-static void
-test_a_track_narrower_than_the_knob_shrinks_the_knob_to_fit(void) {
+static void test_a_track_narrower_than_the_knob_shrinks_the_knob_to_fit(void)
+{
     const mu_Rect narrow = { 0, 0, 10, 24 };
 
     const mu_Rect k = ui_slider_knob_rect(narrow, 0, 100, 50, 40);
@@ -171,8 +194,8 @@ test_a_track_narrower_than_the_knob_shrinks_the_knob_to_fit(void) {
         "a knob must never be drawn wider than the track it lives on");
 }
 
-static void
-test_step_of_zero_falls_back_rather_than_dividing_by_zero(void) {
+static void test_step_of_zero_falls_back_rather_than_dividing_by_zero(void)
+{
     const slider_fixture_t f = fixture();
 
     /* Only asserting it returns something in range - step 0 has no
@@ -182,8 +205,8 @@ test_step_of_zero_falls_back_rather_than_dividing_by_zero(void) {
     TEST_ASSERT_TRUE(v >= f.lo && v <= f.hi);
 }
 
-static void
-test_step_larger_than_the_whole_range_still_clamps(void) {
+static void test_step_larger_than_the_whole_range_still_clamps(void)
+{
     const slider_fixture_t f = fixture();
 
     const int v = ui_slider_value_at_x(f.track, 0, 10, f.knob_w, 1000,
@@ -193,8 +216,8 @@ test_step_larger_than_the_whole_range_still_clamps(void) {
         "reachable");
 }
 
-static void
-test_zero_width_track_produces_no_oversized_or_negative_rect(void) {
+static void test_zero_width_track_produces_no_oversized_or_negative_rect(void)
+{
     const mu_Rect zero = { 0, 0, 0, 24 };
 
     const mu_Rect k = ui_slider_knob_rect(zero, 0, 100, 50, 40);
@@ -204,10 +227,11 @@ test_zero_width_track_produces_no_oversized_or_negative_rect(void) {
     TEST_ASSERT_TRUE(fill.w >= 0 && fill.w <= zero.w);
 }
 
-void
-run_ui_slider_suite(void) {
+void run_ui_slider_suite(void)
+{
     RUN_TEST(test_round_trip_holds_for_every_value_in_range);
     RUN_TEST(test_round_trip_holds_at_a_coarser_step);
+    RUN_TEST(test_a_touch_picks_the_value_whose_knob_centres_nearest_it);
     RUN_TEST(test_knob_sits_flush_inside_the_track_at_lo_and_hi);
     RUN_TEST(test_knob_stays_inside_the_track_everywhere_between);
     RUN_TEST(test_a_touch_quantizes_to_the_nearest_step);
