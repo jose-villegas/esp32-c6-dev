@@ -550,7 +550,7 @@ The costs, stated plainly rather than left implicit:
 | --- | --- | --- |
 | extended statics | 16 codes, 5 used, 11 spare | 8 codes, 5 used, **3 spare** |
 | `materials[]` (hot table) | 16 rows, 192 B of flash | 32 rows, **384 B** of flash |
-| control frame-budget rows | pinned (`sand_step`, `aligned(32)`, [`Tuning-At-a-Glance.md`](Tuning-At-a-Glance.md#the-layout-lottery)) | **unmeasured** against the doubled table - a flash-layout-lottery question, not a logic one |
+| control frame-budget rows | believed pinned (`sand_step`, `aligned(32)`) - it was not, see [`Tuning-At-a-Glance.md`](Tuning-At-a-Glance.md#the-layout-lottery) | **unmeasured** against the doubled table - a flash-layout-lottery question, not a logic one |
 
 Half of what was left of the extended range's own doorway, spent on one
 material, is a real price - three spare static codes is not much room for
@@ -947,8 +947,10 @@ stateDiagram-v2
 A settled block costs one comparison per step (`BLOCK_ACTIVE` check in
 `finalize_settling()`) instead of a full grain-by-grain sweep - this is
 the entire reason `test_a_screen_of_settled_sand_costs_almost_nothing`
-exists and has a 300 µs budget instead of one shared with the other
-tests. Two settled bits, not one
+exists and has a budget of its own, three orders of magnitude under the
+others, instead of one shared with them. The sweep asks the question once
+per BLOCK row rather than once per row, so a settled board never builds
+the per-row context at all. Two settled bits, not one
 (`BLOCK_SETTLED_NEAREST`/`BLOCK_SETTLED_OTHER`), because gravity's
 direction is dithered between two ring directions each step, and a block
 settled under one might not be under the other.

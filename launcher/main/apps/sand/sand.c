@@ -1076,16 +1076,15 @@ static void build_xflow(xflow_t *f, int gx, int gy)
  * sand_step_gas() already use. */
 
 
-/* Pinned to a cache-line boundary so this function's placement is not a
- * coin flip of whatever unrelated code sits before it: a host bisect found
- * sand_step()'s compiled bytes IDENTICAL across commits that never touched
- * this body, yet performance still swung between two bands in lock-step
- * with the function's own address alignment. 32, not 64: 32 bytes is this
- * chip's actual i-cache line, and 64 does not link here - ld refuses the
- * section overlap it causes with ESP-IDF's linker script. */
+/* THE ALIGNMENT IS THIS ARRAY'S, not sand_step()'s below, though it was
+ * written for the function and this definition later slid in under it.
+ * Pointing it back was measured (esp32c6-lgc): +4.5% on both liquid-free
+ * controls, nothing recovered. Paying that is a separate call from noticing
+ * it; until then the eight bytes keep a line of their own and the function
+ * draws a layout ticket like everything else.
+ *
+ * Defined here once rather than per TU - see sand_priv.h. */
 __attribute__((aligned(32)))
-/* Defined here, once, rather than per translation unit - see reaction_dirs'
- * comment in sand_priv.h for what that is worth. */
 const int8_t reaction_dirs[4][2] = {
     {0, -1},
     {0, 1},
@@ -1168,7 +1167,35 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
     const int w = s->w;
     const uint16_t is_liquid = liquid_mask();
 
+    /* Asked once per BLOCK row, not once per row. step_one_row() already
+     * skips a settled block, but only after building a seventeen-field
+     * context for the row - and the answer is the same for all
+     * SAND_BLOCK_H rows sharing that block row, so on a settled board that
+     * context is built 64 times over to find nothing to do. Nothing in the
+     * skipped row has a side effect (dest_row() is pure), so this is the
+     * same program with the dead contexts removed. */
+    int scanned_by = -1;
+    bool block_row_settled = false;
+
     for (int y = y_from; y != y_to; y += y_step) {
+        if (settled_bit != 0) {
+            const int by = y / SAND_BLOCK_H;
+            if (by != scanned_by) {
+                scanned_by = by;
+                block_row_settled = true;
+                const uint8_t *const brow =
+                    &s->block_state[(size_t)by * (size_t)s->block_cols];
+                for (int bx = 0; bx < s->block_cols; bx++) {
+                    if ((brow[bx] & settled_bit) == 0) {
+                        block_row_settled = false;
+                        break;
+                    }
+                }
+            }
+            if (block_row_settled) {
+                continue;
+            }
+        }
         step_one_row(s, y, w, dx, dy, slide_a, slide_b, x_step,
                     load_dx, load_dy, jostle, settled_bit, is_liquid, driven);
     }
