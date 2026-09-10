@@ -920,6 +920,34 @@ step_one_tempered_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cons
     return next != SAND_AMBIENT_HEAT;
 }
 
+/* Whether this cell has a face on something that is neither itself nor its
+ * own crust.
+ *
+ * A crust is a SHELL: without this the roll fires anywhere a bank is at rest,
+ * so the most buried cell ices as readily as the exposed one.
+ *
+ * THE CRUST MUST NOT COUNT AS ITS OWN BORDER - hence two materials. Counting
+ * it ices the whole bank anyway, just slower: each ring turns, and the one
+ * behind it then faces something that is not snow.
+ *
+ * Off-grid is not a face; the screen edge would rim a bank in ice. */
+static inline bool
+touches_something_else(const sand_t* s, int x, int y, int w, int h, uint8_t mine,
+                       uint8_t becomes) {
+    for (int d = 0; d < 4; d++) {
+        const int nx = x + reaction_dirs[d][0];
+        const int ny = y + reaction_dirs[d][1];
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            continue;
+        }
+        const uint8_t m = CELL_MATERIAL(s->cells[(size_t)ny * (size_t)w + (size_t)nx]);
+        if (m != mine && m != becomes) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* Fixed blast radius. Cascade ignition simulates lid giving way. Tune on
  * device. */
 #define SAND_GAS_IGNITE_BLAST_RADIUS 8
@@ -1833,6 +1861,8 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
          * crust would form one cell and stall; and nothing needs waking,
          * because snow becoming ice only makes the board more solid. */
         if (r->crusts != 0 && cell_settled(s, x, y)
+            && touches_something_else(s, x, y, w, h, CELL_MATERIAL(c),
+                                      CELL_MATERIAL((cell_t)r->crusts_to))
             && (int)(rng_next(&s->rng) & 0xFFFF) < ((s->crust >= 0) ? s->crust : r->crusts)) {
             REACTION_DOC(crusts_to, "what a settled cell slowly crusts into");
             row[x] = (cell_t)r->crusts_to;

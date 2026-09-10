@@ -1045,6 +1045,79 @@ static void test_snow_melts_on_wet_soil_but_not_on_dry(void)
         "about dirt rather than about the water in it");
 }
 
+/* THE CRUST IS A SHELL, and the inside of the bank stays powder.
+ *
+ * Ice belongs where snow meets something else. It used to form mid-drift just
+ * as readily, because the rule asked only whether the bank was at rest, and a
+ * bank iced all the way through is not a crust but a block of ice.
+ *
+ * Measured here without the border test: 71 of 74 cells two deep were ice.
+ * The interior assertion carries this test; the ring one only proves the rule
+ * still fires. */
+static void test_a_snowbank_crusts_on_its_faces_and_stays_powder_inside(void)
+{
+    enum { GW = 40, GH = 40, X0 = 8, X1 = 32, YTOP = 16, YBOT = GH - 2 };
+    uint8_t *cells  = calloc(GW * GH, 1);
+    uint8_t *blocks = calloc((size_t)((GW + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
+                           * (size_t)((GH + SAND_BLOCK_H - 1) / SAND_BLOCK_H), 1);
+    TEST_ASSERT_NOT_NULL(cells);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t g;
+    memset(&g, 0, sizeof g);
+    sand_init(&g, cells, GW, GH, 71u);
+    sand_enable_sleeping(&g, blocks);
+    sand_set_crust(&g, 256);   /* the shipped rate is minutes, not frames */
+
+    /* WALLED, and resting on the floor. Snow is a powder: a block of it left
+     * in mid-air collapses into rubble, and the first version of this measured
+     * the rubble. */
+    for (int x = 0; x < GW; x++) {
+        sand_set(&g, x, GH - 1, STONE);
+    }
+    for (int y = 10; y < GH - 1; y++) {
+        sand_set(&g, X0 - 1, y, STONE);
+        sand_set(&g, X1, y, STONE);
+    }
+    for (int y = YTOP; y <= YBOT; y++) {
+        for (int x = X0; x < X1; x++) {
+            sand_set(&g, x, y, SNOW);
+        }
+    }
+
+    for (int i = 0; i < 1000; i++) {
+        sand_step(&g, 0, 1000, 0);
+    }
+
+    int ring_ice = 0, ring_total = 0, inside_ice = 0;
+    for (int y = YTOP; y <= YBOT; y++) {
+        for (int x = X0; x < X1; x++) {
+            int depth = x - X0;
+            if (X1 - 1 - x < depth) { depth = X1 - 1 - x; }
+            if (y - YTOP < depth)   { depth = y - YTOP; }
+            if (YBOT - y < depth)   { depth = YBOT - y; }
+
+            const cell_t c = sand_at(&g, x, y);
+            const bool is_ice = CELL_MATERIAL(c) == MAT_EXTENDED;
+            if (depth == 0) {
+                ring_total++;
+                ring_ice += is_ice ? 1 : 0;
+            } else if (depth >= 2) {
+                inside_ice += is_ice ? 1 : 0;
+            }
+        }
+    }
+    free(cells);
+    free(blocks);
+
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(ring_total * 3 / 4, ring_ice,
+        "setup: the exposed faces of a settled bank must actually crust, or "
+        "the interior assertion below passes on a bank that never iced at all");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, inside_ice,
+        "no cell two or more deep inside a snowbank may become ice - a crust "
+        "forms where snow meets something else, not in the body of the drift");
+}
+
 /* A SETTLED SNOWBANK CRUSTS OVER; A FALLING ONE DOES NOT.
  *
  * The rest test is the whole rule - a snowfall in flight must cost nothing,
@@ -2007,6 +2080,7 @@ void run_sand_combustion_suite(void)
     RUN_TEST(test_cold_conducts_deep_into_a_slab);
     RUN_TEST(test_snow_melts_on_wet_soil_but_not_on_dry);
     RUN_TEST(test_a_settled_snowbank_crusts_to_ice);
+    RUN_TEST(test_a_snowbank_crusts_on_its_faces_and_stays_powder_inside);
     RUN_TEST(test_a_fire_buried_on_all_four_sides_goes_out);
     RUN_TEST(test_a_material_created_during_the_pass_stays_in_the_mask);
     RUN_TEST(test_sand_alone_lets_the_moisture_pass_switch_off_again);
