@@ -1076,12 +1076,9 @@ static void build_xflow(xflow_t *f, int gx, int gy)
  * sand_step_gas() already use. */
 
 
-/* THE ALIGNMENT IS THIS ARRAY'S, not sand_step()'s below, though it was
- * written for the function and this definition later slid in under it.
- * Pointing it back was measured (esp32c6-lgc): +4.5% on both liquid-free
- * controls, nothing recovered. Paying that is a separate call from noticing
- * it; until then the eight bytes keep a line of their own and the function
- * draws a layout ticket like everything else.
+/* This array's own alignment, which is where sand_step()'s went when this
+ * definition slid in under the attribute written for it. The function has its
+ * own pin again below, at 16 rather than the 32 that measured too dear.
  *
  * Defined here once rather than per TU - see sand_priv.h. */
 __attribute__((aligned(32)))
@@ -1092,6 +1089,19 @@ const int8_t reaction_dirs[4][2] = {
     {1, 0},
 };
 
+/* PINNED at 16, and the 16 is the point.
+ *
+ * This was unpinned for nineteen commits: the attribute written for it bound
+ * to reaction_dirs when that array slid in underneath (00e13ce), which is why
+ * an unrelated change could move a scene holding no liquid by 11.6%.
+ *
+ * 32 was tried and cost 4.5% on both liquid-free controls for nothing. 16 is
+ * near free - controls 5654/5753 against 5653/5753, worst row 1.5%. Cache
+ * blocks are 32 bytes, so 16 still fixes the start within a block. */
+
+/* CHECK WITH objdump, NOT the diff: .text.sand_step should read 2**4. Binding
+ * to the wrong symbol still compiles and passes everything. */
+__attribute__((aligned(16)))
 void sand_step(sand_t *s, int gx, int gy, int jostle)
 {
     /* Emitters act first per step, before gravity, mimicking
