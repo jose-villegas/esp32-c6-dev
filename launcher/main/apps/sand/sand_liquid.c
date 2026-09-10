@@ -435,6 +435,94 @@ static void equalise_liquids(sand_t *s, const xflow_t *f, int sight,
     }
 }
 
+
+/*-----------------------------------------------------------------------------
+ * Sub-pass: a lighter liquid rises through a denser one.
+ *
+ * WHY A PASS OF ITS OWN, rather than the denser cell sinking during the main
+ * sweep as it used to. The sweep's no-double-move guarantee covers the cell
+ * that MOVES; it says nothing about the cell that gets DISPLACED. Every row's
+ * water sank past the same oil in turn, so one sweep carried that oil sixteen
+ * rows - it was at the surface the step it was created, and no rise was ever
+ * visible. Gas never had the problem because it has always risen in its own
+ * reversed sub-pass (sand_gas.c), at about 0.7 rows a step.
+ *
+ * A period gate on the old swap was tried instead and is NOT equivalent: it
+ * strands a lone water cell inside the oil layer for good, because a cell
+ * cannot sink into its own material (give_mass owns that) and the swap only
+ * ever looks DOWN, so nothing can cross it sideways. The cascade had been
+ * hiding that by brute force.
+ *
+ * ORDERED so a cell that rises lands in a row this pass has already left
+ * behind - the same trick the main sweep uses for falling, mirrored. That is
+ * what caps it at one cell a step without any per-cell state to remember.
+ *---------------------------------------------------------------------------*/
+static bool float_lighter_liquids(sand_t *s, int dx, int dy)
+{
+    const int w = s->w, h = s->h;
+    const uint16_t is_liquid = liquid_mask();
+    bool moved = false;
+
+    /* Visiting order: against gravity, on both axes, so the destination of a
+     * rise is always already visited. Covers tilt and inversion - for a purely
+     * sideways vector one axis is a no-op and the other carries it. */
+    const int y0 = (dy > 0) ? 0 : h - 1, ystep = (dy > 0) ? 1 : -1;
+    const int x0 = (dx > 0) ? 0 : w - 1, xstep = (dx > 0) ? 1 : -1;
+
+    for (int yi = 0; yi < h; yi++) {
+        const int y = y0 + yi * ystep;
+        const int uy = y - dy;
+        if ((unsigned)uy >= (unsigned)h) {
+            continue;
+        }
+        uint8_t *const row = &s->cells[(size_t)y * (size_t)w];
+        uint8_t *const urow = &s->cells[(size_t)uy * (size_t)w];
+
+        for (int xi = 0; xi < w; xi++) {
+            const int x = x0 + xi * xstep;
+            const int ux = x - dx;
+            if ((unsigned)ux >= (unsigned)w) {
+                continue;
+            }
+            const cell_t me = row[x];
+            if (CELL_IS_EMPTY(me)) {
+                continue;
+            }
+            const uint8_t mine = CELL_MATERIAL(me);
+            if (((is_liquid >> mine) & 1u) == 0) {
+                continue;
+            }
+            const cell_t above = urow[ux];
+            if (CELL_IS_EMPTY(above)) {
+                continue;   /* open space - the ordinary fall owns that */
+            }
+            const uint8_t theirs = CELL_MATERIAL(above);
+            if (theirs == mine || ((is_liquid >> theirs) & 1u) == 0) {
+                continue;
+            }
+            if (material_by_id((material_id_t)theirs)->density
+                <= material_by_id((material_id_t)mine)->density) {
+                continue;   /* nothing to sort: already the right way up */
+            }
+            /* Viscosity, the same roll the ordinary move pays and the same
+             * idea as gas's mobility gate - a rise should be a lazy drift,
+             * not a guaranteed cell every step. Without it this pass sorts
+             * harder than the sinking swap it replaced ever did. */
+            if (!liquid_may_move(s, mine)) {
+                continue;
+            }
+
+            urow[ux] = me;
+            row[x]   = above;
+            mark_rows(s, y, uy);
+            wake_block_and_neighbors(s, x, y);
+            wake_block_and_neighbors(s, ux, uy);
+            moved = true;
+        }
+    }
+    return moved;
+}
+
 void sand_step_liquids(sand_t *s, const xflow_t *flow, int dx, int dy)
 {
     if (!s->may_have_liquid) {
@@ -458,4 +546,13 @@ void sand_step_liquids(sand_t *s, const xflow_t *flow, int dx, int dy)
     /* Cross-flow levels both ways. See equalise_liquids(). */
     equalise_liquids(s, &run, SAND_LIQUID_SIGHT, dx, dy);
     s->liquid_flip = !s->liquid_flip;
+
+    /* SKIPPED ON ONE BOARD-WIDE FACT. Sorting by density needs two different
+     * liquids to sort; with one, or none, every cell of this pass would reject
+     * and the answer is the same for all of them. A screen of water - what a
+     * liquid scene usually is - therefore pays a popcount, not a pass. */
+    const uint16_t liquids_here = s->may_have_materials & liquid_mask();
+    if ((liquids_here & (uint16_t)(liquids_here - 1u)) != 0u) {
+        (void)float_lighter_liquids(s, dx, dy);
+    }
 }
