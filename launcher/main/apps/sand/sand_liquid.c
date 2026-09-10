@@ -444,6 +444,17 @@ static void equalise_liquids(sand_t *s, const xflow_t *f, int sight,
  * DISPLACES, so every row's water sank past the same oil in turn and carried
  * it sixteen rows in a step. Gas has always risen in its own reversed pass.
  *---------------------------------------------------------------------------*/
+/* Every other step, not every step. This pass is a whole extra traversal and
+ * a capture put it at 22% of the boiler scene; running it half as often halves
+ * that, and separation is still a visible drift - gas, which nobody complains
+ * about, rises at about 0.7 rows a step, so 0.5 is in the same country.
+ *
+ * A BLOCK SKIP WAS TRIED FIRST and measured worth nothing: the scenes that
+ * regress are liquid-dense, so BLOCK_LIQUID_NEAR is set nearly everywhere and
+ * the check never fires. Per-cell it was actively worse (28%), per-block it
+ * landed back on 22% - the same as not having it. */
+#define LIQUID_SORT_PERIOD 2
+
 static bool float_lighter_liquids(sand_t *s, int dx, int dy)
 {
     const int w = s->w, h = s->h;
@@ -476,6 +487,7 @@ static bool float_lighter_liquids(sand_t *s, int dx, int dy)
         }
         uint8_t *const row = &s->cells[(size_t)y * (size_t)w];
         uint8_t *const urow = &s->cells[(size_t)uy * (size_t)w];
+
 
         for (int xi = 0; xi < w; xi++) {
             const int x = x0 + xi * xstep;
@@ -560,7 +572,8 @@ void sand_step_liquids(sand_t *s, const xflow_t *flow, int dx, int dy)
      * and the answer is the same for all of them. A screen of water - what a
      * liquid scene usually is - therefore pays a popcount, not a pass. */
     const uint16_t liquids_here = s->may_have_materials & liquid_mask();
-    if ((liquids_here & (uint16_t)(liquids_here - 1u)) != 0u) {
+    if ((liquids_here & (uint16_t)(liquids_here - 1u)) != 0u
+        && (s->step_phase & (LIQUID_SORT_PERIOD - 1u)) == 0u) {
         (void)float_lighter_liquids(s, dx, dy);
     }
 }
