@@ -683,6 +683,14 @@ step_one_warming_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
  * carries heat. */
 #define CONDUCT_REACH 32
 
+/* How far COLD carries, which is no longer the same as heat.
+ *
+ * They shared CONDUCT_REACH on the argument that a medium carries cold as far
+ * as it carries heat, and that stopped being true once cold got its own
+ * attenuation run and, now, the diagonals. Thirty-two cells of cold read as
+ * unrealistic in play - a third of it does not. */
+#define COLD_REACH (CONDUCT_REACH / 3)
+
 /* Cells the cold crosses per attenuation roll - THE ONE PLACE COLD BEATS HEAT,
  * which is what bd esp32c6-tov asked for. The heat walk rolls at every cell,
  * so at glass's conducts of 220 it clears CONDUCT_REACH about once in a
@@ -723,6 +731,62 @@ step_one_cold_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
         && (((unsigned)s->step_phase + (unsigned)x * 5u + (unsigned)y * 33u)
             & (COLD_CARRY_PERIOD - 1u)) == 0u;
     bool spent_on_heat = false;
+
+    /* THE CARRY RUNS ON ALL EIGHT, unlike the contact loop below it.
+     *
+     * Conduction is proximity, and a cell touching at a corner is as close as
+     * one touching at a face - a cardinals-only walk sent cold down columns
+     * and rows and left the diagonals of a slab untouched, which reads as a
+     * grid rather than as cold spreading.
+     *
+     * Lifted out of that loop so it is walked ONCE for the cell rather than
+     * once per cardinal neighbour, which also makes the source's bill below
+     * one per step instead of up to four. */
+    if (carries) {
+        for (int d = 0; d < 8; d++) {
+            const int *dir = ring_dir(d);
+            int cx = x, cy = y;
+            for (int depth = 1; depth < COLD_REACH; depth++) {
+                cx += dir[0];
+                cy += dir[1];
+                if ((unsigned)cx >= (unsigned)w || (unsigned)cy >= (unsigned)h) {
+                    break;
+                }
+                const size_t cat = (size_t)cy * (size_t)w + (size_t)cx;
+                const cell_t cc = s->cells[cat];
+                if (CELL_IS_EMPTY(cc)) {
+                    break;
+                }
+                const reaction_t* cr = reaction_of(cc);
+                if (cr->conducts == 0 || cr->heat_ramp == 0) {
+                    break;   /* the medium ends here */
+                }
+                const uint8_t ct = CELL_VARIANT(cc);
+                if (ct == 0) {
+                    continue;   /* already as cold as the scale goes */
+                }
+                if ((depth % COLD_CARRY_RUN) == 0
+                    && (int)(rng_next(&s->rng) & 0xFF) >= cr->conducts) {
+                    break;   /* the cold did not carry this far this step */
+                }
+                /* Drawn, not woken - see HEAT LEVELS DO NOT WAKE. This walk
+                 * is where that rule was first found and paid for. */
+                s->cells[cat] = CELL_MAKE(CELL_MATERIAL(cc), (uint8_t)(ct - 1));
+                mark_rows(s, cy, cy);
+                if (ct > SAND_AMBIENT_HEAT) {
+                    spent_on_heat = true;
+                }
+            }
+        }
+    }
+
+    /* THE SOURCE PAYS FOR THE DEPTH TOO. Cooling something HOT has always cost
+     * the chilling cell - that is what stops snow being a free and permanent
+     * heat sink, and a test is named for it. Reaching deeper without paying
+     * deeper would quietly void that. */
+    if (spent_on_heat && try_heat_transform(s, x, y, w, h)) {
+        return false;
+    }
 
     for (int d = 0; d < 4; d++) {
         const int nx = x + reaction_dirs[d][0];
@@ -778,51 +842,6 @@ step_one_cold_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
             continue;
         }
 
-        bool spent_on_heat = false;
-        if (carries) {
-            int cx = nx, cy = ny;
-            for (int depth = 1; depth < CONDUCT_REACH; depth++) {
-                cx += reaction_dirs[d][0];
-                cy += reaction_dirs[d][1];
-                if ((unsigned)cx >= (unsigned)w || (unsigned)cy >= (unsigned)h) {
-                    break;
-                }
-                const size_t cat = (size_t)cy * (size_t)w + (size_t)cx;
-                const cell_t cc = s->cells[cat];
-                if (CELL_IS_EMPTY(cc)) {
-                    break;
-                }
-                const reaction_t* cr = reaction_of(cc);
-                if (cr->conducts == 0 || cr->heat_ramp == 0) {
-                    break;   /* the medium ends here */
-                }
-                const uint8_t ct = CELL_VARIANT(cc);
-                if (ct == 0) {
-                    continue;   /* already as cold as the scale goes */
-                }
-                if ((depth % COLD_CARRY_RUN) == 0
-                    && (int)(rng_next(&s->rng) & 0xFF) >= cr->conducts) {
-                    break;   /* the cold did not carry this far this step */
-                }
-                /* Drawn, not woken - see HEAT LEVELS DO NOT WAKE. This walk
-                 * is where that rule was first found and paid for. */
-                s->cells[cat] = CELL_MAKE(CELL_MATERIAL(cc), (uint8_t)(ct - 1));
-                mark_rows(s, cy, cy);
-                if (ct > SAND_AMBIENT_HEAT) {
-                    spent_on_heat = true;
-                }
-            }
-        }
-
-        /* THE SOURCE PAYS FOR THE DEPTH TOO. Cooling something HOT has always
-         * cost the chilling cell - that is what stops snow being a free and
-         * permanent heat sink, and there is a test named for it. Reaching
-         * deeper without paying deeper would have quietly voided that, and
-         * did: the walk cooled panes several cells in while the snow above
-         * was only ever billed for the one it touched. */
-        if (spent_on_heat && try_heat_transform(s, x, y, w, h)) {
-            return false;
-        }
 
         if (temp == 0) {
             continue; /* the face is as cold as it goes - but the walk above
