@@ -210,10 +210,20 @@ never merged; `git show` still works once that branch is fetched, or
   its address across cache-line boundaries), observed four distinct
   control value-pairs in one day, and saw two *different* binaries land
   the same pair to the microsecond. Reading *which pair* the controls
-  landed in remains the sharp diagnostic. `sand_step` is pinned
-  (`aligned(32)`, commit `66a1e9b`) so its own ticket is no longer drawn;
-  other hot functions still play the lottery, and the pin's padding
-  re-rolls everything downstream of it exactly once.
+  landed in remains the sharp diagnostic. **`sand_step` is not pinned**,
+  whatever `66a1e9b` and three pages of these docs used to say: `00e13ce`
+  defined `reaction_dirs` between the `aligned(32)` and the declaration it
+  was written for, so the attribute bound to the array
+  (`.text.sand_step 2**1`, `.srodata.reaction_dirs 2**5` — objdump is the
+  only thing that can see this; the source diff, the suite and the
+  fingerprint all read normal). Re-pointing it at the function was measured
+  2026-09-10 and is not free: the two controls went 5501/5596 -> 5748/5844,
+  **+4.5%**, while the settled-sand row it was tried against moved 269 ->
+  268. So every hot function draws a ticket again, this one included, and
+  re-pinning is a determinism decision with a price rather than a free
+  restoration. It is also worth less than it was: the whole sweep now
+  inlines into 3.5 KB of `sand_step`, so where its inner loops sit matters
+  more than where the function starts.
 - The diagnostics image no longer runs a task watchdog. It used to charge
   its own periodic console dump to whatever benchmark's timed loop it
   landed inside — deterministically, up to 2.6× inflation, with nothing

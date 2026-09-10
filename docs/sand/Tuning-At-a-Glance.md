@@ -24,7 +24,7 @@ merged), controls pinned at 5,907/6,002:
 
 | Test | Measured | Target | To close |
 |---|---:|---:|---:|
-| Settled screen, nothing moves | 264 µs | 235 | 29 µs |
+| Settled screen, nothing moves | 58 µs | 52 | re-measured and re-pegged 2026-09-10, unlike the rest of this table - the sweep stopped building a per-row context for block rows it skips whole, and the row went 269 -> 58 µs |
 | Full-size step, all falling | 5,907 µs | 5,800 | 107 µs |
 | Gravity flip, settled pile | 6,002 µs | 5,900 | 102 µs |
 | Mixed scene flip | 15,347 µs | 11,700 | 3,647 µs |
@@ -194,11 +194,14 @@ boundaries by unrelated functions earlier in its file growing or
 shrinking — and 2026-09-01 alone produced four distinct control
 value-pairs, two of them landed by *different binaries* to the exact
 microsecond (5,907/6,002-3). Quantised, yes; two states, no. The useful
-test is still "which pair did the controls land in", and `sand_step` no
-longer draws a ticket at all: it is pinned to the 32-byte line it
-fetches by (`aligned(32)`, commit `66a1e9b` — 64 does not link against
-ESP-IDF's `.flash_rodata_dummy` overlay). The pin's padding re-rolled
-everything downstream exactly once; other hot functions still play. The
+test is still "which pair did the controls land in". `sand_step` **draws a
+ticket like everything else** — `66a1e9b` pinned it to the 32-byte line it
+fetches by, and `00e13ce` unpinned it by accident three weeks later,
+defining `reaction_dirs` between the `aligned(32)` and the declaration so
+the attribute bound to the array instead. Putting it back was measured
+2026-09-10 and cost the two controls 4.5% while recovering nothing, so the
+pin is a determinism trade to re-decide, not a repair to apply; see
+[`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md). The
 antidote (attempt 10) stands: **keep control benchmarks in every
 capture** — when only the liquid numbers move, the cause is in the
 liquid path.
