@@ -50,8 +50,7 @@ _Static_assert(BLOCK_H <= 368 - 2 * UI_MARGIN,
  * neighbours, any leftover pixel split evenly on the outside - the same
  * centring shape palette.c's row_left_x() uses, so "equal widths, equal
  * gaps" holds exactly rather than only up to a rounding pixel on one end. */
-static void
-lay_out_segments(mu_Rect row, int gap, int n, mu_Rect *out)
+static void lay_out_segments(mu_Rect row, int gap, int n, mu_Rect *out)
 {
     const int seg_w   = (row.w - (n - 1) * gap) / n;
     const int used    = n * seg_w + (n - 1) * gap;
@@ -62,8 +61,7 @@ lay_out_segments(mu_Rect row, int gap, int n, mu_Rect *out)
     }
 }
 
-static void
-layout_header(mu_Rect panel, brush_screen_layout_t *out)
+static void layout_header(mu_Rect panel, brush_screen_layout_t *out)
 {
     const int content_h = panel.h - 2 * BRUSH_SCREEN_PAD;
 
@@ -87,8 +85,7 @@ layout_header(mu_Rect panel, brush_screen_layout_t *out)
     };
 }
 
-static void
-layout_mode(mu_Rect panel, brush_screen_layout_t *out)
+static void layout_mode(mu_Rect panel, brush_screen_layout_t *out)
 {
     const int content_w = panel.w - 2 * BRUSH_SCREEN_PAD;
     const int content_h = panel.h - 2 * BRUSH_SCREEN_PAD;
@@ -105,8 +102,7 @@ layout_mode(mu_Rect panel, brush_screen_layout_t *out)
     lay_out_segments(row, SEG_GAP, BRUSH_SCREEN_SEGMENT_COUNT, out->segments);
 }
 
-static void
-layout_size(mu_Rect panel, brush_screen_layout_t *out)
+static void layout_size(mu_Rect panel, brush_screen_layout_t *out)
 {
     const int content_w = panel.w - 2 * BRUSH_SCREEN_PAD;
     const int content_h = panel.h - 2 * BRUSH_SCREEN_PAD;
@@ -129,8 +125,7 @@ layout_size(mu_Rect panel, brush_screen_layout_t *out)
     };
 }
 
-void
-brush_screen_layout(int screen_w, int screen_h, brush_screen_layout_t *out)
+void brush_screen_layout(int screen_w, int screen_h, brush_screen_layout_t *out)
 {
     const int panel_x = UI_MARGIN;
     const int panel_w = screen_w - 2 * UI_MARGIN;
