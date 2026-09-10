@@ -69,6 +69,7 @@ extern void sand_host_probe_run_smoke_and_steam(void);
 extern void sand_host_probe_run_gunpowder_basin(void);
 extern void sand_host_probe_run_campfire(void);
 extern void sand_host_probe_run_full_fire(void);
+extern void sand_host_probe_run_plant_bed(void);
 
 typedef struct {
     const char* name;
@@ -93,6 +94,7 @@ static const probe_scene_t SCENES[] = {
     {"gunpowder_basin", sand_host_probe_run_gunpowder_basin},
     {"campfire", sand_host_probe_run_campfire},
     {"full_fire", sand_host_probe_run_full_fire},
+    {"plant_bed", sand_host_probe_run_plant_bed},
 };
 #define SCENE_COUNT (int)(sizeof(SCENES) / sizeof(SCENES[0]))
 
