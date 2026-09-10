@@ -182,6 +182,21 @@ static inline mu_Rect ui_centered_rect(int canvas_w, int w, int h, int y)
     return (mu_Rect){ (canvas_w - w) / 2, y, w, h };
 }
 
+/* UI_DRAW_BITMAP_MAX_BLOCKS: ui_draw_bitmap()'s stack buffer, smaller than
+ * ICON_BITMAP_MAX_BLOCKS (128, gfx/icons.h) on purpose - 128 icon_rect_t is
+ * ~2 KB of UI-task stack for a worst case no shipped artwork gets near.
+ * apps/sand/suite_sand_icons.c is what keeps that promise: it asserts every
+ * shipped bitmap's block count, at the sizes the screen actually draws
+ * them, fits under this cap. Raise it there first if a new icon does not. */
+#define UI_DRAW_BITMAP_MAX_BLOCKS 48
+
+/* Draws a 16x16 bitmap in icon_check_bitmap's format (gfx/icons.h) filling
+ * `r`, in `color`, as MU_COMMAND_RECT entries - never gfx_fill_rect()
+ * directly, which the repaint hash cannot see and would leave as a stale
+ * smear. Same "a style emits commands, not pixels" rule ui_style.h argues
+ * for a control's frame, applied here to an app's own artwork. */
+void ui_draw_bitmap(mu_Context *ctx, mu_Rect r, const uint16_t *bitmap, mu_Color color);
+
 /* Close the frame and paint it, but only if it would look any different
  * from what is already on screen. Returns whether it drew. It repaints
  * when any of these is true: the UI itself changed (a hover, a new
