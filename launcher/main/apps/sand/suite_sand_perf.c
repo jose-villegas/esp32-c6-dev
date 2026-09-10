@@ -41,12 +41,6 @@
 #include "tilt.h"      /* TILT_TAU_*_MS - the turn below follows the real
                        * filter shape rather than a straight line */
 
-/* build_water_over_lava_scene()/WATER_LAVA_IMPULSE_MAX and
- * test_the_water_over_lava_scene_reaches_the_quench_cooloff_and_burst_paths_
- * it_claims moved to suite_sand_scenes.{c,h} - the builder and its impulse
- * budget are reused below by test_the_water_over_lava_scene_fits_in_the_
- * frame_budget, the same reason the four-liquid/lava-stress/etc scene
- * builders live there. */
 
 #ifdef DEVICE_BUILD
 #include <stdlib.h>
@@ -151,26 +145,12 @@ static void test_a_full_size_step_fits_in_the_frame_budget(void)
 }
 
 #ifdef SAND_HOST_PROBE
-/* Host-only timing probe (see main/apps/sand/tools/perf_probe/, the
- * canonical host attribution harness - bd esp32c6-o2s). Exposes the actual
- * official test function above under a plain name, so probe_main.c can run
- * it directly on a laptop instead of hand-copying the scene - one of the
- * two liquid-free controls. Never defined by any real build. */
 void sand_host_probe_run_full_step_control(void)
 {
     test_a_full_size_step_fits_in_the_frame_budget();
 }
 #endif
 
-/* THE SCENE THE BUDGET TEST BELOW MEASURES, built fresh per call. Shared
- * with the pass decomposition after it, which has to rebuild between
- * configurations: a disabled pass leaves a different grid behind, so
- * reusing one scene would have each configuration measuring a board the
- * previous one shaped. */
-/* The board both water_scene_us_per_step() and water_scene_single_step_us()
- * below measure, factored out so the two timing techniques cannot drift into
- * quietly measuring different scenes. `real` must already be default-
- * constructed storage; this does the sand_init()/sand_enable_sleeping() too. */
 static void build_water_scene(sand_t *real, uint8_t *big, uint8_t *blocks)
 {
     sand_init(real, big, REAL_W, REAL_H, 11u);
@@ -250,11 +230,6 @@ static void test_a_screen_of_water_fits_in_the_frame_budget(void)
 }
 
 #ifdef DEVICE_BUILD
-/* A FULL SCREEN OF FIRE, the scene that actually costs the most. Water is
- * 15 ms a step; this one is 254 ms and the gas cascade beside it 347 ms, both
- * over budget, and neither has ever been decomposed. Same construction as
- * test_a_full_screen_of_fire_fits_in_the_frame_budget(), factored so the two
- * cannot drift. */
 static void build_fire_scene(sand_t *real, uint8_t *big, uint8_t *blocks)
 {
     sand_init(real, big, REAL_W, REAL_H, 19u);
@@ -287,14 +262,6 @@ void sand_host_probe_run_water(void)
 #endif /* DEVICE_BUILD */
 
 #ifdef DEVICE_BUILD
-/* THE TWO GAS MOVERS ON THE SAME BOARD. Warmup runs with the walk OFF in both
- * arms, so the timed step sees a byte-identical scene and the only difference
- * is which mover handles it - the same reason the pass decompositions rebuild
- * rather than run twenty steps with a pass disabled.
- *
- * Prints; asserts nothing. The walk is a deliberate behaviour change as well as
- * a cost one, so "is it faster" is only half the question and the other half
- * needs eyes on a screen, not a budget. */
 static void test_the_gas_random_walk_against_the_exhaustive_mover(void)
 {
     int64_t best[2] = { -1, -1 };
@@ -383,13 +350,7 @@ static void test_a_screen_of_settled_sand_costs_almost_nothing(void)
 
 static void test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget(void)
 {
-    /* The real worst case pouring produces, not a synthetic one: a user
-     * pours a big pile, it settles and sleeps (as it does in normal use -
-     * sleeping is on here, exactly like app_sand.c runs it), and then the
-     * device gets tilted hard enough to reverse gravity outright. Every
-     * block must wake at once - this is the scenario the whole block-grid
-     * design exists to keep affordable, not the synthetic all-cells-full
-     * or checkerboard-falling grids the other frame-budget tests use. */
+    /* Worst case pouring: all blocks wake at once. */
     uint8_t *big    = malloc(REAL_W * REAL_H);
     uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
@@ -433,12 +394,6 @@ static void test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget(voi
     free(big);
     free(blocks);
 
-    /* Its own number, split off from the plain full-size-step test's
-     * FULL_STEP_BUDGET_US above (see that constant's comment for why they
-     * used to share one, and for the 2026-08-26 uniform re-base this
-     * follows). Re-based: measured 6529 after the materials wave ->
-     * target 5900 (measured * 0.9, rounded; was 6500, pegged when this
-     * measured 8996 pre-wave). */
     TEST_ASSERT_LESS_THAN_MESSAGE(5900, (int)per_step,
         "reversing gravity on a settled pile must still fit in a frame or "
         "two - this is the real worst case pouring and tilting produces");
@@ -453,11 +408,8 @@ void sand_host_probe_run_settled_flip_control(void)
 }
 #endif
 
-/* Total liquid MASS on the grid - the invariant a liquid scene actually has,
- * where the sand scenes above use sand_count(). A water cell holds 1..15 in
- * its variant nibble (MASS_MAX, material.h) and the diffusion model moves
- * amounts between cells rather than moving cells, so the CELL COUNT genuinely
- * changes as a pool levels while the mass must not. */
+/* Mass invariant for liquid scenes; water cell variant holds 1..15, diffusion
+ * model adjusts amounts without changing cell count. */
 static int settled_pool_total_mass(const sand_t *s, int w, int h)
 {
     int total = 0;
@@ -587,24 +539,9 @@ static void test_turning_a_settled_pool_to_landscape_fits_in_the_frame_budget(vo
         "0.9, so failing means the work is not done yet");
 }
 
-/* THE SHAPE OF A REAL TURN, shared by the two gas tilt scenes below.
- *
- * tilt.c does not sweep gravity linearly - approach() is an exponential
- * moving average, current + (target - current) * dt / (tau + dt), with tau
- * interpolating between TILT_TAU_MOVING_MS and TILT_TAU_STILL_MS. At a ~24 ms
- * frame and the moving tau that is alpha ~ 0.375 per frame, so a real turn is
- * most of the way over in about five frames and settled in twelve.
- *
- * That decides what gets timed. A linear sweep puts its biggest per-step
- * gravity change in the MIDDLE of the turn; the real filter puts it in the
- * first two or three frames, which is where the simulation has the most to
- * do. The moving tau is used rather than the still one because turning the
- * device IS movement, and because it is the demanding case - the largest
- * gravity delta per frame.
- *
- * Returns the mean and writes the worst single step: a rotation's cost is not
- * flat across the turn, and a mean alone is the shape of number that hides a
- * spike. */
+/* Tilt shape uses exponential moving average with tau interpolating between
+ * TILT_TAU_MOVING_MS and TILT_TAU_STILL_MS. Moving tau prioritizes demanding
+ * case with largest gravity delta. Returns mean and worst single step. */
 static int64_t time_a_quarter_turn(sand_t *real, int steps, int64_t *worst_out)
 {
     const int dt_ms  = 24;
@@ -711,11 +648,6 @@ static void test_the_wood_leaf_shading_on_a_grove(void)
     }
     const int64_t per_pass = (esp_timer_get_time() - start) / 20;
 
-    /* THE CONTROL, and without it the figure above is unattributable: the
-     * walk computes material_grain_hash() for all 41,216 cells whatever they
-     * are, while only the tinted ones reach the scan or the wave. This pass
-     * is the same walk with the shading's two calls removed, so the DELTA is
-     * the shading and the rest is the walk paint_row_n() would do anyway. */
     const int64_t c0 = esp_timer_get_time();
     for (int rep = 0; rep < 20; rep++) {
         for (int y = 0; y < REAL_H; y++) {
@@ -818,13 +750,6 @@ static void test_pouring_water_onto_a_plant_bed_costs_more_than_steady_growth(vo
     free(blocks);
 }
 
-/* WHAT A GROWING BED COSTS, which no other row here can say.
- *
- * The plant code - anchored()'s support BFS, find_water()'s reach down through
- * the soil, the root roll - only runs for a plant cell standing on damp soil,
- * so every other scene in this file prices it at exactly zero. This one has
- * ~188 plants, 183 leaves and 266 roots alive at once.
- */
 static void test_a_growing_plant_bed_fits_in_the_frame_budget(void)
 {
     uint8_t *big    = malloc(REAL_W * REAL_H);
@@ -858,15 +783,8 @@ static void test_a_growing_plant_bed_fits_in_the_frame_budget(void)
     free(big);
     free(blocks);
 
-    /* MEASURED 73,130 us per step on the 230-step schedule (capture_ref_
-     * b2bb520) - three whole frames for one bed of plants. Budget is that
-     * x 0.9 = 65,817, rounded DOWN to 65,800 so the target is never looser
-     * than the convention.
-     *
-     * RED ON PURPOSE, and it should stay red until the work is done: this is
-     * a reduction target, not a regression guard, the same convention the
-     * campfire and water rows use. soak/dry is 28% of this step and is where
-     * the reduction has to come from. */
+    /* RED ON PURPOSE, reduction target, not regression guard. Soak/dry is 28%
+     * of this step. */
     TEST_ASSERT_LESS_THAN_MESSAGE(65800, (int)per_step,
         "a bed of growing plants costs three frames a step - a reduction "
         "target at measured x 0.9, so failing means the work is not done yet");
@@ -969,29 +887,12 @@ static void test_turning_a_packed_screen_of_gas_fits_in_the_frame_budget(void)
         "loses three cells a patch, but a packed screen that has shed an "
         "eighth of itself is not the scene this row means to time");
 
-    /* MEASURED 143,165 us per step on device, worst single step 148,093
-     * (capture_ref_68034bf_20260908_233819.md). Budget is that x 0.9 = 128,848, rounded DOWN to
-     * 128,800 so the target is never looser than the convention.
-     *
-     * SIX FRAMES A STEP, and that is the point of the row: it is the ceiling
-     * a completely packed board imposes, not a number anyone plays at. The
-     * half-screen row below costs 2.8x less on the same turn - judge changes
-     * by that one, and use this to bound the worst case. */
     TEST_ASSERT_LESS_THAN_MESSAGE(128800, (int)per_step,
         "a quarter turn on a fully packed screen of gas is the worst case the "
         "gas passes can be handed - a reduction target at measured x 0.9, so "
         "failing means the work is not done yet");
 }
 
-/* THE SAME TURN ON A SCENE SOMEONE COULD ACTUALLY PRODUCE, and the one to
- * trust for whether a change helps real play.
- *
- * Gas rises, so its counterpart to the settled pool's 40% resting on the floor
- * is 40% resting against the CEILING, settled there before the board turns so
- * the turn starts from a body at rest rather than mid-pour. The rest of the
- * grid is open, and that is the difference that matters: a packed screen makes
- * every row skippable and every scan hopeless, while here most rows hold both
- * gas and space, so the passes do their ordinary work. */
 static void test_turning_a_half_screen_of_gas_fits_in_the_frame_budget(void)
 {
     uint8_t *big    = malloc(REAL_W * REAL_H);
@@ -1033,14 +934,6 @@ static void test_turning_a_half_screen_of_gas_fits_in_the_frame_budget(void)
         "turning the board must move gas, not create or destroy it - decay is "
         "off by default, so the cell count is conserved across the turn");
 
-    /* MEASURED 51,320 us per step on device, worst single step 62,138
-     * (capture_ref_68034bf_20260908_233819.md). Budget is that x 0.9 = 46,188, rounded DOWN to
-     * 46,100.
-     *
-     * 2.8x CHEAPER THAN THE PACKED ROW ABOVE on the identical turn, which is
-     * why both exist. A change aimed at packed rows will look roughly three
-     * times better there than it is worth here, and here is where the board
-     * spends its time. */
     TEST_ASSERT_LESS_THAN_MESSAGE(46100, (int)per_step,
         "a quarter turn on a settled half screen of gas is the realistic "
         "tilted case - a reduction target at measured x 0.9, so failing "
@@ -1058,14 +951,6 @@ void sand_host_probe_run_settled_pool_to_landscape(void)
 
 static void test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget(void)
 {
-    /* A harder worst case than the single-material flip above: three
-     * materials at once, plus a fixed obstacle, so a settled pile isn't the
-     * only thing that has to wake and move together. Sand fills ~30% of the
-     * width on the left, water ~30% on the right, both poured from the
-     * floor to half height so there's headroom to launch into once flipped
-     * - same reasoning as the plain flip test. The remaining ~40% in the
-     * middle holds a stone X, floor to ceiling: a fixed obstacle both
-     * materials have to route around, not just fall/rise past. */
     uint8_t *big    = malloc(REAL_W * REAL_H);
     uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
@@ -1087,13 +972,6 @@ static void test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget(void
         }
     }
 
-    /* The X: two diagonals crossing at mid-height, floor to ceiling across
-     * the middle band. Two cells thick, clamped to stay inside the band -
-     * a single-pixel diagonal staircase is exactly the shape that let fire
-     * leak past a corner earlier this session (see
-     * test_fire_is_not_smothered_with_a_gap); thickening it is the same
-     * fix applied here up front instead of after finding the same leak
-     * twice. */
     const int mid_w = water_x0 - sand_x1;
     for (int y = 0; y < REAL_H; y++) {
         const int off = (y * (mid_w - 1)) / (REAL_H - 1);
@@ -1126,18 +1004,11 @@ static void test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget(void
                              "scene, %dx%d: %lld us per step",
              REAL_W, REAL_H, (long long)per_step);
 
-    /* No grain-conservation check here, unlike the plain flip test above -
-     * deliberately, not an oversight. sand_count() counts occupied CELLS,
-     * and water's fill-level model can legitimately spread its mass across
-     * more or fewer cells while conserving total mass; test_a_screen_of_-
-     * water_fits_in_the_frame_budget already skips this same check for the
-     * same reason. Asserting it here once failed with a real, misleading
-     * "Expected 13206 Was 13348" - not a simulation bug, just this
-     * invariant not holding once water is in the scene - and because the
-     * assertion sat before the frees below, Unity's longjmp on that
-     * failure skipped them and leaked ~41 KB, starving every later
-     * malloc()-based test on this device's no-PSRAM heap. Left here as the
-     * reason, not just removed quietly. */
+    /* No grain-conservation check. Water's model can spread mass across
+     * cells, so sand_count() legitimately changes; test_a_screen_of_water_
+     * fits_in_the_frame_budget skips this same check for the same reason.
+     * Asserting it here once leaked ~41 KB - the failure's longjmp skipped
+     * the frees below it. */
 
     free(big);
     free(blocks);
@@ -1161,32 +1032,9 @@ void sand_host_probe_run_mixed_flip(void)
 }
 #endif
 
-/* Every material at once, then a gravity flip.
- *
- * The other budget tests each isolate one thing - a settled pile, a
- * screen of water, a fire cascade. This one deliberately does not: the
- * board is banded with a share of EVERY material, arranged so the
- * reactive pairs actually touch (fire against wood and gas, acid against
- * sand, lava against water), and then gravity is inverted. That makes
- * every pass in sand_step() do real work in the same step - the main
- * sweep on powders and liquids, sand_step_liquids()' cross-flow,
- * sand_step_gas()' rise and spread, and sand_step_reactions() dispatching
- * both burning and dissolving cells - which no single-material scene
- * does.
- *
- * It is the scene that catches a cost that only appears in combination:
- * a pass that is cheap alone but interacts badly with another's wake
- * pattern, or a per-cell branch that is well predicted in a uniform
- * scene and mispredicted in a mixed one.
- *
- * THE ASSERTION BELOW IS NOT A BUDGET, and must not be treated as one.
- * Every other figure in this file is a measured number with the
- * measurement written beside it; this one was written without access to
- * the device, so it is a deliberately loose SANITY CEILING - wide enough
- * that it cannot pass as tuned, tight enough to catch something
- * catastrophic like an accidental quadratic. Replace it with a real
- * figure from `run_device_tests.sh`, and say what was measured, the first
- * time anyone runs this on hardware. */
+/* Board banded with every material, reactive pairs touch, gravity inverted.
+ * Catches combination costs. THE ASSERTION BELOW IS NOT A BUDGET. Replace
+ * with real figure from `run_device_tests.sh`. */
 static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
 {
     uint8_t   *big      = malloc(REAL_W * REAL_H);
@@ -1206,13 +1054,6 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
      * patches below can never detonate - see ALL_PAIRS_IMPULSE_MAX. */
     sand_enable_impulses(&real, impulses, ALL_PAIRS_IMPULSE_MAX);
 
-    /* The scene is DERIVED from materials[] and laid out by
-     * all_pairs_material_at() so that every PAIR of materials touches -
-     * not merely every material appearing somewhere. See that function
-     * for why bands were not enough, and
-     * test_the_mixed_scene_puts_every_material_pair_in_contact, which
-     * checks the coverage on the host rather than leaving it a claim in
-     * a comment. */
 
     /* build_all_pairs_scene() (suite_sand_scenes.c) also plants the
      * deliberate gunpowder patches - the tiling alone scatters gunpowder
@@ -1240,12 +1081,6 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
                              "%dx%d: %lld us per step",
              REAL_W, REAL_H, (long long)per_step);
 
-    /* Freed BEFORE the assertion, deliberately. Unity longjmps out of a
-     * failing assert, so a free() after one never runs - which on this
-     * device's no-PSRAM heap leaked ~41 KB and starved every later
-     * malloc()-based test. That is a real thing that happened to the
-     * mixed-scene test above; the fix belongs in every test shaped like
-     * this one, not just the one that got caught. */
     free(big);
     free(blocks);
     free(impulses);
@@ -1275,17 +1110,6 @@ void sand_host_probe_run_every_material_flip(void)
 
 static void test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget(void)
 {
-    /* The worst case sand_step_reactions() can face, not a synthetic one:
-     * sand_reactions.c's own top comment explains that this pass's fixed
-     * row-major (top-to-bottom, then left-to-right) scan order lets a
-     * cascade continue into any neighbour positioned AHEAD of the scan
-     * pointer within the same pass - which is both the right neighbour
-     * (same row, not yet scanned) AND the neighbour directly below (a
-     * row not yet reached at all). A single spark in the top-left corner
-     * of a completely gas-filled grid is therefore the single most
-     * expensive case there is: the cascade reaches every one of
-     * REAL_W*REAL_H cells in ONE step, each paying a decay tick plus up
-     * to eight neighbour lookups. */
     uint8_t *big    = malloc(REAL_W * REAL_H);
     uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
@@ -1323,15 +1147,8 @@ static void test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_b
     free(big);
     free(blocks);
 
-    /* A DELIBERATELY SYNTHETIC WORST CASE: an edge-to-edge screen of gas
-     * is not something the pour-brush UI can produce, so this row is not
-     * held to the plain-material budgets above.
-     *
-     * MEASURED 247,533 us, 2026-09-10, inside the budget it carried.
-     * Re-pegged by the rule every row here uses: measured x 0.9 rounded
-     * DOWN -> 222,700, failing by design again. Not moving goalposts -
-     * this pass was called exhausted five rounds before it gave up 13.9%.
-     * A row at its real floor should prove it and become a guard. */
+    /* A DELIBERATELY SYNTHETIC WORST CASE: not held to plain-material
+     * budgets. Failing by design, not moving goalposts. */
     TEST_ASSERT_LESS_THAN_MESSAGE(222700, (int)elapsed,
         "a full-screen cascade must stay in the same ballpark as measured "
         "- a jump here means something got much more expensive, not that "
@@ -1340,17 +1157,6 @@ static void test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_b
 
 static void test_a_full_screen_of_fire_fits_in_the_frame_budget(void)
 {
-    /* The steady-state cost fire's KIND_GAS redesign introduced, not
-     * measured by the cascade test above: a full screen that is
-     * ALREADY fire pays for BOTH sand_step_gas() (rise+disperse, now
-     * that fire shares gas's own pass) AND sand_step_reactions()
-     * (decay/extinguish/ignite/smother) on every cell, every step,
-     * indefinitely - not just once during ignition. Traced directly:
-     * the cascade test's one measured step ignites via
-     * sand_step_reactions() alone (sand_step_gas() already ran earlier
-     * in that same sand_step() call, before the newly-ignited cells
-     * existed), so its own numbers are untouched by this and did not
-     * need revisiting - this is genuinely new territory. */
     uint8_t *big    = malloc(REAL_W * REAL_H);
     uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
@@ -1386,14 +1192,6 @@ static void test_a_full_screen_of_fire_fits_in_the_frame_budget(void)
     free(big);
     free(blocks);
 
-    /* Same "not a real-time promise" reasoning as the cascade test above:
-     * an edge-to-edge screen of fire is not something the pour-brush UI
-     * can sustain. It catches a real regression if the steady-state cost
-     * balloons past what was measured.
-     *
-     * MEASURED 97,541 us, 2026-09-10, after bd esp32c6-jin's three
-     * four-neighbour skips took this row 154726 -> 97541. Budget is that
-     * x 0.9 rounded DOWN to 87,700. */
     TEST_ASSERT_LESS_THAN_MESSAGE(87700, (int)per_step,
         "steady-state cost of a full screen of fire must stay in the "
         "same ballpark as measured - not a real-time promise, but a "
@@ -1500,21 +1298,6 @@ void sand_host_probe_run_four_liquids(void)
 }
 #endif
 
-/* A lava reservoir, a water roof, and columns of sand, wood and oil between
- * them (build_lava_stress_scene() above, shared with
- * test_the_lava_stress_scene_reaches_every_reaction_it_claims, which
- * proves all six reactions this scene exists for really do fire in it).
- * Lava is the reaction-richest material in the simulation, and this scene
- * puts every reaction it takes part in - quenching, boiling, glassing,
- * igniting wood, igniting oil, flaring - in front of the reactions pass at
- * once, across a scene big enough to keep them going for the whole
- * measured window rather than one that burns out in the first few steps.
- *
- * First device measurement, 2026-08-26: 121377 us (capture
- * performance_20260826_150930, reproduced by a second capture to within
- * a microsecond). Provisional ceiling (150000) retired the same day to
- * the file-wide uniform reduction target (see FULL_STEP_BUDGET_US's
- * comment): measured * 0.9, rounded -> 109000. */
 static void test_the_lava_stress_scene_fits_in_the_frame_budget(void)
 {
     uint8_t *big    = malloc(REAL_W * REAL_H);
@@ -1563,29 +1346,6 @@ void sand_host_probe_run_lava_stress(void)
 }
 #endif
 
-/* A full screen of smoke and steam with one spark of fire
- * (build_smoke_and_steam_scene() above, shared with
- * test_the_smoke_and_steam_scene_stays_a_gas_screen, which proves the
- * scene conserves cells and is still a gas screen at the end of the
- * window rather than one that decayed into something else). Smoke and
- * steam are the only materials in this simulation with convection
- * behaviour - they warm what they touch - and no benchmark in this file
- * has ever put either of them on screen in quantity before this one.
- *
- * Ten measured steps, not twenty: the same reason
- * test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget
- * and test_a_full_screen_of_fire_fits_in_the_frame_budget above use ten -
- * a full grid of gas is the most expensive thing this simulation does per
- * step, and a previous round of this project tripped the device's
- * five-second task watchdog with a test that ran too many steps across a
- * full screen. No settling steps either - the scene is the worst case
- * from the moment it is painted.
- *
- * First device measurement, 2026-08-26: 141189 us (capture
- * performance_20260826_150930; the second capture reproduced it at
- * 141187, a 2 us spread). Provisional ceiling (400000) retired the same
- * day to the file-wide uniform reduction target (see
- * FULL_STEP_BUDGET_US's comment): measured * 0.9, rounded -> 127000. */
 static void test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget(void)
 {
     uint8_t *big    = malloc(REAL_W * REAL_H);
@@ -1621,13 +1381,9 @@ static void test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget(void)
     free(big);
     free(blocks);
 
-    /* NOT exact conservation - steam condenses. reaction_t.condenses
-     * collapses a 2x2 patch of steam into one water cell and clears three,
-     * which is a real, deliberate loss; the host twin of this scene forces
-     * it off with sand_set_condenses() to be able to count exactly, and
-     * this row cannot, because its budget is pegged with condensation
-     * running. What is still worth asserting is that the screen did not
-     * quietly empty itself into something this row no longer measures. */
+    /* host twin forces off with sand_set_condenses() due to budget pegged
+     * with condensation running. Screen did not quietly empty into unmeasured
+     * state. */
     TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(total - total / 16, count,
         "setup: a screen of smoke and steam must still be essentially full "
         "at the end of the window - steam condensing into water loses three "
@@ -1732,32 +1488,6 @@ static void test_the_thermal_shock_scene_fits_in_the_frame_budget(void)
         "is not done, not that something broke");
 }
 
-/* The boiler scaled to the whole grid and run as a sustained steady state
- * (build_boiler_scene() above, shared with test_the_boiler_scene_keeps_-
- * boiling_across_the_window, which proves the basin keeps boiling for
- * the whole measured window, both burners are still contributing at the
- * end of it, and no cells go missing - the enclosed-burner property that
- * host test explains and this one relies on).
- *
- * 20 settle steps, then 30 measured - matching the host test's own
- * window exactly, so what this times is what that one already proved
- * really is a sustained boil rather than a burst that has mostly spent
- * itself by the time the measured window starts.
- *
- * First device measurement, 2026-08-26: 31529 us (capture
- * performance_20260826_150930, reproduced by a second capture).
- * Provisional ceiling (80000) retired the same day to the file-wide
- * uniform reduction target (see FULL_STEP_BUDGET_US's comment):
- * measured * 0.9, rounded -> 28500.
- *
- * The watchdog pairing the provisional ceiling was chosen against (50
- * total steps at 80000 us was four seconds against the five-second task
- * watchdog; an earlier draft's round 100000 was exactly five, which is
- * not a margin) is comfortably looser at the re-based number. Host
- * timing, best-of-5 and interleaved, ranks this scene the CHEAPEST of
- * the five at 218 us/step against 1199 for the thermal shock lattice -
- * which is why it can afford fifty steps where that one is held to
- * ten. */
 static void test_the_boiler_scene_fits_in_the_frame_budget(void)
 {
     uint8_t *big    = malloc(REAL_W * REAL_H);
@@ -2065,15 +1795,6 @@ void sand_host_probe_run_gunpowder_basin(void)
  * mirror_app_sand_marking()'s gfx_mark_dirty() calls has to agree with. */
 #define REAL_CELL_PX 2
 
-/* See the section comment above: mirrors app_sand.c's draw_dirty_rows()
- * marking policy against `cells` (the same raw w*h buffer sand_init() was
- * given - app_sand.c's own `grid`), gated by `dirty_rows` (hooked up via
- * sand_track_dirty_rows() at the call site) and reconciled against the
- * per-row "previous" state in row_x0/row_x1/row_n (seeded full-width by
- * seed_row_runs_full_width_for_gfx_test() below, the same lie
- * app_sand.c's seed_row_runs_full_width() starts from and for the same
- * reason: forces the first pass over each row to send full width rather
- * than trusting a "previous" state that was never real). */
 static void mirror_app_sand_marking(const uint8_t *cells, int w, int h,
                                     uint8_t *dirty_rows, uint16_t *row_x0,
                                     uint16_t *row_x1, uint8_t *row_n)
@@ -2128,11 +1849,6 @@ static void mirror_app_sand_marking(const uint8_t *cells, int w, int h,
     }
 }
 
-/* app_sand.c's seed_row_runs_full_width(), duplicated for the same reason
- * mirror_app_sand_marking() above is: seeds every row's "previous run" as
- * one full-width span, so the first marking pass over a freshly-built
- * scene sends each row's true width rather than trusting a "previous"
- * state that was never real. */
 static void seed_row_runs_full_width_for_gfx_test(uint16_t *row_x0,
                                                    uint16_t *row_x1,
                                                    uint8_t *row_n, int w,
@@ -2222,24 +1938,12 @@ static int64_t run_present_against_scene(sand_t *s, const uint8_t *cells,
     return present_us / measured_steps;
 }
 
-/* The plain falling-sand case: the same half-screen checkerboard
- * test_a_full_size_step_fits_in_the_frame_budget above builds, deliberately
- * not settled so every grain attempts to move every step. No sleeping and
- * no per-material scatter/decay/mobility, exactly matching that test's own
- * setup - this is the same worst case, with drawing added on top of it.
- *
- * Chosen as the DENSE, CONTIGUOUS end of the shape spectrum these three
- * present-cost tests are picked to bracket: a checkerboard alternates
- * cell-by-cell, which overflows ROW_MAX_RUNS (2) on essentially every
- * occupied row, so row_runs_find() gives up and row_runs_span_fallback()
- * reports one span covering nearly the whole row width - despite only half
- * of it actually holding a grain. That wide fallback span, not the true
- * occupied-cell count, is what gfx_present() actually has to move. */
-/* THE SCENE both this test and test_a_real_frame_is_sim_plus_present_on_a_
- * falling_sand_scene below measure - factored out so the two cannot drift
- * into quietly timing different boards, the same reason build_water_scene()
- * exists above. `big`/`dirty_rows`/`row_x0`/`row_x1`/`row_n` must already be
- * allocated storage; this does the sand_init()/tracking/seeding too. */
+/* DENSE, CONTIGUOUS shape. Checkerboard exceeds ROW_MAX_RUNS (2).
+ * row_runs_find() fails, row_runs_span_fallback() reports wide span.
+ * gfx_present() handles. Scene shared with
+ * test_a_real_frame_is_sim_plus_present_on_a_falling_sand_scene. Allocate
+ * `big`, `dirty_rows`, `row_x0`, `row_x1`, `row_n` for sand_init(), tracking,
+ * seeding. */
 static void build_falling_sand_present_scene(sand_t *real, uint8_t *big,
                                               uint8_t *dirty_rows,
                                               uint16_t *row_x0,
@@ -2339,13 +2043,9 @@ static void test_present_cost_against_a_falling_sand_scene(void)
         "before suspecting the panel");
 }
 
-/* bd esp32c6-e6c: sand_step() budgets exclude present; present tests run
- * the sim outside their own timer. Neither measures the frame SUM, which
- * bd esp32c6-91i (overlapping present with the next step) needs before it
- * can be justified - water's step (15,168 us) now beats a full present
- * (~17,800 us). PRINTS, no frame budget argued yet. Missing the real pixel
- * writes (draw_dirty_rows()/paint_row() are static, unreachable here) - a
- * LOWER BOUND only. */
+/* Present tests run the sim outside their own timer. Neither measures the
+ * frame SUM, needed before justification. PRINTS, no frame budget argued yet.
+ * Missing the real pixel writes - a LOWER BOUND only. */
 static void test_a_real_frame_is_sim_plus_present_on_a_falling_sand_scene(void)
 {
     uint8_t  *big       = malloc(REAL_W * REAL_H);
@@ -2398,21 +2098,6 @@ static void test_a_real_frame_is_sim_plus_present_on_a_falling_sand_scene(void)
              present_pct);
 }
 
-/* The lava stress scene (build_lava_stress_scene() above, shared with
- * test_the_lava_stress_scene_reaches_every_reaction_it_claims and
- * test_the_lava_stress_scene_fits_in_the_frame_budget) - a lava reservoir
- * floor, a water roof, and full-width columns of sand/wood/oil between
- * them. Same seed, settings and settle/measured split as that sand_step-
- * only benchmark above it, so this is directly comparable to it: what
- * drawing costs on top of the same scene and the same window.
- *
- * Chosen as the OTHER dense/contiguous case rather than the scattered one -
- * every layer in this scene spans the full row width (the floor and roof
- * are solid slabs; even the middle's sand/wood/oil/gap columns are wide
- * enough that a dirty row through them is one or two long runs, not many
- * short ones) - specifically so the scattered pick below has something
- * genuinely different to contrast against, not just a second variation on
- * the checkerboard's own fallback-span shape. */
 static void test_present_cost_against_the_lava_stress_scene(void)
 {
     uint8_t  *big        = malloc(REAL_W * REAL_H);
@@ -2475,39 +2160,12 @@ static void test_present_cost_against_the_lava_stress_scene(void)
     free(row_x1);
     free(row_n);
 
-    /* Pegged from the first device capture (performance_20260828_014644):
-     * mean 13,018 us/frame, 100 full-band and only 4 gathered strip-sends
-     * over 20 frames - a denser, more contiguous dirty pattern than the
-     * checkerboard's, and it gathers even less often. 14300 is ~10% over,
-     * a regression guard for the same reason spelled out in
-     * test_present_cost_against_a_falling_sand_scene's comment above.
-     *
-     * TIGHTENED 14300 -> 12200 on 2026-08-28. The partial-band path took
-     * this from 13,018 to 11,885 - the largest share of any scene, 34 of
-     * its 100 whole-band sends converted - and 12200 is ~3% over that.
-     * See the falling-sand comment above for why 3% is a defensible
-     * margin on a present row and would not be on a sand_step() one. */
     TEST_ASSERT_LESS_THAN_MESSAGE(12200, (int)mean_us,
         "present() against the lava stress scene got more expensive - "
         "check the full-band vs gathered counts in the log line above "
         "before suspecting the panel");
 }
 
-/* The thermal shock lattice (build_thermal_shock_scene() above, shared
- * with test_the_thermal_shock_scene_shatters_in_both_directions and
- * test_the_thermal_shock_scene_fits_in_the_frame_budget) - 480 separate
- * glass compartments in a 20x24 tile grid, each a small ring with real
- * empty margin between it and its neighbours (see that builder's own
- * comment on why the tiling keeps them from touching at all). Same seed,
- * settings and ten-step measured window as that sand_step-only benchmark
- * (no settle steps there either - the lattice is already at its most
- * active the moment it is painted), so this is directly comparable to it.
- *
- * Chosen as the SCATTERED case: a dirty row through this lattice crosses
- * many narrow, genuinely separate rings with real gaps between them,
- * rather than the lava scene's and the checkerboard's wide, near-full-
- * width spans - the shape gfx_present()'s gather-vs-full-band choice
- * (send_one_row() in gfx.c) exists for in the first place. */
 static void test_present_cost_against_the_thermal_shock_scene(void)
 {
     uint8_t  *big        = malloc(REAL_W * REAL_H);
@@ -2671,12 +2329,6 @@ static void test_acid_bubbles_do_not_favour_one_wall(void)
         }
     }
 
-    /* Checked EVERY step, not just at the end - a popped grain falls back
-     * under ordinary gravity within a few steps of landing (finalize_
-     * settling() runs after step_impulses(), so the very next step's own
-     * sweep pulls it straight back down), so a snapshot taken only after
-     * all 300 steps would see nothing but the fully-resettled pool, even
-     * on a run where bubbles popped constantly throughout. */
     int left_pops = 0, right_pops = 0;
     const int mid = BUBBLE_W / 2;
     for (int i = 0; i < 300; i++) {
@@ -2769,17 +2421,10 @@ static void test_acid_bubbles_still_fire_once_the_block_is_asleep(void)
             sand_set(&fx.sleepy_bubble_sim, x, y, CELL_MAKE(MAT_ACID, MASS_MAX));
         }
     }
-    /* A GLASS LID over the whole surface while it settles - not load-
-     * bearing for the claim itself, but for keeping this test's own
-     * "must fall asleep" setup check independent of SAND_ACID_BUBBLE_
-     * CHANCE's exact value. acid_bubble() only ever rolls for a cell with
-     * open space against gravity from it (see its own comment in
-     * sand_reactions.c) - a lid means no acid cell is ever exposed during
-     * the settle phase, so nothing can roll a bubble regardless of how
-     * high that chance is currently tuned, and the pool settles on
-     * physics alone. Removed once asleep is confirmed, below - a covered
-     * pool bubbling once uncovered is exactly the same claim the old,
-     * chance-sensitive version of this test was after. */
+    /* GLASS LID to ensure "must fall asleep" setup check is independent of
+     * SAND_ACID_BUBBLE_CHANCE. acid_bubble() rolls only for open space
+     * against gravity. Lid prevents acid cell exposure, ensuring pool settles
+     * by physics alone. Removed once asleep confirmed. */
     for (int x = 0; x < BUBBLE_W; x++) {
         sand_set(&fx.sleepy_bubble_sim, x, POOL_TOP - 1, GLASS);
     }
@@ -2796,23 +2441,11 @@ static void test_acid_bubbles_still_fire_once_the_block_is_asleep(void)
             }
         }
     }
-    /* Not freed ahead of this assertion, unlike this file's other
-     * converted fixtures - sleepy_bubble_sim still points into
-     * sleepy_bubble_cells/sleepy_bubble_buf and the lid-lift plus pop
-     * check below still need them live. If this setup assertion itself
-     * fails, the buffers leak, same as any other test failure in this
-     * run. */
     TEST_ASSERT_TRUE_MESSAGE(asleep,
         "setup: the pool must actually fall asleep within 40 quiet steps, "
         "or this test is not exercising the sleeping path it exists to "
         "check at all");
 
-    /* Lift the lid now that the pool is confirmed asleep. Whether erasing
-     * it also wakes the block is beside the point either way: acid_
-     * bubble() lives in the reactions pass now (sand_reactions.c), which
-     * never consults block-sleeping at all - see its own comment - so
-     * this test's claim holds regardless of whether the lid's removal
-     * happens to wake the block or not. */
     for (int x = 0; x < BUBBLE_W; x++) {
         sand_erase(&fx.sleepy_bubble_sim, x, POOL_TOP - 1, 0);
     }
@@ -2853,16 +2486,10 @@ static void test_acid_bubbles_still_fire_once_the_block_is_asleep(void)
  * not earn an app_sand.h and nothing else calls it. */
 bool sand_app_alloc_selfcheck(size_t *out_largest_free, bool *out_impulses_ok);
 
-/* THE CHECK NOTHING ELSE IN THIS FILE MAKES. Every other device row here
- * times sand_step() on a grid this suite allocated for itself, which says
- * nothing about whether the APP can still get one - and on 2026-09-01 it
- * could not: a "no memory for the grid" screen was sitting on the board
- * after a capture, unnoticed by 741 passing tests.
- *
- * Runs inside the suite on purpose, not before it. The question worth
- * asking is whether the app can be entered on a heap this suite has already
- * worked over, because that is the state someone actually finds the board
- * in after an autorun image finishes. */
+/* Runs inside the suite on purpose, not before it. The question worth asking
+ * is whether the app can be entered on a heap this suite has already worked
+ * over, because that is the state someone actually finds the board in after
+ * an autorun image finishes. */
 static void test_the_sand_app_can_still_allocate_everything_it_needs(void)
 {
     size_t largest_free = 0;
