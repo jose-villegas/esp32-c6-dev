@@ -56,6 +56,7 @@
 #include "../../gfx/gfx.h"
 #define REAL_BLOCK_COLS ((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
 #define REAL_BLOCK_ROWS ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
+#include "suite_sand_split.h"
 
 /* The worst case: every cell on the screen moving at once.
  *
