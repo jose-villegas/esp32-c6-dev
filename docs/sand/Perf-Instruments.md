@@ -134,6 +134,13 @@ found |= <the thing it looks for>;
 if (!found) { barren++; }      /* it looked, and there was nothing */
 ```
 
+**It says WHETHER, never HOW MUCH.** Acid rain's quad test was entered 204,247
+times in a run and found nothing every single time; removing all of it
+measured **1.6%** on device. The counter was right that the work was
+removable and silent on what it was worth. Third time measured — see bd
+`esp32c6-u2g`, where counters halved and the device gave 2.5%. Use it to
+choose *what* to build, never to claim a number.
+
 Run a scene on the host and read the ratio.
 
 | walk | entered per step | found nothing | what it was worth |
@@ -214,6 +221,14 @@ untouched phases hold to 1–2 us across it. Two differently-**scoped** builds
 are the same trap with a wider mouth: never diff a perf-scoped capture
 against an unscoped one.
 
+*But read the controls before applying that rule.* The spread is not a
+constant — it scales with how much the layout was disturbed. Two images
+differing by a single skip returned **byte-identical** control rows (settled
+sand 241, half-screen gas 55,642, mixed flip 11,157), and against controls
+that flat a 0.5% delta is real. The controls tell you the resolution of the
+comparison: check them before dismissing a small number as noise, and before
+trusting one.
+
 **Only size-neutral changes attribute cleanly.** A change that grows the hot
 function relocates everything after it and moves every phase together. When
 the controls move by ~1,000 us instead of ~2, the per-phase split is no longer
@@ -223,6 +238,13 @@ readable and only the whole-step number means anything.
 change.** A per-direction helper marked `static inline` was out-lined by GCC
 and cost −14.5%; the hot function got *smaller*, and that shrinkage was the
 symptom, not evidence of a win. A plain call costs ~27 cycles here.
+
+Nor is smaller faster. `step_one_reacting_row` went from 9,340 to 8,410 bytes
+— 10% smaller, 292 cache lines down to 263 — and the scenes that run it
+hardest measured 0.5–1.4% **slower**, on boards holding none of the materials
+the change touched. Instruction count, register pressure and gross layout were
+all excluded; what moved was the function's offset within a 32-byte cache
+line. Size is not the variable (bd `esp32c6-vk4`).
 
 **An identical fingerprint proves nothing until the oracle reaches the new
 path.** Mutate the grid *inside* the new branch and confirm `--check` moves. It
