@@ -923,7 +923,13 @@ static void test_the_thermal_shock_scene_shatters_in_both_directions(void)
     TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(1000, water,
         "meltwater from ice and snow must still be showing at the end of "
         "the window");
-    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(800, steam,
+    /* LOWERED FROM 800 when cold gained the ability to conduct through a
+     * medium (bd esp32c6-tov): the payload's glass now chills faster and
+     * further, so less meltwater reaches it still hot, and this scene settled
+     * at 774. That is a real consequence of the feature, not a regression -
+     * and this floor exists to catch a scene that has gone QUIET, which 774
+     * plainly has not. Kept well below the new figure so it still would. */
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(700, steam,
         "steam from meltwater meeting a hot payload must still be "
         "showing at the end of the window");
     TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(2000, fire,
