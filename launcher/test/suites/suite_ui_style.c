@@ -180,6 +180,109 @@ static void test_the_shadowed_edges_are_drawn_over_the_lit_ones(void)
 }
 
 /*---------------------------------------------------------------------------
+ * The panel
+ *
+ * ui_panel_spans() is ui_bezel_spans()'s sibling for a section frame - see
+ * ui_style.h's "The panel" section. Same reasoning as the bezel tests above:
+ * pure geometry, checked directly rather than by eyeballing five rects.
+ *-------------------------------------------------------------------------*/
+
+#define PANEL_X 8
+#define PANEL_Y 24
+#define PANEL_W 352
+#define PANEL_H 120
+
+static const mu_Color PANEL_FACE   = { 0x0A, 0x0C, 0x14, 255 };
+static const mu_Color PANEL_BORDER = { 0x3D, 0xDC, 0x97, 255 };
+
+static mu_Rect panel_rect(void)
+{
+    return (mu_Rect){ PANEL_X, PANEL_Y, PANEL_W, PANEL_H };
+}
+
+static void test_panel_face_is_drawn_first_and_covers_the_whole_rect(void)
+{
+    ui_span_t s[UI_PANEL_MAX_SPANS];
+    const int n = ui_panel_spans(panel_rect(), PANEL_FACE, PANEL_BORDER,
+                                 s, UI_PANEL_MAX_SPANS);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(UI_PANEL_MAX_SPANS, n,
+        "a panel is a face plus four border edges");
+    TEST_ASSERT_EQUAL_INT(PANEL_X, s[0].rect.x);
+    TEST_ASSERT_EQUAL_INT(PANEL_Y, s[0].rect.y);
+    TEST_ASSERT_EQUAL_INT(PANEL_W, s[0].rect.w);
+    TEST_ASSERT_EQUAL_INT(PANEL_H, s[0].rect.h);
+    TEST_ASSERT_TRUE_MESSAGE(same_color(s[0].color, PANEL_FACE),
+        "the face keeps the colour asked for; only the border is a second colour");
+}
+
+static void test_panel_every_span_stays_inside_the_rect(void)
+{
+    ui_span_t s[UI_PANEL_MAX_SPANS];
+    const int n = ui_panel_spans(panel_rect(), PANEL_FACE, PANEL_BORDER,
+                                 s, UI_PANEL_MAX_SPANS);
+
+    for (int i = 0; i < n; i++) {
+        TEST_ASSERT_TRUE_MESSAGE(
+            s[i].rect.x >= PANEL_X && s[i].rect.y >= PANEL_Y,
+            "a span started outside the panel's rect");
+        TEST_ASSERT_TRUE_MESSAGE(
+            s[i].rect.x + s[i].rect.w <= PANEL_X + PANEL_W &&
+            s[i].rect.y + s[i].rect.h <= PANEL_Y + PANEL_H,
+            "a span ran past the panel's rect - overspill lands on whatever "
+            "sits next to it");
+    }
+}
+
+static void test_panel_border_spans_are_the_border_color(void)
+{
+    ui_span_t s[UI_PANEL_MAX_SPANS];
+    ui_panel_spans(panel_rect(), PANEL_FACE, PANEL_BORDER, s, UI_PANEL_MAX_SPANS);
+
+    for (int i = 1; i < UI_PANEL_MAX_SPANS; i++) {
+        TEST_ASSERT_TRUE_MESSAGE(same_color(s[i].color, PANEL_BORDER),
+            "a panel's border is flat, not lit/shadowed like a bezel's edges");
+    }
+}
+
+static void test_panel_a_rect_too_small_for_a_border_gets_a_flat_face(void)
+{
+    ui_span_t s[UI_PANEL_MAX_SPANS];
+    const int n = ui_panel_spans((mu_Rect){ 0, 0, 2, 2 }, PANEL_FACE,
+                                 PANEL_BORDER, s, UI_PANEL_MAX_SPANS);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, n,
+        "with no room for a border and a pixel of face between, a panel "
+        "degrades to a plain fill rather than drawing edges that meet");
+    TEST_ASSERT_TRUE_MESSAGE(same_color(s[0].color, PANEL_FACE),
+        "and that fill is the face colour, unshaded");
+}
+
+static void test_panel_a_zero_sized_rect_produces_nothing(void)
+{
+    ui_span_t s[UI_PANEL_MAX_SPANS];
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0,
+        ui_panel_spans((mu_Rect){ 4, 4, 0, 20 }, PANEL_FACE, PANEL_BORDER,
+                       s, UI_PANEL_MAX_SPANS),
+        "a rect with no width must produce no spans at all");
+    TEST_ASSERT_EQUAL_INT(0,
+        ui_panel_spans((mu_Rect){ 4, 4, 20, 0 }, PANEL_FACE, PANEL_BORDER,
+                       s, UI_PANEL_MAX_SPANS));
+}
+
+static void test_panel_a_buffer_too_small_produces_nothing(void)
+{
+    ui_span_t s[UI_PANEL_MAX_SPANS];
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0,
+        ui_panel_spans(panel_rect(), PANEL_FACE, PANEL_BORDER, s,
+                       UI_PANEL_MAX_SPANS - 1),
+        "a half-written panel - a face with some edges missing - looks like "
+        "a bug, so refuse rather than fill what fits");
+}
+
+/*---------------------------------------------------------------------------
  * Text styles
  *
  * ui_text_passes() is ui_bezel_spans()'s sibling for text - see ui_style.h's
@@ -429,6 +532,12 @@ void suite_ui_style(void)
     RUN_TEST(test_a_thin_control_keeps_a_pixel_of_face_between_its_edges);
     RUN_TEST(test_a_zero_sized_control_produces_nothing);
     RUN_TEST(test_a_buffer_too_small_produces_nothing);
+    RUN_TEST(test_panel_face_is_drawn_first_and_covers_the_whole_rect);
+    RUN_TEST(test_panel_every_span_stays_inside_the_rect);
+    RUN_TEST(test_panel_border_spans_are_the_border_color);
+    RUN_TEST(test_panel_a_rect_too_small_for_a_border_gets_a_flat_face);
+    RUN_TEST(test_panel_a_zero_sized_rect_produces_nothing);
+    RUN_TEST(test_panel_a_buffer_too_small_produces_nothing);
     RUN_TEST(test_plain_is_one_ink_pass_at_the_origin);
     RUN_TEST(test_outlined_is_eight_halo_offsets_and_the_ink);
     RUN_TEST(test_shadowed_is_one_halo_offset_and_the_ink);
