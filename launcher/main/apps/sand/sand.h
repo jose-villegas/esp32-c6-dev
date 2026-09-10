@@ -181,6 +181,7 @@ typedef struct sand_s {
     int      condenses;    /* see sand_set_condenses() */
     int      lava_cooloff; /* see sand_set_lava_cooloff() */
     int      lava_burst;   /* see sand_set_lava_burst() */
+    int      crust;        /* see sand_set_crust(); -1 uses reaction_t.crusts */
     int      acid_rain;    /* see sand_set_acid_rain() */
     int      acid_dilute_mass_bias; /* see sand_set_acid_dilute_mass_bias() */
 
@@ -516,6 +517,13 @@ void sand_set_lava_cooloff(sand_t *s, int chance);
  * sand_set_lava_cooloff(). Ensures deterministic bursts for testing. Clamped
  * to [0, 255]. */
 void sand_set_lava_burst(sand_t *s, int chance);
+
+/* Force reaction_t.crusts, whose shipped rate is one in 65536 a step so a
+ * bank crusts over minutes rather than frames. A test or a benchmark scene
+ * cannot wait for that, and the same reason put a setter on the lava burst
+ * and on acid rain. Negative restores the material's own figure; the roll
+ * this feeds is 16-bit, so useful values run to 65535, not 255. */
+void sand_set_crust(sand_t *s, int chance);
 
 /* Overrides SAND_GUNPOWDER_BLAST_COOLDOWN: steps between fuse blasts,
  * board-wide. 0 lifts limit, negative restores default. Exists because

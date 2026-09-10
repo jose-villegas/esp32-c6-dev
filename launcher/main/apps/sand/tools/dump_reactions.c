@@ -352,6 +352,10 @@ static const field_doc_t field_docs[] = {
      * REACTION_DOC(spoils_to, ...) call, for where emit_spoils() gets its
      * clause from rather than guessing it. */
     F(heats_to,     GRP_TRANSFORM, FK_TARGET, NULL),
+    /* Took two of reaction_t's five padding bytes rather than growing the
+     * row: the 64-byte stride is load-bearing (see stride_pad's own note). */
+    F(crusts_to,    GRP_TRANSFORM, FK_TARGET, NULL),
+    FRATE(crusts,      GRP_TRANSFORM, "crusts over once settled"),
     FRATE(heat_chance, GRP_TRANSFORM, "melts"),
     /* `melts` shares heats_to with heat_chance but answers to LAVA
      * alone - direct contact with a burning liquid, never a flame and
@@ -463,8 +467,6 @@ static const field_doc_t field_docs[] = {
     /* Padding, not chemistry - see reaction_t. Listed so every byte of the
      * struct is still claimed by exactly one row; nothing emits these,
      * since output is driven by the fields a material actually sets. */
-    F(stride_pad0,      GRP_PADDING, FK_PAD, NULL),
-    F(stride_pad1,      GRP_PADDING, FK_PAD, NULL),
     F(stride_pad2,      GRP_PADDING, FK_PAD, NULL),
     F(stride_pad3,      GRP_PADDING, FK_PAD, NULL),
     F(stride_pad4,      GRP_PADDING, FK_PAD, NULL),
@@ -2301,6 +2303,18 @@ static void emit_shatter(const reaction_t *r)
            cause_marked("shatters_to", 0));
 }
 
+/* The rate is out of 65536, not 256: this roll is 16-bit at its read site
+ * precisely because one in 256 a step is not slow once a bank holds a
+ * thousand cells. Printing it against the usual denominator would overstate
+ * it by 256x. */
+static void emit_crust(const reaction_t *r)
+{
+    if (r->crusts == 0 || r->crusts_to == 0) return;
+    printf("- Once it has *settled*, it slowly crusts into %s "
+           "(%u in 65536 a step, and only while at rest).\n",
+           mat_span_v(r->crusts_to), (unsigned)r->crusts);
+}
+
 static void emit_material_section(const char *name, const reaction_t *r,
                                   uint8_t self_id, uint8_t color_id)
 {
@@ -2315,6 +2329,7 @@ static void emit_material_section(const char *name, const reaction_t *r,
     emit_cold(r);
     emit_warmth(r);
     emit_thaw(r);
+    emit_crust(r);
     emit_wet(r, color_id);
     emit_acid(r);
     emit_evaporates(r);

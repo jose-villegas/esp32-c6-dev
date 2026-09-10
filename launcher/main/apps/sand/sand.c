@@ -173,6 +173,7 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->condenses    = SAND_CONDENSES_PER_MATERIAL;     /* see sand_set_condenses() */
     s->lava_cooloff = SAND_LAVA_COOLOFF_DEFAULT; /* see sand_set_lava_cooloff() */
     s->lava_burst   = SAND_LAVA_BURST_DEFAULT;   /* see sand_set_lava_burst() */
+    s->crust        = -1;                        /* see sand_set_crust() */
     s->acid_rain    = SAND_ACID_RAIN_DEFAULT;    /* see sand_set_acid_rain() */
     s->acid_dilute_mass_bias = SAND_ACID_DILUTE_MASS_BIAS_DEFAULT; /* see
                                           * sand_set_acid_dilute_mass_bias() */
@@ -659,6 +660,11 @@ void sand_set_lava_cooloff(sand_t *s, int chance)
 void sand_set_fuse_cooldown(sand_t *s, int steps)
 {
     s->fuse_cooldown = (steps < 0) ? -1 : (steps > 255 ? 255 : steps);
+}
+
+void sand_set_crust(sand_t *s, int chance)
+{
+    s->crust = (chance < 0) ? -1 : (chance > 65535 ? 65535 : chance);
 }
 
 void sand_set_lava_burst(sand_t *s, int chance)

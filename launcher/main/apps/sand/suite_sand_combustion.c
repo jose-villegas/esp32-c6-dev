@@ -927,6 +927,86 @@ static void test_pouring_stone_never_arms_the_reactions_pass(void)
 }
 
 
+/* A SETTLED SNOWBANK CRUSTS OVER; A FALLING ONE DOES NOT.
+ *
+ * The rest test is the whole rule - a snowfall in flight must cost nothing,
+ * and only banks that have stopped moving pay anything. Sleeping has to be
+ * ENABLED for any of it: cell_settled() reads block_state, and with sleeping
+ * off nothing is ever known to be at rest, so the rule correctly never fires.
+ *
+ * sand_set_crust() forces the roll because the shipped rate is 1 in 65536 a
+ * step - minutes of crusting, not frames. */
+static void test_a_settled_snowbank_crusts_to_ice(void)
+{
+    uint8_t *cells  = calloc(W * H, 1);
+    uint8_t *blocks = calloc((size_t)((W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
+                             * (size_t)((H + SAND_BLOCK_H - 1) / SAND_BLOCK_H), 1);
+    TEST_ASSERT_NOT_NULL(cells);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t snow_sim;
+    sand_init(&snow_sim, cells, W, H, 41u);
+    sand_enable_sleeping(&snow_sim, blocks);
+    sand_set_crust(&snow_sim, 65535);   /* every settled snow cell, every step */
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&snow_sim, x, H - 1, STONE);
+        sand_set(&snow_sim, x, H - 2, SNOW);
+    }
+
+    /* Long enough for the bank to land and its block to be marked settled -
+     * the rule cannot fire before that however hard the roll is forced. */
+    int ice = 0;
+    for (int i = 0; i < 200 && ice == 0; i++) {
+        sand_step(&snow_sim, 0, 1000, 0);
+        for (int k = 0; k < W * H; k++) {
+            if (cells[k] == MATX(MATX_ICE)) {
+                ice++;
+            }
+        }
+    }
+
+    /* THE CONTROL, and it is what proves the rest test is load-bearing rather
+     * than decorative: the same bank, the same forced roll, but jostled every
+     * step so nothing is ever marked settled. A jostle clears the settled bits
+     * board-wide (see sand_step()), which is exactly the state a snowfall in
+     * flight is in. Without this the test passes just as well on a rule that
+     * ignores rest entirely and crusts everything it sees. */
+    memset(cells, 0, W * H);
+    sand_init(&snow_sim, cells, W, H, 41u);
+    sand_enable_sleeping(&snow_sim, blocks);
+    sand_set_crust(&snow_sim, 65535);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&snow_sim, x, H - 1, STONE);
+        sand_set(&snow_sim, x, H - 2, SNOW);
+    }
+
+    for (int i = 0; i < 200; i++) {
+        sand_step(&snow_sim, 0, 1000, 1);   /* jostled: never settles */
+    }
+
+    int shaken_ice = 0;
+    for (int k = 0; k < W * H; k++) {
+        if (cells[k] == MATX(MATX_ICE)) {
+            shaken_ice++;
+        }
+    }
+
+    /* BOTH frees before EITHER assert: a failed TEST_ASSERT longjmps straight
+     * past anything after it, and this test owns two allocations. */
+    free(cells);
+    free(blocks);
+
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, ice,
+        "a snowbank that has come to rest must crust into ice - with the "
+        "roll forced, the only thing left gating it is the settled test");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, shaken_ice,
+        "snow that is never allowed to settle must never crust, however hard "
+        "the roll is forced - the rule is about rest, and a snowfall in "
+        "flight has to cost nothing");
+}
+
 /* BURYING A FIRE PUTS IT OUT - one of only two ways fire ends, and asserted
  * nowhere until now: the whole suite passed with smothering disabled outright
  * (bd esp32c6-dxj).
@@ -1806,6 +1886,7 @@ void run_sand_combustion_suite(void)
     RUN_TEST(test_fire_burning_out_marks_its_row_dirty);
     RUN_TEST(test_fire_spreads_through_a_connected_pocket_in_one_step);
     RUN_TEST(test_pouring_stone_never_arms_the_reactions_pass);
+    RUN_TEST(test_a_settled_snowbank_crusts_to_ice);
     RUN_TEST(test_a_fire_buried_on_all_four_sides_goes_out);
     RUN_TEST(test_a_material_created_during_the_pass_stays_in_the_mask);
     RUN_TEST(test_sand_alone_lets_the_moisture_pass_switch_off_again);
