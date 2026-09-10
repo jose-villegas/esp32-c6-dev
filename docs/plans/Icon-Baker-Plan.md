@@ -86,6 +86,9 @@ typedef struct {
 ```
 
 Packed `uint8_t` rows with an explicit stride is what lifts the 16px cap.
+Every field is `const` and every array is `static const`, deliberately: see
+the RAM and cache section below for why a single missing `const` is the one
+edit that could quietly move this whole facility into DRAM.
 
 ---
 
@@ -114,9 +117,67 @@ icon is ever drawn.
 
 ---
 
+## The budget that is not the command list: RAM, and the 32 KB cache
+
+An icon facility that grows without bound is only safe if growing it cannot
+take DRAM from an app or evict a hot loop. Three rules, in decreasing order
+of how easy they are to get wrong.
+
+**Baked data must stay in flash, and must be provably there.** Everything
+the generator emits is `static const`, which on this target lands in
+`.rodata` in flash rather than in DRAM — the same placement
+`docs/notes/Optimization-Playbook.md` records for the boot photo ("the photo
+is `static const`, so it lives in flash behind the XIP cache"). That keeps
+icons entirely out of the pool `check_static_ram.py` guards, where the
+framebuffer plus one sand grid already have to fit contiguously. **Verify it
+rather than assume it**: a baked set must move `check_static_ram.py`'s
+number by zero, and that is a one-line check to run when phase 1 lands, not
+a claim to take on faith. A single missing `const` silently relocates the
+whole table into DRAM.
+
+**No runtime registry, no init-time copies.** Lookup is an index into a
+generated `const` table, resolved at the call site. Nothing is assembled in
+RAM at startup, nothing is cached in RAM after a draw, and no app "registers"
+its icons at boot. This is also why lookup is by generated id and never by
+name string: a name lookup wants a searchable structure, and a searchable
+structure is the first step toward building one in RAM.
+
+**Per-draw stack must not scale with icon size.** This is the one place the
+current design actually fails the constraint. `ui_draw_bitmap()` extracts
+runs into a stack array of `UI_DRAW_BITMAP_MAX_BLOCKS` (48) `icon_rect_t` —
+768 bytes of transient DRAM on the UI task's stack. At 16x16 that is
+merely wasteful; at 32x32 the worst case is 16 runs per row over 32 rows,
+and a cap raised to match would put several KiB on a stack that already has
+a checker complaining about a 2 KiB test frame.
+
+So `ui_draw_icon()` should **stream** runs, emitting each `mu_draw_rect()`
+as it is found instead of collecting them all first. Per-draw stack then
+becomes O(1) in the icon's size, and `UI_DRAW_BITMAP_MAX_BLOCKS` stops being
+a constraint on artwork at all — leaving the command-list budget as the only
+ceiling, which the baked run count now enforces at build time anyway. The
+array form exists today because pure geometry returning a buffer is easy to
+host-test; an iterator keeps that property, since a test's callback can
+collect into an array while the firmware's callback draws.
+
+**On the cache, specifically: the risk is code, not icon data.** A 16x16
+1bpp icon is 32 bytes — one cache line, against a 32 KB shared XIP cache.
+Even a hundred of them, touched once each per frame, is noise next to the
+sand simulation's own working set. What *can* hurt is
+`icon_bitmap_blocks()` being `static inline` in a header: every call site
+gets its own copy of the run-length extraction, and the Optimization
+Playbook records exactly this failure mode — "eventually a function gets
+folded into every one of its call sites and the hot loop stops fitting the
+32 KB cache, and the technique that had been winning at every prior level
+makes everything worse." One or two call sites is fine. If icon drawing
+spreads across several apps, move the extraction out of line into a pure
+`.c` that host tests can still link, and measure rather than assume which
+way is cheaper.
+
 ## Ownership: one generator, two homes
 
-The obvious reading of "system-wide" fights an existing rule. CLAUDE.md:
+Decided, not proposed: there is a shared system set for UI/UX vocabulary,
+and apps may also provide their own. The obvious reading of "system-wide"
+fights an existing rule, and the split is what resolves it. CLAUDE.md:
 adding or removing an app touches no other file, and deleting the folder
 deletes the app, its logic and its tests cleanly. Put sand's funnel in a
 system atlas and deleting `apps/sand/` leaves artwork nothing draws.
@@ -175,10 +236,16 @@ failure mode CLAUDE.md's convention is written to prevent.
 1. **Generator plus the system set.** `gen_icons.py`, `design/icons/system.*`,
    `gfx/icons_system.h`. Migrate the check mark: `icon_check()` fetches from
    the table, and `ui.c`'s `MU_ICON_CHECK` path is unchanged for callers.
-2. **The packed format.** Stride-aware `icon_bitmap_blocks()` (it was already
-   generalized once, in Phase 3, from the check mark to any 16-wide bitmap —
-   this is the same move a second time), and `ui_draw_icon()` beside today's
-   `ui_draw_bitmap()`.
+   **Record `check_static_ram.py`'s reported number before and after** — a
+   baked set must move it by exactly zero, and this is the phase that proves
+   the placement claim above instead of asserting it.
+2. **The packed format, and a streaming draw.** Stride-aware run extraction
+   (it was already generalized once, in Phase 3, from the check mark to any
+   16-wide bitmap — this is the same move a second time), reshaped as an
+   iterator so `ui_draw_icon()` emits each rect as it is found rather than
+   buffering all of them on the stack. Keep the array-returning form for
+   host tests, or have the test supply a collecting callback; either way the
+   firmware path must not put an icon-sized array on the UI task's stack.
 3. **Migrate sand's four.** Delete `sand_icons.h`.
 4. **`_Static_assert` the run counts**, and retire the hand-maintained cap
    test that stands in for it today.
