@@ -123,6 +123,7 @@ typedef void (*scene_fn)(sand_t *s);
 #define FP_WET_DIRT CELL_MAKE(MAT_DIRT, MASS_MAX)      /* saturated, not damp */
 #define FP_HOT_GLASS CELL_MAKE(MAT_GLASS, SAND_SHOCK_HEAT - 1)
 #define FP_ICE    MATX(MATX_ICE)
+#define FP_POWDER GUNPOWDER_CELL(0)                    /* dry, unlit */
 
 
 /* Scene 1: dry grains over a floor. The main sweep and nothing else - no
@@ -476,6 +477,54 @@ static void scene_snow_crust(sand_t *s)
     }
 }
 
+
+/* A KEG STANDING IN WATER. No scene reached gunpowder at all before this, so
+ * every soak/dry/convert rule it owns hashed the same whether it worked or
+ * not - and one of its exits is an explosive. Fifth material gap this tool
+ * has been caught with.
+ *
+ * Walled, because a powder slides off an open ledge and loose water spreads
+ * away, and a keg soaks slowly enough now that both happen first - the same
+ * thing that broke a unit test's fixture when the rate dropped. */
+static void scene_powder_keg(sand_t *s)
+{
+    /* RATES FORCED, and deliberately not the shipped ones. A keg soaks at 2 in
+     * 256 and converts once in 256 steps, so at 300 steps a scene left on the
+     * shipped tuning would not even saturate, let alone reach oil - it would
+     * hash the soak path and silently cover nothing else. These make the
+     * MECHANISM reachable inside the window; the rate itself is tuning and is
+     * pinned by unit tests, where re-pegging it does not move eleven other
+     * rows. */
+    sand_set_soak(s, 60);
+    sand_set_soak_convert(s, 1);
+
+    for (int x = 0; x < FP_W; x++) {
+        sand_set(s, x, FP_H - 1, FP_STONE);
+    }
+    for (int y = 40; y < FP_H - 1; y++) {
+        sand_set(s, 10, y, FP_STONE);
+        sand_set(s, 30, y, FP_STONE);
+    }
+    for (int y = FP_H - 10; y < FP_H - 1; y++) {
+        for (int x = 11; x < 30; x++) {
+            sand_set(s, x, y, FP_POWDER);
+        }
+    }
+    for (int y = FP_H - 16; y < FP_H - 10; y++) {
+        for (int x = 11; x < 30; x++) {
+            sand_set(s, x, y, FP_WATER);
+        }
+    }
+
+    /* A dry half too, so the row also pins that dry powder does NOT convert -
+     * the other half of what soaked_to promises. */
+    for (int y = FP_H - 10; y < FP_H - 1; y++) {
+        for (int x = 40; x < 58; x++) {
+            sand_set(s, x, y, FP_POWDER);
+        }
+    }
+}
+
 /* GRAVITY IS PER SCENE, and the six original rows keep the straight-down
  * vector they were baselined with - their hashes must not move.
  *
@@ -528,6 +577,9 @@ static const struct {
     /* And the one row where a SETTLED-gated rule actually fires - see the
      * builder for why the rate is forced. */
     { "snow_crust",  scene_snow_crust,  71u, 0,    1000, 1 },
+
+    /* The gunpowder row - see the builder for what was invisible without it. */
+    { "powder_keg",  scene_powder_keg,  29u, 0,    1000, 0 },
 };
 
 int main(void)
