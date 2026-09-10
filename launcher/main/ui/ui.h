@@ -88,14 +88,25 @@ void ui_set_button_style(ui_button_style_t style);
 void ui_set_text_style(ui_text_style_t style);
 
 /* Choose the font microui measures and draws MU_COMMAND_TEXT with, until
- * this is called again - ui_init() seeds it with gfx_font_ui() so it is
- * never left NULL in normal use. Passing NULL here falls back to
- * gfx_font_ui() rather than storing NULL. Unlike ui_set_text_style() and
- * ui_set_transform() below it, this does NOT need to call
- * ui_invalidate() - see the comment above ui_set_font()'s definition in
- * ui.c for why the font is the one style-like setting here that gets to
- * skip it. */
+ * called again - ui_init() seeds it with gfx_font_ui(). NULL falls back
+ * to gfx_font_ui() rather than being stored. Unlike ui_set_text_style()
+ * and ui_set_transform() below, this does NOT need ui_invalidate() - see
+ * ui_set_font()'s ui.c comment for why. Equivalent to
+ * ui_set_font_scaled(font, GFX_GLYPH_SCALE). */
 void ui_set_font(const gfx_font_t *font);
+
+/* Like ui_set_font(), but at `scale` glyph cells instead of the fixed
+ * GFX_GLYPH_SCALE - see ui_set_font()'s ui.c comment for why carrying the
+ * scale inside the font, rather than a separate render-time setting, is
+ * what lets a screen mix two text sizes without paying ui_invalidate()
+ * every frame. Clamped to at least 1. */
+void ui_set_font_scaled(const gfx_font_t *font, int scale);
+
+/* The width `str` would measure at the CURRENT font and scale - what
+ * ui_set_font()/ui_set_font_scaled() last set. For right-aligning a
+ * string (e.g. against a caption on the same row) without re-deriving
+ * the font role and scale at the call site. */
+int ui_measure_text(const char *str);
 
 /* Choose the transform every command is mapped through before it is
  * drawn - see ui_transform.h for what a transform is and why it is

@@ -69,22 +69,71 @@ static bool            transform_valid;
  * transform change is the one and only thing that increments it. */
 static uint32_t layout_generation;
 
+/* What a mu_Font actually points at - see ui_set_font()'s comment below
+ * for why the scale rides inside the font rather than a separate
+ * render-time setting. */
+typedef struct {
+    const gfx_font_t *font;
+    int                scale;
+} ui_font_scaled_t;
+
+/* Every (font, scale) pair anyone has asked for, so the same pair always
+ * yields the same address - see intern_font_scaled() below for why that
+ * stability is load-bearing. Small and never cleared: one shell, one
+ * mu_Context, realistically a handful of roles at a handful of scales
+ * for the app's whole lifetime, not a per-screen or per-frame set. */
+#define UI_FONT_SCALED_MAX 8
+static ui_font_scaled_t font_scaled_table[UI_FONT_SCALED_MAX];
+static int              font_scaled_count;
+
+/* Returns the SAME address for the same (font, scale) every time, which is
+ * what lets hash_canvas() (below) notice a scale change on its own, the
+ * same way it already does for a font change - see ui_set_font()'s
+ * comment. Exhaustion reuses slot 0 rather than growing or asserting: it
+ * means UI_FONT_SCALED_MAX needs raising, not that the caller erred, and a
+ * momentarily wrong size beats a crash. */
+static const ui_font_scaled_t *intern_font_scaled(const gfx_font_t *font, int scale)
+{
+    for (int i = 0; i < font_scaled_count; i++) {
+        if (font_scaled_table[i].font == font && font_scaled_table[i].scale == scale) {
+            return &font_scaled_table[i];
+        }
+    }
+    if (font_scaled_count < UI_FONT_SCALED_MAX) {
+        font_scaled_table[font_scaled_count] = (ui_font_scaled_t){ font, scale };
+        return &font_scaled_table[font_scaled_count++];
+    }
+    ESP_LOGW(TAG, "ui: font/scale table full (%d entries) - reusing slot 0",
+             UI_FONT_SCALED_MAX);
+    font_scaled_table[0] = (ui_font_scaled_t){ font, scale };
+    return &font_scaled_table[0];
+}
+
+/* mu_Font is NULL only before ui_init() has run - see resolve_font_scaled()
+ * and measure_text_width()/height() below, which is where that matters. */
+static ui_font_scaled_t resolve_font_scaled(mu_Font font)
+{
+    if (font) {
+        return *(const ui_font_scaled_t *)font;
+    }
+    return (ui_font_scaled_t){ gfx_font_ui(), GFX_GLYPH_SCALE };
+}
+
 /* microui asks us for text metrics rather than measuring anything itself.
  * `font` is whatever ctx.style->font held when the widget that wants
- * metrics ran - see ui_set_font() in ui.h. It is NULL only before
- * ui_init() has run; fall back to gfx_font_ui() (the UI/body-text role)
- * rather than deref a NULL, so a widget measured before ui_init() gets a
+ * metrics ran - see ui_set_font() in ui.h. Falling back rather than
+ * dereferencing NULL means a widget measured before ui_init() gets a
  * sane answer instead of a crash. */
 static int measure_text_width(mu_Font font, const char *str, int len)
 {
-    const gfx_font_t *f = font ? (const gfx_font_t *)font : gfx_font_ui();
-    return gfx_font_text_width(f, str, len, GFX_GLYPH_SCALE);
+    const ui_font_scaled_t fs = resolve_font_scaled(font);
+    return gfx_font_text_width(fs.font, str, len, fs.scale);
 }
 
 static int measure_text_height(mu_Font font)
 {
-    const gfx_font_t *f = font ? (const gfx_font_t *)font : gfx_font_ui();
-    return gfx_font_height(f, GFX_GLYPH_SCALE);
+    const ui_font_scaled_t fs = resolve_font_scaled(font);
+    return gfx_font_height(fs.font, fs.scale);
 }
 
 /*---------------------------------------------------------------------------
@@ -147,17 +196,23 @@ void ui_set_text_style(ui_text_style_t style)
     }
 }
 
-/* WHY THIS ONE DOES NOT NEED ui_invalidate(), UNLIKE ui_set_text_style()
- * ABOVE: mu_Font is not read only at render time, it's baked into the
- * command list itself - ctx.style->font rides along inside every
- * mu_TextCommand, so a font change moves layout (different metrics mean
- * different positions/sizes for every control that measured text this
- * frame), not just different pixels for the same geometry. Those are
- * different bytes, so hash_canvas() sees the change on its own without
- * being told to. */
+/* WHY THIS NEEDS NO ui_invalidate(), UNLIKE ui_set_text_style() ABOVE:
+ * mu_Font rides inside every mu_TextCommand, so a font (or scale) change
+ * is different bytes and hash_canvas() sees it unaided. THAT property is
+ * exactly why the scale lives here too rather than a render-time global -
+ * a global would need invalidating on every size change, which a two-size
+ * screen hits every frame, permanently defeating the repaint skip. */
+void ui_set_font_scaled(const gfx_font_t *font, int scale)
+{
+    if (scale < 1) {
+        scale = 1;
+    }
+    ctx.style->font = (mu_Font)intern_font_scaled(font ? font : gfx_font_ui(), scale);
+}
+
 void ui_set_font(const gfx_font_t *font)
 {
-    ctx.style->font = (mu_Font)(font ? font : gfx_font_ui());
+    ui_set_font_scaled(font, GFX_GLYPH_SCALE);
 }
 
 static bool transforms_equal(ui_transform_t a, ui_transform_t b)
@@ -218,7 +273,8 @@ void ui_init(void)
     mu_init(&ctx);
     ctx.text_width  = measure_text_width;
     ctx.text_height = measure_text_height;
-    ctx.style->font = (mu_Font)gfx_font_ui();
+    font_scaled_count = 0;
+    ui_set_font(gfx_font_ui());
 
     base_draw_frame = ctx.draw_frame;
     ctx.draw_frame  = styled_draw_frame;
@@ -369,6 +425,12 @@ int ui_height(void)
     return logical_viewport().h;
 }
 
+int ui_measure_text(const char *str)
+{
+    const ui_font_scaled_t fs = resolve_font_scaled(ctx.style->font);
+    return gfx_font_text_width(fs.font, str, -1, fs.scale);
+}
+
 /* See ui.h for the full argument. Short version: mu_begin_window_ex()
  * only seeds cnt->rect the FIRST time a title is opened, remembering it
  * forever after - correct for a desktop window manager, wrong here,
@@ -426,8 +488,9 @@ static void draw_command(const mu_Command *cmd)
     case MU_COMMAND_TEXT: {
         const mu_Color ink  = cmd->text.color;
         const mu_Color halo = ui_text_halo(ink);
-        const gfx_font_t *font = cmd->text.font ?
-            (const gfx_font_t *)cmd->text.font : gfx_font_ui();
+        const ui_font_scaled_t fs = resolve_font_scaled(cmd->text.font);
+        const gfx_font_t *font = fs.font;
+        const int scale = fs.scale;
         const int quarter = ui_transform_quarter(t);
 
         /* WHY THE WHOLE STRING'S BOX IS MAPPED, NOT ITS ORIGIN: every
@@ -439,9 +502,8 @@ static void draw_command(const mu_Command *cmd)
          * (rotated text drifting off-centre). Now measures the LOGICAL
          * box - same one used to size it - and maps that, like the
          * others. */
-        const int tw = gfx_font_text_width(font, cmd->text.str, -1,
-                                           GFX_GLYPH_SCALE);
-        const int th = gfx_font_height(font, GFX_GLYPH_SCALE);
+        const int tw = gfx_font_text_width(font, cmd->text.str, -1, scale);
+        const int th = gfx_font_height(font, scale);
         const mu_Rect box = ui_transform_rect(
             t, (mu_Rect){ cmd->text.pos.x, cmd->text.pos.y, tw, th });
 
@@ -454,7 +516,7 @@ static void draw_command(const mu_Command *cmd)
          * than called directly because ui/ sits below apps/, so pulling
          * in apps/sand/ would be a backwards layering dependency. */
         int mx, my;
-        ui_text_glyph0_origin(font, box, quarter, GFX_GLYPH_SCALE, &mx, &my);
+        ui_text_glyph0_origin(font, box, quarter, scale, &mx, &my);
 
         ui_text_pass_t passes[UI_TEXT_MAX_PASSES];
         const int n = ui_text_passes(text_style, passes, UI_TEXT_MAX_PASSES);
@@ -473,7 +535,7 @@ static void draw_command(const mu_Command *cmd)
              * LOGICAL space instead - a different physical direction once
              * turn is nonzero. */
             gfx_text_font(mx + passes[i].dx, my + passes[i].dy, cmd->text.str,
-                          color, GFX_GLYPH_SCALE, quarter, font);
+                          color, scale, quarter, font);
         }
         break;
     }
