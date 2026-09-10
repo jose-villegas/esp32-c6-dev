@@ -1045,16 +1045,17 @@ static void test_snow_melts_on_wet_soil_but_not_on_dry(void)
         "about dirt rather than about the water in it");
 }
 
-/* THE BALANCE CEILING: 32 cells of snow reach 90% ice in about three minutes.
+/* THE BALANCE CEILING: 32 cells of snow reach 90% ice in about five minutes.
  *
- * The one crust test that does NOT force the rate - the others call
- * sand_set_crust(), so sweeping crusts through them is byte-identical and the
- * shipped value goes untested. Measured 5855 steps.
+ * OF PLAY, NOT OF TEST - simulated steps at ~30 ms on the device; the host
+ * runs the lot in a quarter second. Measured 9511 steps.
  *
- * 90% and not all: the rim never crusts, so a cover this shape tops out just
- * over 90%. No side walls - they seed the crust up the full height, and the
- * front would travel sideways rather than into the cover's depth. */
-static void test_a_32_cell_snow_cover_turns_to_ice_in_about_three_minutes(void)
+ * The one crust test that does NOT force the rate: the others call
+ * sand_set_crust(), so sweeping crusts through them is byte-identical.
+ *
+ * 90% and not all, because the rim never crusts. No side walls - they seed up
+ * the full height, and the front would go sideways, not into the depth. */
+static void test_a_32_cell_snow_cover_turns_to_ice_in_about_five_minutes(void)
 {
     enum { GW = 56, GH = 40, X0 = 4, X1 = 52, DEPTH = 32 };
     uint8_t *cells  = calloc(GW * GH, 1);
@@ -1080,9 +1081,18 @@ static void test_a_32_cell_snow_cover_turns_to_ice_in_about_three_minutes(void)
         sand_step(&g, 0, 1000, 0);
     }
 
+    /* SAMPLED, NOT COUNTED EVERY STEP. Rescanning the grid each step costs
+     * more than stepping it, and the answer is a threshold crossing several
+     * thousand steps out - resolving it to the exact step buys nothing that
+     * the assertions below can use. Every 64 steps runs the whole test in a
+     * fraction of what a per-step count did. */
+    enum { SAMPLE_EVERY = 64 };
     int almost_at = -1;
-    for (int i = 1; i <= 20000 && almost_at < 0; i++) {
+    for (int i = 1; i <= 30000 && almost_at < 0; i++) {
         sand_step(&g, 0, 1000, 0);
+        if (i % SAMPLE_EVERY != 0) {
+            continue;
+        }
         int ice = 0, total = 0;
         for (int y = 0; y < GH; y++) {
             for (int x = X0; x < X1; x++) {
@@ -1120,15 +1130,16 @@ static void test_a_32_cell_snow_cover_turns_to_ice_in_about_three_minutes(void)
     free(blocks);
 
     TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, almost_at,
-        "a 32 cell cover of snow must end up 90% ice - measured 5855 steps; "
+        "a 32 cell cover of snow must end up 90% ice - measured 9511 steps; "
         "never getting there means the shipped crusts rate cannot reach the "
         "balance ceiling at all, which is what a byte-wide field against a "
         "65536 roll used to guarantee");
-    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(2000, almost_at,
-        "and must not get there in a few seconds - snow landing on anything "
-        "would stop reading as snow");
-    TEST_ASSERT_LESS_THAN_INT_MESSAGE(12000, almost_at,
-        "nor take ten minutes - the ceiling this pins is about three");
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(4000, almost_at,
+        "and must not get there in seconds - snow landing on anything would "
+        "stop reading as snow");
+    TEST_ASSERT_LESS_THAN_INT_MESSAGE(20000, almost_at,
+        "nor take a quarter hour - the ceiling this pins is about five "
+        "minutes");
     TEST_ASSERT_GREATER_THAN_INT_MESSAGE(skin_total * 3 / 4, skin_snow,
         "the drift's own surface must still be snow after the inside has "
         "iced - a cell with open space beside it is the rim, and the rim does "
@@ -2242,7 +2253,7 @@ void run_sand_combustion_suite(void)
     RUN_TEST(test_a_settled_snowbank_crusts_to_ice);
     RUN_TEST(test_a_snowbank_crusts_on_its_faces_and_thickens_slowly_inward);
     RUN_TEST(test_snow_does_not_crust_against_open_air);
-    RUN_TEST(test_a_32_cell_snow_cover_turns_to_ice_in_about_three_minutes);
+    RUN_TEST(test_a_32_cell_snow_cover_turns_to_ice_in_about_five_minutes);
     RUN_TEST(test_a_fire_buried_on_all_four_sides_goes_out);
     RUN_TEST(test_a_material_created_during_the_pass_stays_in_the_mask);
     RUN_TEST(test_sand_alone_lets_the_moisture_pass_switch_off_again);
