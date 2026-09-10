@@ -1348,11 +1348,6 @@ static void draw_palette(const input_t *input)
  * pressed against the button frame. */
 #define BRUSH_INFO_ICON_PAD  12
 
-static const char *const brush_seg_names[BRUSH_SCREEN_SEGMENT_COUNT] = {
-    [BRUSH_SCREEN_SEG_POUR]  = "POUR",
-    [BRUSH_SCREEN_SEG_ERASE] = "ERASE",
-    [BRUSH_SCREEN_SEG_BOOM]  = "BOOM",
-};
 
 static const uint16_t *const brush_seg_icons[BRUSH_SCREEN_SEGMENT_COUNT] = {
     [BRUSH_SCREEN_SEG_POUR]  = icon_pour_bitmap,
@@ -1427,7 +1422,7 @@ static void draw_brush_screen(const input_t *input)
                         MU_OPT_NOTITLE | MU_OPT_NORESIZE |
                         MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
 
-        ui_set_font_scaled(gfx_font_ui(), 2);
+        ui_set_font_scaled(gfx_font_ui(), BRUSH_SCREEN_CAPTION_SCALE);
 
         /*---------------------------------------------------------------
          * Header: swatch, caption/name, info button (drawn, inert).
@@ -1437,8 +1432,8 @@ static void draw_brush_screen(const input_t *input)
         draw_brush_bezel(ctx, lay.swatch,
                          gfx_color_rgb888(brush_color(brushes[ui.brush])), false);
 
-        draw_brush_text(ctx, lay.material_caption, "MATERIAL",
-                        mu_color_hex(BRUSH_CAPTION_COLOR), 2, -1);
+        draw_brush_text(ctx, lay.material_caption, BRUSH_SCREEN_MATERIAL_CAPTION,
+                        mu_color_hex(BRUSH_CAPTION_COLOR), BRUSH_SCREEN_CAPTION_SCALE, -1);
 
         /* 4 is the starting scale, but "Gunpowder" (the longest name any
          * brush carries) doesn't fit it in the name rect at the narrower
@@ -1454,7 +1449,7 @@ static void draw_brush_screen(const input_t *input)
         }
         draw_brush_text(ctx, lay.material_name, name,
                         mu_color_hex(BRUSH_TEXT_COLOR), name_scale, -1);
-        ui_set_font_scaled(gfx_font_ui(), 2);
+        ui_set_font_scaled(gfx_font_ui(), BRUSH_SCREEN_CAPTION_SCALE);
 
         draw_brush_bezel(ctx, lay.info_button, BRUSH_SEG_UNSELECTED_COLOR, false);
         {
@@ -1475,17 +1470,17 @@ static void draw_brush_screen(const input_t *input)
          * Brush mode: caption, three segments.
          *-------------------------------------------------------------*/
         draw_brush_panel(ctx, lay.mode_panel);
-        draw_brush_text(ctx, lay.mode_caption, "BRUSH MODE",
-                        mu_color_hex(BRUSH_CAPTION_COLOR), 2, -1);
+        draw_brush_text(ctx, lay.mode_caption, BRUSH_SCREEN_MODE_CAPTION,
+                        mu_color_hex(BRUSH_CAPTION_COLOR), BRUSH_SCREEN_CAPTION_SCALE, -1);
 
         for (int i = 0; i < BRUSH_SCREEN_SEGMENT_COUNT; i++) {
             const mu_Rect r = lay.segments[i];
+            const char *name = brush_screen_segment_label((brush_screen_segment_t)i);
 
             /* Id from the segment's own name, the same idiom mu_button_ex()
              * uses for a labelled control - the three names differ, so no
              * two segments can collide. */
-            const mu_Id id = mu_get_id(ctx, brush_seg_names[i],
-                                       (int)strlen(brush_seg_names[i]));
+            const mu_Id id = mu_get_id(ctx, name, (int)strlen(name));
             mu_update_control(ctx, id, r, 0);
 
             if (ctx->mouse_pressed == MU_MOUSE_LEFT && ctx->focus == id) {
@@ -1501,7 +1496,7 @@ static void draw_brush_screen(const input_t *input)
 
             draw_brush_bezel(ctx, r, face, pressed);
 
-            const int label_h = gfx_font_height(gfx_font_ui(), 2);
+            const int label_h = gfx_font_height(gfx_font_ui(), BRUSH_SCREEN_CAPTION_SCALE);
             int icon_side = r.h - 2 * BRUSH_SEG_PAD - label_h - BRUSH_SEG_LABEL_GAP;
             const int icon_side_max = r.w - 2 * BRUSH_SEG_PAD;
             if (icon_side > icon_side_max) {
@@ -1517,7 +1512,7 @@ static void draw_brush_screen(const input_t *input)
                 r.x + BRUSH_SEG_PAD, icon_r.y + icon_side + BRUSH_SEG_LABEL_GAP,
                 r.w - 2 * BRUSH_SEG_PAD, label_h,
             };
-            draw_brush_text(ctx, label_r, brush_seg_names[i], ink, 2, 0);
+            draw_brush_text(ctx, label_r, name, ink, BRUSH_SCREEN_CAPTION_SCALE, 0);
         }
 
         /*---------------------------------------------------------------
@@ -1525,16 +1520,15 @@ static void draw_brush_screen(const input_t *input)
          *-------------------------------------------------------------*/
         draw_brush_panel(ctx, lay.size_panel);
 
-        const char *size_caption = (ui.mode == SAND_MODE_ERASE)    ? "ERASE BRUSH SIZE"
-                                  : (ui.mode == SAND_MODE_DETONATE) ? "BOOM BRUSH SIZE"
-                                                                     : "POUR BRUSH SIZE";
+        const char *size_caption =
+            brush_screen_size_caption((brush_screen_segment_t)ui.mode);
         draw_brush_text(ctx, lay.size_caption, size_caption,
-                        mu_color_hex(BRUSH_CAPTION_COLOR), 2, -1);
+                        mu_color_hex(BRUSH_CAPTION_COLOR), BRUSH_SCREEN_CAPTION_SCALE, -1);
 
         char size_value[8];
         snprintf(size_value, sizeof size_value, "%02u PX", (unsigned)sand_ui_radius(&ui));
         draw_brush_text(ctx, lay.size_value, size_value,
-                        mu_color_hex(BRUSH_TEXT_COLOR), 2, 1);
+                        mu_color_hex(BRUSH_TEXT_COLOR), BRUSH_SCREEN_CAPTION_SCALE, 1);
 
         mu_layout_set_next(ctx, lay.slider_track, 0);
         int radius = sand_ui_radius(&ui);

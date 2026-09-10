@@ -15,6 +15,7 @@
 #include "suites.h"
 
 #include "brush_screen.h"
+#include "gfx/gfx_font_roles.h"
 
 #define PORTRAIT_W 368
 #define PORTRAIT_H 448
@@ -227,8 +228,62 @@ static void test_tap_targets_landscape(void)
     assert_tap_targets(LANDSCAPE_W, LANDSCAPE_H);
 }
 
+
+/* Every fixed string on this screen has to FIT the rect the layout gave it.
+ * Twice now a caption was sized by eye and clipped its own tail on the
+ * narrower canvas - "06 PX" against a 64px value box, then the size row's
+ * caption against a 232px one. Measuring the real glyph metrics against the
+ * real rect is the only check that catches it without a device. */
+static void assert_captions_fit(int screen_w, int screen_h)
+{
+    const brush_screen_layout_t l = fixture(screen_w, screen_h);
+    const int scale = BRUSH_SCREEN_CAPTION_SCALE;
+
+    struct { const char *str; mu_Rect r; } fixed[] = {
+        { BRUSH_SCREEN_MATERIAL_CAPTION, l.material_caption },
+        { BRUSH_SCREEN_MODE_CAPTION,     l.mode_caption },
+    };
+    for (unsigned i = 0; i < sizeof fixed / sizeof fixed[0]; i++) {
+        TEST_ASSERT_TRUE_MESSAGE(
+            gfx_font_text_width(gfx_font_ui(), fixed[i].str, -1, scale) <= fixed[i].r.w,
+            fixed[i].str);
+    }
+
+    /* Whichever mode is selected drives the size caption and each segment
+     * carries its own label, so the longest of each has to fit, not just
+     * the one that happens to show first. */
+    for (int seg = 0; seg < BRUSH_SCREEN_SEGMENT_COUNT; seg++) {
+        const char *caption = brush_screen_size_caption((brush_screen_segment_t)seg);
+        TEST_ASSERT_TRUE_MESSAGE(
+            gfx_font_text_width(gfx_font_ui(), caption, -1, scale) <= l.size_caption.w,
+            caption);
+
+        const char *label = brush_screen_segment_label((brush_screen_segment_t)seg);
+        TEST_ASSERT_TRUE_MESSAGE(
+            gfx_font_text_width(gfx_font_ui(), label, -1, scale) <= l.segments[seg].w,
+            label);
+    }
+
+    /* The widest the value ever gets: two digits, a space and "PX". */
+    TEST_ASSERT_TRUE_MESSAGE(
+        gfx_font_text_width(gfx_font_ui(), "00 PX", -1, scale) <= l.size_value.w,
+        "the size value must fit its own box at every radius");
+}
+
+static void test_captions_fit_their_rects_portrait(void)
+{
+    assert_captions_fit(368, 448);
+}
+
+static void test_captions_fit_their_rects_landscape(void)
+{
+    assert_captions_fit(448, 368);
+}
+
 void run_brush_screen_suite(void)
 {
+    RUN_TEST(test_captions_fit_their_rects_portrait);
+    RUN_TEST(test_captions_fit_their_rects_landscape);
     RUN_TEST(test_every_rect_inside_canvas_portrait);
     RUN_TEST(test_every_rect_inside_canvas_landscape);
     RUN_TEST(test_panels_stacked_top_to_bottom_portrait);
