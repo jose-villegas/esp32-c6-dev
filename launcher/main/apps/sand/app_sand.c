@@ -1221,6 +1221,27 @@ static mu_Color mu_color_hex(uint32_t rgb)
                     (int)(rgb & 0xFF), 255);
 }
 
+/* Dim the whole canvas so a panel drawn over it reads as the foreground and
+ * the frozen sandbox reads as backdrop - the panels stay opaque, this is
+ * what makes them look lit from in front rather than pasted on.
+ *
+ * APPLY EXACTLY ONCE PER REPAINT OF WHAT IS UNDERNEATH, never per frame.
+ * gfx_fill_rect_blend() mixes with the destination it reads, and the sand
+ * behind a panel is frozen - not redrawn while the panel is up - so a
+ * second application lands on the first's own output and the picture walks
+ * toward black one frame at a time. The two moments the backdrop is
+ * genuinely fresh are the frame a panel opens and a turn taken while it is
+ * open; both call this, nothing else may. Cost rules it out per frame
+ * anyway: this reads all 368x448 pixels, which gfx.h's own comment warns is
+ * not what a blend fill is for. */
+#define PANEL_SCRIM_ALPHA 110
+
+static void dim_backdrop(void)
+{
+    gfx_fill_rect_blend(0, 0, GFX_WIDTH, GFX_HEIGHT, gfx_rgb(0x000000),
+                        PANEL_SCRIM_ALPHA);
+}
+
 static void draw_palette(const input_t *input)
 {
     mu_Context *ctx = ui_context();
@@ -1877,6 +1898,7 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
         if (actions & SAND_UI_OPEN_PALETTE) {
             ui_invalidate();
 
+            dim_backdrop();
             panel_drawn_quarter = quarter;
         } else if (quarter != panel_drawn_quarter) {
             /* Board turned while the palette stayed open: draw_palette()
@@ -1890,6 +1912,7 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
             mark_sand_fully_dirty();
             draw_dirty_rows(false, false, false, false, false);
             draw_emitter_markers();
+            dim_backdrop();
             panel_drawn_quarter = quarter;
         }
 
@@ -1903,6 +1926,7 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
         if (actions & SAND_UI_OPEN_BRUSH) {
             ui_invalidate();
 
+            dim_backdrop();
             panel_drawn_quarter = quarter;
         } else if (quarter != panel_drawn_quarter) {
             /* Same reasoning as the palette's own turn-handling above: this
@@ -1912,6 +1936,7 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
             mark_sand_fully_dirty();
             draw_dirty_rows(false, false, false, false, false);
             draw_emitter_markers();
+            dim_backdrop();
             panel_drawn_quarter = quarter;
         }
 
