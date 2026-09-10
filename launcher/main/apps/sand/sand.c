@@ -1168,7 +1168,35 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
     const int w = s->w;
     const uint16_t is_liquid = liquid_mask();
 
+    /* Asked once per BLOCK row, not once per row. step_one_row() already
+     * skips a settled block, but only after building a seventeen-field
+     * context for the row - and the answer is the same for all
+     * SAND_BLOCK_H rows sharing that block row, so on a settled board that
+     * context is built 64 times over to find nothing to do. Nothing in the
+     * skipped row has a side effect (dest_row() is pure), so this is the
+     * same program with the dead contexts removed. */
+    int scanned_by = -1;
+    bool block_row_settled = false;
+
     for (int y = y_from; y != y_to; y += y_step) {
+        if (settled_bit != 0) {
+            const int by = y / SAND_BLOCK_H;
+            if (by != scanned_by) {
+                scanned_by = by;
+                block_row_settled = true;
+                const uint8_t *const brow =
+                    &s->block_state[(size_t)by * (size_t)s->block_cols];
+                for (int bx = 0; bx < s->block_cols; bx++) {
+                    if ((brow[bx] & settled_bit) == 0) {
+                        block_row_settled = false;
+                        break;
+                    }
+                }
+            }
+            if (block_row_settled) {
+                continue;
+            }
+        }
         step_one_row(s, y, w, dx, dy, slide_a, slide_b, x_step,
                     load_dx, load_dy, jostle, settled_bit, is_liquid, driven);
     }
