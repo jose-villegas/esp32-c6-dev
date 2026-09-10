@@ -72,7 +72,7 @@ for what that flag carries versus `--dev`.
 ./launcher/tools/screenshot.sh
 ```
 
-Captures whatever is currently on screen as an uncompressed `.bmp`, plus a
+Captures whatever is currently on screen as a lossless `.png`, plus a
 same-named `.json` snapshot of device state at that exact frame - uptime,
 heap (current and low-water mark), CPU clock, on-die temperature,
 orientation, the IMU, and that frame's touch/button state. Good for anything
@@ -81,9 +81,9 @@ against memory/sensor conditions at that instant - see
 `main/util/screenshot.h` and `main/util/device_state.h` for the mechanism
 and the full field list.
 
-- Also writes a same-named `.png` if Pillow is installed (`pip install
-  Pillow`) - the `.bmp` is written either way, the `.png` is just a
-  convenience for viewers that don't read BMP.
+- The device streams a 24bpp BMP over the wire, but `screenshot.py` converts
+  it to PNG in memory (stdlib `zlib`/`struct`, no Pillow) before anything
+  touches disk - the `.bmp` is never written.
 
 - **Development-only** (`--dev` or `--diag` build) - a release build carries
   none of it.

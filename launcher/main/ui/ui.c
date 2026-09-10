@@ -33,6 +33,8 @@
 #include "gfx/gfx.h"
 #include "gfx/gfx_font_roles.h"
 #include "gfx/icons.h"
+#include "ui/ui_pointer.h"
+#include "ui/ui_slider.h"
 
 static const char *TAG = "ui";
 
@@ -42,6 +44,22 @@ static uint64_t canvas_hash[MU_CONTAINERPOOL_SIZE];
 
 static mu_Context ctx;
 static bool       invalidated = true;
+
+#if CONFIG_LAUNCHER_DEVELOPMENT
+/* MU_COMMANDLIST_SIZE (8 KiB, microui.h) was sized against an estimate, not
+ * a measurement - this makes it one. Logs only on a new high, so a screen
+ * that has already shown its worst frame costs nothing more to watch. */
+static int command_list_high_water;
+
+static void report_command_list_high_water(int used)
+{
+    if (used > command_list_high_water) {
+        command_list_high_water = used;
+        ESP_LOGI(TAG, "command list high water: %d / %d bytes",
+                 used, MU_COMMANDLIST_SIZE);
+    }
+}
+#endif
 
 static ui_button_style_t  button_style;
 /* The style in force for the rest of this frame, and microui's own frame
@@ -68,22 +86,74 @@ static bool            transform_valid;
  * transform change is the one and only thing that increments it. */
 static uint32_t layout_generation;
 
+/* What a mu_Font actually points at - see ui_set_font()'s comment below
+ * for why the scale rides inside the font rather than a separate
+ * render-time setting. */
+typedef struct {
+    const gfx_font_t *font;
+    int                scale;
+} ui_font_scaled_t;
+
+/* Every (font, scale) pair anyone has asked for, so the same pair always
+ * yields the same address - see intern_font_scaled() below for why that
+ * stability is load-bearing. Small and never cleared: one shell, one
+ * mu_Context, realistically a handful of roles at a handful of scales
+ * for the app's whole lifetime, not a per-screen or per-frame set. */
+#define UI_FONT_SCALED_MAX 8
+static ui_font_scaled_t font_scaled_table[UI_FONT_SCALED_MAX];
+static int              font_scaled_count;
+
+/* Returns the SAME address for the same (font, scale) every time, which is
+ * what lets hash_canvas() (below) notice a scale change on its own, the
+ * same way it already does for a font change - see ui_set_font()'s
+ * comment. */
+static const ui_font_scaled_t *intern_font_scaled(const gfx_font_t *font, int scale)
+{
+    for (int i = 0; i < font_scaled_count; i++) {
+        if (font_scaled_table[i].font == font && font_scaled_table[i].scale == scale) {
+            return &font_scaled_table[i];
+        }
+    }
+    if (font_scaled_count < UI_FONT_SCALED_MAX) {
+        font_scaled_table[font_scaled_count] = (ui_font_scaled_t){ font, scale };
+        return &font_scaled_table[font_scaled_count++];
+    }
+    /* Full: hand back the default pair rather than recycling a slot.
+     * Overwriting one retargets every mu_Font already pointing at it - slot 0
+     * is the shell default - so the picture changes while the command list
+     * keeps the same bytes, which is exactly what hash_canvas() cannot see.
+     * Text at the wrong size is visible and recoverable; a canvas that skips
+     * its repaint is neither. Raise UI_FONT_SCALED_MAX instead. */
+    ESP_LOGW(TAG, "font/scale table full (%d entries) - falling back to the default",
+             UI_FONT_SCALED_MAX);
+    return &font_scaled_table[0];
+}
+
+/* mu_Font is NULL only before ui_init() has run - see resolve_font_scaled()
+ * and measure_text_width()/height() below, which is where that matters. */
+static ui_font_scaled_t resolve_font_scaled(mu_Font font)
+{
+    if (font) {
+        return *(const ui_font_scaled_t *)font;
+    }
+    return (ui_font_scaled_t){ gfx_font_ui(), GFX_GLYPH_SCALE };
+}
+
 /* microui asks us for text metrics rather than measuring anything itself.
  * `font` is whatever ctx.style->font held when the widget that wants
- * metrics ran - see ui_set_font() in ui.h. It is NULL only before
- * ui_init() has run; fall back to gfx_font_ui() (the UI/body-text role)
- * rather than deref a NULL, so a widget measured before ui_init() gets a
+ * metrics ran - see ui_set_font() in ui.h. Falling back rather than
+ * dereferencing NULL means a widget measured before ui_init() gets a
  * sane answer instead of a crash. */
 static int measure_text_width(mu_Font font, const char *str, int len)
 {
-    const gfx_font_t *f = font ? (const gfx_font_t *)font : gfx_font_ui();
-    return gfx_font_text_width(f, str, len, GFX_GLYPH_SCALE);
+    const ui_font_scaled_t fs = resolve_font_scaled(font);
+    return gfx_font_text_width(fs.font, str, len, fs.scale);
 }
 
 static int measure_text_height(mu_Font font)
 {
-    const gfx_font_t *f = font ? (const gfx_font_t *)font : gfx_font_ui();
-    return gfx_font_height(f, GFX_GLYPH_SCALE);
+    const ui_font_scaled_t fs = resolve_font_scaled(font);
+    return gfx_font_height(fs.font, fs.scale);
 }
 
 /*---------------------------------------------------------------------------
@@ -95,14 +165,11 @@ static int measure_text_height(mu_Font font)
  *
  * WHY THE PRESSED LOOK IS ON HOVER, NOT ONLY ON FOCUS
  *
- * On a mouse, hover means "the pointer is near" and focus means "the button is
- * held". A touchscreen has no such distinction: the pointer does not exist
- * until a finger is already on the glass, so hover IS contact. Following
- * feed_input()'s sequence below, a tap renders MU_COLOR_BUTTONHOVER for every
- * frame the finger is down and MU_COLOR_BUTTONFOCUS for the single frame the
- * press lands on. Sinking the bezel only on focus would therefore flash it for
- * one frame out of a press that lasts dozens, which reads as a glitch rather
- * than as a button going in.
+ * On a mouse, hover means the pointer is near; focus means the button is
+ * held. Touch has neither until contact, so hover IS contact. The pointer
+ * now holds DOWN for the whole press, so focus covers most of a tap on its
+ * own - but the one synthesized hover frame before DOWN lands has no focus
+ * yet, so hover still has to key the sunken look too.
  *-------------------------------------------------------------------------*/
 
 static bool is_button_frame(int colorid)
@@ -149,17 +216,23 @@ void ui_set_text_style(ui_text_style_t style)
     }
 }
 
-/* WHY THIS ONE DOES NOT NEED ui_invalidate(), UNLIKE ui_set_text_style()
- * ABOVE: mu_Font is not read only at render time, it's baked into the
- * command list itself - ctx.style->font rides along inside every
- * mu_TextCommand, so a font change moves layout (different metrics mean
- * different positions/sizes for every control that measured text this
- * frame), not just different pixels for the same geometry. Those are
- * different bytes, so hash_canvas() sees the change on its own without
- * being told to. */
+/* WHY THIS NEEDS NO ui_invalidate(), UNLIKE ui_set_text_style() ABOVE:
+ * mu_Font rides inside every mu_TextCommand, so a font (or scale) change
+ * is different bytes and hash_canvas() sees it unaided. THAT property is
+ * exactly why the scale lives here too rather than a render-time global -
+ * a global would need invalidating on every size change, which a two-size
+ * screen hits every frame, permanently defeating the repaint skip. */
+void ui_set_font_scaled(const gfx_font_t *font, int scale)
+{
+    if (scale < 1) {
+        scale = 1;
+    }
+    ctx.style->font = (mu_Font)intern_font_scaled(font ? font : gfx_font_ui(), scale);
+}
+
 void ui_set_font(const gfx_font_t *font)
 {
-    ctx.style->font = (mu_Font)(font ? font : gfx_font_ui());
+    ui_set_font_scaled(font, GFX_GLYPH_SCALE);
 }
 
 static bool transforms_equal(ui_transform_t a, ui_transform_t b)
@@ -220,7 +293,8 @@ void ui_init(void)
     mu_init(&ctx);
     ctx.text_width  = measure_text_width;
     ctx.text_height = measure_text_height;
-    ctx.style->font = (mu_Font)gfx_font_ui();
+    font_scaled_count = 0;
+    ui_set_font(gfx_font_ui());
 
     base_draw_frame = ctx.draw_frame;
     ctx.draw_frame  = styled_draw_frame;
@@ -282,9 +356,12 @@ void ui_init(void)
  * rather than where it now visibly is. This is the one place touch enters
  * microui, which is exactly why it is also the one place this mapping needs
  * to happen. */
-static bool press_pending;
-static int  press_x, press_y; /* physical; mapped to logical at each use */
+static ui_pointer_t pointer;
 
+/* Also where ui_pointer_step()'s off-screen park point (-1, -1) gets mapped:
+ * under a translating transform, logical "off-screen" is not necessarily
+ * (-1, -1) either, so the park needs the same inverse as a real touch to
+ * stay outside whatever the logical canvas currently is. */
 static void to_logical(int x, int y, int *lx, int *ly)
 {
     ui_transform_t inv;
@@ -301,45 +378,34 @@ static void to_logical(int x, int y, int *lx, int *ly)
     ui_transform_point(inv, x, y, lx, ly);
 }
 
-static void feed_input(const input_t *input)
+/* One ui_pointer_t event, mapped to logical and replayed into microui. The
+ * policy itself - hover, then hold down until the real release, park
+ * off-screen when idle - lives in ui_pointer_step(); this only translates
+ * and dispatches what it returns. */
+static void replay_pointer_event(const ui_pointer_event_t *e)
 {
     int lx, ly;
+    to_logical(e->x, e->y, &lx, &ly);
 
-    if (input->pressed) {
-        /* Frame 1 of the tap: position only, so hover resolves. */
-        press_pending = true;
-        press_x = input->x;
-        press_y = input->y;
-        to_logical(press_x, press_y, &lx, &ly);
+    switch (e->kind) {
+    case UI_POINTER_MOVE:
         mu_input_mousemove(&ctx, lx, ly);
-        return;
-    }
-
-    if (press_pending) {
-        /* Frame 2: now the press itself lands on a hovered control. */
-        press_pending = false;
-        to_logical(press_x, press_y, &lx, &ly);
-        mu_input_mousemove(&ctx, lx, ly);
+        break;
+    case UI_POINTER_DOWN:
         mu_input_mousedown(&ctx, lx, ly, MU_MOUSE_LEFT);
-        /* Release immediately. Holding is not meaningful for these controls,
-         * and it keeps a lifted finger from leaving the button stuck down if
-         * the release edge arrives while we are still mid-tap. */
+        break;
+    case UI_POINTER_UP:
         mu_input_mouseup(&ctx, lx, ly, MU_MOUSE_LEFT);
-        return;
+        break;
     }
+}
 
-    if (input->down) {
-        to_logical(input->x, input->y, &lx, &ly);
-        mu_input_mousemove(&ctx, lx, ly);
-    } else {
-        /* Park the pointer off-screen so nothing sits in a hover state
-         * while no finger is touching. Mapped like every other point here
-         * rather than passed straight through: under a translating
-         * transform, the logical origin's "off-screen" neighbourhood is
-         * not necessarily (-1, -1) any more, and mapping keeps this
-         * parked outside whatever the logical canvas currently is. */
-        to_logical(-1, -1, &lx, &ly);
-        mu_input_mousemove(&ctx, lx, ly);
+static void feed_input(const input_t *input)
+{
+    ui_pointer_event_t events[UI_POINTER_MAX_EVENTS];
+    const int n = ui_pointer_step(&pointer, input, events, UI_POINTER_MAX_EVENTS);
+    for (int i = 0; i < n; i++) {
+        replay_pointer_event(&events[i]);
     }
 }
 
@@ -377,6 +443,67 @@ int ui_width(void)
 int ui_height(void)
 {
     return logical_viewport().h;
+}
+
+int ui_measure_text(const char *str)
+{
+    const ui_font_scaled_t fs = resolve_font_scaled(ctx.style->font);
+    return gfx_font_text_width(fs.font, str, -1, fs.scale);
+}
+
+void ui_draw_bitmap(mu_Context *c, mu_Rect r, const uint16_t *bitmap, mu_Color color)
+{
+    icon_rect_t blocks[UI_DRAW_BITMAP_MAX_BLOCKS];
+    const int n = icon_bitmap_blocks(bitmap, r.w, r.h, blocks, UI_DRAW_BITMAP_MAX_BLOCKS);
+
+    for (int i = 0; i < n; i++) {
+        mu_draw_rect(c, mu_rect(r.x + blocks[i].x, r.y + blocks[i].y,
+                                blocks[i].w, blocks[i].h), color);
+    }
+}
+
+/* See ui.h. `value`'s own address (not what it points to, same idiom
+ * mu_slider_ex() uses) gives each call site a stable id with no string
+ * needed. MU_OPT_HOLDFOCUS keeps a drag updating once it leaves the knob. */
+bool ui_slider_int(mu_Context *c, int *value, int lo, int hi, int step)
+{
+    const mu_Id id = mu_get_id(c, &value, sizeof(value));
+    const mu_Rect track = mu_layout_next(c);
+    mu_update_control(c, id, track, MU_OPT_HOLDFOCUS);
+
+    int v = *value;
+    if (c->focus == id && (c->mouse_down | c->mouse_pressed) == MU_MOUSE_LEFT) {
+        v = ui_slider_value_at_x(track, lo, hi, UI_SLIDER_KNOB_W, step, c->mouse_pos.x);
+    }
+    v = mu_clamp(v, lo, hi);
+    const bool changed = (v != *value);
+    *value = v;
+
+    ui_span_t panel[UI_PANEL_MAX_SPANS];
+    const int pn = ui_panel_spans(track, c->style->colors[MU_COLOR_BASE],
+                                  c->style->colors[MU_COLOR_BORDER],
+                                  panel, UI_PANEL_MAX_SPANS);
+    if (pn > 0) {
+        /* Face, then the filled portion, then the border last - so the
+         * border still frames the whole track rather than the fill
+         * painting over it where the two overlap. */
+        mu_draw_rect(c, panel[0].rect, panel[0].color);
+        mu_draw_rect(c, ui_slider_fill_rect(track, lo, hi, v, UI_SLIDER_KNOB_W),
+                     c->style->colors[MU_COLOR_BUTTONFOCUS]);
+        for (int i = 1; i < pn; i++) {
+            mu_draw_rect(c, panel[i].rect, panel[i].color);
+        }
+
+        ui_span_t knob[UI_BEZEL_MAX_SPANS];
+        const mu_Rect knob_rect = ui_slider_knob_rect(track, lo, hi, v, UI_SLIDER_KNOB_W);
+        const int kn = ui_bezel_spans(knob_rect, c->style->colors[MU_COLOR_BUTTON],
+                                      false, knob, UI_BEZEL_MAX_SPANS);
+        for (int i = 0; i < kn; i++) {
+            mu_draw_rect(c, knob[i].rect, knob[i].color);
+        }
+    }
+
+    return changed;
 }
 
 /* See ui.h for the full argument. Short version: mu_begin_window_ex()
@@ -436,8 +563,9 @@ static void draw_command(const mu_Command *cmd)
     case MU_COMMAND_TEXT: {
         const mu_Color ink  = cmd->text.color;
         const mu_Color halo = ui_text_halo(ink);
-        const gfx_font_t *font = cmd->text.font ?
-            (const gfx_font_t *)cmd->text.font : gfx_font_ui();
+        const ui_font_scaled_t fs = resolve_font_scaled(cmd->text.font);
+        const gfx_font_t *font = fs.font;
+        const int scale = fs.scale;
         const int quarter = ui_transform_quarter(t);
 
         /* WHY THE WHOLE STRING'S BOX IS MAPPED, NOT ITS ORIGIN: every
@@ -449,9 +577,8 @@ static void draw_command(const mu_Command *cmd)
          * (rotated text drifting off-centre). Now measures the LOGICAL
          * box - same one used to size it - and maps that, like the
          * others. */
-        const int tw = gfx_font_text_width(font, cmd->text.str, -1,
-                                           GFX_GLYPH_SCALE);
-        const int th = gfx_font_height(font, GFX_GLYPH_SCALE);
+        const int tw = gfx_font_text_width(font, cmd->text.str, -1, scale);
+        const int th = gfx_font_height(font, scale);
         const mu_Rect box = ui_transform_rect(
             t, (mu_Rect){ cmd->text.pos.x, cmd->text.pos.y, tw, th });
 
@@ -464,7 +591,7 @@ static void draw_command(const mu_Command *cmd)
          * than called directly because ui/ sits below apps/, so pulling
          * in apps/sand/ would be a backwards layering dependency. */
         int mx, my;
-        ui_text_glyph0_origin(font, box, quarter, GFX_GLYPH_SCALE, &mx, &my);
+        ui_text_glyph0_origin(font, box, quarter, scale, &mx, &my);
 
         ui_text_pass_t passes[UI_TEXT_MAX_PASSES];
         const int n = ui_text_passes(text_style, passes, UI_TEXT_MAX_PASSES);
@@ -483,7 +610,7 @@ static void draw_command(const mu_Command *cmd)
              * LOGICAL space instead - a different physical direction once
              * turn is nonzero. */
             gfx_text_font(mx + passes[i].dx, my + passes[i].dy, cmd->text.str,
-                          color, GFX_GLYPH_SCALE, quarter, font);
+                          color, scale, quarter, font);
         }
         break;
     }
@@ -648,6 +775,10 @@ static bool repaint_marked_canvases(int n, const bool *repaint,
 bool ui_end(uint32_t background_rgb)
 {
     mu_end(&ctx);
+
+#if CONFIG_LAUNCHER_DEVELOPMENT
+    report_command_list_high_water(ctx.command_list.idx);
+#endif
 
     const int n = ctx.root_list.idx;
     bool repaint[MU_ROOTLIST_SIZE] = { false };

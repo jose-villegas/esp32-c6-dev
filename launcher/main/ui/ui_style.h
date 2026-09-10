@@ -220,6 +220,50 @@ static inline int ui_text_passes(ui_text_style_t style, ui_text_pass_t *out,
     }
 }
 
+/*---------------------------------------------------------------------------
+ * The panel
+ *
+ * A section frame for the brush screen's captioned groups: a face plus a
+ * plain border, sibling to the bezel above but flat rather than lit/shadowed
+ * - a panel groups content, it does not invite a press.
+ *-------------------------------------------------------------------------*/
+
+/* Face, plus four border edges. */
+#define UI_PANEL_MAX_SPANS 5
+
+/* 2px: thinner than UI_BEZEL_THICKNESS on purpose - a panel outlines a
+ * whole screen section, not a single tap target, so a hairline reads as a
+ * grouping without competing with the bezelled controls inside it. */
+#define UI_PANEL_BORDER_THICKNESS 2
+
+/* The rects making one panel frame, back to front: face first, then the
+ * four border edges, overlapping at corners the same way ui_bezel_spans()
+ * does. Returns spans written, or 0 if `max` can't hold a panel - same
+ * all-or-nothing rule. Border thickness is clamped so opposite edges can
+ * never cross; with no room, the result is one flat face span. */
+static inline int ui_panel_spans(mu_Rect r, mu_Color face, mu_Color border,
+                                 ui_span_t *out, int max)
+{
+    if (max < UI_PANEL_MAX_SPANS || r.w <= 0 || r.h <= 0) {
+        return 0;
+    }
+
+    out[0] = (ui_span_t){ r, face };
+
+    /* Leave at least one pixel of face visible between opposite edges. */
+    const int room = (mu_min(r.w, r.h) - 1) / 2;
+    const int t    = mu_min(UI_PANEL_BORDER_THICKNESS, room);
+    if (t < 1) {
+        return 1;
+    }
+
+    out[1] = (ui_span_t){ (mu_Rect){ r.x, r.y, r.w, t }, border };
+    out[2] = (ui_span_t){ (mu_Rect){ r.x, r.y, t, r.h }, border };
+    out[3] = (ui_span_t){ (mu_Rect){ r.x, r.y + r.h - t, r.w, t }, border };
+    out[4] = (ui_span_t){ (mu_Rect){ r.x + r.w - t, r.y, t, r.h }, border };
+    return UI_PANEL_MAX_SPANS;
+}
+
 /* The halo colour for a given ink, derived from the ink's luminance
  * rather than fixed - see UI_BEZEL_HIGHLIGHT/SHADOW above. A fixed halo
  * fails like a fixed button highlight: it vanishes against whichever

@@ -1001,6 +1001,104 @@ that actually changed get sent to the panel via `gfx_mark_dirty()` - "a
 screen band containing no changed rows need not be sent to the panel at
 all, which is most of a frame's cost."
 
+## Two screens: the palette and the brush screen
+
+The app has two full-screen overlay panels, siblings rather than pages of
+one menu, opened by different buttons and never both at once
+(`sand_ui_screen_t`, `sand_ui.h`):
+
+| Button | Opens | Screen | Picks |
+|---|---|---|---|
+| BOOT | `SAND_UI_PALETTE` | the material picker (`palette.c/.h`) | which material the finger places |
+| PWR | `SAND_UI_BRUSH` | the brush screen (`brush_screen.c/.h`) | POUR/ERASE/BOOM, and that mode's radius |
+
+PWR used to cycle PAINT/ERASE/DETONATE directly, with no panel at all; it
+now opens the brush screen instead, and closes it on a second press.
+Mode selection moved to the brush screen's own three-segment control - see
+`sand_ui_mode_clicked()` below.
+
+Both panels split the same way: a **pure layout** module with no gfx and no
+hardware header (host-tested at both real canvases, since the shell can be
+under a quarter turn), a **pure state machine** in `sand_ui.c/.h` that owns
+what a tap on either panel *means*, and `app_sand.c`, which lays out real
+`mu_button()`/`mu_update_control()` hit targets from the layout module's
+rects, calls into `sand_ui.c` with the result, and draws. See sand_ui.h's
+own "WHO HIT-TESTS AND WHO DECIDES": the caller (`app_sand.c`) hit-tests
+through microui, so rotation is free; `sand_ui.c` decides what a hit means,
+so that logic is host-testable - the file exists because four edge-
+ownership bugs (a state reading an edge that belonged to a different one)
+shipped out of exactly this logic before the split, and `suite_sand_ui.c`
+is what now pins all four down, plus the corresponding brush-screen case:
+**the PWR press that opens the screen must not also close it** - guaranteed
+by `sand_ui_step()` reading `ui->screen` exactly once per frame, before any
+branch can change it.
+
+The brush screen's own files:
+
+- **`brush_screen.h`/`.c`** - pure layout, the same split `palette.c` uses:
+  a canvas width and height in, every rect (panels, swatch, info button,
+  three segments, slider track) out, nothing reading `gfx.h` or `GFX_WIDTH`/
+  `GFX_HEIGHT` directly. `suite_brush_screen.c` asserts the layout holds at
+  both 368x448 and 448x368 - nothing overlaps, nothing leaves the canvas,
+  every tap target stays finger-sized - and measures every one of the
+  screen's fixed strings against the rect it has to fit inside, at the
+  scale it is actually drawn at. That check is what caught the design's own
+  wording not fitting: the size caption reads **`POUR SIZE`**, not the
+  design's `POUR BRUSH SIZE`, which needs 240px of a row that is only 232px
+  wide in portrait once the value box takes its 80. `BRUSH_SCREEN_SEG_POUR/
+  ERASE/BOOM` line up with `sand_mode_t`'s `SAND_MODE_PAINT/ERASE/DETONATE`
+  order by construction, a fact `brush_screen.h`'s own header comment
+  warns about at length: this app has three unrelated things called some
+  form of "brush" (the palette's materials, `brush_mode_t`'s pour-vs-spawn,
+  and this screen's PAINT/ERASE/DETONATE selector), and the segments below
+  are the third one, not the other two.
+- **`sand_icons.h`** - the funnel/cross/starburst/`i` bitmaps for POUR,
+  ERASE, BOOM and the (currently inert) info button, hand-drawn 16x16 in
+  `gfx/icons.h`'s own format and reusing its `icon_bitmap_blocks()`
+  rather than repeating that logic. Lives in the app's own folder, not
+  `gfx/icons.h`, per "an app is a folder" - deleting `apps/sand/` deletes
+  its icons with it. `suite_sand_icons.c` checks structural facts only
+  (non-empty, fits `UI_DRAW_BITMAP_MAX_BLOCKS` at the size the screen
+  actually draws it, symmetric where the artwork claims to be) - never
+  against the code that draws it, since nothing can assert a funnel looks
+  like a funnel.
+- **`sand_swatch.h`** - a deterministic pattern of shade variants for the
+  header's textured material swatch, drawn from `MATERIAL_SHADE_SPAN` and
+  `material_grain_hash()` so the swatch is made of the same shades the
+  grid itself renders with, not a second, drifting idea of what a material
+  looks like. A pure function of `(spec, col, row)` alone, never sand_t's
+  RNG or a frame counter - a swatch that reshuffled itself every frame
+  would defeat `ui_end()`'s repaint hash and force a repaint of an
+  otherwise-static panel forever. `suite_sand_swatch.c` checks determinism
+  and that every variant stays in range.
+- **`app_sand.c`**'s `draw_brush_screen()` - the drawing and hit-testing,
+  using the shell's Phase 1-4 primitives (`ui_draw_bitmap()`,
+  `ui_slider_int()`, `ui_panel_spans()`/`ui_bezel_spans()`,
+  `ui_set_font_scaled()`) documented in
+  [`Launcher-Architecture.md`](../Launcher-Architecture.md#drawing-a-ui-in-the-shell-or-in-an-app).
+  `handle_pour_input()` reads the current mode's radius from
+  `sand_ui_radius(&ui)` rather than a fixed `POUR_RADIUS_PX`/
+  `ERASE_RADIUS_PX`/`DETONATE_RADIUS_PX` - those three constants are still
+  there, now only as the three modes' starting defaults
+  (`sand_ui_t.radius_px`, seeded once at startup).
+
+**One size per mode, not one shared slider.** POUR, ERASE and BOOM each
+remember their own radius in `sand_ui_t.radius_px[SAND_MODE_COUNT]`,
+clamped to `[SAND_UI_RADIUS_MIN, SAND_UI_RADIUS_MAX]` by
+`sand_ui_set_radius()`. A single shared value would flatten reaches that
+are deliberately different - BOOM's default (50px) is five times POUR's
+(10px) - so switching segments would either make BOOM's blast tiny or
+POUR's brush enormous depending on which was touched last.
+
+**Deliberately deferred**, both flagged in code comments rather than left
+to be mistaken for bugs: the info button draws (`icon_info_bitmap`) but
+has no handler - the panel behind it is separate, unbuilt work - and
+nothing on either screen persists across an app restart; brush, mode and
+every radius reset with `sand_ui_t` the same way everything else in it
+already does. See
+[`Sand-Brush-Screen-Plan.md`](../plans/Sand-Brush-Screen-Plan.md) for the
+plan this shipped from and what else it deferred.
+
 ## Verifying performance on real hardware
 
 ### Use the scripts in `launcher/tools/`

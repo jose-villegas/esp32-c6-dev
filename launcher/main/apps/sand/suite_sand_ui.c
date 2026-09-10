@@ -46,6 +46,9 @@ static void fixture(sand_ui_t *ui)
         .swallow_release = false,
         .opened_brush = 0,
         .opened_mode  = BRUSH_POUR,
+        .radius_px = { 0 },
+        .opened_sand_mode = SAND_MODE_PAINT,
+        .opened_radius = 0,
     };
 }
 
@@ -404,12 +407,11 @@ static void test_tapping_outside_every_tile_does_nothing(void)
     TEST_ASSERT_EQUAL_INT(SAND_MODE_ERASE, ui.mode);
 }
 
-/* PWR's whole job: PAINT -> ERASE -> DETONATE -> PAINT, one mode per press,
- * every press asking for the label. Checked as one continuous cycle rather
- * than three separate tests, since the thing actually under test is the
- * WRAP - that DETONATE lands back on PAINT rather than running off the end
- * of the enum - and that only shows up by walking all three. */
-static void test_pwr_cycles_through_paint_erase_detonate_and_back(void)
+/* PWR used to cycle PAINT -> ERASE -> DETONATE -> PAINT directly (see git
+ * history for that version of this test). It now opens the brush screen
+ * instead, and leaves `mode` exactly as it found it - the segments decide
+ * mode now, not PWR. */
+static void test_pwr_from_running_opens_the_brush_screen_and_does_not_cycle_the_mode(void)
 {
     sand_ui_t ui;
     fixture(&ui);
@@ -419,17 +421,189 @@ static void test_pwr_cycles_through_paint_erase_detonate_and_back(void)
     input_t in = no_input();
     in.power.pressed = true;
 
-    const unsigned actions1 = sand_ui_step(&ui, &in);
-    TEST_ASSERT_TRUE(actions1 & SAND_UI_SHOW_LABEL);
+    const unsigned actions = sand_ui_step(&ui, &in);
+
+    TEST_ASSERT_TRUE(actions & SAND_UI_OPEN_BRUSH);
+    TEST_ASSERT_EQUAL_INT(SAND_UI_BRUSH, ui.screen);
+    TEST_ASSERT_EQUAL_INT(SAND_MODE_PAINT, ui.mode);
+}
+
+/* The hazard this file's top comment warns about: PWR opens and closes on
+ * the SAME kind of edge (buttons.h - PWR has no release), so the open must
+ * not also resolve as a close within the very call that produced it. */
+static void test_the_pwr_press_that_opens_the_brush_screen_does_not_also_close_it(void)
+{
+    sand_ui_t ui;
+    fixture(&ui);
+    ui.screen = SAND_UI_RUNNING;
+
+    input_t in = no_input();
+    in.power.pressed = true;
+
+    const unsigned actions = sand_ui_step(&ui, &in);
+
+    TEST_ASSERT_TRUE(actions & SAND_UI_OPEN_BRUSH);
+    TEST_ASSERT_FALSE(actions & SAND_UI_CLOSE_BRUSH);
+    TEST_ASSERT_EQUAL_INT(SAND_UI_BRUSH, ui.screen);   /* survives the frame */
+}
+
+static void test_a_later_pwr_press_closes_the_brush_screen(void)
+{
+    sand_ui_t ui;
+    fixture(&ui);
+    ui.screen = SAND_UI_BRUSH;
+    ui.mode = SAND_MODE_ERASE;
+    ui.opened_sand_mode = SAND_MODE_ERASE;
+    ui.opened_radius = ui.radius_px[SAND_MODE_ERASE];
+
+    input_t in = no_input();
+    in.power.pressed = true;
+
+    const unsigned actions = sand_ui_step(&ui, &in);
+
+    TEST_ASSERT_TRUE(actions & SAND_UI_CLOSE_BRUSH);
+    TEST_ASSERT_EQUAL_INT(SAND_UI_RUNNING, ui.screen);
+}
+
+static void test_a_segment_tap_sets_the_mode_and_the_selected_segment_is_harmless(void)
+{
+    sand_ui_t ui;
+    fixture(&ui);
+    ui.screen = SAND_UI_BRUSH;
+    ui.mode = SAND_MODE_PAINT;
+
+    const unsigned actions = sand_ui_mode_clicked(&ui, (int)SAND_MODE_ERASE);
+    TEST_ASSERT_TRUE(actions & SAND_UI_REDRAW_BRUSH);
     TEST_ASSERT_EQUAL_INT(SAND_MODE_ERASE, ui.mode);
 
-    const unsigned actions2 = sand_ui_step(&ui, &in);
-    TEST_ASSERT_TRUE(actions2 & SAND_UI_SHOW_LABEL);
-    TEST_ASSERT_EQUAL_INT(SAND_MODE_DETONATE, ui.mode);
+    /* Tapping the segment already lit again - nothing left to change. */
+    const unsigned actions2 = sand_ui_mode_clicked(&ui, (int)SAND_MODE_ERASE);
+    TEST_ASSERT_EQUAL_UINT(0, actions2);
+    TEST_ASSERT_EQUAL_INT(SAND_MODE_ERASE, ui.mode);
+}
 
-    const unsigned actions3 = sand_ui_step(&ui, &in);
-    TEST_ASSERT_TRUE(actions3 & SAND_UI_SHOW_LABEL);
+static void test_radius_is_remembered_per_mode(void)
+{
+    sand_ui_t ui;
+    fixture(&ui);
+
+    ui.mode = SAND_MODE_PAINT;
+    sand_ui_set_radius(&ui, 20);
+    TEST_ASSERT_EQUAL_UINT8(20, sand_ui_radius(&ui));
+
+    /* Switching modes must not disturb ERASE's own (still-default) radius. */
+    ui.mode = SAND_MODE_ERASE;
+    TEST_ASSERT_EQUAL_UINT8(0, sand_ui_radius(&ui));
+    sand_ui_set_radius(&ui, 40);
+    TEST_ASSERT_EQUAL_UINT8(40, sand_ui_radius(&ui));
+
+    /* And PAINT's own radius is exactly as it was left. */
+    ui.mode = SAND_MODE_PAINT;
+    TEST_ASSERT_EQUAL_UINT8(20, sand_ui_radius(&ui));
+}
+
+static void test_radius_clamps_at_both_ends_rather_than_wrapping(void)
+{
+    sand_ui_t ui;
+    fixture(&ui);
+    ui.mode = SAND_MODE_DETONATE;
+
+    sand_ui_set_radius(&ui, 0);
+    TEST_ASSERT_EQUAL_UINT8(SAND_UI_RADIUS_MIN, sand_ui_radius(&ui));
+
+    sand_ui_set_radius(&ui, 255);
+    TEST_ASSERT_EQUAL_UINT8(SAND_UI_RADIUS_MAX, sand_ui_radius(&ui));
+}
+
+/* The brush screen's own version of
+ * test_opening_with_a_finger_already_down_then_lifting_selects_nothing
+ * above - same guard, same reason, a different panel. */
+static void test_opening_the_brush_screen_with_a_finger_already_down_then_lifting_selects_nothing(void)
+{
+    sand_ui_t ui;
+    fixture(&ui);
+    ui.screen = SAND_UI_RUNNING;
+    ui.mode = SAND_MODE_PAINT;
+
+    input_t press = no_input();
+    press.power.pressed = true;
+    press.down = true;     /* a pour in progress as PWR fires */
+    const unsigned open_actions = sand_ui_step(&ui, &press);
+
+    TEST_ASSERT_TRUE(open_actions & SAND_UI_OPEN_BRUSH);
+    TEST_ASSERT_TRUE(ui.swallow_release);
+
+    const unsigned click_actions = sand_ui_mode_clicked(&ui, (int)SAND_MODE_ERASE);
+    TEST_ASSERT_EQUAL_UINT(0, click_actions);
     TEST_ASSERT_EQUAL_INT(SAND_MODE_PAINT, ui.mode);
+
+    input_t lift = no_input();
+    lift.down = false;
+    const unsigned lift_actions = sand_ui_step(&ui, &lift);
+
+    TEST_ASSERT_EQUAL_UINT(0, lift_actions);
+    TEST_ASSERT_FALSE(ui.swallow_release);
+}
+
+/* The two panels are siblings, never both open - BOOT belongs to the
+ * palette and must be inert while the brush screen has the floor. */
+static void test_boot_while_the_brush_screen_is_open_does_nothing(void)
+{
+    sand_ui_t ui;
+    fixture(&ui);
+    ui.screen = SAND_UI_BRUSH;
+    ui.mode = SAND_MODE_ERASE;
+    ui.brush = 2;
+
+    input_t boot_press = no_input();
+    boot_press.boot.pressed = true;
+    const unsigned press_actions = sand_ui_step(&ui, &boot_press);
+    TEST_ASSERT_EQUAL_UINT(0, press_actions);
+    TEST_ASSERT_EQUAL_INT(SAND_UI_BRUSH, ui.screen);
+
+    input_t boot_release = no_input();
+    boot_release.boot.released = true;
+    const unsigned release_actions = sand_ui_step(&ui, &boot_release);
+    TEST_ASSERT_EQUAL_UINT(0, release_actions);
+    TEST_ASSERT_EQUAL_INT(SAND_UI_BRUSH, ui.screen);
+    TEST_ASSERT_EQUAL_INT(2, ui.brush);
+}
+
+static void test_closing_the_brush_screen_without_changing_anything_requests_no_label(void)
+{
+    sand_ui_t ui;
+    fixture(&ui);
+    ui.screen = SAND_UI_BRUSH;
+    ui.mode = SAND_MODE_ERASE;
+    ui.radius_px[SAND_MODE_ERASE] = 16;
+    ui.opened_sand_mode = SAND_MODE_ERASE;
+    ui.opened_radius = 16;
+
+    input_t close = no_input();
+    close.power.pressed = true;
+    const unsigned actions = sand_ui_step(&ui, &close);
+
+    TEST_ASSERT_TRUE(actions & SAND_UI_CLOSE_BRUSH);
+    TEST_ASSERT_FALSE(actions & SAND_UI_SHOW_LABEL);
+}
+
+static void test_closing_the_brush_screen_after_a_real_change_requests_the_label(void)
+{
+    sand_ui_t ui;
+    fixture(&ui);
+    ui.screen = SAND_UI_BRUSH;
+    ui.mode = SAND_MODE_PAINT;
+    ui.opened_sand_mode = SAND_MODE_PAINT;
+    ui.opened_radius = ui.radius_px[SAND_MODE_PAINT];
+
+    sand_ui_set_radius(&ui, 30);   /* the real change - radius, not mode */
+
+    input_t close = no_input();
+    close.power.pressed = true;
+    const unsigned actions = sand_ui_step(&ui, &close);
+
+    TEST_ASSERT_TRUE(actions & SAND_UI_CLOSE_BRUSH);
+    TEST_ASSERT_TRUE(actions & SAND_UI_SHOW_LABEL);
 }
 
 static void test_closing_without_changing_anything_requests_no_label(void)
@@ -506,10 +680,20 @@ void run_sand_ui_suite(void)
     RUN_TEST(test_tapping_the_selected_tile_is_untouched_by_detonate);
     RUN_TEST(test_tapping_the_selected_tile_when_it_cannot_emit_does_nothing);
     RUN_TEST(test_tapping_outside_every_tile_does_nothing);
-    RUN_TEST(test_pwr_cycles_through_paint_erase_detonate_and_back);
     RUN_TEST(test_closing_without_changing_anything_requests_no_label);
     RUN_TEST(test_closing_after_selecting_a_different_tile_requests_the_label);
     RUN_TEST(test_closing_after_toggling_the_selected_tiles_mode_requests_the_label);
+
+    RUN_TEST(test_pwr_from_running_opens_the_brush_screen_and_does_not_cycle_the_mode);
+    RUN_TEST(test_the_pwr_press_that_opens_the_brush_screen_does_not_also_close_it);
+    RUN_TEST(test_a_later_pwr_press_closes_the_brush_screen);
+    RUN_TEST(test_a_segment_tap_sets_the_mode_and_the_selected_segment_is_harmless);
+    RUN_TEST(test_radius_is_remembered_per_mode);
+    RUN_TEST(test_radius_clamps_at_both_ends_rather_than_wrapping);
+    RUN_TEST(test_opening_the_brush_screen_with_a_finger_already_down_then_lifting_selects_nothing);
+    RUN_TEST(test_boot_while_the_brush_screen_is_open_does_nothing);
+    RUN_TEST(test_closing_the_brush_screen_without_changing_anything_requests_no_label);
+    RUN_TEST(test_closing_the_brush_screen_after_a_real_change_requests_the_label);
 }
 
 SUITE_REGISTER(run_sand_ui_suite);

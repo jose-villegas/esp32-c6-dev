@@ -234,8 +234,8 @@ static void step_app(const app_t **current, input_t *input, uint32_t dt_ms)
         return;
     }
 
-    /* HELD, not a plain press: app_sand.c's own handle_brush_input()
-     * already reads a short press to cycle brush mode, and stealing it
+    /* HELD, not a plain press: app_sand.c's own sand_ui_step() already
+     * reads a short PWR press to open its brush screen, and stealing it
      * here would silence that everywhere else in this shell too. `held`
      * fires from the PMU's own separate long-press interrupt (buttons.h),
      * so the two are independent presses, not the same edge read twice.
