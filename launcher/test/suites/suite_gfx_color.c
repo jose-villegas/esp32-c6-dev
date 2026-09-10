@@ -324,6 +324,41 @@ static void test_covers_both_equals_covers_the_lower_alpha(void)
     }
 }
 
+/* WHY A SCRIM MAY ONLY BE APPLIED ONCE.
+ *
+ * gfx_fill_rect_blend() mixes into the pixel it reads, so dimming a region
+ * that nothing else repaints - a panel's frozen backdrop, in practice -
+ * lands the second application on the first one's own output. This is the
+ * arithmetic behind that: same mix, same alpha, twice, is strictly darker
+ * than once, and repeating it walks the picture to black. See
+ * dim_backdrop() in apps/sand/app_sand.c, which is why it is called from
+ * the two moments the backdrop is genuinely fresh and nowhere else. */
+static void test_mixing_toward_black_twice_is_darker_than_once(void)
+{
+    const gfx_color_t black = GFX_RGB(0x000000);
+    const gfx_color_t start = GFX_RGB(0xC08040);
+    const uint8_t alpha = 110;
+
+    const gfx_color_t once  = gfx_color_mix(start, black, alpha);
+    const gfx_color_t twice = gfx_color_mix(once,  black, alpha);
+
+    const uint32_t rgb_once  = gfx_color_rgb888(once);
+    const uint32_t rgb_twice = gfx_color_rgb888(twice);
+
+    TEST_ASSERT_TRUE_MESSAGE(rgb_twice < rgb_once,
+        "a scrim applied twice must be visibly darker than once - this is "
+        "why it is applied per repaint of the backdrop, never per frame");
+
+    /* And it keeps going: nothing converges, it just falls. */
+    gfx_color_t c = twice;
+    for (int i = 0; i < 8; i++) {
+        c = gfx_color_mix(c, black, alpha);
+    }
+    TEST_ASSERT_TRUE_MESSAGE(gfx_color_rgb888(c) < rgb_twice / 2,
+        "repeating a scrim walks the picture toward black rather than "
+        "settling anywhere");
+}
+
 void run_gfx_color_suite(void)
 {
     RUN_TEST(test_t_zero_returns_a_exactly);
@@ -332,6 +367,7 @@ void run_gfx_color_suite(void)
     RUN_TEST(test_black_toward_white_at_half_gives_mid_grey);
     RUN_TEST(test_a_known_pair_blends_to_a_known_result);
     RUN_TEST(test_channels_blend_independently_green_stays_put);
+    RUN_TEST(test_mixing_toward_black_twice_is_darker_than_once);
     RUN_TEST(test_adding_black_changes_nothing);
     RUN_TEST(test_adding_two_primaries_gives_their_combination);
     RUN_TEST(test_each_channel_saturates_at_its_own_ceiling);

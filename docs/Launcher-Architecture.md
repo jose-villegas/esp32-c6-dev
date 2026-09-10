@@ -654,6 +654,40 @@ because it now paints and sends nothing at all. `test/suites/suite_ui.c` covers
 the independence claim directly - it builds two windows, changes one, and
 asserts the other's bands stay clean.
 
+#### Dimming what is behind a panel (the scrim)
+
+A panel over a paused app reads as pasted on unless whatever is behind it is
+knocked back. The pattern, used by both of the sand app's screens:
+
+1. the panel keeps `UI_NO_BACKGROUND`, so the frozen app stays visible in
+   the gaps rather than being cleared away;
+2. once, when the panel opens, dim the whole canvas —
+   `gfx_fill_rect_blend(0, 0, GFX_WIDTH, GFX_HEIGHT, black, alpha)`;
+3. draw the panel over it, opaque.
+
+No new primitive: `gfx_fill_rect_blend()` already mixes into the destination.
+
+**The rule that makes it work: apply it exactly once per repaint of what is
+underneath, never per frame.** A blend fill *reads* the pixel it writes, and
+the app behind a panel is frozen — nothing repaints it while the panel is up
+— so a second application lands on the first one's own output. Repeat it per
+frame and the backdrop walks toward black while the user sits there.
+`suite_gfx_color.c` pins the arithmetic so the rule cannot quietly rot into a
+comment nobody believes. Cost says the same thing independently: this reads
+every pixel on the panel, which `gfx.h` warns is not what a blend fill is
+for. Once is free; every frame is neither correct nor affordable.
+
+In practice the backdrop is genuinely fresh at exactly two moments — the
+frame the panel opens, and a turn taken while it is open (which repaints the
+app underneath). See `dim_backdrop()` in `apps/sand/app_sand.c`.
+
+**Why this one is allowed to paint pixels**, when `ui_style.h` insists a
+style must emit commands: everything in the command list is re-emitted on
+every repaint, and re-emitting is precisely what a scrim must never do. It
+is not part of the picture the hash describes; it is a one-off change to
+what the picture is drawn *on top of*. A scrim expressed as a command would
+be a scrim applied every repaint, which is the bug above.
+
 ### Text and fonts
 
 A font here is a `gfx_font_t` (`gfx/gfx_font.h`): an atlas of glyph bitmaps,
