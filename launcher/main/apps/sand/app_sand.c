@@ -59,6 +59,7 @@
 #include "row_runs.h"
 #include "sand.h"
 #include "sand_icons.h"
+#include "sand_swatch.h"
 #include "sand_ui.h"
 #include "tilt.h"
 #include "util/intmath.h"   /* im_abs(), im_len() - see
@@ -1369,14 +1370,48 @@ static void draw_brush_panel(mu_Context *ctx, mu_Rect r)
 }
 
 /* One bezelled frame (ui_style.h's lit/shadowed control frame) in a given
- * face colour - the swatch, the info button and the three mode segments
- * all use this, each with its own face and `sunken`. */
+ * face colour - the info button and the three mode segments use this,
+ * each with its own face and `sunken`. The swatch draws its own border
+ * below, via draw_brush_swatch(). */
 static void draw_brush_bezel(mu_Context *ctx, mu_Rect r, uint32_t face_rgb, bool sunken)
 {
     ui_span_t spans[UI_BEZEL_MAX_SPANS];
     const int n = ui_bezel_spans(r, mu_color_hex(face_rgb), sunken, spans,
                                  UI_BEZEL_MAX_SPANS);
     for (int i = 0; i < n; i++) {
+        mu_draw_rect(ctx, spans[i].rect, spans[i].color);
+    }
+}
+
+/* Swatch side, in cells per axis. 8 divides SWATCH_SIDE (80px) into an
+ * exact 10px cell and keeps the brush screen's whole command list under
+ * two thirds of MU_COMMANDLIST_SIZE - see ui.c's command-list high-water
+ * log (CONFIG_LAUNCHER_DEVELOPMENT) for the measured figure. */
+#define BRUSH_SWATCH_CELLS 8
+
+/* Fills `r` with sand_swatch_cell()'s deterministic pattern for `spec`,
+ * then its bezel border on top (span[0] of ui_bezel_spans() is skipped -
+ * the grid already fills the face that span would flatten over). */
+static void draw_brush_swatch(mu_Context *ctx, mu_Rect r, cell_t spec)
+{
+    const gfx_color_t *palette = material_palette();
+
+    for (int row = 0; row < BRUSH_SWATCH_CELLS; row++) {
+        const int y0 = r.y + row * r.h / BRUSH_SWATCH_CELLS;
+        const int y1 = r.y + (row + 1) * r.h / BRUSH_SWATCH_CELLS;
+        for (int col = 0; col < BRUSH_SWATCH_CELLS; col++) {
+            const int x0 = r.x + col * r.w / BRUSH_SWATCH_CELLS;
+            const int x1 = r.x + (col + 1) * r.w / BRUSH_SWATCH_CELLS;
+            const cell_t cell = sand_swatch_cell(spec, col, row, BRUSH_SWATCH_CELLS);
+            mu_draw_rect(ctx, mu_rect(x0, y0, x1 - x0, y1 - y0),
+                        mu_color_hex(gfx_color_rgb888(palette[cell])));
+        }
+    }
+
+    ui_span_t spans[UI_BEZEL_MAX_SPANS];
+    const int n = ui_bezel_spans(r, mu_color_hex(gfx_color_rgb888(brush_color(spec))),
+                                 false, spans, UI_BEZEL_MAX_SPANS);
+    for (int i = 1; i < n; i++) {
         mu_draw_rect(ctx, spans[i].rect, spans[i].color);
     }
 }
@@ -1429,8 +1464,7 @@ static void draw_brush_screen(const input_t *input)
          *-------------------------------------------------------------*/
         draw_brush_panel(ctx, lay.header_panel);
 
-        draw_brush_bezel(ctx, lay.swatch,
-                         gfx_color_rgb888(brush_color(brushes[ui.brush])), false);
+        draw_brush_swatch(ctx, lay.swatch, brushes[ui.brush]);
 
         draw_brush_text(ctx, lay.material_caption, BRUSH_SCREEN_MATERIAL_CAPTION,
                         mu_color_hex(BRUSH_CAPTION_COLOR), BRUSH_SCREEN_CAPTION_SCALE, -1);
