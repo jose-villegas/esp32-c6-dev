@@ -21,9 +21,11 @@
  * edge. */
 #define INFO_BTN_SIDE 56
 
-/* Wide enough for "06 PX" at the caption's own text size with room either
- * side - Phase 5b's actual glyph metrics may want to reclaim some of this. */
-#define SIZE_VALUE_W 64
+/* Exactly "06 PX" at scale 2 on the 8px-wide UI font: 5 glyphs * 8px *
+ * 2 = 80. Monospace, so this is exact, not a guess - a narrower value
+ * clipped the trailing "X" (measured with ui_measure_text() while wiring
+ * the screen's drawing code). */
+#define SIZE_VALUE_W 80
 
 #define SEG_GAP 8
 
