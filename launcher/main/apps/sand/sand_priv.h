@@ -670,24 +670,6 @@ tick_decay(sand_t* s, uint8_t* row, int x, int y, cell_t* grain, const material_
  * compiler prove the guarded work unreachable and delete the walk that reaches
  * it, which is how an earlier code-skip probe in this campaign measured
  * nothing at all. */
-#if CONFIG_LAUNCHER_SAND_PASS_GATES
-/* SCAFFOLDING for one round, removed at the end of it by
- * scripts/strip-pass-gates.py. Volatile is load-bearing: an #if would let
- * the compiler prove the guarded work unreachable and delete the walk that
- * reaches it, which is how an earlier code-skip probe measured nothing. */
-extern volatile bool sand_step_gate_liq_sink;
-extern volatile bool sand_step_gate_liq_down;
-extern volatile bool sand_step_gate_liq_slides;
-extern volatile bool sand_step_gate_sweep_move;
-extern volatile bool sand_step_gate_soak_dry;
-extern volatile bool sand_step_gate_plant_stages;
-
-#define SAND_STEP_GATE(name)        if (sand_step_gate_##name)
-#define SAND_STEP_GATED(name, cond) (sand_step_gate_##name && (cond))
-#else
-#define SAND_STEP_GATE(name)
-#define SAND_STEP_GATED(name, cond) (cond)
-#endif
 /* Defined in sand_reactions.c: the whole of a step's fire-chemistry work
  * for every burning cell (reaction_t.burns - fire and ember today) -
  * ignition of adjacent flammable neighbours, extinguishing by adjacent

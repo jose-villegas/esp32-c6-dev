@@ -25,18 +25,6 @@
 #include "util/fixed.h"
 #include "util/intmath.h"
 
-#if CONFIG_LAUNCHER_SAND_PASS_GATES
-/* Gate definitions, kept at the top of the file rather than beside
- * sand_step(): a definition dropped between an attribute and the function
- * it was written for silently steals the attribute, and this campaign
- * measures function alignment. */
-volatile bool sand_step_gate_liq_sink = true;
-volatile bool sand_step_gate_liq_down = true;
-volatile bool sand_step_gate_liq_slides = true;
-volatile bool sand_step_gate_sweep_move = true;
-volatile bool sand_step_gate_soak_dry = true;
-volatile bool sand_step_gate_plant_stages = true;
-#endif
 
 /* tan(22.5 deg) is the boundary between "straight down" and "diagonal"; its
  * reciprocal, 2.4142, is approximated as 29/12 to keep this in integers.
@@ -796,9 +784,8 @@ static bool step_one_grain(sand_t *s, uint8_t *row, uint8_t *prow,
         return false;
     }
     if (((sweep_liquid_mask >> mrow) & 1u) != 0) {
-        return SAND_STEP_GATED(sweep_move,
-            move_liquid_grain(s, row, prow, x, y, dx, dy, slide_a,
-                                 slide_b, grain, CELL_MATERIAL(grain)));
+        return move_liquid_grain(s, row, prow, x, y, dx, dy, slide_a,
+                                 slide_b, grain, CELL_MATERIAL(grain));
     }
 
     const material_t *mat = material_of(grain);
