@@ -1576,7 +1576,8 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
 
     static void* const stage_labels[RSTAGE_COUNT] = {
         &&stage_burn_any, &&stage_burn_always, &&stage_burn_check, &&stage_dissolve, &&stage_acid_rain,
-        &&stage_condense, &&stage_heat_ramp,   &&stage_chill,      &&stage_warm,     &&stage_soak_dry,
+        &&stage_condense, &&stage_heat_ramp,   &&stage_crust,      &&stage_chill,    &&stage_warm,
+        &&stage_soak_dry,
         &&stage_fall,     &&stage_drink,       &&stage_root,       &&stage_grow,
         &&stage_sprout,   &&stage_bud,         &&stage_end,
     };
@@ -1661,6 +1662,24 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
             continue;
         }
         /* Drift on dry ground persists, found later when liquid reaches it. */
+    stage_crust:
+        /* THE ROLL IS LAST on purpose: drawn before the settled test it would
+         * shift the random stream for every scene whether or not snow is
+         * present, moving every baselined hash for a rule that did nothing.
+         *
+         * Converts in place and deliberately does NOT wake. Waking would clear
+         * BLOCK_SETTLED on the very bank whose stillness allowed this, so the
+         * crust would form one cell and stall; and nothing needs waking,
+         * because snow becoming ice only makes the board more solid. */
+        if (r->crusts != 0 && cell_settled(s, x, y)
+            && (int)(rng_next(&s->rng) & 0xFFFF) < ((s->crust >= 0) ? s->crust : r->crusts)) {
+            REACTION_DOC(crusts_to, "what a settled cell slowly crusts into");
+            row[x] = (cell_t)r->crusts_to;
+            latch_content_flags(s, row[x]);
+            mark_rows(s, y, y);
+            continue;
+        }
+        /* Falls through: snow that did not crust this step still chills. */
     stage_chill:
         if (r->chills != 0) {
             if (step_one_cold_cell(s, x, y, w, h, r)) {
