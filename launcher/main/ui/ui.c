@@ -89,9 +89,7 @@ static int              font_scaled_count;
 /* Returns the SAME address for the same (font, scale) every time, which is
  * what lets hash_canvas() (below) notice a scale change on its own, the
  * same way it already does for a font change - see ui_set_font()'s
- * comment. Exhaustion reuses slot 0 rather than growing or asserting: it
- * means UI_FONT_SCALED_MAX needs raising, not that the caller erred, and a
- * momentarily wrong size beats a crash. */
+ * comment. */
 static const ui_font_scaled_t *intern_font_scaled(const gfx_font_t *font, int scale)
 {
     for (int i = 0; i < font_scaled_count; i++) {
@@ -103,9 +101,14 @@ static const ui_font_scaled_t *intern_font_scaled(const gfx_font_t *font, int sc
         font_scaled_table[font_scaled_count] = (ui_font_scaled_t){ font, scale };
         return &font_scaled_table[font_scaled_count++];
     }
-    ESP_LOGW(TAG, "ui: font/scale table full (%d entries) - reusing slot 0",
+    /* Full: hand back the default pair rather than recycling a slot.
+     * Overwriting one retargets every mu_Font already pointing at it - slot 0
+     * is the shell default - so the picture changes while the command list
+     * keeps the same bytes, which is exactly what hash_canvas() cannot see.
+     * Text at the wrong size is visible and recoverable; a canvas that skips
+     * its repaint is neither. Raise UI_FONT_SCALED_MAX instead. */
+    ESP_LOGW(TAG, "font/scale table full (%d entries) - falling back to the default",
              UI_FONT_SCALED_MAX);
-    font_scaled_table[0] = (ui_font_scaled_t){ font, scale };
     return &font_scaled_table[0];
 }
 
