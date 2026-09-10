@@ -92,6 +92,62 @@ collapses. So an entry carries its string source, its scale policy and its
 box **together**. An editor that cannot say "this will not fit at this
 scale" would let you draw those same bugs, visually, and call it a design.
 
+## The editor is a native app, and renders in-process
+
+Two decisions, and the first one forces the second.
+
+**Native, cross-platform, not a web page.** The tools in this tree are POSIX
+sh so they run "under Git Bash or MSYS on Windows, and natively on Linux and
+macOS" (`tools/screenshot.sh`'s own header). The editor holds to the same
+bar: one source tree, three platforms, nothing Windows-specific. Web stays a
+*target* - something the engine may one day be built for - never the way the
+editor draws itself.
+
+**It links the firmware's host-portable C in-process**, rather than spawning
+a renderer and reading back an image. `boot_anim_editor_server.py` spawns
+and recompiles because its payload is baked into a header the C reads; there
+is no way around it there. Layout-as-data removes that tax entirely: nothing
+is generated to preview a change, so the editor can mutate a struct, call
+the same layout and draw code the firmware calls, and re-render at frame
+rate. Direct manipulation needs that - dragging a panel through a subprocess
+round trip per frame is not the same product.
+
+That choice also serves the web goal instead of fighting it: the same
+host-portable C compiles under Emscripten, so a browser preview later is the
+same code, not a second implementation of it.
+
+### The shell: raylib, with SDL2 + microui as the near miss
+
+Cross-platform makes the *dependency* the deciding question, not the widget
+set.
+
+**raylib + raygui** is the recommendation. Pure C11 - no C++ in a tree that
+has none - one source tree across Windows, Linux and macOS, and it brings
+the whole stack that otherwise has to be assembled: a window, input, a
+texture to blit the framebuffer into, and `raygui` as a single-header
+immediate-mode GUI for property panels. It targets Emscripten first-class,
+so the web build above costs nothing extra. The price is that it is a
+chunkier thing to depend on than the single-purpose libraries vendored in
+`components/` today, so fetch it at configure time rather than checking it
+in.
+
+**SDL2 + microui** was the close alternative and is worth knowing about. SDL
+is packaged on every platform, microui is already vendored and already
+host-linkable, and the editor would then be built with the very toolkit it
+edits - every gap in `ui/` found by someone using it daily, which is the
+best bug-finding argument available. It loses on how much has to be written:
+microui has no real text input, no file dialogs, no docking, so the editor
+chrome becomes its own project.
+
+**cimgui + SDL** gives the best editor UX of the three and costs a C++
+toolchain on three platforms. Only worth it if the editor grows ambitious.
+
+**Build with CMake.** ESP-IDF already uses it, so it is not a new tool for
+anyone on any platform, and both candidate shells ship support for it. The
+editor lives under `tools/`, is never part of the firmware build, and like
+every other host tool here is absent from `idf.py` and from
+`test/run_tests.sh`.
+
 ## Phases
 
 1. **Layout as authored data. No editor.** A screen's JSON, a generator, a
@@ -109,10 +165,11 @@ scale" would let you draw those same bugs, visually, and call it a design.
    suite keeps its own assertions as the independent witness - the generator
    checking itself is not a test.
 
-3. **The editor server.** Point the boot-anim pattern at this payload: serve
-   a page, `POST /render`, write the draft to a scratch JSON, run the
-   existing preview tool, return the PNG. Both orientations side by side,
-   because that is where composition decisions actually get made.
+3. **The editor shell.** A native window that links the layout and draw code
+   directly and renders both orientations side by side - that is where
+   composition decisions actually get made. No server, no subprocess, no
+   recompile in the preview loop. Loading and saving the JSON is the whole
+   of its file handling at this stage.
 
 4. **Direct manipulation.** Drag and resize in the browser, writing back to
    the JSON. Deliberately last: it is the least load-bearing part, and a
@@ -139,6 +196,16 @@ scale" would let you draw those same bugs, visually, and call it a design.
   animation editor rejected exactly this and says so in its own header: it
   renders through the real C rather than a JS twin. A preview that is not
   the shipping renderer is a preview of something that does not exist.
+
+- **A browser-hosted editor at all**, which is what the boot animation
+  editor is. It suits a timeline with a scrubber; a layout editor wants
+  direct manipulation, and that wants in-process rendering. Accepted
+  consequence: two editor architectures coexist until the older one is
+  either migrated or retired. Not a reason to make this one a page.
+
+- **Anything platform-specific** - Win32, WinUI, Cocoa, GTK-only. One source
+  tree has to serve Windows, Linux and macOS, which is the same bar every
+  shell script here already meets.
 - **Editing the mockup instead.** A design image is an input to authoring,
   not the authored artifact. The brush screen already diverges from its
   mockup in two accepted places, and those decisions live in the plan, not
