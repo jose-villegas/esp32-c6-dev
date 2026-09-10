@@ -1045,6 +1045,68 @@ static void test_snow_melts_on_wet_soil_but_not_on_dry(void)
         "about dirt rather than about the water in it");
 }
 
+/* AIR IS NOT A MATERIAL, so an exposed surface does not crust - otherwise a
+ * drift rims its whole outline in ice.
+ *
+ * A free-standing block tells the two apart: stone under it, air on the other
+ * three sides. Measured at 2000 steps, 12 of 12 along the stone and 1 of 12
+ * down the open sides, that one widened up from the iced floor. */
+static void test_snow_does_not_crust_against_open_air(void)
+{
+    enum { GW = 32, GH = 32, X0 = 10, X1 = 22, YTOP = 18, YBOT = GH - 2 };
+    uint8_t *cells  = calloc(GW * GH, 1);
+    uint8_t *blocks = calloc((size_t)((GW + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
+                           * (size_t)((GH + SAND_BLOCK_H - 1) / SAND_BLOCK_H), 1);
+    TEST_ASSERT_NOT_NULL(cells);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t g;
+    memset(&g, 0, sizeof g);
+    sand_init(&g, cells, GW, GH, 71u);
+    sand_enable_sleeping(&g, blocks);
+    sand_set_crust(&g, 256);
+
+    for (int x = 0; x < GW; x++) {
+        sand_set(&g, x, GH - 1, STONE);
+    }
+    for (int y = YTOP; y <= YBOT; y++) {
+        for (int x = X0; x < X1; x++) {
+            sand_set(&g, x, y, SNOW);
+        }
+    }
+
+    for (int i = 0; i < 2000; i++) {
+        sand_step(&g, 0, 1000, 0);
+    }
+
+    int floor_ice = 0, floor_n = 0, side_ice = 0, side_n = 0;
+    for (int y = YTOP; y <= YBOT; y++) {
+        for (int x = X0; x < X1; x++) {
+            const cell_t c = sand_at(&g, x, y);
+            if (CELL_MATERIAL(c) != MAT_EXTENDED && CELL_MATERIAL(c) != MAT_SNOW) {
+                continue;
+            }
+            const int ice = (CELL_MATERIAL(c) == MAT_EXTENDED) ? 1 : 0;
+            if (y == YBOT) {
+                floor_n++;
+                floor_ice += ice;
+            } else if (y > YTOP && (x == X0 || x == X1 - 1)) {
+                side_n++;
+                side_ice += ice;
+            }
+        }
+    }
+    free(cells);
+    free(blocks);
+
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(floor_n / 2, floor_ice,
+        "setup: snow resting on stone must crust along that contact, or the "
+        "assertion below passes on a bank that never crusted anywhere");
+    TEST_ASSERT_LESS_THAN_INT_MESSAGE(side_n / 3, side_ice,
+        "snow with nothing but open air beside it must stay powder - a crust "
+        "forms where snow meets another material, and air is not one");
+}
+
 /* A CRUST STARTS AT THE FACES AND THICKENS INWARD, never reaching the core.
  *
  * Three claims, one per assertion below. Measured at 4000 steps, ice per
@@ -2088,6 +2150,7 @@ void run_sand_combustion_suite(void)
     RUN_TEST(test_snow_melts_on_wet_soil_but_not_on_dry);
     RUN_TEST(test_a_settled_snowbank_crusts_to_ice);
     RUN_TEST(test_a_snowbank_crusts_on_its_faces_and_thickens_slowly_inward);
+    RUN_TEST(test_snow_does_not_crust_against_open_air);
     RUN_TEST(test_a_fire_buried_on_all_four_sides_goes_out);
     RUN_TEST(test_a_material_created_during_the_pass_stays_in_the_mask);
     RUN_TEST(test_sand_alone_lets_the_moisture_pass_switch_off_again);

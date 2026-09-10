@@ -922,13 +922,13 @@ step_one_tempered_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cons
 
 /* How this cell is exposed: on a foreign face, on its own crust, or neither.
  *
- * A crust is a SHELL that GROWS INWARD, and the two happen at very different
- * rates - which is why they are counted apart. A foreign face is where ice
- * starts; a face on ice already formed is how the shell thickens, and that
- * must be far slower or the front just eats the bank.
+ * A crust is a SHELL that GROWS INWARD, counted apart because the two run at
+ * very different rates. A foreign face is where ice starts; a face on ice
+ * already formed is how the shell thickens, far slower or the front eats the
+ * bank.
  *
- * Neither face means interior, which never crusts. Off-grid is not a face;
- * the screen edge would rim a bank in ice. */
+ * Neither face is interior, and never crusts. AIR IS NOT A FACE: count it and
+ * a drift rims its whole outline in ice. Off-grid, likewise. */
 #define FACE_FOREIGN 1u
 #define FACE_CRUST   2u
 
@@ -942,7 +942,11 @@ crust_faces(const sand_t* s, int x, int y, int w, int h, uint8_t mine,
         if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
             continue;
         }
-        const uint8_t m = CELL_MATERIAL(s->cells[(size_t)ny * (size_t)w + (size_t)nx]);
+        const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
+        if (CELL_IS_EMPTY(n)) {
+            continue;
+        }
+        const uint8_t m = CELL_MATERIAL(n);
         if (m == becomes) {
             faces |= FACE_CRUST;
         } else if (m != mine) {
