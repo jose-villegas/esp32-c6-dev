@@ -50,6 +50,15 @@ typedef struct sand_s {
      * read as two shades rather than one flat fill. */
     uint32_t pour_phase;
 
+    /* Steps since the grid was created, wrapped. A rule that fires once every
+     * N steps rather than every step reads this instead of paying a roll:
+     * (step_phase + x + y) & (N - 1) also spreads that rule's cells over the
+     * period, keeping the work per step flat.
+     *
+     * Wraps deliberately, and only powers of two may be used, so the wrap is
+     * invisible to a mask - any other period would stutter once a lap. */
+    uint16_t step_phase;
+
     bool     sweep_flip; /* alternates the sweep direction between steps */
     bool     liquid_flip;/* alternates which way liquids share sideways */
     bool     gas_flip;   /* same idea as liquid_flip, for sand_step_gas()'s

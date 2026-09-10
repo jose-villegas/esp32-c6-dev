@@ -666,8 +666,38 @@ step_one_warming_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
  * 24% -> 64%, cells cold enough to shatter when warmed 12% -> 47%. */
 #define COLD_CARRY_RUN 4
 
+/* One carry attempt per cold cell every this many steps. The face a chiller
+ * touches still cools every step; reaching deeper is rate-limited, so a slab
+ * frosts over rather than reading as frozen the moment snow lands.
+ *
+ * A PERIOD, NOT A CHANCE: a 3-in-256 roll cost a draw on every cell every step
+ * to say "no", and moved the shared RNG stream under every other rule on the
+ * board. The x and y multipliers only spread the phase, so a drift narrower
+ * than the period does not cool in one burst. Power of two. */
+#define COLD_CARRY_PERIOD 512
+
+/* A cell below ambient drifts back one level in this many steps.
+ *
+ * BOTH KNOBS ARE NEEDED: how deep the cold gets is the RATIO of cooling to
+ * rewarming, not a race against time. Slowing the carry alone does not make a
+ * slab take longer to freeze - it makes it never freeze.
+ *
+ * A period, not a divisor on the drain: cools is 5, so dividing lands on
+ * 5, 2, 1, 0 and nothing between, and the only setting slower than a level a
+ * step was never rewarming at all, which latches a slab cold forever. */
+#define COLD_REWARM_PERIOD 32
+
 static bool
 step_one_cold_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
+    /* ONE DECISION FOR THE CELL, not one per direction - the question is
+     * whether this cell sends cold onward this step, and asking it four times
+     * would make the rate four times what it reads as. */
+    const bool carries = (present_pair_bits & PAIR_CONDUCTS) != 0
+        && r->chills != 0
+        && (((unsigned)s->step_phase + (unsigned)x * 5u + (unsigned)y * 33u)
+            & (COLD_CARRY_PERIOD - 1u)) == 0u;
+    bool spent_on_heat = false;
+
     for (int d = 0; d < 4; d++) {
         const int nx = x + reaction_dirs[d][0];
         const int ny = y + reaction_dirs[d][1];
@@ -722,28 +752,8 @@ step_one_cold_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
             continue;
         }
 
-        if (temp == 0) {
-            continue; /* already as cold as this scale goes */
-        }
-        if ((int)(rng_next(&s->rng) & 0xFF) >= r->chills) {
-            continue;
-        }
-
-        s->cells[nat] = CELL_MAKE(CELL_MATERIAL(n), (uint8_t)(temp - 1));
-        s->may_have_temperature = true;
-        mark_rows(s, ny, ny);
-        wake_block_and_neighbors(s, nx, ny);
-
-        /* AND ON THROUGH THE MEDIUM. Cold stopped where it touched: snow on
-         * glass chilled three rows and sat there, the same at 250 steps as at
-         * 1000.
-         *
-         * conduct_heat() has walked conductors all along but only out of a
-         * BURNING cell, so no cold source could enter it. This is its mirror,
-         * at the same reach, attenuating on the conductor's own `conducts` so
-         * nothing new needs tuning. Free where nothing conducts. */
         bool spent_on_heat = false;
-        if ((present_pair_bits & PAIR_CONDUCTS) != 0) {
+        if (carries) {
             int cx = nx, cy = ny;
             for (int depth = 1; depth < CONDUCT_REACH; depth++) {
                 cx += reaction_dirs[d][0];
@@ -768,9 +778,14 @@ step_one_cold_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
                     && (int)(rng_next(&s->rng) & 0xFF) >= cr->conducts) {
                     break;   /* the cold did not carry this far this step */
                 }
+                /* MARKED FOR DRAWING, NOT WOKEN. Waking exists so neighbours
+                 * get another chance to MOVE, and a cell that only got one
+                 * heat level colder gives nothing a new way to move - the
+                 * same argument the snow crust rule uses. Waking here shook
+                 * blocks loose often enough to slide a solid ice block out of
+                 * the column it was placed in, which a test caught. */
                 s->cells[cat] = CELL_MAKE(CELL_MATERIAL(cc), (uint8_t)(ct - 1));
                 mark_rows(s, cy, cy);
-                wake_block_and_neighbors(s, cx, cy);
                 if (ct > SAND_AMBIENT_HEAT) {
                     spent_on_heat = true;
                 }
@@ -787,9 +802,42 @@ step_one_cold_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
             return false;
         }
 
+        if (temp == 0) {
+            continue; /* the face is as cold as it goes - but the walk above
+                       * has already carried cold past it */
+        }
+        if ((int)(rng_next(&s->rng) & 0xFF) >= r->chills) {
+            continue;
+        }
+
+        s->cells[nat] = CELL_MAKE(CELL_MATERIAL(n), (uint8_t)(temp - 1));
+        s->may_have_temperature = true;
+        mark_rows(s, ny, ny);
+        wake_block_and_neighbors(s, nx, ny);
+
+        /* AND ON THROUGH THE MEDIUM. Cold stopped where it touched: snow on
+         * glass chilled three rows and sat there, the same at 250 steps as at
+         * 1000.
+         *
+         * conduct_heat() has walked conductors all along but only out of a
+         * BURNING cell, so no cold source could enter it. This is its mirror,
+         * at the same reach, attenuating on the conductor's own `conducts` so
+         * nothing new needs tuning. Free where nothing conducts. */
+
         if (temp > SAND_AMBIENT_HEAT && try_heat_transform(s, x, y, w, h)) {
             return false;
         }
+    }
+
+    /* THE SOURCE PAYS FOR THE DEPTH, ONCE PER STEP. Cooling something HOT has
+     * always cost the chilling cell - that is what stops snow being a free and
+     * permanent heat sink, and a test is named for it. The walk cools panes
+     * several cells in, so billing only the face it touches would void that.
+     *
+     * Once per step, NOT per direction: per direction billed a block of ice up
+     * to four melts a step and melted it out of the column it was put in. */
+    if (spent_on_heat) {
+        (void)try_heat_transform(s, x, y, w, h);
     }
     return true;
 }
@@ -847,6 +895,11 @@ step_one_tempered_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cons
     /* Water cannot fall below ambient, preventing SAND_SHOCK_COLD. Snow
      * retains that role. */
     unsigned drain = r->cools;
+    if (temp < SAND_AMBIENT_HEAT
+        && (((unsigned)s->step_phase + (unsigned)x * 17u + (unsigned)y * 3u)
+            & (COLD_REWARM_PERIOD - 1u)) != 0u) {
+        drain = 0;   /* not this cell's step to warm back up */
+    }
     if (temp > SAND_AMBIENT_HEAT) {
         drain *= (unsigned)(temp - SAND_AMBIENT_HEAT);
         if (wet) {
