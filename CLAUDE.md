@@ -30,7 +30,7 @@ each living entirely in its own `launcher/main/apps/<name>/` folder:
 cd launcher && idf.py build            # release firmware — no test code
 idf.py -p <PORT> flash monitor
 
-./launcher/test/run_tests.sh           # host tests, portable suites, <1 s
+./launcher/test/run_tests.sh           # host tests, portable suites, ~35 s
 ./launcher/test/run_device_tests.sh    # diagnostics build + flash + on-device run of every suite
 ```
 
@@ -207,7 +207,7 @@ instrument itself). See `docs/Testing-Guide.md`.
 
 One set of suites (`test/suites/`, plus each app's own suites beside it, e.g.
 `main/apps/sand/suite_sand.c`) compiles into **two** runners: the host runner
-(`<1 s`, portable suites only, the TDD loop) and the on-device selftest
+(portable suites only, the TDD loop) and the on-device selftest
 (every suite, including portable ones — proves the RISC-V build behaves
 identically to x86, not just that the logic is right on a laptop).
 

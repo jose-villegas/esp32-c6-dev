@@ -216,7 +216,7 @@ doing the typing, not you privately drafting the same text.
 6. **Apply by hand, then verify for real.** For this project:
 
    ```sh
-   ./launcher/test/run_tests.sh   # host suite, portable, <1s - run this first
+   ./launcher/test/run_tests.sh   # host suite, portable, ~35s - run this first
    ```
 
    Then a real target build (see `docs/Testing-Guide.md` for the Windows/

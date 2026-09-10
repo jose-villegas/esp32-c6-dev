@@ -935,6 +935,78 @@ step_one_tempered_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cons
     return next != SAND_AMBIENT_HEAT;
 }
 
+/* How this cell is exposed: on a foreign face, on its own crust, or neither.
+ *
+ * A crust is a SHELL that GROWS INWARD, counted apart because the two run at
+ * very different rates. A foreign face is where ice starts; a face on ice
+ * already formed is how the shell thickens, far slower or the front eats the
+ * bank.
+ *
+ * Neither face is interior, and never crusts. AIR IS NOT A FACE: count it and
+ * a drift rims its whole outline in ice. Off-grid, likewise. */
+#define FACE_FOREIGN 1u
+#define FACE_CRUST   2u
+
+/* How much crust a cell must be backed by before it joins one, over all eight
+ * neighbours.
+ *
+ * EIGHT, BECAUSE FOUR CANNOT EXPRESS IT. A snow cell on a fully iced row has
+ * one orthogonal ice neighbour, so any threshold above one stalls a flat front
+ * and the cover never finishes. Over eight it has three, so three is the least
+ * that advances a flat front while refusing a cell brushing a corner. */
+#define CRUST_WIDEN_MIN_ICE 3
+
+static inline unsigned
+crust_faces(const sand_t* s, int x, int y, int w, int h, uint8_t mine,
+            uint8_t becomes) {
+    unsigned faces = 0;
+    unsigned crust_seen = 0;
+    bool open = false;
+    for (int d = 0; d < 8; d++) {
+        const int *dir = ring_dir(d);
+        const int nx = x + dir[0];
+        const int ny = y + dir[1];
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            continue;
+        }
+        const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
+        if (CELL_IS_EMPTY(n)) {
+            open = true;
+            continue;
+        }
+        const uint8_t m = CELL_MATERIAL(n);
+        if (m == becomes) {
+            crust_seen++;
+        } else if (m != mine && (dir[0] == 0 || dir[1] == 0)) {
+            /* A FOREIGN face stays orthogonal: touching a wall at the corner
+             * is not resting against it, and counting it ices the diagonal
+             * staircase a poured pile leaves along any slope. */
+            faces |= FACE_FOREIGN;
+        }
+    }
+    /* THE RIM STAYS SNOW: open space anywhere around it makes this the drift's
+     * own surface, and a surface does not thicken a crust forming underneath
+     * it. Only widening is held to this - a cell pressed against a wall still
+     * seeds, or a cover would never start. */
+    if (!open && crust_seen >= CRUST_WIDEN_MIN_ICE) {
+        faces |= FACE_CRUST;
+    }
+    return faces;
+}
+
+/* How often each of the two paths gets to roll. Periods, not divisors on the
+ * chance: crusts is a small count, so dividing floors to zero.
+ *
+ * SEEDING NEEDS A CLOCK TOO. Ungated it rolls every step, so a whole contact
+ * face turned within a second of settling while the shell behind it took
+ * minutes - the crust appeared rather than formed. Still the faster of the
+ * two, being what starts a shell, but no longer instant.
+ *
+ * The stagger multipliers differ per path so the two do not come due
+ * together. */
+#define CRUST_SEED_PERIOD  4
+#define CRUST_WIDEN_PERIOD 8
+
 /* Fixed blast radius. Cascade ignition simulates lid giving way. Tune on
  * device. */
 #define SAND_GAS_IGNITE_BLAST_RADIUS 8
@@ -1847,8 +1919,20 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
          * BLOCK_SETTLED on the very bank whose stillness allowed this, so the
          * crust would form one cell and stall; and nothing needs waking,
          * because snow becoming ice only makes the board more solid. */
-        if (r->crusts != 0 && cell_settled(s, x, y)
-            && (int)(rng_next(&s->rng) & 0xFFFF) < ((s->crust >= 0) ? s->crust : r->crusts)) {
+        const unsigned faces = (r->crusts != 0 && cell_settled(s, x, y))
+            ? crust_faces(s, x, y, w, h, CELL_MATERIAL(c),
+                          CELL_MATERIAL((cell_t)r->crusts_to))
+            : 0u;
+        const unsigned phase = (unsigned)s->step_phase;
+        const bool seed_due = ((faces & FACE_FOREIGN) != 0)
+            && ((phase + (unsigned)x * 11u + (unsigned)y * 7u)
+                & (CRUST_SEED_PERIOD - 1u)) == 0u;
+        const bool widen_due = ((faces & FACE_CRUST) != 0)
+            && ((phase + (unsigned)x * 5u + (unsigned)y * 33u)
+                & (CRUST_WIDEN_PERIOD - 1u)) == 0u;
+        const bool may_crust = seed_due || widen_due;
+        if (may_crust
+            && (int)(rng_next(&s->rng) & (CRUST_ROLL_MAX - 1)) < ((s->crust >= 0) ? s->crust : r->crusts)) {
             REACTION_DOC(crusts_to, "what a settled cell slowly crusts into");
             row[x] = (cell_t)r->crusts_to;
             latch_content_flags(s, row[x]);
