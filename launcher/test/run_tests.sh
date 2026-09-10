@@ -84,6 +84,7 @@ $TEST_DIR/suites/suite_icons.c
 $TEST_DIR/suites/suite_ui_style.c
 $TEST_DIR/suites/suite_ui_transform.c
 $TEST_DIR/suites/suite_ui_centered_rect.c
+$TEST_DIR/suites/suite_ui_pointer.c
 $TEST_DIR/suites/suite_display.c
 $TEST_DIR/suites/suite_screenshot.c
 $TEST_DIR/suites/suite_device_state.c
@@ -91,6 +92,7 @@ $MAIN_DIR/input/touch_fsm.c
 $MAIN_DIR/input/gesture.c
 $MAIN_DIR/input/button_fsm.c
 $MAIN_DIR/display/display.c
+$MAIN_DIR/ui/ui_pointer.c
 "
 
 # App-owned sources, discovered rather than listed, so adding or deleting an

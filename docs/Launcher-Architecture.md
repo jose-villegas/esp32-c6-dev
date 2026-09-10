@@ -500,13 +500,21 @@ reset, the launcher opting in would leave the sand app's overlay buttons
 bezelled too.
 
 One detail worth spelling out, because it is the opposite of what a desktop
-toolkit would do: **the pressed look is on hover, not on focus.** On a mouse,
-hover means "the pointer is near" and focus means "the button is held"; on a
-touchscreen the pointer does not exist until a finger is already on the glass,
-so hover *is* contact. A tap renders `MU_COLOR_BUTTONHOVER` for every frame the
-finger is down and `MU_COLOR_BUTTONFOCUS` for the single frame the press lands
-on, so sinking the bezel only on focus would flash it for one frame out of a
-press lasting dozens.
+toolkit would do: **the pressed look is on hover, not only on focus.** On a
+mouse, hover means "the pointer is near" and focus means "the button is
+held"; on a touchscreen the pointer does not exist until a finger is already
+on the glass, so hover *is* contact.
+
+Since Phase 1 of `docs/plans/Sand-Brush-Screen-Plan.md` (`ui_pointer.c`), the
+pointer holds `DOWN` for the whole press instead of releasing the same frame
+it presses, so `MU_COLOR_BUTTONFOCUS` now covers most of a tap on its own —
+microui keeps a control focused for as long as `mouse_down` stays true,
+`MU_OPT_HOLDFOCUS` or not. What still needs hover is the one synthesized
+frame *before* `DOWN` lands (see `feed_input()`'s comment): the pointer is
+on the control but focus has not been taken yet, so a style keyed only on
+focus would render that one frame flat. Keying the bezel off hover as well
+as focus is what keeps it sinking smoothly through the whole gesture instead
+of flashing in on the second frame.
 
 The geometry and the shading are pure functions in the header, the same split
 `icons.h` makes, so `test/suites/suite_ui_style.c` checks the shape on a host
