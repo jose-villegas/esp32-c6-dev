@@ -1997,7 +1997,7 @@ static void emit_thaw(const reaction_t *r)
      * keeps that true breadth without the word. */
     if (r->heats_to != 0) {
         printf("- If anything wet touches it, it *melts*%s, turning into "
-               "%s.\n",
+               "%s. Soaked ground counts, more slowly the drier it is.\n",
                rate_gap(adverb_child("thaws", r->thaws)), mat_span_v(r->heats_to));
     } else {
         printf("- If anything wet touches it, it *melts*%s.\n",

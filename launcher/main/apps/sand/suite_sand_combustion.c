@@ -927,6 +927,52 @@ static void test_pouring_stone_never_arms_the_reactions_pass(void)
 }
 
 
+/* Snow over a dirt bed at one moisture level, run out, snow left standing.
+ * Its own grid each time: a wet half and a dry half on one board contaminate
+ * each other, because powder scatters sideways and moisture percolates - the
+ * first version of this test lost its control that way. */
+static int snow_left_over_soil_at(uint8_t moisture)
+{
+    fixture();
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, soil_set_moisture(CELL_MAKE(MAT_DIRT, 0), moisture, 0));
+        sand_set(&s, x, H - 3, SNOW);
+    }
+
+    for (int i = 0; i < 400; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+    return count_cells_of(MAT_SNOW);
+}
+
+/* WET SOIL MELTS SNOW, DRY SOIL DOES NOT.
+ *
+ * Snow melted only against open water before this, because the thaw test
+ * reads the neighbour's KIND and dirt carries its water as a moisture nibble
+ * instead - so a soaked bank and a dry one looked identical to it
+ * (bd esp32c6-bl4).
+ *
+ * The dry bed is the control, doing two jobs: it proves the melt is about the
+ * WATER in the soil and not about dirt, and it pins the floor, since the rate
+ * scales with moisture and is meant to reach zero well before bone dry. */
+static void test_snow_melts_on_wet_soil_but_not_on_dry(void)
+{
+    const reaction_t *dr = reaction_of(CELL_MAKE(MAT_DIRT, 0));
+
+    const int on_wet = snow_left_over_soil_at(dr->moist_max);
+    const int on_dry = snow_left_over_soil_at(0);
+
+    TEST_ASSERT_LESS_THAN_INT_MESSAGE(on_dry, on_wet,
+        "snow resting on saturated soil must melt faster than snow on dry "
+        "soil - the water is bound in the grains rather than standing free, "
+        "but it is still water");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(W, on_dry,
+        "control: snow on BONE DRY dirt must not melt at all, or the rule is "
+        "about dirt rather than about the water in it");
+}
+
 /* A SETTLED SNOWBANK CRUSTS OVER; A FALLING ONE DOES NOT.
  *
  * The rest test is the whole rule - a snowfall in flight must cost nothing,
@@ -1886,6 +1932,7 @@ void run_sand_combustion_suite(void)
     RUN_TEST(test_fire_burning_out_marks_its_row_dirty);
     RUN_TEST(test_fire_spreads_through_a_connected_pocket_in_one_step);
     RUN_TEST(test_pouring_stone_never_arms_the_reactions_pass);
+    RUN_TEST(test_snow_melts_on_wet_soil_but_not_on_dry);
     RUN_TEST(test_a_settled_snowbank_crusts_to_ice);
     RUN_TEST(test_a_fire_buried_on_all_four_sides_goes_out);
     RUN_TEST(test_a_material_created_during_the_pass_stays_in_the_mask);
