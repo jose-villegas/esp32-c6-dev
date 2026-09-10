@@ -7,6 +7,19 @@ it must fire on what the model just produced, and stay silent about the
 backlog already in the tree, which is somebody's cleanup task and not this
 edit's problem.
 
+Two rules, and the second is what keeps the first from being a treadmill:
+
+  1. Nothing just written may carry a comment over LIMIT.
+  2. An edit that TOUCHES a comment already over TARGET may not hand it back
+     longer than it found it.
+
+Rule 1 alone lets everything land at 400-490 and the tree drift upward under
+a ceiling it never technically breaks - measured: the count over LIMIT fell
+while the count over TARGET rose, and the median offender sat at 489. Rule 2
+costs a careless edit nothing (leave the comment alone and it passes) and
+makes deliberate growth of an already-long comment the one thing you cannot
+do by accident.
+
 Exit 2 hands the message back to the model as a blocking error.
 """
 
@@ -28,19 +41,32 @@ except ImportError:
 
 
 def written_text(payload):
-    """The text this tool call put into the file, or None if not applicable."""
+    """(text written, text it replaced, path). `replaced` is None when there is
+    nothing to compare against - a Write hands over a whole file with no record
+    of what was there, so rule 2 cannot apply to it."""
     tool = payload.get("tool_name", "")
     inp = payload.get("tool_input") or {}
     path = inp.get("file_path") or ""
     if not path.endswith((".c", ".h", ".cpp", ".hpp")):
-        return None, path
+        return None, None, path
     if tool == "Edit":
-        return inp.get("new_string") or "", path
+        return inp.get("new_string") or "", inp.get("old_string") or "", path
     if tool == "Write":
-        return inp.get("content") or "", path
+        return inp.get("content") or "", None, path
     if tool == "NotebookEdit":
-        return None, path
-    return None, path
+        return None, None, path
+    return None, None, path
+
+
+def over_aim_total(path, text):
+    """Characters of comment sitting above TARGET, banners excluded. Summed
+    rather than compared comment-by-comment because an edit may split one
+    comment into two or merge two into one, and the question rule 2 asks is
+    about the prose as a whole, not about any one block surviving intact."""
+    if not text:
+        return 0
+    return sum(c.length for c in scan(path, text)
+               if c.length > TARGET and not c.has_rule)
 
 
 def main():
@@ -49,7 +75,7 @@ def main():
     except (json.JSONDecodeError, ValueError):
         return 0
 
-    text, path = written_text(payload)
+    text, replaced, path = written_text(payload)
     if not text:
         return 0
 
@@ -60,6 +86,25 @@ def main():
     # is wherever the fragment happens to start.
     over = [c for c in scan(path, text)
             if c.length > LIMIT and not c.has_rule]
+
+    # Rule 2. Only bites when the edit found an over-aim comment there
+    # already: a brand-new comment between TARGET and LIMIT is allowed, since
+    # TARGET is an aim and LIMIT is the rule.
+    was = over_aim_total(path, replaced)
+    now = over_aim_total(path, text)
+    if not over and was and now > was:
+        print(f"Comment length ratchet: this edit lengthens a comment in "
+              f"{os.path.basename(path)} that was already past the "
+              f"{TARGET}-character aim - {was} characters of over-aim prose "
+              f"went in, {now} came back.", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("Leaving it alone is fine. Making it shorter is better. Making "
+              "it longer is the one thing that is not available, because that "
+              "is how a tree ends up with hundreds of comments parked just "
+              "under the ceiling. Cut whatever the code already says, and any "
+              "history git log owns.", file=sys.stderr)
+        return 2
+
     if not over:
         return 0
 
