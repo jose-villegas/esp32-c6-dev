@@ -10,9 +10,18 @@ Living document: update it when the approach changes.
 ## Running them
 
 ```sh
-./launcher/test/run_tests.sh          # portable suites, on this machine, <1 s
+./launcher/test/run_tests.sh          # portable suites, on this machine, ~35 s
 ./launcher/test/run_device_tests.sh   # every suite, on the board, host-triggered
 ```
+
+**Where those 35 seconds go, because it is not the tests.** All 895 of them
+execute in about 2.6 s. The rest is compiling: `run_tests.sh` builds every
+source in one `gcc` invocation each run and then compiles them all a second
+time for the `-fstack-usage` pass, with no object caching between runs - a
+re-run that changes nothing costs the same 35 s as one that changes a file.
+So a slow individual test is rarely what to optimise; the two rebuilds are.
+(Measured on one Windows machine - treat the ratio as the point, not the
+number.)
 
 **On Windows**, `idf.py` cannot run under Git Bash, so the build/flash
 half of that second script refuses. Either collect from what is already
