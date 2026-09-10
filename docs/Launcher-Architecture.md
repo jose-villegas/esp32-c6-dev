@@ -772,7 +772,7 @@ other app, rather than reusing it for free.
 **The real cost, for balance:** microui encodes a mouse's interaction model
 (point, then click), and a touchscreen cannot produce that sequence - the
 pointer does not exist until a finger is already down. Every control needs a
-synthesised hover frame to compensate, costing one frame (~24 ms) of input
+synthesised hover frames to compensate, costing two frames (~48 ms) of input
 latency on every tap. That friction is specific to picking an immediate-mode,
 mouse-shaped toolkit; a touch-native widget system would not have it. It was
 worth paying given the three constraints above, but it is a real trade-off,
@@ -798,14 +798,26 @@ values in trailing comments. They are edited in the header rather than
 overridden from our side because they determine the struct's layout, and two
 translation units disagreeing would corrupt it silently.
 
-**Touch needs a synthesised hover frame.** `mu_update_control()` only
+**Touch needs two synthesised hover frames.** `mu_update_control()` only
 establishes hover on a frame where the button is *not* held, and a control only
 submits once focused — the mouse sequence "point, then click". A touchscreen
 never produces the first half, because the pointer does not exist until a finger
 is already down.
 
-So `feed_input()` delivers a press across two frames: position only, then the
-button-down. One frame of latency, ~24 ms, and taps register every time.
+Two frames, not one, and the second is the one that is easy to miss:
+`mu_mouse_over()` needs `in_hover_root()`, and `mu_begin()` copies `hover_root`
+from the *previous* frame's `next_hover_root`. So the first frame at a new
+position only tells microui which window the finger is in; the second is the
+first that can mark a control hovered; the press follows. `ui_pointer.c` owns
+that policy (`UI_POINTER_HOVER_FRAMES`) and `suite_ui_pointer_microui.c` pins
+it against real microui.
+
+Shipping a press one frame early cost exactly what this passage predicts: the
+pointer held `mouse_down` from the press frame onward, hover was therefore
+never established, nothing took focus, and **every button in the shell drew
+its pressed frame while returning 0** — no app reachable from the launcher.
+The event-list unit tests stayed green throughout, which is why a suite that
+drives real microui now exists.
 
 **This applies to every microui control**, not just buttons — anything reacting
 to a press goes through `mu_update_control()`. Adding a checkbox requires

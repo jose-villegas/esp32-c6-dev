@@ -25,36 +25,48 @@ int ui_pointer_step(ui_pointer_t *p, const input_t *input, ui_pointer_event_t *o
     int n = 0;
 
     if (input->pressed) {
-        /* Frame 1 of a tap: position only, so hover resolves before a
-         * control can be pressed - see ui.h's touch-to-mouse comment. */
-        p->press_pending = true;
+        /* First of the hover frames: position only. See
+         * UI_POINTER_HOVER_FRAMES for why a press cannot simply be fed
+         * here, and why one such frame is not enough. */
+        p->press_stage = 1;
         p->press_x = input->x;
         p->press_y = input->y;
         n = emit(out, n, UI_POINTER_MOVE, p->press_x, p->press_y);
 
         if (input->released) {
-            /* Resolved inside one frame - too fast for the hover frame to
-             * ever get its own DOWN. Still a real tap, so still needs one. */
+            /* Resolved inside one frame - too fast for the hover frames to
+             * play out. Still a real tap, so it still owes a down/up pair,
+             * and feeding both here leaves microui the same
+             * mouse_down-already-clear frame it resolved taps on before
+             * the pointer ever learned to hold. */
             n = emit(out, n, UI_POINTER_DOWN, p->press_x, p->press_y);
             n = emit(out, n, UI_POINTER_UP, input->x, input->y);
-            p->press_pending = false;
+            p->press_stage = 0;
             p->down = false;
         }
         return n;
     }
 
-    if (p->press_pending) {
-        /* Frame 2: the press lands on whatever the hover frame resolved. */
+    if (p->press_stage > 0) {
         n = emit(out, n, UI_POINTER_MOVE, p->press_x, p->press_y);
-        n = emit(out, n, UI_POINTER_DOWN, p->press_x, p->press_y);
-        p->press_pending = false;
-        p->down = true;
+
+        const bool last_hover_frame = (p->press_stage >= UI_POINTER_HOVER_FRAMES);
+        if (last_hover_frame) {
+            n = emit(out, n, UI_POINTER_DOWN, p->press_x, p->press_y);
+            p->press_stage = 0;
+            p->down = true;
+        } else {
+            p->press_stage++;
+        }
 
         if (input->released) {
-            /* The finger lifted before this DOWN frame arrived on its own -
-             * same "still needs a real down/up pair" case as above, just
-             * spread across two frames instead of one. */
+            /* Lifted mid-sequence. A press that never got its DOWN still
+             * owes one, or the tap vanishes entirely. */
+            if (!p->down) {
+                n = emit(out, n, UI_POINTER_DOWN, p->press_x, p->press_y);
+            }
             n = emit(out, n, UI_POINTER_UP, input->x, input->y);
+            p->press_stage = 0;
             p->down = false;
         }
         return n;
