@@ -465,13 +465,13 @@ const reaction_t reactions[MATERIAL_MAX] = {
             /* See reaction_t.thaws. Snow melts slower. */
             .thaws = 4,
 
-            /* A bank that has stopped moving crusts over. 1 against a 16-bit
-             * roll is ~1 cell per 65 steps on a thousand-cell bank, which
-             * reads as a crust forming rather than a flash freeze. */
             .crusts = 35,  /* out of CRUST_ROLL_MAX a settled, bordered cell.
                             * Set by the balance ceiling, not by feel: a 32
-                            * cell deep cover of snow is 90% ice after 9511
-                            * steps, about five minutes of play. */
+                            * cell deep cover of snow is 90% ice after 9152
+                            * steps, about five minutes of play. This field
+                            * only governs that rate now - it used to share it
+                            * with how often a thermal wake happened to
+                            * unsettle the bank (bd esp32c6-8ce). */
             .crusts_to = MATX(MATX_ICE),
         },
 

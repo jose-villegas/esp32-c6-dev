@@ -1047,14 +1047,15 @@ static void test_snow_melts_on_wet_soil_but_not_on_dry(void)
 
 /* THE BALANCE CEILING: 32 cells of snow reach 90% ice in about five minutes.
  *
- * OF PLAY, NOT OF TEST - simulated steps at ~30 ms on the device; the host
- * runs the lot in a quarter second. Measured 9511 steps.
+ * OF PLAY, NOT OF TEST: simulated steps at ~30 ms on the device. Measured
+ * 9152 steps.
  *
- * The one crust test that does NOT force the rate: the others call
- * sand_set_crust(), so sweeping crusts through them is byte-identical.
+ * The one crust test that does NOT force the rate - the others call
+ * sand_set_crust(), leaving the shipped crusts invisible to them, so
+ * re-measure here when anything under the rule moves.
  *
  * 90% and not all, because the rim never crusts. No side walls - they seed up
- * the full height, and the front would go sideways, not into the depth. */
+ * the full height and the front would go sideways. */
 static void test_a_32_cell_snow_cover_turns_to_ice_in_about_five_minutes(void)
 {
     enum { GW = 56, GH = 40, X0 = 4, X1 = 52, DEPTH = 32 };
@@ -1130,7 +1131,7 @@ static void test_a_32_cell_snow_cover_turns_to_ice_in_about_five_minutes(void)
     free(blocks);
 
     TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, almost_at,
-        "a 32 cell cover of snow must end up 90% ice - measured 9511 steps; "
+        "a 32 cell cover of snow must end up 90% ice - measured 9152 steps; "
         "never getting there means the shipped crusts rate cannot reach the "
         "balance ceiling at all, which is what a byte-wide field against a "
         "65536 roll used to guarantee");
@@ -1208,12 +1209,14 @@ static void test_snow_does_not_crust_against_open_air(void)
         "forms where snow meets another material, and air is not one");
 }
 
-/* A CRUST STARTS AT THE FACES AND THICKENS INWARD, never reaching the core.
+/* A CRUST STARTS AT THE FACES AND THICKENS INWARD, and at any moment the
+ * front is deeper on the outside than the inside.
  *
- * Three claims, one per assertion below. Measured at 4000 steps, ice per
- * depth: ring 90/90, then 48/82, 21/74, 4/66, 1/50. Without the border test
- * the bank ices flat - 71 of 74 two deep - and without the slower widening
- * rate the front eats inward and does the same. */
+ * Three claims, one per assertion below. Measured at the window below, ice
+ * per depth: ring 68/90 (the other 22 are the open top, which never crusts),
+ * then 60/82, 42/74, 25/66, 5/58, 3/50. Without the border test the bank ices
+ * flat - 71 of 74 two deep - and without the slower widening rate the front
+ * eats inward and does the same. */
 static void test_a_snowbank_crusts_on_its_faces_and_thickens_slowly_inward(void)
 {
     enum { GW = 40, GH = 40, X0 = 8, X1 = 32, YTOP = 16, YBOT = GH - 2 };
@@ -1245,10 +1248,13 @@ static void test_a_snowbank_crusts_on_its_faces_and_thickens_slowly_inward(void)
         }
     }
 
-    /* Long enough for the second layer to be well under way. Both paths are
-     * deliberately slow now - seeding as well as widening - so this is a
-     * multiple of what the shape needs, not a rate being measured. */
-    for (int i = 0; i < 12000; i++) {
+    /* A WINDOW, and it has to be one: the widening path is rate-limited, not
+     * bounded, so given long enough the front does reach the core and the
+     * third assertion below stops being true of any window at all. This is
+     * where the second layer is well under way and the fifth has barely
+     * started - measured, and it moved when the crust rate stopped riding an
+     * unrelated wake (bd esp32c6-8ce). */
+    for (int i = 0; i < 8000; i++) {
         sand_step(&g, 0, 1000, 0);
     }
 
@@ -1367,6 +1373,73 @@ static void test_a_settled_snowbank_crusts_to_ice(void)
         "snow that is never allowed to settle must never crust, however hard "
         "the roll is forced - the rule is about rest, and a snowfall in "
         "flight has to cost nothing");
+}
+
+/* AND ONCE AT REST IT STAYS AT REST, whatever is happening thermally under it.
+ *
+ * The test above makes cell_settled() the gate on crusting, which hands the
+ * crust RATE to whatever else clears BLOCK_SETTLED - and waking on heat
+ * traffic moved the balance ceiling 9x with COLD_REWARM_PERIOD (esp32c6-8ce).
+ *
+ * STONE UNDERNEATH IS THE POINT - the heat_ramp material snow can chill. On
+ * an inert floor there is no traffic and this passes with the wakes back in. */
+static void test_a_resting_snowbank_stays_settled_over_a_floor_it_chills(void)
+{
+    enum { GW = 32, GH = 24, DEPTH = 14, WARMUP = 200, WATCH = 600 };
+    uint8_t *cells  = calloc(GW * GH, 1);
+    uint8_t *blocks = calloc((size_t)((GW + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
+                           * (size_t)((GH + SAND_BLOCK_H - 1) / SAND_BLOCK_H), 1);
+    TEST_ASSERT_NOT_NULL(cells);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t g;
+    memset(&g, 0, sizeof g);
+    sand_init(&g, cells, GW, GH, 71u);
+    sand_enable_sleeping(&g, blocks);
+
+    for (int x = 0; x < GW; x++) {
+        sand_set(&g, x, GH - 1, STONE);
+    }
+    for (int y = GH - 1 - DEPTH; y < GH - 1; y++) {
+        for (int x = 2; x < GW - 2; x++) {
+            sand_set(&g, x, y, SNOW);
+        }
+    }
+    for (int i = 0; i < WARMUP; i++) {
+        sand_step(&g, 0, 1000, 0);   /* land, and be marked settled */
+    }
+
+    int first_loose = -1, loose_steps = 0;
+    for (int i = 1; i <= WATCH; i++) {
+        sand_step(&g, 0, 1000, 0);
+        int loose = 0;
+        for (int y = 0; y < GH; y++) {
+            for (int x = 0; x < GW; x++) {
+                if (CELL_MATERIAL(sand_at(&g, x, y)) != MAT_SNOW) {
+                    continue;
+                }
+                loose += cell_settled(&g, x, y) ? 0 : 1;
+            }
+        }
+        if (loose != 0) {
+            loose_steps++;
+            if (first_loose < 0) {
+                first_loose = i;
+            }
+        }
+    }
+    free(cells);
+    free(blocks);
+
+    /* NOT A FRACTION. The wakes this pins are gone, not merely rarer, so the
+     * honest assertion is zero - with them it broke by step 48 here, and on
+     * eight seeds by step 136 at the latest. */
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, loose_steps,
+        "a snowbank at rest on stone must never be shaken loose again - heat "
+        "moving through the floor is not a reason for a grain to move, and "
+        "waking on it puts snow's crust rate under a thermal constant");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(-1, first_loose,
+        "and the step it first came loose on says how quickly, when it does");
 }
 
 /* BURYING A FIRE PUTS IT OUT - one of only two ways fire ends, and asserted
@@ -2254,6 +2327,7 @@ void run_sand_combustion_suite(void)
     RUN_TEST(test_cold_conducts_deep_into_a_slab);
     RUN_TEST(test_snow_melts_on_wet_soil_but_not_on_dry);
     RUN_TEST(test_a_settled_snowbank_crusts_to_ice);
+    RUN_TEST(test_a_resting_snowbank_stays_settled_over_a_floor_it_chills);
     RUN_TEST(test_a_snowbank_crusts_on_its_faces_and_thickens_slowly_inward);
     RUN_TEST(test_snow_does_not_crust_against_open_air);
     RUN_TEST(test_a_32_cell_snow_cover_turns_to_ice_in_about_five_minutes);
