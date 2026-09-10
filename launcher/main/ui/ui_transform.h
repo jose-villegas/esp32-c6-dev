@@ -58,6 +58,7 @@
 #include <stdint.h>
 
 #include "gfx/gfx_font.h"
+#include "gfx/icon.h"
 #include "microui.h"
 #include "util/fixed.h"
 
@@ -227,6 +228,39 @@ static inline mu_Rect ui_transform_rect(ui_transform_t t, mu_Rect r)
         if (ys[i] > max_y) max_y = ys[i];
     }
     return (mu_Rect){ min_x, min_y, max_x - min_x, max_y - min_y };
+}
+
+/* icon_walk_blocks()'s callback context, adapted to transform each run
+ * before it reaches the caller's own `emit` - see ui_transform_icon_blocks()
+ * below for why this exists instead of transforming `box` once up front. */
+typedef struct {
+    ui_transform_t t;
+    int             box_x, box_y;
+    icon_emit_fn    emit;
+    void           *ctx;
+} ui_transform_icon_ctx_t;
+
+static inline void ui_transform_icon_emit(void *ctx, int x, int y, int w, int h)
+{
+    const ui_transform_icon_ctx_t *ic = ctx;
+    const mu_Rect local = { ic->box_x + x, ic->box_y + y, w, h };
+    const mu_Rect dst = ui_transform_rect(ic->t, local);
+    ic->emit(ic->ctx, dst.x, dst.y, dst.w, dst.h);
+}
+
+/* icon_walk_blocks() (gfx/icon.h), with each emitted run mapped through `t`
+ * before `emit` sees it, not just the enclosing `box` - transforming only
+ * the box lands it correctly but leaves the glyph inside it upright under
+ * any quarter turn, the bug MU_COMMAND_RECT/_TEXT never had. `box` is
+ * LOGICAL, the same one microui's command carries. */
+static inline void ui_transform_icon_blocks(ui_transform_t t, const uint8_t *rows,
+                                             int iw, int ih, int stride, mu_Rect box,
+                                             icon_emit_fn emit, void *ctx)
+{
+    ui_transform_icon_ctx_t ic = { .t = t, .box_x = box.x, .box_y = box.y,
+                                   .emit = emit, .ctx = ctx };
+    icon_walk_blocks(rows, iw, ih, stride, box.w, box.h,
+                     ui_transform_icon_emit, &ic);
 }
 
 /* Which of gfx_text_turned()'s four quarters `t` represents, for a

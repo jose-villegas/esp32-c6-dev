@@ -40,14 +40,21 @@ typedef struct {
     uint8_t  blocks;   /* baked run-length rect count - see gen_icons.py */
 } icon_t;
 
+/* One run, in whatever coordinate space its producer documents - a plain
+ * carrier for a caller that wants icon_walk_blocks()'s runs collected into
+ * an array instead of streamed to a callback (test suites do this). Used to
+ * live in icons.h beside the hand-typed format that owned it first; that
+ * format is gone, this outlived it. */
+typedef struct {
+    int x, y, w, h;
+} icon_rect_t;
+
 /* icon_walk_blocks()'s output: one contiguous horizontal run, already scaled
  * and positioned relative to the destination box's own origin (0, 0) - the
- * caller adds its box's x/y, same convention icon_bitmap_blocks() (icons.h)
- * uses for its output array. */
+ * caller adds its box's x/y. */
 typedef void (*icon_emit_fn)(void *ctx, int x, int y, int w, int h);
 
-/* Streaming twin of icon_bitmap_blocks() (icons.h): same fit-to-box and
- * content-bbox centring, but EMITS each run instead of collecting, so
+/* Fits an icon to a box and EMITS each run rather than collecting them, so
  * per-draw stack is O(1) in the icon's size. `rows`/`iw`/`ih`/`stride` are
  * an icon_t's own fields plus its table's rows[] blob.
  *
@@ -65,10 +72,10 @@ static inline void icon_walk_blocks(const uint8_t *rows, int iw, int ih, int str
         scale = 1;
     }
 
-    /* Fresh scan of the content bounding box every call, same reasoning as
-     * icon_bitmap_blocks(): a glyph rarely fills its whole iw x ih grid, so
-     * centring the declared size rather than the ink would off-centre the
-     * visible content by however wide that margin is. */
+    /* Fresh scan of the content bounding box every call: a glyph rarely
+     * fills its whole iw x ih grid, so centring the declared size rather
+     * than the ink would off-centre the visible content by however wide
+     * that margin is. */
     int min_x = iw, max_x = -1;
     int min_row = ih, max_row = -1;
     for (int y = 0; y < ih; y++) {

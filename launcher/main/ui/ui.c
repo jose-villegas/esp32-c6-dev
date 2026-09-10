@@ -32,7 +32,7 @@
 
 #include "gfx/gfx.h"
 #include "gfx/gfx_font_roles.h"
-#include "gfx/icons.h"
+#include "gfx/icons_system.h"
 #include "ui/ui_pointer.h"
 #include "ui/ui_slider.h"
 
@@ -551,6 +551,16 @@ int ui_begin_screen(mu_Context *ctx, const char *title, int opt)
  * at the point it was set.
  *-------------------------------------------------------------------------*/
 
+typedef struct {
+    gfx_color_t color;
+} icon_fill_ctx_t;
+
+static void icon_fill_emit(void *ctx, int x, int y, int w, int h)
+{
+    const icon_fill_ctx_t *fc = ctx;
+    gfx_fill_rect(x, y, w, h, fc->color);
+}
+
 static void draw_command(const mu_Command *cmd)
 {
     const ui_transform_t t = effective_transform();
@@ -628,19 +638,23 @@ static void draw_command(const mu_Command *cmd)
 
     case MU_COMMAND_ICON: {
         /* microui's icons are close/check/collapsed/expanded. MU_ICON_CHECK
-         * is real artwork (icons.h's icon_check()) because two callers need
-         * it: the diagnostics app's mu_checkbox() toggles, and
-         * app_sand.c's palette spawn badge. The other three stay a small
-         * centred-square placeholder - a deliberate gap, not an oversight,
-         * because nothing in this shell closes a window or collapses a
-         * tree yet to ask for them. */
+         * is real artwork (gfx/icons_system.h's baked ICON_SYSTEM_CHECK)
+         * because two callers need it: the diagnostics app's mu_checkbox()
+         * toggles, and app_sand.c's palette spawn badge. The other three
+         * stay a small centred-square placeholder - a deliberate gap, not
+         * an oversight, because nothing in this shell closes a window or
+         * collapses a tree yet to ask for them. */
         const mu_Color c = cmd->icon.color;
-        const mu_Rect r = ui_transform_rect(t, cmd->icon.rect);
         const gfx_color_t color = gfx_rgb(((uint32_t)c.r << 16) |
                                           ((uint32_t)c.g << 8)  | c.b);
         if (cmd->icon.id == MU_ICON_CHECK) {
-            icon_check(r.x, r.y, r.w, r.h, color);
+            const icon_t *icon = &icon_system_table[ICON_SYSTEM_CHECK];
+            icon_fill_ctx_t fc = { .color = color };
+            ui_transform_icon_blocks(t, icon_system_rows + icon->offset,
+                                     icon->w, icon->h, icon->stride,
+                                     cmd->icon.rect, icon_fill_emit, &fc);
         } else {
+            const mu_Rect r = ui_transform_rect(t, cmd->icon.rect);
             gfx_fill_rect(r.x + r.w / 3, r.y + r.h / 3, r.w / 3, r.h / 3,
                           color);
         }

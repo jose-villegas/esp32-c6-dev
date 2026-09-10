@@ -6,7 +6,6 @@ set(app_srcs
     "boot/post_ui.c"
     "display/display.c"
     "gfx/gfx.c"
-    "gfx/icons.c"
     "input/touch.c"
     "input/touch_fsm.c"
     "input/button_fsm.c"
