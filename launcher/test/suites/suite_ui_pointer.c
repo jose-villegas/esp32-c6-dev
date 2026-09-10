@@ -158,6 +158,43 @@ test_a_finger_already_down_at_open_synthesizes_no_press(void) {
 }
 
 static void
+test_a_finger_already_down_at_open_then_released_emits_no_up(void) {
+    fixture();
+
+    step(true, false, false, 50, 60); /* already down at open: no DOWN was ever emitted */
+
+    int n = step(false, false, true, 50, 60);
+    TEST_ASSERT_EQUAL_INT(1, n);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(UI_POINTER_MOVE, ev[0].kind,
+                                  "a DOWN that was never emitted must not get a matching UP");
+}
+
+/*-----------------------------------------------------------------------------
+ * The header promises never more than `max` - a too-small buffer must be
+ * rejected outright, not partially filled, and must not touch state either
+ * (a caller with a short buffer must not silently eat a press edge).
+ *---------------------------------------------------------------------------*/
+
+static void
+test_a_too_small_buffer_returns_zero_and_leaves_state_untouched(void) {
+    fixture();
+
+    input_t in = make_input(true, true, false, 10, 20);
+    int n = ui_pointer_step(&p, &in, ev, UI_POINTER_MAX_EVENTS - 1);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, n, "a buffer smaller than UI_POINTER_MAX_EVENTS must be rejected");
+
+    /* Rejected, not partially applied: the same press replayed with a
+     * proper buffer must still play out its normal hover-then-down. */
+    n = step(true, true, false, 10, 20);
+    TEST_ASSERT_EQUAL_INT(1, n);
+    TEST_ASSERT_EQUAL_INT(UI_POINTER_MOVE, ev[0].kind);
+
+    n = step(true, false, false, 10, 20);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(2, n, "the DOWN must still follow, proving the rejected call left press_pending untouched");
+    TEST_ASSERT_EQUAL_INT(UI_POINTER_DOWN, ev[1].kind);
+}
+
+static void
 test_idle_parks_the_pointer_off_screen(void) {
     fixture();
 
@@ -175,6 +212,8 @@ run_ui_pointer_suite(void) {
     RUN_TEST(test_exactly_one_up_comes_out_of_one_press);
     RUN_TEST(test_a_same_frame_tap_still_yields_move_down_up);
     RUN_TEST(test_a_finger_already_down_at_open_synthesizes_no_press);
+    RUN_TEST(test_a_finger_already_down_at_open_then_released_emits_no_up);
+    RUN_TEST(test_a_too_small_buffer_returns_zero_and_leaves_state_untouched);
     RUN_TEST(test_idle_parks_the_pointer_off_screen);
 }
 
