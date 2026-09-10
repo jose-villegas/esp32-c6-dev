@@ -12,6 +12,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "app.h"
 
@@ -31,8 +32,20 @@ typedef struct {
  * can play out - see ui_pointer_step()'s own comment. */
 #define UI_POINTER_MAX_EVENTS 3
 
+/* MOVE-only frames a press waits through before its DOWN is fed, and both
+ * are load-bearing. microui resolves a control's hover only when the mouse
+ * is over it AND not already down, and mu_mouse_over() needs hover_root,
+ * which mu_begin() copies from the PREVIOUS frame. So frame one only tells
+ * microui which window the finger is in, frame two is the first that can
+ * actually mark the control hovered, and a DOWN before that lands with
+ * nothing hovered - which means nothing focused, and a button that draws
+ * its pressed state but never submits. */
+#define UI_POINTER_HOVER_FRAMES 2
+
 typedef struct {
-    bool press_pending; /* the hover MOVE went out; the DOWN has not yet */
+    /* 0 when no press is being staged, else how many hover frames have gone
+     * out so far - the DOWN follows the UI_POINTER_HOVER_FRAMES'th. */
+    uint8_t press_stage;
     int press_x, press_y;
     bool down; /* a DOWN went out with no matching UP yet */
 } ui_pointer_t;

@@ -174,9 +174,10 @@ gesture), `util/` (pure arithmetic), `apps/`.
 256 KiB just for the command list, cut down in the header itself since it
 affects struct layout). Immediate-mode command list, hashed per-window each
 frame to skip repainting/transferring unchanged canvases (dirty-band system).
-Touch needs a synthesized hover frame (`feed_input()`) since a touchscreen
-never produces microui's mouse-shaped "point, then click" sequence — costs
-one frame (~24 ms) of tap latency, applies to every control. See
+Touch needs two synthesized hover frames (`ui_pointer.c`) since a touchscreen
+never produces microui's mouse-shaped "point, then click" sequence, and
+`hover_root` itself lags a frame — costs ~48 ms of tap latency, applies to
+every control. See
 `docs/Launcher-Architecture.md` for the full mechanism and the styling system
 (`ui_style.h`, `UI_BUTTON_FLAT` vs `UI_BUTTON_BEZEL`).
 

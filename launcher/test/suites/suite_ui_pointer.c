@@ -40,23 +40,43 @@ step(bool down, bool pressed, bool released, int x, int y) {
     return ui_pointer_step(&p, &in, ev, UI_POINTER_MAX_EVENTS);
 }
 
+/* Walk a press through every hover frame, leaving the NEXT step() as the
+ * one that carries the DOWN. Written against UI_POINTER_HOVER_FRAMES rather
+ * than a hardcoded count so a change to the policy shows up as one failing
+ * assertion about the policy, not as several tests silently testing the
+ * wrong thing. */
+static void
+press_through_hover(int x, int y) {
+    for (int frame = 0; frame < UI_POINTER_HOVER_FRAMES; frame++) {
+        step(true, frame == 0, false, x, y);
+    }
+}
+
 /*-----------------------------------------------------------------------------
  * The synthesized hover frame - load-bearing, see ui.h's touch-to-mouse
  * comment. Lost, a touchscreen tap could never resolve into a click at all.
  *---------------------------------------------------------------------------*/
 
 static void
-test_a_tap_hovers_one_frame_before_pressing(void) {
+test_a_tap_hovers_two_frames_before_pressing(void) {
     fixture();
 
-    int n = step(true, true, false, 10, 20);
-    TEST_ASSERT_EQUAL_INT(1, n);
-    TEST_ASSERT_EQUAL_INT(UI_POINTER_MOVE, ev[0].kind);
-    TEST_ASSERT_EQUAL_INT(10, ev[0].x);
-    TEST_ASSERT_EQUAL_INT(20, ev[0].y);
+    /* Both hover frames are MOVE-only, and both matter: the first tells
+     * microui which window the finger is in (hover_root, which mu_begin()
+     * copies from the previous frame), the second is the first frame that
+     * can mark a control hovered. A DOWN before that lands with nothing
+     * hovered, so nothing takes focus and no button ever submits - which
+     * is exactly what shipped and made every app unreachable. */
+    for (int frame = 0; frame < UI_POINTER_HOVER_FRAMES; frame++) {
+        const int n = step(true, frame == 0, false, 10, 20);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(1, n, "a hover frame carries a move and nothing else");
+        TEST_ASSERT_EQUAL_INT(UI_POINTER_MOVE, ev[0].kind);
+        TEST_ASSERT_EQUAL_INT(10, ev[0].x);
+        TEST_ASSERT_EQUAL_INT(20, ev[0].y);
+    }
 
-    n = step(true, false, false, 10, 20);
-    TEST_ASSERT_EQUAL_INT_MESSAGE(2, n, "the frame after a press must carry a move and a down, nothing more");
+    const int n = step(true, false, false, 10, 20);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(2, n, "the down follows the hover frames, with its own move");
     TEST_ASSERT_EQUAL_INT(UI_POINTER_MOVE, ev[0].kind);
     TEST_ASSERT_EQUAL_INT(UI_POINTER_DOWN, ev[1].kind);
     TEST_ASSERT_EQUAL_INT(10, ev[1].x);
@@ -71,7 +91,7 @@ static void
 test_a_drag_stays_down_across_moves_then_lifts_once(void) {
     fixture();
 
-    step(true, true, false, 10, 20);          /* hover frame */
+    press_through_hover(10, 20);
     int n = step(true, false, false, 10, 20); /* the down */
     TEST_ASSERT_EQUAL_INT(2, n);
     TEST_ASSERT_EQUAL_INT(UI_POINTER_DOWN, ev[1].kind);
@@ -185,12 +205,10 @@ test_a_too_small_buffer_returns_zero_and_leaves_state_untouched(void) {
 
     /* Rejected, not partially applied: the same press replayed with a
      * proper buffer must still play out its normal hover-then-down. */
-    n = step(true, true, false, 10, 20);
-    TEST_ASSERT_EQUAL_INT(1, n);
-    TEST_ASSERT_EQUAL_INT(UI_POINTER_MOVE, ev[0].kind);
+    press_through_hover(10, 20);
 
     n = step(true, false, false, 10, 20);
-    TEST_ASSERT_EQUAL_INT_MESSAGE(2, n, "the DOWN must still follow, proving the rejected call left press_pending untouched");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(2, n, "the DOWN must still follow, proving the rejected call left press_stage untouched");
     TEST_ASSERT_EQUAL_INT(UI_POINTER_DOWN, ev[1].kind);
 }
 
@@ -207,7 +225,7 @@ test_idle_parks_the_pointer_off_screen(void) {
 
 void
 run_ui_pointer_suite(void) {
-    RUN_TEST(test_a_tap_hovers_one_frame_before_pressing);
+    RUN_TEST(test_a_tap_hovers_two_frames_before_pressing);
     RUN_TEST(test_a_drag_stays_down_across_moves_then_lifts_once);
     RUN_TEST(test_exactly_one_up_comes_out_of_one_press);
     RUN_TEST(test_a_same_frame_tap_still_yields_move_down_up);
