@@ -80,6 +80,17 @@ SELFTEST_COMPLETE_RE = re.compile(r"SELFTEST_COMPLETE(?:\s+failures=(\d+)\s+elap
 # subject is last.
 MEASURE_RE = re.compile(r"device_tests.*(?<![\d.])(\d+)\s*us\b")
 
+# ...but a SAND line puts its subject FIRST: "20190 us per step, worst
+# single step 29644 us". The rule above tabled the worst single step as
+# the per-step cost - a 27100 budget read as missed by 9.4% when the real
+# figure passes it with a quarter to spare, and PASS printed beside that,
+# because the status is the test's own verdict on the number it actually
+# asserted. Five lines of one capture carry two figures this way.
+#
+# A line saying "per step" names its subject; everything else keeps the
+# last-figure rule and the gfx reasoning above.
+PER_STEP_RE = re.compile(r"device_tests.*?(?<![\d.])(\d+)\s*us per step")
+
 
 def parse_budgets(source_path: str) -> dict:
     with open(source_path, "r", errors="replace") as f:
@@ -163,7 +174,7 @@ def parse_capture(capture_path: str):
     test_times = {}  # test name -> elapsed_ms, from TEST_TIME lines
     pending_measure = None
     for line in text.splitlines():
-        mm = MEASURE_RE.search(line)
+        mm = PER_STEP_RE.search(line) or MEASURE_RE.search(line)
         if mm:
             pending_measure = int(mm.group(1))
             continue
