@@ -50,12 +50,15 @@
 #include "../../app.h"
 #include "../../display/display.h"
 #include "../../gfx/gfx.h"
+#include "../../gfx/gfx_font_roles.h"
 #include "../../input/imu.h"
 #include "../../ui/ui.h"
+#include "brush_screen.h"
 #include "material_palette.h"
 #include "palette.h"
 #include "row_runs.h"
 #include "sand.h"
+#include "sand_icons.h"
 #include "sand_ui.h"
 #include "tilt.h"
 #include "util/intmath.h"   /* im_abs(), im_len() - see
@@ -94,15 +97,20 @@ static int cell, grid_w, grid_h, block_cols, block_rows;
 #define MENU_BTN_H    UI_ROW_HEIGHT
 #define MENU_BTN_GAP  20
 
-#define POUR_RADIUS_PX   10      /* was 5 cells at 2 px */
+/* Default pour brush radius, in px - seeds sand_ui_t.radius_px; the value
+ * actually in force is whatever the brush screen's slider last set (see
+ * sand_ui_radius()). */
+#define POUR_RADIUS_PX   10
 
 #define POUR_HZ       60
 #define POUR_STEP_MS  (1000 / POUR_HZ)
 
-#define ERASE_RADIUS_PX  16      /* was 8 cells at 2 px */
+/* Default erase brush radius, in px - see POUR_RADIUS_PX's own comment. */
+#define ERASE_RADIUS_PX  16
 
 #define ERASE_EMITTER_RADIUS_PX  32
 
+/* Default BOOM brush radius, in px - see POUR_RADIUS_PX's own comment. */
 #define DETONATE_RADIUS_PX  50
 
 #define APP_IMPULSE_MAX  2048
@@ -125,8 +133,9 @@ _Static_assert(
     "allocated - never from arithmetic alone.");
 
 /* Selected from the palette panel, not cycled - a cycle's cost grows with
- * material count, a panel's doesn't. PWR still cycles PAINT/ERASE/DETONATE
- * directly: a HOLD's 600ms tax is too slow for a control used this often.
+ * material count, a panel's doesn't. PAINT/ERASE/DETONATE now comes from
+ * the brush screen's segmented control, not a PWR cycle, for the same
+ * reason: a HOLD's 600ms tax is too slow for a control used this often.
  * Only paintable materials get a tile - burning wood is a STATE, not a
  * material (reaction_t.burn_decay). Whole CELLS, not ids: an extended
  * material isn't nameable by id alone (MATX() in material.h). */
@@ -187,8 +196,7 @@ static uint8_t    *sleep_blocks; /* BLOCK_COLS_MAX*BLOCK_ROWS_MAX bytes:
                                    * sand_enable_sleeping() */
 static impulse_t  *impulse_buf;  /* APP_IMPULSE_MAX entries: grains in
                                    * flight from DETONATE - see
-                                   * sand_enable_impulses(). Scaffolding,
-                                   * like sand_mode_t itself. */
+                                   * sand_enable_impulses(). */
 
 static uint16_t   *row_run_x0;
 static uint16_t   *row_run_x1;
@@ -200,7 +208,10 @@ static uint32_t    label_left_ms;    /* countdown for the mode label */
 
 static bool        input_ready;
 
-static int         palette_drawn_quarter;
+/* The shell's quarter turn as of the last frame either overlay panel
+ * (palette or brush) was drawn - both can be left open while the board
+ * rotates, and each detects the change against this the same way. */
+static int         panel_drawn_quarter;
 
 #if CONFIG_LAUNCHER_DEVELOPMENT
 /* Rolling averages, purely for the log line - a release build has nobody
@@ -410,8 +421,9 @@ static void start_sim(void)
 
     sand_enable_sleeping(&sim, sleep_blocks);
 
-    /* DETONATE scaffolding - see sand_ui.h. Enabled unconditionally to catch
-     * allocation failures early. */
+    /* Enabled unconditionally, not just once BOOM is selected, so an
+     * allocation failure shows up at start_sim() rather than on the first
+     * tap in BOOM mode. */
     sand_enable_impulses(&sim, impulse_buf, APP_IMPULSE_MAX);
     tilt_reset(&tilt, IMU_COUNTS_PER_G);
 
@@ -1130,7 +1142,7 @@ static void draw_mode_label(int gx, int gy)
     char text_buf[24];
     const char *text;
     if (ui.mode == SAND_MODE_DETONATE) {
-        text = "DETONATE";   /* scaffolding - see sand_mode_t in sand_ui.h */
+        text = "BOOM";
     } else if (ui.mode == SAND_MODE_ERASE) {
         text = "ERASE";
     } else if (ui.modes[ui.brush] == BRUSH_SPAWN) {
@@ -1190,6 +1202,17 @@ static void draw_mode_label(int gx, int gy)
 
 #define PALETTE_BADGE_BORDER_COLOR  0x141414
 #define PALETTE_BADGE_FILL_COLOR    0xF2F2F2
+
+/* The brush screen's palette - dark navy panels, a gold accent for the
+ * selected mode segment. Unlike the palette above, none of these derive
+ * from a material's own colour: this screen's chrome, not its content. */
+#define BRUSH_PANEL_FACE_COLOR         0x131C2E
+#define BRUSH_PANEL_BORDER_COLOR       0xE8ECF4
+#define BRUSH_SEG_SELECTED_COLOR       0xE0A63C
+#define BRUSH_SEG_UNSELECTED_COLOR     0x1B2740
+#define BRUSH_CAPTION_COLOR            0x8FA3C0
+#define BRUSH_TEXT_COLOR               0xF2F6FF
+#define BRUSH_SEG_SELECTED_INK_COLOR   0x2A1A06
 
 static mu_Color mu_color_hex(uint32_t rgb)
 {
@@ -1313,6 +1336,218 @@ static void draw_palette(const input_t *input)
     ui_end(UI_NO_BACKGROUND);
 }
 
+/* Padding inside one brush-mode segment, and the gap between its icon and
+ * its label - the icon square is whatever is left of the segment's height
+ * after both, capped to the segment's width so a narrow canvas can't ask
+ * for a wider icon than the segment actually has. */
+#define BRUSH_SEG_PAD        8
+#define BRUSH_SEG_LABEL_GAP  4
+
+/* Inset from the info button's own edge to its icon - same reasoning as
+ * INFO_BTN_SIDE's own comment in brush_screen.c: room so the glyph isn't
+ * pressed against the button frame. */
+#define BRUSH_INFO_ICON_PAD  12
+
+static const char *const brush_seg_names[BRUSH_SCREEN_SEGMENT_COUNT] = {
+    [BRUSH_SCREEN_SEG_POUR]  = "POUR",
+    [BRUSH_SCREEN_SEG_ERASE] = "ERASE",
+    [BRUSH_SCREEN_SEG_BOOM]  = "BOOM",
+};
+
+static const uint16_t *const brush_seg_icons[BRUSH_SCREEN_SEGMENT_COUNT] = {
+    [BRUSH_SCREEN_SEG_POUR]  = icon_pour_bitmap,
+    [BRUSH_SCREEN_SEG_ERASE] = icon_erase_bitmap,
+    [BRUSH_SCREEN_SEG_BOOM]  = icon_boom_bitmap,
+};
+
+/* One panel frame (ui_style.h's flat section frame) in a fixed colour
+ * pair, spans drawn back to front. */
+static void draw_brush_panel(mu_Context *ctx, mu_Rect r)
+{
+    ui_span_t spans[UI_PANEL_MAX_SPANS];
+    const int n = ui_panel_spans(r, mu_color_hex(BRUSH_PANEL_FACE_COLOR),
+                                 mu_color_hex(BRUSH_PANEL_BORDER_COLOR),
+                                 spans, UI_PANEL_MAX_SPANS);
+    for (int i = 0; i < n; i++) {
+        mu_draw_rect(ctx, spans[i].rect, spans[i].color);
+    }
+}
+
+/* One bezelled frame (ui_style.h's lit/shadowed control frame) in a given
+ * face colour - the swatch, the info button and the three mode segments
+ * all use this, each with its own face and `sunken`. */
+static void draw_brush_bezel(mu_Context *ctx, mu_Rect r, uint32_t face_rgb, bool sunken)
+{
+    ui_span_t spans[UI_BEZEL_MAX_SPANS];
+    const int n = ui_bezel_spans(r, mu_color_hex(face_rgb), sunken, spans,
+                                 UI_BEZEL_MAX_SPANS);
+    for (int i = 0; i < n; i++) {
+        mu_draw_rect(ctx, spans[i].rect, spans[i].color);
+    }
+}
+
+/* `str` at the CURRENT font/scale (whatever ui_set_font_scaled() last set -
+ * `scale` must agree, since it's what sizes the text vertically here),
+ * vertically centred in `r`, horizontally at `align` (-1 left, 0 centre, 1
+ * right). Clipped to `r`, the same guard mu_draw_control_text() gives an
+ * ordinary control's label - this screen has no built-in equivalent since
+ * it draws its own frames rather than going through mu_button(). */
+static void draw_brush_text(mu_Context *ctx, mu_Rect r, const char *str,
+                            mu_Color color, int scale, int align)
+{
+    const int tw = ui_measure_text(str);
+    const int th = gfx_font_height(gfx_font_ui(), scale);
+    const int x = (align < 0) ? r.x
+                : (align == 0) ? r.x + (r.w - tw) / 2
+                               : r.x + r.w - tw;
+    const int y = r.y + (r.h - th) / 2;
+
+    mu_push_clip_rect(ctx, r);
+    mu_draw_text(ctx, ctx->style->font, str, -1, mu_vec2(x, y), color);
+    mu_pop_clip_rect(ctx);
+}
+
+/* Modeled on draw_palette() above - same "caller hit-tests via a real
+ * control, sand_ui.c decides what the hit means" split, sand_ui_mode_
+ * clicked() standing in for sand_ui_tile_clicked(). Unlike the palette,
+ * this screen is a full panel rather than an overlay, hence COL_BACKGROUND
+ * rather than UI_NO_BACKGROUND at ui_end(). */
+static void draw_brush_screen(const input_t *input)
+{
+    mu_Context *ctx = ui_context();
+
+    ui_begin(input);
+
+    ui_set_text_style(UI_TEXT_PLAIN);
+
+    brush_screen_layout_t lay;
+    brush_screen_layout(ui_width(), ui_height(), &lay);
+
+    if (ui_begin_screen(ctx, "Sand Brush",
+                        MU_OPT_NOTITLE | MU_OPT_NORESIZE |
+                        MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
+
+        ui_set_font_scaled(gfx_font_ui(), 2);
+
+        /*---------------------------------------------------------------
+         * Header: swatch, caption/name, info button (drawn, inert).
+         *-------------------------------------------------------------*/
+        draw_brush_panel(ctx, lay.header_panel);
+
+        draw_brush_bezel(ctx, lay.swatch,
+                         gfx_color_rgb888(brush_color(brushes[ui.brush])), false);
+
+        draw_brush_text(ctx, lay.material_caption, "MATERIAL",
+                        mu_color_hex(BRUSH_CAPTION_COLOR), 2, -1);
+
+        /* 4 is the starting scale, but "Gunpowder" (the longest name any
+         * brush carries) doesn't fit it in the name rect at the narrower
+         * of the two real canvases - drop a size at a time rather than let
+         * draw_brush_text()'s clip cut the tail off a real material name. */
+        const char *name = material_name(brushes[ui.brush]);
+        int name_scale = 4;
+        for (; name_scale > 1; name_scale--) {
+            ui_set_font_scaled(gfx_font_ui(), name_scale);
+            if (ui_measure_text(name) <= lay.material_name.w) {
+                break;
+            }
+        }
+        draw_brush_text(ctx, lay.material_name, name,
+                        mu_color_hex(BRUSH_TEXT_COLOR), name_scale, -1);
+        ui_set_font_scaled(gfx_font_ui(), 2);
+
+        draw_brush_bezel(ctx, lay.info_button, BRUSH_SEG_UNSELECTED_COLOR, false);
+        {
+            /* No handler: the panel this button opens is separate, later
+             * work (see docs/plans/Sand-Brush-Screen-Plan.md). Drawn now
+             * because it's in the design; not a bug that tapping it does
+             * nothing yet. */
+            const mu_Rect icon_r = {
+                lay.info_button.x + BRUSH_INFO_ICON_PAD,
+                lay.info_button.y + BRUSH_INFO_ICON_PAD,
+                lay.info_button.w - 2 * BRUSH_INFO_ICON_PAD,
+                lay.info_button.h - 2 * BRUSH_INFO_ICON_PAD,
+            };
+            ui_draw_bitmap(ctx, icon_r, icon_info_bitmap, mu_color_hex(BRUSH_TEXT_COLOR));
+        }
+
+        /*---------------------------------------------------------------
+         * Brush mode: caption, three segments.
+         *-------------------------------------------------------------*/
+        draw_brush_panel(ctx, lay.mode_panel);
+        draw_brush_text(ctx, lay.mode_caption, "BRUSH MODE",
+                        mu_color_hex(BRUSH_CAPTION_COLOR), 2, -1);
+
+        for (int i = 0; i < BRUSH_SCREEN_SEGMENT_COUNT; i++) {
+            const mu_Rect r = lay.segments[i];
+
+            /* Id from the segment's own name, the same idiom mu_button_ex()
+             * uses for a labelled control - the three names differ, so no
+             * two segments can collide. */
+            const mu_Id id = mu_get_id(ctx, brush_seg_names[i],
+                                       (int)strlen(brush_seg_names[i]));
+            mu_update_control(ctx, id, r, 0);
+
+            if (ctx->mouse_pressed == MU_MOUSE_LEFT && ctx->focus == id) {
+                sand_ui_mode_clicked(&ui, i);
+            }
+
+            const bool selected = ((sand_mode_t)i == ui.mode);
+            const bool pressed  = (ctx->hover == id) || (ctx->focus == id);
+            const uint32_t face = selected ? BRUSH_SEG_SELECTED_COLOR
+                                            : BRUSH_SEG_UNSELECTED_COLOR;
+            const mu_Color ink  = mu_color_hex(selected ? BRUSH_SEG_SELECTED_INK_COLOR
+                                                         : BRUSH_TEXT_COLOR);
+
+            draw_brush_bezel(ctx, r, face, pressed);
+
+            const int label_h = gfx_font_height(gfx_font_ui(), 2);
+            int icon_side = r.h - 2 * BRUSH_SEG_PAD - label_h - BRUSH_SEG_LABEL_GAP;
+            const int icon_side_max = r.w - 2 * BRUSH_SEG_PAD;
+            if (icon_side > icon_side_max) {
+                icon_side = icon_side_max;
+            }
+            const mu_Rect icon_r = {
+                r.x + (r.w - icon_side) / 2, r.y + BRUSH_SEG_PAD,
+                icon_side, icon_side,
+            };
+            ui_draw_bitmap(ctx, icon_r, brush_seg_icons[i], ink);
+
+            const mu_Rect label_r = {
+                r.x + BRUSH_SEG_PAD, icon_r.y + icon_side + BRUSH_SEG_LABEL_GAP,
+                r.w - 2 * BRUSH_SEG_PAD, label_h,
+            };
+            draw_brush_text(ctx, label_r, brush_seg_names[i], ink, 2, 0);
+        }
+
+        /*---------------------------------------------------------------
+         * Brush size: caption/value, slider.
+         *-------------------------------------------------------------*/
+        draw_brush_panel(ctx, lay.size_panel);
+
+        const char *size_caption = (ui.mode == SAND_MODE_ERASE)    ? "ERASE BRUSH SIZE"
+                                  : (ui.mode == SAND_MODE_DETONATE) ? "BOOM BRUSH SIZE"
+                                                                     : "POUR BRUSH SIZE";
+        draw_brush_text(ctx, lay.size_caption, size_caption,
+                        mu_color_hex(BRUSH_CAPTION_COLOR), 2, -1);
+
+        char size_value[8];
+        snprintf(size_value, sizeof size_value, "%02u PX", (unsigned)sand_ui_radius(&ui));
+        draw_brush_text(ctx, lay.size_value, size_value,
+                        mu_color_hex(BRUSH_TEXT_COLOR), 2, 1);
+
+        mu_layout_set_next(ctx, lay.slider_track, 0);
+        int radius = sand_ui_radius(&ui);
+        if (ui_slider_int(ctx, &radius, SAND_UI_RADIUS_MIN, SAND_UI_RADIUS_MAX, 1)) {
+            sand_ui_set_radius(&ui, (uint8_t)radius);
+        }
+
+        mu_end_window(ctx);
+    }
+
+    ui_end(COL_BACKGROUND);
+}
+
 /*---------------------------------------------------------------------------
  * Frame
  *-------------------------------------------------------------------------*/
@@ -1351,7 +1586,7 @@ static void handle_pour_input(const input_t *input, uint32_t dt_ms)
         if (input->pressed) {
             const int cx = input->x / cell;
             const int cy = input->y / cell;
-            sand_explode(&sim, cx, cy, (DETONATE_RADIUS_PX + cell / 2) / cell);
+            sand_explode(&sim, cx, cy, (sand_ui_radius(&ui) + cell / 2) / cell);
         }
         return;
     }
@@ -1387,7 +1622,7 @@ static void handle_pour_input(const input_t *input, uint32_t dt_ms)
     const int cy = input->y / cell;
     for (int i = 0; i < applications; i++) {
         if (ui.mode == SAND_MODE_ERASE) {
-            sand_erase(&sim, cx, cy, (ERASE_RADIUS_PX + cell / 2) / cell);
+            sand_erase(&sim, cx, cy, (sand_ui_radius(&ui) + cell / 2) / cell);
             /* Wider than the sweep above on purpose - see
              * ERASE_EMITTER_RADIUS_PX's own comment for why a point target
              * needs more aiming tolerance than an area sweep does. */
@@ -1395,7 +1630,7 @@ static void handle_pour_input(const input_t *input, uint32_t dt_ms)
                                  (ERASE_EMITTER_RADIUS_PX + cell / 2) / cell);
         } else {
             sand_spawn_cell(&sim, cx, cy,
-                            (POUR_RADIUS_PX + cell / 2) / cell,
+                            (sand_ui_radius(&ui) + cell / 2) / cell,
                             brushes[ui.brush]);
         }
     }
@@ -1581,17 +1816,18 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
 
     const unsigned actions = sand_ui_step(&ui, input);
 
-    if (actions & SAND_UI_CLOSE_PALETTE) {
+    if (actions & (SAND_UI_CLOSE_PALETTE | SAND_UI_CLOSE_BRUSH)) {
         if (actions & SAND_UI_SHOW_LABEL) {
             label_left_ms = LABEL_MS;
         }
 
-        /* Restores UI_TEXT_PLAIN so the outline doesn't leak into the next
-         * UI drawn (text style stays in force until changed - ui.h). Does
-         * NOT restore the transform any more: main.c now owns that for the
-         * whole shell, sampling real orientation on its own schedule. An
-         * app must not touch it - resetting it here would fight the shell
-         * the moment the board is actually held sideways. */
+        /* Restores UI_TEXT_PLAIN so the palette's outline style doesn't leak
+         * into the next UI drawn (text style stays in force until changed -
+         * ui.h); the brush screen only ever used PLAIN, so this is a no-op
+         * on that path. Does NOT restore the transform any more: main.c now
+         * owns that for the whole shell, sampling real orientation on its
+         * own schedule. An app must not touch it - resetting it here would
+         * fight the shell the moment the board is actually held sideways. */
         ui_set_text_style(UI_TEXT_PLAIN);
 
         sim_accumulator_q8 = 0;
@@ -1600,7 +1836,7 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
         return;
     }
 
-    if (actions & SAND_UI_OPEN_PALETTE) {
+    if (actions & (SAND_UI_OPEN_PALETTE | SAND_UI_OPEN_BRUSH)) {
         label_left_ms = 0;
     }
 
@@ -1610,8 +1846,8 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
         if (actions & SAND_UI_OPEN_PALETTE) {
             ui_invalidate();
 
-            palette_drawn_quarter = quarter;
-        } else if (quarter != palette_drawn_quarter) {
+            panel_drawn_quarter = quarter;
+        } else if (quarter != panel_drawn_quarter) {
             /* Board turned while the palette stayed open: draw_palette()
              * paints UI_NO_BACKGROUND deliberately (frozen sand shows
              * through the grout), so the panel's old footprint - now
@@ -1623,26 +1859,38 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
             mark_sand_fully_dirty();
             draw_dirty_rows(false, false, false, false, false);
             draw_emitter_markers();
-            palette_drawn_quarter = quarter;
+            panel_drawn_quarter = quarter;
         }
 
         draw_palette(input);
         return;
     }
 
+    if (ui.screen == SAND_UI_BRUSH) {
+        const int quarter = display_shell_quarter();
+
+        if (actions & SAND_UI_OPEN_BRUSH) {
+            ui_invalidate();
+
+            panel_drawn_quarter = quarter;
+        } else if (quarter != panel_drawn_quarter) {
+            /* Same reasoning as the palette's own turn-handling above: this
+             * screen is opaque, but it doesn't cover the corners the sand
+             * grid used to occupy at the old orientation, so those still
+             * need a forced repaint. */
+            mark_sand_fully_dirty();
+            draw_dirty_rows(false, false, false, false, false);
+            draw_emitter_markers();
+            panel_drawn_quarter = quarter;
+        }
+
+        draw_brush_screen(input);
+        return;
+    }
+
     int gx, gy, flow, jostle, rotation;
     imu_sample_t sample = { 0 };
     read_gravity_input(dt_ms, &sample, &gx, &gy, &flow, &jostle, &rotation);
-
-    if (actions & SAND_UI_SHOW_LABEL) {
-        label_left_ms = LABEL_MS;
-        if (input->power.pressed) {
-            const char *mode_name = (ui.mode == SAND_MODE_DETONATE) ? "detonate"
-                                   : (ui.mode == SAND_MODE_ERASE)    ? "erase"
-                                   : material_name(brushes[ui.brush]);
-            ESP_LOGI(TAG, "brush: %s", mode_name);
-        }
-    }
 
     if (label_left_ms > 0) {
         label_left_ms = (dt_ms >= label_left_ms) ? 0 : (label_left_ms - dt_ms);
