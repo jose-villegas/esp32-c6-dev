@@ -34,15 +34,11 @@
  * is exactly what several of these tests compare. */
 extern bool partial_updates;
 
-/* app_cube.c's three per-frame phases plus its enter/exit, all exposed
- * specifically for this suite. Deliberately NOT S3L_newFrame()/
- * S3L_drawScene() or the cube/scene state directly: small3dlib.h defines
- * real, non-static functions once configured and included, so only the
- * translation unit that already includes it (app_cube.c) can touch them -
- * a second #include here would redefine those same symbols and fail to
- * link. Going through cube_update_rotation()/cube_clear_frame()/
- * cube_rasterize_frame() instead means this suite exercises the exact
- * code cube_frame() runs, not a hand-copy of it that could drift. */
+/* app_cube.c's three per-frame phases plus its enter/exit, exposed for this
+ * suite. NOT S3L_newFrame()/S3L_drawScene() directly: small3dlib.h defines
+ * real, non-static functions once configured and included, so a second
+ * #include here would redefine them and fail to link. Going through these
+ * exercises the code cube_frame() runs, not a hand-copy that could drift. */
 extern void cube_enter(void);
 extern void cube_exit(void);
 extern void cube_update_rotation(uint32_t dt_ms);
@@ -67,28 +63,14 @@ typedef struct {
     int32_t present_us;        /* gfx_present() */
 } frame_sample_t;
 
-/* A genuine ring buffer, not a 10s-at-60fps-sized capture: run_perf_capture()
- * runs for the full SAMPLE_SECONDS regardless of how many frames that turns
- * out to be, wrapping sample_count % MAX_SAMPLES back to the start once the
- * ring fills, so stats are always taken over the most recent MAX_SAMPLES
- * frames rather than whichever frames happened to land first. That is a
- * feature, not just a memory saving: a fixed capture cap would silently
- * truncate the window's tail on a device rendering faster than expected,
- * biasing every stat toward the run's startup transient instead of its
- * settled frame rate. sample_count itself is never wrapped - it is the
- * total frame count used for the reported average fps - only the index
- * into samples[]/stat_scratch[] is.
+/* A ring, so stats cover the most recent MAX_SAMPLES frames: a fixed cap
+ * would truncate the tail on a device rendering faster than expected and
+ * bias every stat toward the startup transient. sample_count itself never
+ * wraps - it is the total behind the reported average fps.
  *
- * 128 is deliberately smaller than a 10s capture would ever need: it is
- * still enough for a meaningful P95 (128 * 5% = 6 samples in the tail), and
- * every sample here costs five int32_t fields, four of them duplicated a
- * second time in stat_scratch while compute_stats() sorts one field at a
- * time - see its own comment. If a future run ever wants closer to the
- * full window's true distribution instead of its recent tail, blending two
- * such rings - e.g. an exponential moving average of each ring's own
- * min/max/median as one drains into the other - would buy that back
- * without ever paying for the whole 10s of raw samples at once; nothing
- * here needs that precision yet. */
+ * 128 is still enough for a meaningful P95 (128 * 5% = 6 samples in the
+ * tail), and every sample costs five int32_t fields, four of them
+ * duplicated in stat_scratch. */
 #define MAX_SAMPLES  128
 
 /* Heap-allocated, not static: suite order matters, since "cube_perf"
@@ -211,13 +193,9 @@ static void cube_perf_teardown(void)
     cube_exit();
 
     /* gfx_set_interlace() is gfx.c-global state, not app-scoped like
-     * partial_clear (cube_exit() already turns that off) - left on here,
-     * it would leak into every suite that runs after this one in the same
-     * boot, since suites are registered and run alphabetically and
-     * "cube_perf" sorts right before "display"/"gfx_*". That is exactly
-     * what broke their own dirty-tracking budget assertions the first time
-     * this suite ran on device: interlace's carried-over dirty bits made
-     * an otherwise-unchanged frame look like it still had pixels to send. */
+     * partial_clear - left on, it leaks into every suite that runs after
+     * this one in the same boot, where its carried-over dirty bits make an
+     * otherwise-unchanged frame look like it still has pixels to send. */
     gfx_set_interlace(false);
 
     free(samples);
@@ -231,18 +209,11 @@ static void cube_perf_teardown(void)
  * (zeroed) input_t is required here, not NULL. */
 static const input_t null_input = { 0 };
 
-/* Runs the 10-second capture and logs the resulting breakdown. The label is
- * generated from the three toggles themselves (see run_perf_variant()) so
- * every run states its own configuration rather than a name someone has to
- * remember to keep in sync with what the test actually does.
- *
- * `with_hud` toggles the one line real cube_frame() always pays for -
- * draw_fps() - timed as its own phase so a with/without run shows exactly
- * what the HUD text costs, rather than folding it silently into whichever
- * phase happened to run next. `with_partial` toggles cube_clear_frame()'s
- * own partial-clear path, and `with_interlace` toggles gfx_present()'s -
- * both are this branch's actual optimizations, so both get the same
- * on/off comparison the HUD does. */
+/* The label is generated from the three toggles (see run_perf_variant()),
+ * so no run can state a configuration that has drifted from what it did.
+ * draw_fps() is timed as its own phase rather than folded into whichever
+ * phase runs next, so a with/without run shows what the HUD text costs;
+ * `with_partial` and `with_interlace` get the same on/off treatment. */
 static void run_perf_capture(const char *label, bool with_hud, bool with_partial,
                              bool with_interlace)
 {
