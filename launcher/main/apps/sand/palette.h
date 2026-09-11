@@ -89,12 +89,11 @@
       ((w) / PALETTE_TILE)))
 
 /* How many columns a `screen_w`-wide canvas gets - see this file's own
- * "WHY DERIVED, NOT FIXED" comment above. Every caller that used to read
- * the constant PALETTE_COLS now calls this with the LOGICAL canvas width
- * (see ui.h's ui_width(), not GFX_WIDTH) and threads the result through
- * explicitly, the same way screen_w/screen_h are already threaded
- * through palette_tile_rect() and friends below - never a hidden
- * global. */
+ * "WHY DERIVED, NOT FIXED" comment above. Callers pass the LOGICAL
+ * canvas width (see ui.h's ui_width(), not GFX_WIDTH) and thread the
+ * result through explicitly, the same way screen_w/screen_h are already
+ * threaded through palette_tile_rect() and friends below - never a
+ * hidden global. */
 int palette_cols(int screen_w);
 
 /* Duplicated from gfx.h's GFX_CHAR_W/GFX_CHAR_H - see this file's own top
