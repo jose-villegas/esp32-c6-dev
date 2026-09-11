@@ -164,11 +164,11 @@ typedef enum {
 
 /* Cullet (glass turned to sand) costs no bits: sand's variant is already a
  * shade, so marking "this came from a pane" spends four of sixteen shades,
- * no more. Needed since glass at the ramp's plain top didn't read - one
- * flat colour, and "brightest sand" still looked like sand. Cullet gets a
- * different HUE instead (pale, glass-coloured); the nibble no longer names
- * a fixed colour but which quarter of a shared, slowly-advancing cycle a
- * grain starts at, so a heap shimmers through several pale tints. */
+ * no more. Cullet gets a different HUE (pale, glass-coloured) rather than
+ * a fixed shade - a flat colour at the ramp's plain top reads as
+ * "brightest sand", not glass - so the nibble names which quarter of a
+ * shared, slowly-advancing cycle a grain starts at, letting a heap
+ * shimmer through several pale tints. */
 #define SAND_DUNE_SHADES    12
 #define SAND_CULLET_BASE    SAND_DUNE_SHADES
 #define SAND_CULLET_SHADES  (MATERIAL_VARIANTS - SAND_CULLET_BASE)
@@ -277,12 +277,10 @@ typedef struct {
 
     /* Zero for every material but gunpowder; nonzero is gunpowder's BLAST
      * RADIUS, read only in step_one_burning_cell() (sand_reactions.c),
-     * never at ignition time. A fully-lit 2x2 (not the rarer 3x3 first
-     * tried) triggers sand_explode() at this radius instead of decaying to
-     * plain fire - see SAND_GUNPOWDER_BLAST_RADIUS for why 16. Earlier
-     * versions blasted the instant a spark touched one grain, which
-     * measured as gunpowder spending nearly every blast on itself - see
-     * docs/sand/Impulse-Mechanics.md. */
+     * never at ignition time. A fully-lit 2x2 triggers sand_explode() at
+     * this radius instead of decaying to plain fire - see
+     * SAND_GUNPOWDER_BLAST_RADIUS for why 16, and
+     * docs/sand/Impulse-Mechanics.md for why not a single-grain spark. */
     uint8_t explodes;
 
     /* Only what touches air burns. */
@@ -449,14 +447,11 @@ typedef struct {
     uint8_t shatters_to;
 
     /* SETTLED-ONLY: a cell at rest slowly becomes crusts_to. Rolled against
-     * CRUST_ROLL_MAX, not the usual 256, because this is the one rate a whole
-     * bank pays at once.
-     *
-     * The denominator used to be 65536, chosen when EVERY settled cell was
-     * eligible. Only cells with a face on another material are now, which is
-     * a thin skin rather than the bank, and against that population 65536 put
-     * the fastest expressible rate - this field is a byte, so 255 - at over an
-     * hour to convert a 32-cell cover. */
+     * CRUST_ROLL_MAX, not the usual 256, because this is the one rate a
+     * whole bank pays at once - only cells with a face on another material
+     * are eligible, a thin skin rather than the whole bank, and even the
+     * fastest expressible rate for a byte field (255) takes over an hour
+     * to convert a 32-cell cover. */
     uint8_t crusts;
     uint8_t crusts_to;
 
