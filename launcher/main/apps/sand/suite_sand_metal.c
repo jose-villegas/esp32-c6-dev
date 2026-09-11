@@ -131,24 +131,13 @@ static void test_dry_dirt_beside_lava_smelts_into_metal_or_stone(void)
         "reaction_t.flaw_to's call (material.h); either counts here");
 }
 
-/* Saturated dirt needs SOIL_MOISTURE_MAX successful moisture-lowering
- * events to reach bone dry, one level at a time, before a further
- * success can ever convert the cell - see the wet-earth branch of
- * try_heat_transform() (sand_reactions.c). That holds regardless of
- * WHICH mechanism drives any one level off - the wet stage of the new
- * branch (visible as steam) or dirt's own ordinary ambient drying
- * (reaction_t.dries, ambient and silent, ticking independently of any
- * heat source) - because both only ever remove one level at a time and
- * the cell cannot smelt while any is left. So this counts the number of
- * DISTINCT moisture values the cell passes through, deterministically,
- * rather than comparing wall-clock step counts against bone-dry dirt -
- * which is a race against two independent RNG-driven rates and was
- * measured to occasionally land either side of even a generous margin.
- *
- * reaction_t.spoils_to (material.h) means the cell can now also leave
- * this process early by spoiling to sand rather than drying all the way
- * to metal or stone - see the branch below on dirt_cell_is_smelted() for
- * how the two paths get different bounds. */
+/* Saturated dirt must lose all SOIL_MOISTURE_MAX levels, one at a time,
+ * before it can convert at all - the wet-earth branch of
+ * try_heat_transform() (sand_reactions.c). Counts DISTINCT moisture values
+ * passed through rather than wall-clock steps against bone-dry dirt: two
+ * independent RNG-driven rates drive the drying (heat and reaction_t.dries),
+ * so a step-count comparison is a race that lands either side of even a
+ * generous margin. */
 static void test_saturated_dirt_smelts_roughly_eight_times_slower(void)
 {
     lava_beside_dirt(SOIL_MOISTURE_MAX);
@@ -178,21 +167,12 @@ static void test_saturated_dirt_smelts_roughly_eight_times_slower(void)
         "into metal or stone, or spoil into sand - within the budget");
 
     if (dirt_cell_is_smelted()) {
-        /* SOIL_MOISTURE_MAX, not +1: sampled once per wall-clock step, so
-         * the rare step where BOTH mechanisms roll a success at once
-         * (heat and ambient drying, independently gated) merges two
-         * adjacent moisture values into a single observation - measured
-         * to happen on this seed. The bound stays tight enough to
-         * distinguish "passed through nearly every level" from
-         * "converted in a handful of events", which is the property this
-         * test exists to pin down.
-         *
-         * Only checked on the SMELTED path. A cell that spoils instead
-         * (reaction_t.spoils_to, material.h) can leave off partway
-         * through drying by design - see spoils_chance's own comment for
-         * why that is a real risk, not a bug - so the "very nearly every
-         * level" claim is specifically a claim about reaching metal or
-         * stone, not about resolving in general. */
+        /* SOIL_MOISTURE_MAX, not +1: moisture is sampled once per step, so
+         * a step where heat and ambient drying both succeed merges two
+         * adjacent values into one observation - measured on this seed.
+         * Only checked on the smelted path; a cell that spoils
+         * (reaction_t.spoils_to, material.h) leaves off partway by
+         * design. */
         TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(SOIL_MOISTURE_MAX,
             distinct_moisture_levels_seen,
             "saturated dirt that smelts (rather than spoiling) must pass "
@@ -290,18 +270,11 @@ static void test_wet_dirt_can_still_steam_before_spoiling_at_least_sometimes(voi
         sand_set(&st, lava_x + 1, y, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
     }
 
-    /* Existence only - not per-pod sequencing. Steam is KIND_GAS and
-     * rises/drifts once emitted (sand_step_gas()), so pinning WHICH pod a
-     * given steam cell came from would mean fighting the same dispersal
-     * the simulation is supposed to do; a single board-wide count is
-     * immune to that because it does not care which pod produced it,
-     * only that at least one did.
-     *
-     * NOT count_cells_of() - that helper is hardcoded to the shared
-     * fixture's `s`/`W`/`H` globals (see its own definition), not
-     * whichever sand_t is passed to sand_step() - it would silently
-     * count cells on a completely unrelated grid here. Scanned inline
-     * against `st`/STEAM_TEST_W/STEAM_TEST_H instead. */
+    /* Existence only: steam is KIND_GAS and drifts once emitted
+     * (sand_step_gas()), so which pod produced a given cell is not
+     * pinnable. Scanned inline rather than with count_cells_of(), which is
+     * hardcoded to the shared fixture's `s`/`W`/`H` and would silently
+     * count an unrelated grid. */
     bool steamed_any = false;
     for (int i = 0; i < 8000 && !steamed_any; i++) {
         sand_step(&st, 0, 1000, 0);
@@ -327,16 +300,10 @@ static void test_wet_dirt_can_still_steam_before_spoiling_at_least_sometimes(voi
         "steam emit itself broke");
 }
 
-/* reaction_t.spoils_to (material.h) actually fires, rather than just being
- * a field nobody reaches: many INDEPENDENT saturated-dirt-beside-lava
- * pockets side by side, each the same shape as lava_beside_dirt()'s one
- * cell, run until every one of them has resolved. Written when
- * spoils_chance was still 24/256 (~9%), where a single cell spoiling was
- * unlikely enough to need padding against; it now sits at 77/256 (~30%,
- * unconditional - no gate any more, see that field's own comment in
- * material.h), so one pod would usually do, but PODS pockets costs nothing
- * extra and keeps this test's confidence independent of which exact cell it
- * happens to be. */
+/* reaction_t.spoils_to (material.h) actually fires rather than being a field
+ * nobody reaches. spoils_chance is 77/256, so one pod would usually do;
+ * several independent pockets keep the result from hanging on which exact
+ * cell it happened to be. */
 #define SPOILS_TEST_PODS 6
 static void test_wet_dirt_can_spoil_into_sand_instead_of_smelting(void)
 {
@@ -451,25 +418,13 @@ static void test_dry_dirt_smelting_reaches_both_metal_and_stone(void)
         "255 (metal can no longer exist) rather than merely high");
 }
 
-/* Every smelting test above this one holds a POOL OF LAVA against the
- * dirt. That proves lava and dirt have the reaction; it says nothing
- * about whether the reaction is keyed on being LAVA or on being hot and
- * alight, because try_heat_transform() (sand_reactions.c) is reached from
- * any burning neighbour - cell_is_burning() gates it, checking
- * reaction_t.burns, not CELL_MATERIAL(n) == MAT_LAVA. An ordinary flame
- * is the cheapest thing that also satisfies cell_is_burning(), and the
- * whole point of this test is that swapping it in for lava changes
- * nothing about the outcome.
+/* Smelting is keyed on cell_is_burning() (reaction_t.burns), not on
+ * CELL_MATERIAL(n) == MAT_LAVA, and every other smelting test here reaches
+ * for lava. A narrowing of that gate to lava specifically would pass all of
+ * them and fail only this.
  *
- * If a future change narrowed dirt's smelting path to check for lava
- * specifically - or for anything else lava has that a plain flame does
- * not - this is the test that would catch it while every lava-based test
- * above kept passing right through the regression.
- *
- * Fire rises and burns itself out in around forty steps
- * (material_by_id((material_id_t)MAT_FIRE)->decay), so exactly like
- * test_a_fire_held_long_enough_melts_glass_to_lava it has to be
- * re-placed every step rather than dropped once and left unattended. */
+ * Fire rises and burns out in around forty steps (MAT_FIRE's decay), so it
+ * has to be re-placed every step rather than dropped once. */
 static void test_a_held_flame_smelts_dirt_as_lava_does(void)
 {
     fixture();
@@ -496,26 +451,14 @@ static void test_a_held_flame_smelts_dirt_as_lava_does(void)
         "lava as its heat source");
 }
 
-/* And the conducted path is just as general as the contact path: dirt on
- * the far side of a plain stone wall smelts from heat that crossed the
- * wall via conduct_heat(), not by touching the fire that is driving it.
+/* The conducted path is as general as the contact path: dirt on the far
+ * side of a plain stone wall smelts from heat that crossed via
+ * conduct_heat(), never touching the fire driving it. The other far-side
+ * test below uses a metal conductor the smelting itself grew; this one is
+ * an ordinary conductor that was already there.
  *
- * test_the_rod_terminates_at_conduct_reach_not_the_far_wall (below)
- * already proves the far-side hit works for a METAL conductor, but that
- * scene only exists because a metal rod grows itself one smelted cell at
- * a time - it never demonstrates the far-side hit landing through an
- * ordinary conductor that was not itself produced by smelting. This is
- * the plain-stone-wall version test_heat_through_a_pan_lights_oil_rather
- * _than_boiling_it already is for oil, one section up: fire heats a
- * stone slab, and dirt sitting on the far side of that slab - never
- * touching the fire - smelts from the heat that walked through the
- * stone.
- *
- * Real per-material `conducts` applies (sand_set_conduction(&s,
- * SAND_CONDUCTION_PER_MATERIAL) - see that test's own comment on why this
- * one wants the same call rather than a forced 255), so this is stone's
- * actual 220-in-256 figure attenuating across a one-cell-thick wall, not
- * a tuned-up test double. */
+ * Real per-material `conducts` applies, so this is stone's own 220-in-256
+ * figure attenuating across a one-cell wall, not a forced 255. */
 static void test_heat_through_a_stone_wall_smelts_the_dirt_beyond_it(void)
 {
     fixture();
@@ -640,18 +583,11 @@ static void test_sand_still_becomes_glass_beside_the_new_dirt_branch(void)
         "branch must never catch it");
 }
 
-/* Steps until MAT_STEAM appears past a `wall_len`-cell wall of
- * `wall_cell`, heated by an immortal LAVA source rather than fire. Fire
- * decays away in around forty steps (material_by_id((material_id_t)MAT_FIRE)->decay), which
- * would cap how many attempts a slow conductor ever gets and confuse
- * "does it conduct at all" with "did the fire survive long enough to
- * find out". Lava never decays (`decay` MUST stay 0 - see its own row
- * in material.c), so this isolates the one thing under test: the real
- * per-material `conducts` figure. Boxes the lava on three sides for the
- * same reason lava_beside_dirt() does above - a liquid otherwise drains
- * to level itself instead of staying put against the wall. Mirrors
- * build_boiler_room()/steps_to_boil() above, generalised over the wall
- * material and the heat source. */
+/* Steps until MAT_STEAM appears past a `wall_len`-cell wall of `wall_cell`.
+ * Heated by lava rather than fire: fire decays in around forty steps, which
+ * would cap how many attempts a slow conductor gets and confuse "does it
+ * conduct" with "did the fire last long enough to find out". Lava never
+ * decays, so the only variable left is the per-material `conducts` figure. */
 static int steps_to_boil_through(int wall_len, cell_t wall_cell, int budget)
 {
     /* Self-contained, like steps_to_boil() above: malloc, use, free, all
@@ -710,16 +646,10 @@ static int steps_to_boil_through(int wall_len, cell_t wall_cell, int budget)
     return result;
 }
 
-/* The performance-relevant claim the plan itself flags as the one thing
- * no benchmark scene would catch: metal's `conducts` (248) makes the
- * conduction walk reach roughly CONDUCT_REACH cells on average, against
- * stone and glass's 220 - see Metal.md's own attenuation
- * table. This is the minimum host guard the plan asks for before merge:
- * heat must cross a 20-cell metal run comfortably inside a short shared
- * budget where a 20-cell stone run - real per-material figures, nothing
- * forced - must not have gotten through yet. Extended materials appear
- * in no benchmark scene today, so this is what stands between metal's
- * real conduction cost and shipping completely unmeasured. */
+/* Metal's `conducts` (248) puts the conduction walk at roughly
+ * CONDUCT_REACH cells on average, against stone and glass's 220 - see
+ * Metal.md's attenuation table. Extended materials appear in no benchmark
+ * scene, so this shared short budget is the only guard on that cost. */
 static void test_a_metal_run_conducts_further_than_a_stone_one(void)
 {
     const int wall_len = 20;
@@ -838,35 +768,18 @@ static void test_the_rod_terminates_at_conduct_reach_not_the_far_wall(void)
         "bed is twice CONDUCT_REACH long specifically so a rod that "
         "failed to cap would be caught reaching the far wall instead");
 
-    /* NOT asserting stone_count > 0 here, on purpose, even though this is
-     * exactly the scene that motivated flaw_to in the first place. The
-     * clump mechanism only RE-ROLLS once every HEAT_FLAW_CLUMP_TEST
-     * triggers (see the comment below), so a rod ~30 cells long gets only
-     * ~6 independent rerolls, not ~30. At flaw_chance 220/256 (rebalanced
-     * twice on 2026-08-31, 40 -> 90 -> 220, to make METAL the rare
-     * outcome), the odds have flipped from the original worry: the chance
-     * of landing on all-metal by pure chance is now (1 - 220/256)^6, on
-     * the order of 0.0008% - effectively never - but the chance of landing
-     * on all-STONE, zero metal anywhere in the rod, is (220/256)^6, ~40%,
-     * a real and unremarkable outcome for a sample this small. Either
-     * extreme is still not this test's job to rule out.
-     * test_dry_dirt_smelting_reaches_both_metal_and_stone below proves
-     * both flaw_to AND metal itself still fire, from a sample large
-     * enough that chance is not a factor either way; this test's job is
-     * the SHAPE of a flaw when one happens, not proving one happens (or
-     * doesn't) here. */
+    /* No stone_count > 0 assertion, on purpose: the clump mechanism re-rolls
+     * only once per HEAT_FLAW_CLUMP_TEST triggers, so a ~30-cell rod gets
+     * ~6 independent rolls and an all-stone rod is (220/256)^6, about 40%.
+     * test_dry_dirt_smelting_reaches_both_metal_and_stone proves both
+     * outcomes still fire, from a sample where chance is not a factor. */
 
-    /* THE CLUMPING ITSELF. Successes along this rod happen one at a time,
-     * in strict spatial order - each cell has to smelt before conduction
-     * can even reach the next one (see this test's own top comment) - so
-     * heat_flaw_seq's trigger order here is exactly this array's index
-     * order, with no interleaving from elsewhere on the grid. That makes
-     * the clump bound EXACT rather than statistical: heat_flaw_is_flawed
-     * only ever changes at a trigger index that is a multiple of
-     * HEAT_FLAW_CLUMP_TEST, so a run of this length can contain at most
-     * ceil(smelted_len / HEAT_FLAW_CLUMP_TEST) maximal same-outcome
-     * stretches - see try_heat_transform()'s own SMELT FLAW comment
-     * (sand_reactions.c) for the mechanism this is checking. */
+    /* Successes along this rod happen one at a time in strict spatial
+     * order, so the flaw sequence's trigger order is this array's index
+     * order. That makes the bound exact rather than statistical: the
+     * outcome only flips at a trigger index that is a multiple of
+     * HEAT_FLAW_CLUMP_TEST, so the rod holds at most
+     * ceil(smelted_len / HEAT_FLAW_CLUMP_TEST) same-outcome stretches. */
     int runs = 1;
     for (int i = 1; i < smelted_len; i++) {
         if (flawed[i] != flawed[i - 1]) {
@@ -960,24 +873,11 @@ static void test_acid_eats_metal_between_stone_and_sand(void)
 static void test_wood_and_steam_grain_count_is_conserved(void)
 {
     fixture();
-    /* Condensation forced off: this is purely a movement (or, for wood,
-     * non-movement) conservation check, and reaction_t.condenses is NOT
-     * one-for-one the way an ordinary material swap is - a 2x2 patch of
-     * steam collapsing into a single water cell is a real, deliberate
-     * loss of three grains, which is exactly what this test exists to
-     * catch when it is a BUG rather than a feature working as designed.
-     * With it off, wood never burns on its own (it has no burning
-     * neighbour in this scene) and steam has nothing left to react with
-     * (its only other field, `warms`, needs a heat-holder neighbour this
-     * scene has none of), so may_have_burning and may_have_condenser
-     * both stay clear and sand_step_reactions() early-returns every
-     * step. Ember is deliberately NOT covered here: its flare
-     * (reaction_t.flare) can spawn a brand new MAT_FIRE cell out of an
-     * empty neighbour, which is the feature working as designed
-     * (test_an_ember_flares_fire_into_an_empty_neighbour), not a
-     * conservation violation - but it does mean a strict grain-count
-     * invariant, the kind this test checks, does not apply to ember the
-     * way it does to every other material here. */
+    /* Condensation forced off: reaction_t.condenses is not one-for-one - a
+     * 2x2 patch of steam collapsing to one water cell loses three grains by
+     * design, and this is a movement-conservation check. Ember is left out
+     * for the same reason: reaction_t.flare spawns a new MAT_FIRE cell out
+     * of an empty neighbour, so no strict grain count applies to it. */
     sand_set_condenses(&s, 0);
 
     for (int y = 1; y <= 2; y++) {
@@ -1006,19 +906,11 @@ static void test_wood_and_steam_grain_count_is_conserved(void)
     }
 }
 
-/* Fake condensation - reaction_t.condenses/condenses_to. A really small,
- * deliberately rare per-step chance in real play, so a test that wants
- * to actually see it happen forces the override to 255 instead of
- * waiting on the real figure - the same discipline sand_set_boils() and
- * every other chance override in this file already gives.
- *
- * The 2x2 pocket is sealed in stone on every side a stationary gas cell
- * could otherwise be moved out of by sand_step_gas() (which runs BEFORE
- * sand_step_reactions() within one sand_step() call - see sand.c): stone
- * above the top row blocks a rise attempt, stone left of the left column
- * and right of the right column blocks the cross-flow spread pass. Without
- * that sealing, a single step's own gas movement could scatter the block
- * before the condensation check ever saw it intact. */
+/* reaction_t.condenses is a rare per-step chance in real play, forced to 255
+ * so the reaction is actually reached. The 2x2 pocket is sealed in stone on
+ * every side sand_step_gas() could move a cell out of - it runs before
+ * sand_step_reactions() within one sand_step(), so otherwise a step's own
+ * gas movement scatters the block before the condensation check sees it. */
 static void test_a_2x2_block_of_steam_condenses_into_one_water_cell(void)
 {
     fixture();
