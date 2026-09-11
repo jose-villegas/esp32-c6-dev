@@ -44,8 +44,11 @@
 
 #ifdef DEVICE_BUILD
 #include <stdlib.h>
+#include "esp_cpu.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "soc/extmem_reg.h"
+#include "soc/soc.h"
 #include "row_runs.h"
 #include "../../gfx/gfx.h"
 #define REAL_BLOCK_COLS ((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
@@ -172,6 +175,89 @@ static void test_a_screen_of_water_fits_in_the_frame_budget(void)
 }
 
 #ifdef DEVICE_BUILD
+/* Elapsed microseconds cannot tell a stall from an instruction, so "cycles
+ * per grid load" has been read as a memory signature without evidence. These
+ * registers count fetches and misses directly. The grid is heap SRAM and
+ * never reaches this cache; code and flash-resident const do. Scheduler ticks
+ * inside the window count too, biasing misses UP - a small reading is the
+ * trustworthy direction. */
+static void cache_counters_begin(void)
+{
+    REG_WRITE(EXTMEM_L1_CACHE_ACS_CNT_CTRL_REG,
+              EXTMEM_L1_IBUS_CNT_CLR | EXTMEM_L1_DBUS_CNT_CLR);
+    REG_WRITE(EXTMEM_L1_CACHE_ACS_CNT_CTRL_REG,
+              EXTMEM_L1_IBUS_CNT_ENA | EXTMEM_L1_DBUS_CNT_ENA);
+}
+
+static void cache_counters_report(const char *what, int steps,
+                                  uint32_t cycles)
+{
+    const uint32_t ihit  = REG_READ(EXTMEM_L1_IBUS_ACS_HIT_CNT_REG);
+    const uint32_t imiss = REG_READ(EXTMEM_L1_IBUS_ACS_MISS_CNT_REG);
+    const uint32_t dhit  = REG_READ(EXTMEM_L1_DBUS_ACS_HIT_CNT_REG);
+    const uint32_t dmiss = REG_READ(EXTMEM_L1_DBUS_ACS_MISS_CNT_REG);
+    REG_WRITE(EXTMEM_L1_CACHE_ACS_CNT_CTRL_REG, 0);
+
+    ESP_LOGI("device_tests",
+             "cache %s: %lu cycles/step, ibus %lu hit %lu miss, "
+             "dbus %lu hit %lu miss (per step)",
+             what, (unsigned long)(cycles / (uint32_t)steps),
+             (unsigned long)(ihit / (uint32_t)steps),
+             (unsigned long)(imiss / (uint32_t)steps),
+             (unsigned long)(dhit / (uint32_t)steps),
+             (unsigned long)(dmiss / (uint32_t)steps));
+}
+
+static void test_the_cache_counters_over_a_water_step(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t real;
+    build_water_scene(&real, big, blocks);
+
+    const int steps = 20;
+    cache_counters_begin();
+    const uint32_t c0 = esp_cpu_get_cycle_count();
+    for (int i = 0; i < steps; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+    const uint32_t cycles = esp_cpu_get_cycle_count() - c0;
+    cache_counters_report("water", steps, cycles);
+
+    free(big);
+    free(blocks);
+}
+
+static void test_the_cache_counters_over_a_settled_sand_step(void)
+{
+    uint8_t *big = malloc(REAL_W * REAL_H);
+    TEST_ASSERT_NOT_NULL(big);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 99u);
+    for (int y = 0; y < REAL_H / 2; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            if (((x + y) & 1) == 0) {
+                sand_set(&real, x, y, SAND_FIRST_SHADE);
+            }
+        }
+    }
+
+    const int steps = 10;
+    cache_counters_begin();
+    const uint32_t c0 = esp_cpu_get_cycle_count();
+    for (int i = 0; i < steps; i++) {
+        sand_step(&real, 0, 1, 0);
+    }
+    const uint32_t cycles = esp_cpu_get_cycle_count() - c0;
+    cache_counters_report("falling sand", steps, cycles);
+
+    free(big);
+}
+
 static void build_fire_scene(sand_t *real, uint8_t *big, uint8_t *blocks)
 {
     sand_init(real, big, REAL_W, REAL_H, 19u);
@@ -2175,6 +2261,8 @@ void run_sand_perf_suite(void)
     RUN_TEST(test_turning_a_settled_pool_to_landscape_fits_in_the_frame_budget);
     RUN_TEST(test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget);
     RUN_TEST(test_a_screen_of_water_fits_in_the_frame_budget);
+    RUN_TEST(test_the_cache_counters_over_a_water_step);
+    RUN_TEST(test_the_cache_counters_over_a_settled_sand_step);
     /* Ungated: the two gas movers compare through sand_set_gas_walk(), an
      * ordinary API, so this runs in every diagnostics build. */
     RUN_TEST(test_the_gas_random_walk_against_the_exhaustive_mover);

@@ -30,15 +30,13 @@
  * ACROSS flow, so it cannot disturb the main sweep. Falling water does
  * not spread: a cell able to fall THIS step leaves cross-flow nothing
  * to decide. */
-static inline bool has_room_below(const sand_t *s, int x, int y, int dx,
-                                  int dy, uint8_t id)
+static inline bool has_room_below(const uint8_t *below_row, int w, int fx,
+                                  uint8_t id)
 {
-    const int fx = x + dx;
-    const int fy = y + dy;
-    if ((unsigned)fx >= (unsigned)s->w || (unsigned)fy >= (unsigned)s->h) {
+    if (below_row == NULL || (unsigned)fx >= (unsigned)w) {
         return false;
     }
-    const cell_t below = s->cells[(size_t)fy * (size_t)s->w + (size_t)fx];
+    const cell_t below = below_row[fx];
     return CELL_IS_EMPTY(below) ||
            (CELL_MATERIAL(below) == id && CELL_VARIANT(below) < MASS_MAX);
 }
@@ -48,16 +46,13 @@ static inline bool has_room_below(const sand_t *s, int x, int y, int dx,
  * legitimately read as lower, so "is it lower" alone would send every
  * interior cell of a full pool on a full sight walk - the exact cost
  * this function exists to avoid. */
-static inline bool neighbour_is_lower(const sand_t *s, int x, int y, int px,
-                                      int py, uint8_t id, int mass,
-                                      int bias_q8)
+static inline bool neighbour_is_lower(const uint8_t *n_row, int w, int nx,
+                                      uint8_t id, int mass, int bias_q8)
 {
-    const int nx = x + px;
-    const int ny = y + py;
-    if ((unsigned)nx >= (unsigned)s->w || (unsigned)ny >= (unsigned)s->h) {
+    if (n_row == NULL || (unsigned)nx >= (unsigned)w) {
         return false;
     }
-    const cell_t n = s->cells[(size_t)ny * (size_t)s->w + (size_t)nx];
+    const cell_t n = n_row[nx];
     /* Rejects OTHER material as full using same comparison. One branch for
      * both. */
     const int there = CELL_IS_EMPTY(n) ? 0
@@ -112,17 +107,23 @@ static inline int find_shallowest(const sand_t *s, int x, int y, int px,
     return mine - best;
 }
 
-/* Returns transfer status and row confinement; sets `*touched_x` if confined. */
+/* Returns transfer status and row confinement; sets `*touched_x` if confined.
+ * BOTH PROBE ROWS ARE PASSED IN, not derived: the caller resolved them once
+ * for the whole row walk. Deriving them here cost a multiply and a reload of
+ * s->w, s->h and s->cells per probe, which the compiler cannot hoist because
+ * the transfer below writes through s->cells and may alias those fields. */
 static inline bool equalise_one_cell(sand_t *s, uint8_t *row, int x, int y,
-                                     int px, int py, int dx, int dy,
+                                     const uint8_t *below_row,
+                                     const uint8_t *n_row, int w,
+                                     int px, int py, int dx,
                                      int sight, uint8_t id, int mass,
                                      int bias_q8,
                                      bool *stayed_in_row, int *touched_x)
 {
-    if (has_room_below(s, x, y, dx, dy, id)) {
+    if (has_room_below(below_row, w, x + dx, id)) {
         return false;
     }
-    if (!neighbour_is_lower(s, x, y, px, py, id, mass, bias_q8)) {
+    if (!neighbour_is_lower(n_row, w, x + px, id, mass, bias_q8)) {
         return false;
     }
     if (s->may_have_viscous_liquid && !liquid_may_move(s, id)) {
@@ -156,7 +157,6 @@ static inline bool equalise_one_cell(sand_t *s, uint8_t *row, int x, int y,
 
     const int tx = x + px * at;
     const int ty = y + py * at;
-    const int w  = s->w;
 
     const bool was_empty =
         pour_into(&s->cells[(size_t)ty * (size_t)w + (size_t)tx], id, give);
@@ -189,8 +189,10 @@ static inline void union_touched_x(bool *touched, int *x0, int *x1,
 /* One cell's cross-flow contribution: tracked liquid, fold same-row transfer.
  * Split for complexity. */
 static inline bool equalise_one_row_cell(sand_t *s, uint8_t *row, int x, int y,
-                                         const xflow_t *r,
-                                         int dx, int dy,
+                                         const uint8_t *ax_row,
+                                         const uint8_t *dg_row,
+                                         const uint8_t *below_row, int w,
+                                         const xflow_t *r, int dx,
                                          int sight, uint16_t is_liquid,
                                          bool *touched, int *touched_x0,
                                          int *touched_x1)
@@ -218,10 +220,14 @@ static inline bool equalise_one_row_cell(sand_t *s, uint8_t *row, int x, int y,
     const int px = diagonal ? r->dg[0] : r->ax[0];
     const int py = diagonal ? r->dg[1] : r->ax[1];
     const int bias_q8 = diagonal ? r->bias_dg_q8 : r->bias_ax_q8;
+    /* The ray's own row, already resolved once for the whole row walk - the
+     * two rays are the only rows a neighbour probe can land in. */
+    const uint8_t *const n_row = diagonal ? dg_row : ax_row;
 
     bool stayed_in_row = false;
     int  tx = 0;
-    if (equalise_one_cell(s, row, x, y, px, py, dx, dy, sight, id,
+    if (equalise_one_cell(s, row, x, y, below_row, n_row, w,
+                              px, py, dx, sight, id,
                               CELL_VARIANT(c), bias_q8, &stayed_in_row, &tx) &&
             stayed_in_row) {
         /* Marking deferred for gravity-free orientations. mark_rows() impact.
@@ -234,7 +240,10 @@ static inline bool equalise_one_row_cell(sand_t *s, uint8_t *row, int x, int y,
 
 static inline bool equalise_one_block(sand_t *s, uint8_t *row, int y,
                                       int cx_from, int cx_to, int x_step,
-                                      const xflow_t *r, int dx, int dy,
+                                      const uint8_t *ax_row,
+                                      const uint8_t *dg_row,
+                                      const uint8_t *below_row, int w,
+                                      const xflow_t *r, int dx,
                                       int sight, uint16_t is_liquid,
                                       bool *touched, int *touched_x0,
                                       int *touched_x1)
@@ -245,8 +254,8 @@ static inline bool equalise_one_block(sand_t *s, uint8_t *row, int y,
      * equalise_one_row_cell(), derived from x once a cell is known to be
      * liquid - see its own comment. */
     for (int x = cx_from; x != cx_to; x += x_step) {
-        if (equalise_one_row_cell(s, row, x, y, r,
-                                  dx, dy, sight,
+        if (equalise_one_row_cell(s, row, x, y, ax_row, dg_row, below_row, w,
+                                  r, dx, sight,
                                   is_liquid, touched, touched_x0,
                                   touched_x1)) {
             any_liquid = true;
@@ -318,6 +327,7 @@ static bool equalise_one_row(sand_t *s, int y, int w, int x_step,
 
     const uint8_t *const ax_row = dest_row(s, y + r->ax[1]);
     const uint8_t *const dg_row = dest_row(s, y + r->dg[1]);
+    const uint8_t *const below_row = dest_row(s, y + dy);
 
     bool any_liquid = false;
     bool touched = false;
@@ -356,7 +366,8 @@ static bool equalise_one_row(sand_t *s, int y, int w, int x_step,
         if (equalise_one_block(s, row, y,
                                (x_step > 0) ? lo : hi - 1,
                                (x_step > 0) ? hi : lo - 1,
-                               x_step, r, dx, dy, sight, is_liquid,
+                               x_step, ax_row, dg_row, below_row, w,
+                               r, dx, sight, is_liquid,
                                &touched, &touched_x0, &touched_x1)) {
             any_liquid = true;
         }

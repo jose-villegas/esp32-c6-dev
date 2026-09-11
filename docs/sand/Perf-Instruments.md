@@ -7,6 +7,7 @@ this is the toolbox.
 | instrument | answers | cannot answer |
 |---|---|---|
 | **ceiling probe** (host counters) | how OFTEN work finds nothing | how long it takes |
+| **cache counters** (EXTMEM L1) | whether a scene stalls on fetch | which instructions it ran |
 | **pass gate** (`volatile bool`) | what one phase costs, within one image | whether the phase was worth running |
 | **single step** from a rebuilt board | a phase's cost without compounding | anything about steady state |
 | **control pass** | which part of a loop is yours | the part you did not isolate |
@@ -77,8 +78,10 @@ bash launcher/main/apps/sand/tools/report_performance.sh --perf-scope
 | behaviour coverage | complete | none, deliberately — not a gate |
 
 It is also a *better* instrument, not merely a roomier one: a smaller image
-sits closer to release layout in the 32 KB instruction cache, and much of
-this campaign is fetch-bound rather than IPC-bound (bd esp32c6-vk4).
+sits closer to release layout, so its numbers carry less of the ±6.7% link
+spread. It is **not** because the sim is fetch-bound — that claim stood here
+until the cache counters below measured 89 instruction misses in a 2.3
+million cycle water step (bd esp32c6-vk4).
 
 **Scope every capture of one round the same way.** A scoped and an unscoped
 image are different layouts, so the within-capture rule below does not merely
@@ -113,6 +116,44 @@ riscv32-esp-elf-nm launcher/build/launcher.elf | grep -c sand_step_gate_   # 0
 Turn them on for a round by appending `CONFIG_LAUNCHER_SAND_PASS_GATES=y` to
 `launcher/sdkconfig.defaults.diag` in a commit marked TEMP, and strip that
 commit before the PR.
+
+## Cache counters: is this scene stalling, or just executing?
+
+The C6 counts L1 hits and misses in hardware, one pair per bus, at
+`EXTMEM_L1_{I,D}BUS_ACS_{HIT,MISS}_CNT_REG`. `suite_sand_perf.c` reads them
+either side of a step, with `esp_cpu_get_cycle_count()`, and logs both scenes
+in every perf-scoped capture. They cost nothing in the loop, so what they
+price is the shipped code.
+
+Per step, capture `performance_20260911_141810`:
+
+| scene | cycles | ibus hit | ibus miss | dbus hit | dbus miss |
+|---|---:|---:|---:|---:|---:|
+| water | 2,298,429 | 2,047,557 | **89** | 1,009 | **0** |
+| falling sand | 893,427 | 825,440 | **57** | 10,808 | **0** |
+
+**Read three things off that table.**
+
+*The sim does not stall on memory.* One instruction fetch in 23,000 misses,
+and no data fetch misses at all. Even at a 200-cycle flash penalty that is
+0.8% of the step. "Cycles per grid load" has been read as a memory signature
+three separate times in this campaign; it never was one. The grid is heap
+SRAM and does not reach this cache, and the flash-resident const tables stay
+resident.
+
+*The core is executing, not waiting.* 2,047,557 fetches against 2,298,429
+cycles is 0.89 accesses per cycle — the fetch unit is busy nearly every
+cycle. There is no stall reservoir to reclaim, so the only lever on a pass is
+how many instructions it runs.
+
+*Cycles convert exactly.* 2,298,429 / 14,365 µs = 160.0, so the µs figures
+every other instrument reports are cycles / 160 with no correction.
+
+The counters also attribute a candidate where wall-clock cannot. Handing
+cross-flow's probes their rows (PR for bd `esp32c6-61h`) moved water by −581
+µs; the counters on the same pair of images read −93,120 cycles, which is
+−582 µs, and −85,680 fetches. Cycles fell 1.09 per fetch removed. A layout
+accident cannot produce that agreement.
 
 ## Before you build anything
 
