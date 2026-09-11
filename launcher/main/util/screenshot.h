@@ -104,17 +104,13 @@ static inline void screenshot_bmp_header(uint8_t out[SCREENSHOT_BMP_HEADER_SIZE]
 }
 
 /*
- * Base64 - the console UART carries text (ESP_LOG lines, the REPL a human
- * might be typing into), so the framebuffer's raw bytes cannot go down it
- * unescaped: a stray 0x0A in pixel data would look like a line break, and
- * plenty of byte values are not valid UTF-8 on their own, which is how
- * idf_monitor's own decoding is configured. Base64 is the standard fix -
- * every byte that comes out is printable ASCII - and at 4 output bytes per 3
- * input bytes it costs a third more over the wire than a hex dump would cost
- * two thirds more, which matters at 115200 baud for a 322 KiB frame.
+ * The console UART carries text, so raw pixel bytes cannot go down it
+ * unescaped: a stray 0x0A reads as a line break, and many byte values are
+ * not valid UTF-8 on their own. Base64 costs a third more over the wire
+ * where a hex dump costs two thirds, which matters at 115200 baud for a
+ * 322 KiB frame.
  *
- * RFC 4648, no line breaks of its own (screenshot.c adds those, one encoded
- * chunk per printed line) and '=' padding for a trailing partial group.
+ * RFC 4648, no line breaks of its own, '=' padding for a partial group.
  */
 
 /* How many bytes screenshot_base64_encode() writes for `len` input bytes -

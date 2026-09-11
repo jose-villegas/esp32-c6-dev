@@ -680,15 +680,11 @@ static void test_a_steep_tilt_does_pour_the_bed(void)
 
 /* --- sleeping ------------------------------------------------------------ */
 
-/* The hazard is specific: a row wrongly left asleep leaves a grain hanging
- * that should have fallen. It does not crash and it does not corrupt anything,
- * it just quietly stops being sand.
- *
- * So the central test does not check which rows were skipped - it checks the
- * only thing that matters, that nothing was left able to move. Settle the grid
- * with sleeping on, then run it again with sleeping OFF and require that
- * nothing at all happens. If sleeping froze something, the second pass frees
- * it and the grids differ. */
+/* A row wrongly left asleep leaves a grain hanging that should have fallen -
+ * no crash, no corruption, it just quietly stops being sand. So the central
+ * test checks not which rows were skipped but that nothing was left able to
+ * move: settle with sleeping on, run again with sleeping OFF, and require
+ * that nothing at all happens. */
 
 /* BLOCK_COLS/BLOCK_ROWS/sleep_blocks/settle_with_sleeping()/
  * assert_nothing_left_to_do() live in suite_sand_common.{c,h} - reused far

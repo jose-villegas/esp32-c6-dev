@@ -157,19 +157,11 @@ static int measure_text_height(mu_Font font)
 }
 
 /*
- * Styling
- *
- * Every frame microui draws - button, checkbox, slider, scrollbar, window
- * background - arrives here with a rect and a colour id. See ui_style.h for
- * what a style is and why it produces spans rather than painting.
- *
- * WHY THE PRESSED LOOK IS ON HOVER, NOT ONLY ON FOCUS
- *
- * On a mouse, hover means the pointer is near; focus means the button is
- * held. Touch has neither until contact, so hover IS contact. The pointer
- * now holds DOWN for the whole press, so focus covers most of a tap on its
- * own - but the one synthesized hover frame before DOWN lands has no focus
- * yet, so hover still has to key the sunken look too.
+ * Why the pressed look keys off hover and not only focus: on a mouse, hover
+ * means the pointer is near and focus means the button is held, but touch
+ * has neither until contact, so hover IS contact. Focus covers most of a
+ * tap, yet the one synthesized hover frame before DOWN lands has no focus
+ * yet. See ui_style.h for what a style is and why it produces spans.
  */
 
 static bool is_button_frame(int colorid)
@@ -325,37 +317,14 @@ void ui_init(void)
 }
 
 /*
- * Touch to mouse
+ * mu_update_control() takes hover only on a frame where the button is NOT
+ * held, and submits only once it has focus - the mouse's "point, then
+ * click". A touchscreen has no such sequence, so the missing frame is
+ * synthesised: on the press, deliver the position alone and hold
+ * button-down for the following frame.
  *
- * This is the one place where touch and microui genuinely disagree, so it is
- * worth spelling out. mu_update_control() only establishes hover on a frame
- * where the button is NOT held:
- *
- *     if (mouseover && !ctx->mouse_down) { ctx->hover = id; }
- *     if (ctx->hover == id) { if (ctx->mouse_pressed) { set_focus(id); } }
- *
- * and a control only submits once it has focus. That encodes the mouse
- * sequence "point at it, then click": hover on one frame, press on the next.
- *
- * A touchscreen has no such sequence - the pointer does not exist until a
- * finger is already down. Sending move and press together means hover is never
- * set, focus is never taken, and the button never fires.
- *
- * So we synthesise the missing frame: on the press, deliver only the position
- * and hold the button-down for the following frame. That costs one frame of
- * latency, imperceptible even at 25 fps, and makes a tap register every time.
- *
- * TOUCH ARRIVES IN PHYSICAL COORDINATES, MICROUI WANTS LOGICAL ONES
- *
- * `input->x/y` are where the finger actually is on the glass - physical
- * panel coordinates. Every control microui knows about, though, was laid out
- * in LOGICAL coordinates and drawn through the forward transform (see
- * draw_command() below), so a tap has to go through this function's inverse
- * before it means anything to mu_input_mouse*() - otherwise, under any
- * transform but identity, a control would be hit where it was laid out
- * rather than where it now visibly is. This is the one place touch enters
- * microui, which is exactly why it is also the one place this mapping needs
- * to happen.
+ * Touch also arrives in PHYSICAL coordinates while controls were laid out in
+ * LOGICAL ones, so a tap needs the inverse transform first.
  */
 static ui_pointer_t pointer;
 

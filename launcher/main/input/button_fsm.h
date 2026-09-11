@@ -38,22 +38,12 @@
 #define BUTTON_HOLD_US (600 * 1000)
 
 /*
- * Contract
+ * `held` fires EXACTLY ONCE, once the button has been continuously down for
+ * BUTTON_HOLD_US since the debounced press. `released` fires on the debounced
+ * release edge ONLY IF the press did not become a hold.
  *
- * `pressed`  fires on the debounced press edge, as always.
- * `held`     fires EXACTLY ONCE, the moment the button has been continuously
- *            down for BUTTON_HOLD_US since the debounced press.
- * `released` fires on the debounced release edge ONLY IF the press did not
- *            become a hold. A press that turned into a hold delivers no
- *            release edge at all - `held` already told the caller everything
- *            it needs to know, and a trailing `released` would just be a
- *            second event for the same physical press.
- *
- * That last rule is the point of putting this here rather than in the
- * caller: it makes short-press and long-press mutually exclusive in the
- * pure, tested layer, so a caller can write `if (released) cycle();` and
- * `if (held) open_panel();` side by side with no bookkeeping of its own and
- * no risk of both firing for one press.
+ * That rule belongs here rather than in a caller, so short-press and
+ * long-press are mutually exclusive in the pure, tested layer.
  */
 
 typedef struct {

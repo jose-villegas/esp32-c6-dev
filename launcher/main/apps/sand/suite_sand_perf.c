@@ -366,41 +366,12 @@ static int settled_pool_total_mass(const sand_t *s, int w, int h)
     return total;
 }
 
-/* THE USER'S OWN SCENARIO, AS A FRAME BUDGET - the same turn test_turning_a_
- * settled_pool_to_landscape_does_not_flash_the_whole_body pins visually,
- * timed instead. Filed because the device report was not only "a flip of
- * colours": the other half of it was "tilt flips into straight positions
- * with the water settled seem to cause a huge spike".
- *
- * WHY THIS IS NOT test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_
- * budget ABOVE, which already times a flip on a settled body. It differs in
- * every dimension that decides the cost:
- *
- *   - WATER, NOT SAND. A liquid grain goes through move_liquid_grain() and
- *     the mass-diffusion cross-flow pass, which the water budget above is
- *     more than twice the sand one precisely because of.
- *   - 40% OF THE GRID, full width, against that test's middle-half-width
- *     block from half height - about 25%, and never touching the side walls.
- *   - A 90-DEGREE ROTATION, not a 180-degree reversal. For a liquid that is
- *     the harder case by a long way: reversing gravity mostly drops the body
- *     in place, while turning the board sideways makes the whole pool
- *     re-level ACROSS the full grid width, which is exactly what the
- *     cross-flow search costs the most for. It also crosses the depth walk's
- *     own 45-degree regime line and flips both scan-direction flags, so it
- *     exercises the render side and not only the simulation.
- *
- * THE TURN IS SWEPT, one step per degree of it, rather than stepped in one
- * jump: a real tilt filter ramps, and the expensive frames are the ones
- * where the pool is mid-re-level, not the single frame the vector changes
- * on. Gravity follows a chord from (0, G) to (G, 0) so this needs no
- * trigonometry, the same reason the other tilt scenes here use straight
- * lines and triangle waves.
- *
- * BOTH THE MEAN AND THE WORST SINGLE STEP ARE LOGGED, and deliberately so:
- * a rotation's cost is not flat across the sweep, and a mean alone is
- * exactly the shape of number that can hide a spike - which is what the
- * report was about. The budget is asserted on the mean, matching every other
- * scene here; the worst is there to read in the capture. */
+/* A 90-degree turn is the expensive case a gravity reversal is not:
+ * reversing drops the body in place, while turning sideways makes the pool
+ * re-level across the full grid width, which is what the cross-flow search
+ * costs the most for. Swept one step per degree because the expensive
+ * frames are the mid-re-level ones. The worst step is logged alongside the
+ * asserted mean, since a mean alone can hide a spike. */
 static void test_turning_a_settled_pool_to_landscape_fits_in_the_frame_budget(void)
 {
     uint8_t *big    = malloc(REAL_W * REAL_H);
@@ -510,38 +481,12 @@ static int64_t time_a_quarter_turn(sand_t *real, int steps, int64_t *worst_out)
     return per_step;
 }
 
-/* THE GAS PASSES UNDER A TILTED BOARD, which nothing else here measured.
- *
- * WHY NOT test_a_screen_of_smoke_and_steam ABOVE, which uses the same field:
- * that one runs at gravity (0, 1000), so it only ever sees an axis-aligned
- * sweep. equalise_gas() takes its spread direction from ring_dir(i_stable + 2),
- * so an axis-aligned board gives py == 0 and a diagonal one does not, and the
- * two take genuinely different paths - down to whether gas_run_t's carry runs
- * at all, since carry_ok IS py == 0. Four of the eight ring directions are
- * diagonal, half the orientations this device can be held in, and none of them
- * had a scene.
- *
- * THIS ONE IS THE DIAGNOSTIC EXTREME, not a scene anyone plays: a completely
- * packed screen, where no gas can go anywhere because there is nowhere to go.
- * It bounds the worst case and exercises the row-skip path, which needs packed
- * rows to fire at all. The half-screen scene below is its realistic
- * counterpart, and the PAIR is the point - a number from this one alone would
- * flatter any optimisation aimed at packed rows. */
-/* WHAT THE WOOD/LEAF GUST SHADING COSTS ON A GROVE.
- *
- * WHAT THIS DOES NOT MEASURE, first, because the gap matters more than the
- * number: paint_row_n() is `static inline` inside app_sand.c and nothing here
- * can call it, so no row in this suite exercises the app's paint path. The
- * present-cost rows above run mirror_app_sand_marking() and gfx_present(),
- * never the app's own painting. That is why the shading could land measuring
- * "nothing" - not because it is free, but because nothing was looking.
- *
- * So this times the per-cell work the shading actually adds, over the real
- * grid the grove produces, walked the way paint_row_n() walks it. It covers
- * the scan and the wave. It does NOT cover the framebuffer writes, nor the
- * extra paint_row() calls the gust's wake tick causes - for that, watch how
- * many rows carry foliage, which this prints.
- *
+/* paint_row_n() is `static inline` inside app_sand.c and unreachable from
+ * here, so no row in this suite exercises the app's paint path - the
+ * shading could land measuring "nothing" because nothing was looking. This
+ * times the per-cell work the shading adds, over the real grid, walked the
+ * way paint_row_n() walks it: the scan and the wave, not the framebuffer
+ * writes nor the extra paint_row() calls the gust's wake tick causes.
  * Prints; asserts no budget, since half the cost is out of reach. */
 static void test_the_wood_leaf_shading_on_a_grove(void)
 {
@@ -768,6 +713,11 @@ void sand_host_probe_run_campfire(void)
 }
 #endif
 
+/* A tilted board is a different path, not a rotation of the same one:
+ * equalise_gas() takes its spread direction from ring_dir(i_stable + 2), and
+ * gas_run_t's carry runs only where py == 0. Packed bounds the worst case
+ * and is the only shape that fires the row skip; the half-screen scene below
+ * is the realistic counterpart, and the pair is the point. */
 static void test_turning_a_packed_screen_of_gas_fits_in_the_frame_budget(void)
 {
     uint8_t *big    = malloc(REAL_W * REAL_H);
@@ -1655,30 +1605,14 @@ static void seed_row_runs_full_width_for_gfx_test(uint16_t *row_x0,
     }
 }
 
-/* Runs `settle_steps` unmeasured frames - each a real sand_step(),
- * mirror_app_sand_marking() and gfx_present(), not just the simulation
- * step - so gfx's own dirty state and the row_runs "previous" state
- * converge to what an actually-running app would see by the time the
- * timed window starts, instead of measuring the inflated first frame a
- * freshly-seeded full-width "previous" state would otherwise produce.
- * Then times `measured_steps` more of the same, returning the mean
- * gfx_present() cost in us. gfx_reset_strip_send_counts() is called right
- * before the measured window starts, so `full_bands`/`gathered`/
- * `partial_bands` come back as the totals accumulated over exactly those
- * steps, not the settle ones.
+/* The settle frames are whole frames, so gfx's dirty state and row_runs'
+ * "previous" reach what a running app sees before the timed window starts,
+ * instead of measuring an inflated first frame.
  *
- * Because each measured gfx_present() here can carry several full bands
- * at once, this function measures the PIPELINED price: send_full_row()
- * (gfx.c) queues its draw_bitmap without waiting, and gfx_present()
- * drains every queued band together at the end, so later bands' DMA
- * overlaps earlier bands' CPU-side setup. That is why seven bands sent
- * in a real frame come to 18,147 us, not 7 x 3,405 = 23,835 - the sum of
- * seven un-pipelined sends. The un-pipelined price, 3,405 us for one
- * band presented alone with nothing else queued, is what the ratio tests
- * in suite_gfx.c measure instead - test_a_narrow_change_costs_less_than_
- * a_full_band and its neighbors, through test_two_far_corners_cost_less_
- * than_a_full_band. The two numbers are not interchangeable: do not
- * sanity-check one against the other by multiplying by the band count. */
+ * This is the PIPELINED price: queued bands drain together, so seven bands
+ * in a real frame come to 18,147 us, not 7 x 3,405 = 23,835. suite_gfx.c's
+ * ratio tests measure the un-pipelined price; the two do not convert by a
+ * band count. */
 static int64_t run_present_against_scene(sand_t *s, const uint8_t *cells,
                                           int w, int h, uint8_t *dirty_rows,
                                           uint16_t *row_x0, uint16_t *row_x1,
@@ -1993,44 +1927,14 @@ static void test_present_cost_against_the_thermal_shock_scene(void)
     free(row_x1);
     free(row_n);
 
-    /* Pegged from the first device capture (performance_20260828_014644),
-     * and this is the row worth reading twice: mean 17,922 us/frame with
-     * 70 full-band and ZERO gathered strip-sends over 10 frames. Ten
-     * frames x 7 strips is 70, so every strip of every frame went out as
-     * a whole band - this scene costs a full-screen send every frame
-     * (a full present measures 18,147 us)
-     * and the dirty-region tracking has nothing left to give: an ORACLE
-     * that marks the exact set of cells whose byte changed this frame,
-     * with no cap of any kind, sends the identical 164,864 pixels per
-     * frame that the shipped marking does. The zero is not a target - 70
-     * of 70 is correct behaviour, because a 480-compartment lattice
-     * really does dirty every strip across its full width and full
-     * height, every frame. The tracker is at its ceiling here rather
-     * than failing. The number worth watching in this scene is PIXELS
-     * SENT, not the gathered count, and only a change to what the scene
-     * itself draws could move it.
+    /* 70 of 70 strip-sends full and zero gathered is correct, not a target:
+     * this lattice dirties every strip every frame, and an oracle marking
+     * only the cells whose byte changed sends the identical 164,864 pixels.
+     * Pixels sent is the number to watch.
      *
-     * TIGHTENED 19700 -> 18700 on 2026-08-28, and this row is the one
-     * that must NEVER become a reduction target, however the rest of
-     * this file is graded. The oracle above proves the marking is exact
-     * and gfx.h proves the bus is saturated, so the only honest budget
-     * here is a guard sitting just above a number that cannot legally
-     * fall. Measured 18,017 / 18,042 / 18,129 across three captures of
-     * three different builds - a 0.6% spread, because a bus-bound row
-     * does not ride the layout lottery - so a present row can be held far
-     * tighter than a sim row.
-     *
-     * RE-PEGGED 18700 -> 17450 on 2026-09-01: measured 17,992 * 0.97, so
-     * this stops being a guard ~3% ABOVE the measurement and becomes a
-     * reduction target ~3% BELOW it, failing until the work is done.
-     * 0.97 rather than the sand rows' 0.9 because only ~6% of a present
-     * is not bus time - see the same re-peg note on
-     * test_present_cost_against_a_falling_sand_scene for the full
-     * reasoning, which applies unchanged here.
-     *
-     * If this fails because something made the scene dirty MORE pixels,
-     * that is the regression this row still catches; do not go looking
-     * for a slower present. */
+     * Budget is measured x 0.97 rather than the sand rows' 0.9 because only
+     * ~6% of a present is not bus time. A failure most likely means the
+     * scene dirties MORE pixels; do not go looking for a slower present. */
     TEST_ASSERT_LESS_THAN_MESSAGE(17450, (int)mean_us,
         "present() against the thermal shock lattice got more expensive "
         "than a full-screen send every frame, which is already what it "
@@ -2118,33 +2022,13 @@ static void test_acid_bubbles_do_not_favour_one_wall(void)
 #define SLEEPY_BLOCK_ROWS ((BUBBLE_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
 static uint8_t sleepy_bubble_blocks[SLEEPY_BLOCK_COLS * SLEEPY_BLOCK_ROWS];
 
-/* THE ACTUAL BUG A REAL DEVICE HIT, reported after acid_bubble() first
- * shipped living in move_liquid_grain() (sand_liquid.c): a real, calm
- * puddle of acid on device never bubbled at all, though the exact same
- * mechanism visibly worked in the test above. The difference is
- * sand_enable_sleeping() (see app_sand.c, which does enable it with a
- * real buffer) - move_liquid_grain() only runs for cells the MAIN SWEEP
- * visits, and step_one_row() (sand.c) skips any block marked settled
- * under block-sleeping entirely, never calling move_liquid_grain() for
- * its cells at all. A calm, undisturbed puddle earns that settled mark
- * within a handful of quiet steps - which is exactly what "calm" means -
- * so the trigger stopped firing the moment the puddle stopped visibly
- * moving, precisely when bubbling was supposed to prove it was still
- * "alive". The test above never caught this because it never enables
- * sleeping, so it always visits every cell regardless of settled state -
- * a blind spot in the test, not evidence the mechanism worked on device.
- *
- * FIXED by moving acid_bubble() into sand_reactions.c, called from
- * step_one_reacting_row()'s own `r->dissolves` branch - that pass is not
- * gated by block-sleeping at all (see acid_bubble()'s own comment there),
- * for the same reason dissolving and cooling already were not: they have
- * to keep happening on a board with nothing else moving.
- *
- * THIS TEST is the one that would have caught it: same flat pool as
- * above, but with sand_enable_sleeping() on, and a quiet settle period
- * BEFORE the check loop starts, so the pool's own block is genuinely
- * asleep (confirmed via sand_block_settled(), not merely assumed) before
- * a single bubble is allowed to count. */
+/* Bubbling must survive block sleeping. step_one_row() (sand.c) skips a
+ * settled block entirely, so anything hung off move_liquid_grain() stops
+ * the moment a puddle goes calm - exactly when bubbling is meant to prove
+ * it is still alive. acid_bubble() lives in the reactions pass, which is
+ * not block-gated, for the same reason dissolving and cooling are not.
+ * This pool is settled to a confirmed sand_block_settled() before a single
+ * bubble is allowed to count. */
 static void test_acid_bubbles_still_fire_once_the_block_is_asleep(void)
 {
     enum { POOL_TOP = 15 };

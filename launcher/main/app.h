@@ -75,19 +75,13 @@ typedef struct {
 } app_t;
 
 /*
- * The registry
+ * Apps register themselves, so an app is entirely contained in
+ * main/apps/<name>/ and deleting that folder removes it - source, logic and
+ * tests - without touching another file, CMakeLists.txt included.
  *
- * Apps register themselves. There is no central list to edit, which is the
- * point: an app is entirely contained in main/apps/<name>/, and deleting that
- * folder removes it - source, logic and tests - without touching another file.
- * The build globs the folder, so even CMakeLists.txt stays untouched.
- *
- * APP_REGISTER() places a constructor in .init_array, which the ESP-IDF startup
- * runs before app_main(). The registry is a fixed array filled in at that
- * point, so no allocation happens and registration cannot fail at an awkward
- * time.
- *
- * Link order decides .init_array order, which is not something to rely on, so
+ * APP_REGISTER() places a constructor in .init_array, which ESP-IDF runs
+ * before app_main(), into a fixed array - no allocation, and registration
+ * cannot fail at an awkward time. Link order decides .init_array order, so
  * the shell sorts by name before showing the list.
  */
 

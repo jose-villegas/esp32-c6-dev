@@ -35,23 +35,13 @@
 #define GFX_HEIGHT  448
 #endif
 
-/* QSPI clock for the panel - the sole thing setting frame transfer time, and
- * the largest single cost in a frame: 16.5 ms of bus at 40 MHz against 8.2 at
- * 80, with a measured full present of 17.6 ms saying there is no software slack
- * left at this clock. Vendor/Espressif validate only 40.
- *
- * 80 MHz produces corner artifacts - corruption at the START of a transfer
- * rather than noise across the frame - not a bandwidth ceiling. Raising
- * the pads to 40 mA (CONFIG_LAUNCHER_GFX_QSPI_STRONG_PADS) makes them rare
- * rather than routine, which says the failure is edge rate or setup
- * margin at the receiver. Rare is not gone, so 80 stays opt-in - see bd
- * esp32c6-kfg.
- *
- * No in-between exists: the 80 MHz source's integer divider (n>=2 floor)
- * resolves to exactly 40 or 80, which is why the option is a bool.
- *
- * THE THRESHOLDS BELOW ARE FITTED TO 40 MHz and need re-measuring if the clock
- * changes - that re-tune is part of any move to 80, not a follow-up. */
+/* QSPI clock for the panel - the largest single cost in a frame: 16.5 ms of
+ * bus at 40 MHz against 8.2 at 80, and a measured full present of 17.6 ms
+ * leaves no software slack. Only 40 is vendor-validated; 80 corrupts the
+ * START of a transfer rather than the whole frame, and 40 mA pads
+ * (CONFIG_LAUNCHER_GFX_QSPI_STRONG_PADS) make that rare but not gone, so 80
+ * stays opt-in - bd esp32c6-kfg. The divider resolves to exactly 40 or 80,
+ * hence a bool. THE THRESHOLDS BELOW ARE FITTED TO 40 MHz. */
 #if defined(CONFIG_LAUNCHER_GFX_QSPI_80MHZ) && CONFIG_LAUNCHER_GFX_QSPI_80MHZ
 #define GFX_QSPI_HZ (80 * 1000 * 1000)
 #else
@@ -144,25 +134,15 @@ void gfx_pixel(int x, int y, gfx_color_t color);
 void gfx_line(int x0, int y0, int x1, int y1, gfx_color_t color);
 
 /*
- * Lines, with options
+ * Two independent choices - how it composites, and whether it owns its
+ * first pixel - so flags on one function rather than a family of
+ * gfx_line_add_open() spellings inviting another.
  *
- * Two independent choices - how it composites, and whether it owns its first
- * pixel - which is four combinations, and there was a third. Flags on one
- * function rather than a name per combination, because they genuinely are
- * independent and a family of gfx_line_add_open() spellings is both
- * unreadable and a standing invitation to add another.
- *
- * There WAS a GFX_LINE_SMOOTH doing Xiaolin Wu antialiasing here. It worked
- * and it was tested, and it was taken out again: on a stroke one to three
- * pixels wide it is close to invisible, because antialiasing redistributes
- * light WITHIN a pixel and what reads as a lit curve on this panel is a
- * falloff several pixels ACROSS. It cost 6.7 fps to be almost unnoticeable.
- * The thing to come back with is a wide-support filter - a distance-indexed
- * intensity table in the manner of Gupta & Sproull, whose reach is a
- * parameter - not this. See the commit that removed it.
- *
- * gfx_line() above is the no-flags case, kept as its own name because it is
- * what most callers want and reads better than passing a zero.
+ * A GFX_LINE_SMOOTH doing Xiaolin Wu antialiasing cost 6.7 fps to be nearly
+ * invisible: antialiasing redistributes light WITHIN a pixel, while what
+ * reads as a lit curve on this panel is a falloff several pixels ACROSS.
+ * The thing to come back with is a wide-support filter in the manner of
+ * Gupta & Sproull, not that.
  */
 
 /* Add to what is already in the framebuffer instead of replacing it, so two
@@ -256,19 +236,12 @@ bool gfx_suspend(void);
 bool gfx_resume(bool full_init);
 
 /*
- * Dirty tracking
- *
- * gfx_present() sends only the horizontal bands that changed. The panel holds
- * the rest in its own GRAM, so anything not sent simply stays on screen - and
- * sending is almost the whole cost of a frame, so this is where the time is.
- *
- * Most code never touches any of this. Every gfx_* drawing call marks what it
- * touched, and gfx_clear() marks the whole screen, so an app that clears and
- * redraws is correct without knowing dirty tracking exists.
- *
- * It matters only for code writing through gfx_framebuffer() directly, which
- * gfx cannot see. Such code MUST mark what it wrote. Forgetting looks like a
- * frozen or partially stale screen, not a crash.
+ * gfx_present() sends only the horizontal bands that changed - the panel
+ * holds the rest in its own GRAM, and sending is almost the whole cost of a
+ * frame. Every gfx_* drawing call marks what it touched and gfx_clear()
+ * marks the whole screen, so most callers never touch this. Code writing
+ * through gfx_framebuffer() directly MUST mark what it wrote; forgetting
+ * looks like a frozen or partially stale screen, not a crash.
  */
 
 /* Declare that a rectangle of the framebuffer has changed. Tracked as a real

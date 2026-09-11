@@ -84,25 +84,11 @@ static void histogram(const uint8_t *cells, int n, int counts[16])
 typedef void (*scene_fn)(sand_t *s);
 
 /* ONE MACRO PER MATERIAL, because MASS_MAX is not a general "a full cell of
- * this" idiom and using it as one built four different kinds of wrong cell.
- * A cell's low nibble means whatever its own material says it means:
- *
- *     water, lava, oil    MASS - MASS_MAX is correct, and only here
- *     stone, glass        HEAT - MASS_MAX is the TOP of the ramp, so every
- *                         floor and wall in this file started white-hot
- *     wood                BURN PROGRESS - cell_is_burning() is variant != 0
- *                         for anything with burn_decay, so the wood wall in
- *                         scene_fire_gas started ALIGHT, which is why that
- *                         scene never actually tested ignition spreading
- *     sand, dirt          MOISTURE (plus a tone bit) - MASS_MAX is fully
- *                         saturated, so the "dry grains" control was wet
- *     gas, fire, smoke    REMAINING LIFE - MASS_MAX happens to be the right
- *                         VALUE here, but only by coincidence of both being
- *                         MATERIAL_VARIANTS - 1; spelled honestly instead
- *
- * Naming them mirrors suite_sand.c, which has always done this correctly and
- * is why the same bug never reached the test suite. Regenerating the baseline
- * alongside this is expected: the SCENES changed, not the simulation.
+ * this" idiom: a cell's low nibble means whatever its own material says it
+ * means. MASS_MAX is mass for water, lava and oil only; for stone and glass
+ * it is the top of the heat ramp, for wood full burn progress, for sand and
+ * dirt full saturation, and for the gases the right value purely by the
+ * coincidence of MATERIAL_VARIANTS - 1.
  */
 #define FP_STONE  CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT)
 #define FP_SAND   CELL_MAKE(MAT_SAND,  0)   /* dry */
@@ -249,15 +235,12 @@ static void scene_sealed_lava(sand_t *s)
     }
 }
 
-/* Scene 6: a dirt bank under standing water, soaking enabled - the
- * moisture codec (soaking up, percolating, drying) sits entirely OUTSIDE
- * every scene above: none of them ever call sand_set_soak(), so
- * step_one_soaking_cell() - the function moisture_of()/with_moisture()
- * (material.h) now route both dirt AND gunpowder through - could regress
- * freely with this whole file staying green. Dry dirt shelved against a
- * stone floor, watered from above, gives both the soaking-up transition
- * and the percolation that spreads it downward through the bank real,
- * sustained exercise over the whole budget - not just a first splash. */
+/* Scene 6: the moisture codec (soaking up, percolating, drying) sits
+ * entirely outside every scene above - none of them calls sand_set_soak(),
+ * so step_one_soaking_cell() could regress with this whole file green. Dry
+ * dirt shelved against a stone floor and watered from above exercises both
+ * the soaking-up transition and the percolation that spreads it downward,
+ * over the whole budget rather than a first splash. */
 static void scene_wet_earth(sand_t *s)
 {
     sand_set_soak(s, SAND_SOAK_PER_MATERIAL);
@@ -277,18 +260,12 @@ static void scene_wet_earth(sand_t *s)
     }
 }
 
-/* A PLANTED BED, because nothing else here grows.
+/* A planted bed, because nothing else here grows: setting GROW_REACH to 1 -
+ * a value that cripples growth outright - moved not one of the eight scenes
+ * above, so the whole plant and root system had no behavioural cover.
  *
- * THE GAP THIS CLOSES, demonstrated rather than assumed: setting GROW_REACH
- * to 1 - a value that cripples plant growth outright - moved not one of the
- * eight scenes above. The whole plant and root system, anchored()'s support
- * search, find_water(), rooting, budding and sprouting, had no
- * behavioural cover at all, while a performance round was about to start
- * changing it.
- *
- * Dry dirt over sand, seeded, with rain above: dirt at full moisture cannot
- * soak the rain up, so it pools and drowns the seeds, and a submerged plant
- * has no room to bud into and never grows. */
+ * Dry dirt over sand, seeded, with rain above: dirt already at full moisture
+ * cannot soak the rain up, so it pools and drowns the seeds. */
 static void scene_plant_bed(sand_t *s)
 {
     sand_set_soak(s, SAND_SOAK_PER_MATERIAL);
@@ -508,13 +485,11 @@ static void scene_powder_keg(sand_t *s)
 /* GRAVITY IS PER SCENE, and the six original rows keep the straight-down
  * vector they were baselined with - their hashes must not move.
  *
- * The two below exist because everything else here holds gravity vertical,
- * and a vertical vector is the ONE case that leaves the perpendicular
- * horizontal: perp is ring_dir(i_stable + 2), so py == 0 only when gravity is
- * (0, +-1). Landscape and every diagonal give py != 0, where equalise_gas()
- * takes a different path, gas_run_t's carry is disabled, and the row skip has
- * a branch that runs nowhere else. None of that was reachable by this tool -
- * corrupting a tilted-only branch left --check reporting "identical". */
+ * A vertical vector is the ONE case that leaves the perpendicular
+ * horizontal: perp is ring_dir(i_stable + 2), so py == 0 only at (0, +-1).
+ * Landscape and every diagonal give py != 0, where equalise_gas() takes a
+ * different path and the row skip has a branch that runs nowhere else -
+ * corrupting which left --check reporting "identical". */
 static const struct {
     const char *name;
     scene_fn    build;

@@ -239,21 +239,11 @@ static uint32_t sim_accumulator_q8;
 static uint32_t pour_accumulator_ms;
 
 /*
- * Sensor axes to screen axes
- *
- * The QMI8658 is soldered in some fixed orientation relative to the panel, and
- * nothing in the datasheet can tell us which - it is a board layout fact. These
- * two macros are the entire mapping, so correcting it is a one-line change.
- *
- * Determined by experiment, not from the datasheet, which describes the chip
- * and not how it was soldered down. Held upright the sensor reads about +1 g
- * on its X axis and roughly zero on Y, so the chip's X axis is the one running
- * down the screen - which is why the obvious guess (X to X, Y to Y) sent the
- * sand sideways.
- *
- * The Y axis then runs across the screen, but pointing left, hence the
- * negation. Both facts came from tilting the board and watching which way the
- * sand went; there is no way to derive them.
+ * Sensor axes to screen axes. How the QMI8658 is soldered relative to the
+ * panel is a board layout fact no datasheet carries, so both facts here
+ * come from tilting the board: held upright the sensor reads about +1 g on
+ * its X axis and roughly zero on Y, so the chip's X runs down the screen and
+ * its Y runs across it pointing left, hence the negation.
  */
 #define GRAVITY_SCREEN_X(s)  (-(s)->ay)
 #define GRAVITY_SCREEN_Y(s)  ( (s)->ax)
@@ -1189,19 +1179,13 @@ static mu_Color mu_color_hex(uint32_t rgb)
                     (int)(rgb & 0xFF), 255);
 }
 
-/* Dim the whole canvas so a panel drawn over it reads as the foreground and
- * the frozen sandbox reads as backdrop - the panels stay opaque, this is
- * what makes them look lit from in front rather than pasted on.
- *
- * APPLY EXACTLY ONCE PER REPAINT OF WHAT IS UNDERNEATH, never per frame.
+/* APPLY EXACTLY ONCE PER REPAINT OF WHAT IS UNDERNEATH, never per frame.
  * gfx_fill_rect_blend() mixes with the destination it reads, and the sand
- * behind a panel is frozen - not redrawn while the panel is up - so a
- * second application lands on the first's own output and the picture walks
- * toward black one frame at a time. The two moments the backdrop is
- * genuinely fresh are the frame a panel opens and a turn taken while it is
- * open; both call this, nothing else may. Cost rules it out per frame
- * anyway: this reads all 368x448 pixels, which gfx.h's own comment warns is
- * not what a blend fill is for. */
+ * behind a panel is frozen, so a second application lands on the first's own
+ * output and the picture walks toward black a frame at a time. The backdrop
+ * is only fresh the frame a panel opens and on a turn taken while it is
+ * open; both call this, nothing else may. Cost rules out per frame anyway -
+ * this reads all 368x448 pixels. */
 #define PANEL_SCRIM_ALPHA 110
 
 static void dim_backdrop(void)
@@ -1427,13 +1411,9 @@ static void draw_brush_text(mu_Context *ctx, mu_Rect r, const char *str,
 }
 
 /* Modeled on draw_palette() above - same "caller hit-tests via a real
- * control, sand_ui.c decides what the hit means" split, sand_ui_mode_
- * clicked() standing in for sand_ui_tile_clicked(). Unlike the palette,
- * this one lays three panels over the paused simulation rather than a grid
- * of tiles - but it keeps the palette's UI_NO_BACKGROUND for the same
- * reason, so the frozen sand still shows through everything the panels do
- * not cover and the screen reads as sitting ON the sandbox rather than
- * replacing it. */
+ * control, sand_ui.c decides what the hit means" split. UI_NO_BACKGROUND
+ * for the same reason too: the frozen sand shows through everything the
+ * panels do not cover, so the screen reads as sitting ON the sandbox. */
 static void draw_brush_screen(const input_t *input)
 {
     mu_Context *ctx = ui_context();

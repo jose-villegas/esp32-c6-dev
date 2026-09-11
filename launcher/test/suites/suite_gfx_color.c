@@ -165,22 +165,15 @@ static void test_adding_never_makes_a_channel_darker(void)
 }
 
 /*
- * gfx_color_rgb888 - unpacking a panel colour back to 0xRRGGBB.
- *
- * The property under test is GFX_RGB(gfx_color_rgb888(c)) == c for every c -
- * see gfx_color_rgb888()'s own comment in gfx_color.h for why bit replication
- * is what makes that hold exactly rather than approximately. A spread of
- * colours is used rather than an exhaustive sweep of all 65536 gfx_color_t
- * values, since the replication argument is per-channel and does not depend
- * on the other two channels' values - so a handful of colours that between
- * them exercise every channel at 0 and at its own maximum is as convincing as
- * the full sweep and a great deal cheaper.
+ * The property is GFX_RGB(gfx_color_rgb888(c)) == c for every c. A spread
+ * rather than a sweep of all 65536 values: the bit-replication argument is
+ * per-channel, so colours exercising every channel at 0 and at its own
+ * maximum are as convincing and a great deal cheaper.
  */
 
-/* 0xRRGGBB constants covering pure black, pure white, each channel alone at
- * its own maximum (0xF80000/0x00FC00/0x0000F8 - the largest 0xRRGGBB value
- * GFX_RGB565 truncates to R5=31/G6=63/B5=31 respectively), and a few
- * arbitrary colours that mix all three channels at once. */
+/* Pure black, pure white, each channel alone at its own maximum
+ * (0xF80000/0x00FC00/0x0000F8, the largest values GFX_RGB565 truncates to
+ * R5=31/G6=63/B5=31), and a few colours mixing all three. */
 static const uint32_t rgb888_spread[] = {
     0x000000, 0xFFFFFF,
     0xF80000, 0x00FC00, 0x0000F8,
@@ -219,21 +212,14 @@ static void test_expanding_a_colour_twice_is_idempotent(void)
 }
 
 /*
- * gfx_dither_covers - the per-pixel ordered-dither coverage test shared by
- * gfx_fill_rect_dither() (device suite: test_dither_* in suite_gfx.c, which
- * exercises this function only indirectly, through a real framebuffer fill)
- * and boot_anim.c's draw_image(), which calls it directly on two separate
- * alphas per pixel (`reveal`, `ink`) and ANDs the results together. These
- * tests are what boot_anim.c's own comment on that AND - "equivalent to
- * testing the lower of the two against one cell" - is checked against,
- * rather than merely asserted in a comment.
+ * gfx_dither_covers() directly, which suite_gfx.c's device fills only ever
+ * reach through a real framebuffer.
  */
 
-/* gfx_dither_level() is the alpha->level scaling gfx_dither_covers() itself
- * compares against the table - exposed so a caller with a whole row at one
- * alpha (boot_anim.c's dither_photo_over()) can compute it once. This pins
- * the two agreeing at EVERY alpha and cell, so the row-pattern loop and the
- * per-pixel test can never drift apart without a test going red. */
+/* gfx_dither_level() is the alpha->level scaling gfx_dither_covers()
+ * compares against the table, exposed so a caller with a whole row at one
+ * alpha can compute it once. Pinning the two at EVERY alpha and cell is
+ * what stops a row-pattern loop and the per-pixel test drifting apart. */
 static void test_dither_level_agrees_with_covers_at_every_alpha_and_cell(void)
 {
     for (int a = 0; a <= 255; a++) {
@@ -294,15 +280,13 @@ static void test_coverage_is_monotonic_in_alpha_at_every_cell(void)
     }
 }
 
-/* The exact property boot_anim.c's draw_image() leans on to fold two
- * gfx_dither_covers() calls into one: since coverage is monotonic in alpha
- * at a fixed cell (proved above), testing against the lower of two alphas
- * must agree with testing against each and ANDing the results, for every
- * cell and every pair. Swept in steps of 17 (255 is not divisible by 17,
- * so the sweep still lands on both 0 and 255) rather than exhaustively -
- * a monotonic step function that agrees at every 17th value and at both
- * endpoints cannot disagree in between without a jump the coarser sweep
- * would itself have caught at a neighbouring point. */
+/* Coverage is monotonic in alpha at a fixed cell (proved above), so testing
+ * the lower of two alphas must agree with testing each and ANDing - the
+ * property a caller folding two gfx_dither_covers() calls into one leans
+ * on. Swept in steps of 17 (255 is not divisible by 17, so both endpoints
+ * are still hit): a monotonic step function agreeing at every 17th value
+ * cannot disagree between them without a jump this sweep catches at a
+ * neighbouring point. */
 static void test_covers_both_equals_covers_the_lower_alpha(void)
 {
     for (int y = 0; y < 4; y++) {
@@ -324,15 +308,11 @@ static void test_covers_both_equals_covers_the_lower_alpha(void)
     }
 }
 
-/* WHY A SCRIM MAY ONLY BE APPLIED ONCE.
- *
- * gfx_fill_rect_blend() mixes into the pixel it reads, so dimming a region
- * that nothing else repaints - a panel's frozen backdrop, in practice -
- * lands the second application on the first one's own output. This is the
- * arithmetic behind that: same mix, same alpha, twice, is strictly darker
- * than once, and repeating it walks the picture to black. Hence the rule a
- * caller has to follow - scrim once per repaint of the backdrop, never per
- * frame - which this pins without needing any particular caller to exist. */
+/* Why a scrim may only be applied once: gfx_fill_rect_blend() mixes into
+ * the pixel it reads, so a second application over an un-repainted region
+ * lands on the first one's own output. Same mix, same alpha, twice is
+ * strictly darker than once, and repeating it walks the picture to black -
+ * so a caller scrims once per repaint of the backdrop, never per frame. */
 static void test_mixing_toward_black_twice_is_darker_than_once(void)
 {
     const gfx_color_t black = GFX_RGB(0x000000);

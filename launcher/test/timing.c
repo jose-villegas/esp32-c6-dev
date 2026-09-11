@@ -76,17 +76,14 @@ void suite_run_test_timed(void (*func)(void), const char *name, int line)
     }
 #endif
 
-    /* Own sentinel line, same key=value shape as selftest.c's
-     * SELFTEST_COMPLETE - a new line rather than an appended suffix, so the
-     * existing result line's format never changes. %lld/int64_t rather than
-     * a narrower width: these range from under a millisecond to the better
-     * part of eight minutes.
+    /* Own sentinel line, same key=value shape as SELFTEST_COMPLETE - a new
+     * line rather than an appended suffix, so the existing result line's
+     * format never changes. int64_t because these range from under a
+     * millisecond to the better part of eight minutes.
      *
-     * peak_bytes is appended only under HOST_HEAP_ARENA, after
-     * elapsed_ms - name= and elapsed_ms= are read by
-     * launcher/tools/sweeps/validate_capture.py and
-     * main/apps/sand/tools/report_performance.py and must not move; a new
-     * field belongs at the end, never between them. */
+     * name= and elapsed_ms= are parsed by the capture-validation and
+     * performance-report scripts and must not move; a new field belongs at
+     * the end, never between them. */
     printf("TEST_TIME name=%s elapsed_ms=%lld"
 #ifdef HOST_HEAP_ARENA
            " peak_bytes=%zu"

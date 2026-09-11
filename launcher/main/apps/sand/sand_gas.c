@@ -122,19 +122,13 @@ static bool try_bubble(sand_t *s, uint8_t *row, uint8_t *prow, int x, int y,
 }
 
 
-/* THE SPEC FOR THE WALK, not the lookup it reads. Offsets are in gravity's
- * frame: ring_dir() is ordered, so with `up` the ring index of the rise
- * direction, up-1 and up+1 are the upper diagonals, up+-2 the sides and up+4
- * straight down - no per-material rotation table needed.
- *
- * Weights are out of 256 and sum to it exactly, so one draw decides
- * everything. The lower diagonals are deliberately 0: a particle that drifts
- * down does so bluntly, and giving five of eight directions a downward
- * component read as smoke sinking rather than swirling.
- *
- * gas_walk_offset[] below is derived from this by hand and is what the walk
- * actually reads; to change the distribution, edit these and rewrite that
- * table to match. */
+/* THE SPEC FOR THE WALK, not the lookup it reads - gas_walk_offset[] below
+ * is derived from this by hand. Offsets are in gravity's frame: ring_dir()
+ * is ordered, so with `up` the rise direction, up+-1 are the upper
+ * diagonals, up+-2 the sides and up+4 straight down. Weights sum to 256
+ * exactly, so one draw decides everything. The lower diagonals are 0:
+ * a downward component on five of eight directions read as smoke sinking
+ * rather than swirling. */
 static const __attribute__((unused)) struct { uint16_t upto; int8_t off; } gas_walk_weights[] = {
     {  72,  0 },   /* straight up          */
     { 144, -1 },   /* up, one side         */
@@ -179,15 +173,13 @@ static void build_gas_tables(void)
     gas_tables_ready = true;
 }
 
-/* BUOYANCY, which move_to() structurally cannot do: can_enter() admits a liquid
- * only to something DENSER, and a gas is lighter by definition - so without this
- * a walking gas cell cannot enter liquid at all and sits trapped inside a body
- * of it. try_bubble() exists for exactly this in the exhaustive mover; the walk
- * needs its own, because it reaches move_to() directly.
+/* BUOYANCY, which move_to() structurally cannot do: can_enter() admits a
+ * liquid only to something DENSER, and a gas is lighter by definition, so
+ * without this a walking gas cell sits trapped inside a body of liquid.
  *
- * UPWARD PICKS ONLY. A bubble rises: sideways or downward buoyancy is wrong
- * physically, and downward is also unsafe for the sweep, which guarantees a
- * single move per cell only in the direction it sweeps. */
+ * UPWARD PICKS ONLY. Sideways or downward buoyancy is wrong physically, and
+ * downward is unsafe for a sweep that guarantees a single move per cell
+ * only in the direction it sweeps. */
 static inline bool gas_walk_once(sand_t *s, uint8_t *row, int x, int y, int w,
                                  int rdx, int rdy, cell_t grain,
                                  uint8_t density)
@@ -363,17 +355,13 @@ static bool step_one_gas_row(sand_t *s, int y, int w, int rdx, int rdy,
  * instead of mass-based.
  */
 
-/* Mirrors has_room_below() in sand_liquid.c: if this grain still has
- * somewhere to rise THIS step, sub-pass 1 above already moved it (or
- * will, being swept before this runs) - one comparison, and it keeps
- * this search off the bill for the common case of a gas pocket still
- * mostly rising rather than pooled under something. */
-/* BOTH PROBES TAKE THEIR ROW, not a y to multiply. The target row is fixed
- * for a whole equalise row - the cell above is always y + rdy, the
- * perpendicular neighbour always y + py - so recomputing ny * w + nx per
- * cell paid a multiply and a vertical bounds test 41,216 times for two
- * pointers the row loop could hand down. dest_row() returning NULL is the
- * vertical bounds test, done once. */
+/* Mirrors has_room_below() in sand_liquid.c: a grain that can still rise
+ * this step was already moved by sub-pass 1, so one comparison keeps this
+ * search off the bill while a pocket is mostly rising. */
+/* BOTH PROBES TAKE THEIR ROW, not a y to multiply: the target row is fixed
+ * for a whole equalise row, so recomputing ny * w + nx per cell paid a
+ * multiply and a bounds test 41,216 times for two pointers the row loop can
+ * hand down. dest_row() returning NULL is that bounds test, done once. */
 static inline bool has_room_above(const uint8_t *arow, int x, int rdx, int w)
 {
     const int fx = x + rdx;

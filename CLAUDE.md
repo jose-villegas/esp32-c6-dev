@@ -133,6 +133,13 @@ write in every other project. Run the checker for current counts rather than
 trusting one written here; `--comments-only <ref>` proves a bulk trim moved
 no code.
 
+A hook only binds an agent that has it configured, so the whole tree is held
+by CI instead (`.github/workflows/comment-rules.yml`): nothing beside code
+over 500 characters, no header over 50 lines, and
+`scripts/check_comment_symbols.py` on top of those — a comment may not name a
+function that does not exist, which is how a trim that garbles a symbol gets
+caught rather than shipped.
+
 Requires a **host** compiler (not the ESP32 toolchain) for the host tests:
 Windows `winget install BrechtSanders.WinLibs.POSIX.UCRT`, Debian/Ubuntu
 `apt install build-essential`, macOS `xcode-select --install`.

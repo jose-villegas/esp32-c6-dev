@@ -31,23 +31,14 @@
 #include "suite_sand_common.h"
 
 /*
- * WATER'S FOAM - gathered at crevices, never on a flat run.
+ * WATER'S FOAM - gathered at crevices, never on a flat run. Curvature
+ * alone decides it (material_colours()'s own comment, material.c):
+ * measured on sloshing water, a flat pool's rim is non-flat in 4% of its
+ * cells and one two steps into a 75 degree tilt in 94%.
  *
- * material_colours()'s own top comment (material.c) has the full account of
- * why curvature - and only curvature - decides this: measured on real
- * sloshing water, a flat pool's rim is non-flat in 4% of its cells and a
- * pool two steps into a 75 degree tilt is non-flat in 94% of them, which is
- * why no separate "is it moving" signal is wired in here or anywhere else.
- *
- * None of these four tests can reach into material.c's own `water_foam`
- * constant - it is file-static, the same way stone_speckle already is,
- * and these tests reach material_colours() only through
- * material.h same as any other caller. Instead they lean on
- * material_set_gravity(0, 0), which zeroes liquid_spec[] entirely (see that
- * function's own free-fall branch), so that "did NOT foam" has an exact,
- * checkable answer: the plain fill-indexed palette entry, with no shift
- * applied at all. Foam is the one thing left that can make a rim cell
- * disagree with that value once gravity contributes nothing.
+ * `water_foam` is file-static, so these tests lean on
+ * material_set_gravity(0, 0), which zeroes liquid_spec[] and gives "did
+ * NOT foam" an exact answer: the plain fill-indexed palette entry.
  */
 
 /* Every test below reads this rim cell's own fill, at variant 12 - deep
@@ -58,14 +49,11 @@
 
 /* THE CURVATURE GATE ITSELF - the property every other foam test assumes
  * without re-checking. A FLAT rim (exactly 3 of 8 neighbours empty, the
- * shape of the top of an ordinary settled pool - one cardinal side plus
- * the two diagonals that lean against it) must never foam, at ANY hash;
- * sweeping all 8 values is what tells "never" apart from "not at this one
- * hash I happened to try". A cell exposed on all 8 sides - as curved as a
- * rim on this board can get - must foam for AT LEAST SOME hashes: foam is
- * a dither (see water_foam_threshold's own comment in material.c), so it
- * will not be every hash either, and asserting that would be asserting
- * something the design never promised. */
+ * top of a settled pool) must never foam at ANY hash; sweeping all 8 is
+ * what tells "never" apart from "not at the one hash I tried". A cell
+ * exposed on all 8 sides must foam for AT LEAST SOME hashes - foam is a
+ * dither, so demanding every hash would assert something the design never
+ * promised. */
 static void test_water_foams_where_its_rim_is_curved(void)
 {
     material_set_gravity(0, 0);
@@ -106,24 +94,14 @@ static void test_water_foams_where_its_rim_is_curved(void)
         "all");
 }
 
-/* GUARDS CHANGE 4 - raising water_foam_threshold's non-zero entries (change
- * 4: { 0, 2, 4, 6 } to { 0, 3, 5, 7 }, to make the alternating foam actually
- * visible) must not touch the ONE entry that is not a tuning knob at all:
- * curvature 0, a flat rim, has to stay exactly 0. That is the one shape on
- * this board that must never sprout foam - the top of a still pool - and
- * raising the OTHER three thresholds is exactly the kind of edit that could
- * bump this one too by a slip of the same find-and-replace, since all four
- * entries sit in one small table (see water_foam_threshold in material.c).
+/* Curvature 0 - a flat rim, the top of a still pool - has to stay exactly
+ * 0 in water_foam_threshold. It is the one entry in that small table that
+ * is not a tuning knob, sitting beside three that are.
  *
- * test_water_foams_where_its_rim_is_curved above already sweeps this same
- * flat shape across all 8 hashes, but always at whatever the foam phase
- * happened to be left at. That is not enough here: the dither compares
- * `hash + foam_phase * 0x9E37u` against the threshold, so a mistake that
- * raised the flat entry from 0 to something small - say 1 - would still
- * read as "never foams" for MOST hash/phase combinations and only show up
- * at the few where the mixed value happens to land under it. Sweeping the
- * full 8x8 grid of hash and phase is what makes "never" mean never rather
- * than "not at the one combination this test happened to try". */
+ * The full 8x8 sweep of hash and phase is what makes "never" mean never:
+ * the dither compares `hash + foam_phase * 0x9E37u` against the
+ * threshold, so a flat entry nudged to 1 would still read as "never
+ * foams" at most combinations. */
 static void test_a_flat_rim_still_never_foams(void)
 {
     material_set_gravity(0, 0);   /* no specular term to confuse a
@@ -159,17 +137,14 @@ static void test_a_flat_rim_still_never_foams(void)
                                    * assume it */
 }
 
-/* Oil, lava and acid share water's rim code path - the fill-indexed lookup
- * shifted by liquid_spec[] - right up until the id check that hands water
- * off into foam. This is the "water only" constraint, and the failure mode
- * it exists to catch is specific: putting the id check one level too high
- * (or leaving it out) would foam every liquid's rim alike, since curvature
- * itself does not know or care which liquid it is measuring.
+/* Oil, lava and acid share water's rim code path - the fill-indexed
+ * lookup shifted by liquid_spec[] - right up to the id check that hands
+ * water off into foam. Put that check one level too high and every
+ * liquid's rim foams alike, since curvature does not know which liquid it
+ * is measuring.
  *
- * Same high-curvature shape as the previous test's spike_mask, and the
- * same hash sweep - if water can be made to foam by this shape, these
- * three must be provably immune to it under the exact same inputs, not
- * just "probably fine" under whatever the loop's default happened to be. */
+ * Same shape and hash sweep as the test above: if water foams on these
+ * inputs, the other three must be provably immune to the same ones. */
 static void test_only_water_foams(void)
 {
     material_set_gravity(0, 0);
@@ -201,15 +176,11 @@ static void test_only_water_foams(void)
     }
 }
 
-/* Guards the interior fix 6a05faa exists for: `mask == 0` (no cardinal
- * side open) must keep painting the flat body colour regardless of what
- * the diagonal bits say, because an interior cell is never a rim and
- * foam is a rim-only decoration. Swept across masks that are pure
- * diagonal - no cardinal bit at all - specifically because that is the
- * shape a broken cardinal test would miss: a mistake that gated foam (or
- * the rim split generally) on `mask != 0` instead of
- * `mask & MATERIAL_EDGE_CARDINAL` would light these up as rim cells, and
- * every one of them must still read as plain interior water instead. */
+/* `mask == 0` - no cardinal side open - must keep painting the flat body
+ * colour whatever the diagonal bits say: an interior cell is never a rim,
+ * and foam is a rim-only decoration. Swept across pure-diagonal masks
+ * because that is the shape a gate written `mask != 0` instead of
+ * `mask & MATERIAL_EDGE_CARDINAL` would light up as a rim. */
 static void test_a_liquid_interior_never_foams(void)
 {
     const gfx_color_t *pal = material_palette();
@@ -315,15 +286,11 @@ static const unsigned foam_spike_mask =
     MATERIAL_EDGE_DOWN_LEFT | MATERIAL_EDGE_DOWN_RIGHT;
 
 /* THE PHASE ITSELF CHANGES THE ANSWER, for one cell whose shape and hash
- * never change. A fixed hash at maximum curvature is swept across sixteen
- * phase values - two full periods of the 3-bit dither the mixing formula
- * cycles through, so a period this test happened to straddle badly cannot
- * hide either outcome - and both a foaming and a non-foaming phase must
- * turn up. Missing either half is a real, different failure: never foaming
- * means material_set_foam_phase() is not reaching the dither at all; always
- * foaming means something ELSE (the fixed hash, the fixed curvature) is
- * deciding this and the phase is doing nothing. Pins CHANGE 1 - the phase
- * existing and actually being read. */
+ * never change: sixteen phase values, two full periods of the 3-bit
+ * dither, and both a foaming and a non-foaming phase must turn up.
+ * Missing either half is a different failure - never foaming means
+ * material_set_foam_phase() is not reaching the dither at all, always
+ * foaming means the fixed hash or curvature is deciding it instead. */
 static void test_foam_moves_between_frames(void)
 {
     const gfx_color_t *pal = material_palette();
