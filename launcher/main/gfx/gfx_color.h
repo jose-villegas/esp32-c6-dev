@@ -3,7 +3,8 @@
  *
  * Split out of gfx.h because this part is pure arithmetic and nothing else:
  * no BSP, no drivers, no hardware headers. That lets code which only needs to
- * describe colours - a material table, say - be compiled and tested on a host,
+ * describe colours - a table of named colours, say - be compiled and tested
+ * on a host,
  * while gfx.h keeps everything that genuinely needs the board.
  *
  * The macros matter for more than tidiness. A colour table built from them is

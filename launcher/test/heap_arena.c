@@ -10,8 +10,8 @@
  * address-ordered blocks, failing an allocation exactly when no ONE free
  * block is big enough, even if the sum of several is - the same rule the
  * device's own allocator runs under, which a running-total byte counter
- * would not catch (a 41 KB grid can fail on a heap with 50 KB free but no
- * block over 38 KB).
+ * would not catch (a 41 KB request can fail on a heap with 50 KB free but
+ * no block over 38 KB).
  *
  * Deliberately simple: one header per block (prev/next/size/in_use/magic),
  * first-fit search, split on allocate, coalesce-both-directions on free.

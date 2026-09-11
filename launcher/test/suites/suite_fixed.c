@@ -46,9 +46,9 @@ static void test_mul_floor_matches_a_hand_written_widened_shift(void)
 }
 
 /*
- * floor vs round: the divergence that would change a simulation's output.
+ * floor vs round: the divergence that would change an accumulator's output.
  *
- * A momentum accumulator is signed and routinely negative. Its decay uses
+ * A signed accumulator decayed step after step is routinely negative. It uses
  * fx_mul_floor(), matching a plain `>> 8` on a negative accumulator - which
  * FLOORS toward negative infinity, not toward zero. If a future reader swaps
  * that for fx_mul_round() because "round" sounds more correct, this is the
@@ -174,8 +174,8 @@ static void test_mul_round_survives_a_32_bit_overflowing_product(void)
 }
 
 /*
- * Both shifts the tree actually uses - Q8 for simulation state, Q16.16 for
- * the UI transform - are the same helper, parameterised
+ * Both shifts the tree actually uses, Q8 and Q16.16, are the same helper,
+ * parameterised
  */
 
 static void test_the_same_helpers_serve_both_shift_8_and_shift_16(void)

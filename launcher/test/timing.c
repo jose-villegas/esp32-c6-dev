@@ -5,8 +5,8 @@
  * starts before it and stops after it returns, so nothing here runs inside
  * setUp(), the test body, or tearDown(). That matters because a handful of
  * tests time their own subject with esp_timer_get_time() around a narrower
- * window (a single simulation step, say) - this must never be what widens
- * that window.
+ * window (one call of the thing under test, say) - this must never be what
+ * widens that window.
  *
  * The elapsed-time line is printed AFTER UnityDefaultTestRun returns, so it
  * never touches the existing "file:line:name:PASS" line, which
