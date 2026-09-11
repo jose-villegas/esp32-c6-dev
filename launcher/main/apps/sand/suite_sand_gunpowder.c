@@ -837,16 +837,12 @@ static void test_a_longer_fuse_cooldown_delays_the_next_blast(void)
         "this same 2x2 would have breached it");
 }
 
-/* Replaces the old board-edge claim (an edge cell CAN now be the corner
- * of an INWARD 2x2, so "the board edge never detonates" is false on its
- * own) with the two claims that actually still hold: off-board counts as
- * not lit (find_lit_two_by_two()'s own comment, sand_reactions.c), and a
- * single LINE, however long, never completes a square. One end of this
- * trail sits AT the board's own edge (x == 0), the whole length pre-lit
- * at once - unlike test_a_lit_gunpowder_trail_burns_along_itself, which
- * is about propagation from one end, this is about the shape itself
- * never qualifying, so every cell starts lit and none of them are ever
- * given a chance to catch each other. */
+/* Off-board counts as not lit (find_lit_two_by_two()'s own comment,
+ * sand_reactions.c), and a single LINE, however long, never completes a
+ * square - so a trail lit its whole length at once, one end AT the
+ * board's own edge (x == 0), must never detonate. Unlike test_a_lit_
+ * gunpowder_trail_burns_along_itself, this is about the shape itself
+ * never qualifying, not propagation from one end. */
 static void test_a_one_wide_lit_trail_never_detonates(void)
 {
     fixture();
@@ -1158,19 +1154,13 @@ static void test_heat_dries_wet_gunpowder_one_level_with_steam(void)
  * soil_dry_out() at all. */
 #define DAMP_TEST_TRIALS 150
 
-/* One [FIRE][GUNPOWDER][STONE] triple per trial, all in a single row, so
- * every trial is fully isolated from every other: the STONE separator
- * blocks horizontal contact with the next trial's fire or gunpowder, and
- * the only row is floored by stone beneath it, so nothing falls before
- * reactions gets a turn. Earlier draft PACKED trials into a tall column
- * instead (fire/gunpowder pairs stacked with no separator) and measured
- * dry and damp both igniting at ~95-97% - because a freshly-lit
- * gunpowder cell is itself a heat source the SAME scan pass still
- * reaches, and stacked vertically its own ignite walk reached the NEXT
- * trial's still-dry cell directly, cascading down the column independent
- * of that trial's own moisture roll entirely. Isolating every trial is
- * what makes this a test of ONE roll's damping, not of a chain
- * reaction. */
+/* One [FIRE][GUNPOWDER][STONE] triple per trial, all in a single row: the
+ * STONE separator blocks horizontal contact with the next trial's fire or
+ * gunpowder, and the row is floored by stone so nothing falls before
+ * reactions gets a turn. Isolation matters because a freshly-lit
+ * gunpowder cell is itself a heat source the same scan pass reaches - an
+ * unseparated column lets one trial's ignite walk cascade into the next,
+ * independent of that trial's own moisture roll. */
 static void ignite_trial_row(sand_t *g, uint8_t *cells, int w, int trials, cell_t gp_byte)
 {
     sand_init(g, cells, w, 2, 7u);
@@ -1179,19 +1169,15 @@ static void ignite_trial_row(sand_t *g, uint8_t *cells, int w, int trials, cell_
                                 * step - see test_an_open_gas_pocket_
                                 * still_just_catches_fire's own use of
                                 * this for the same reason */
-    sand_set_conduction(g, 0);   /* the one-cell stone separator between
-                                * trials is a real conductor at the
-                                * table's own rate - left at the default,
-                                * conduct_heat() carried a trial's own
-                                * fire sideways through it into the NEXT
-                                * trial's gunpowder, a second independent
-                                * heat_chance roll neither isolated trial
-                                * was supposed to get. Confirmed by direct
-                                * instrumentation while writing this test:
-                                * with conduction on, damp ignited at
+    sand_set_conduction(g, 0);   /* the one-cell stone separator conducts
+                                * real heat at the table's own rate - left
+                                * at the default, conduct_heat() carries a
+                                * trial's fire sideways through it into the
+                                * NEXT trial's gunpowder (damp ignites
                                 * ~87% instead of the ~19.5% one damped
-                                * roll predicts. Sealed shut here, since
-                                * this test is about the DIRECT-contact
+                                * roll predicts), a second independent
+                                * roll neither isolated trial should get.
+                                * This test is about the DIRECT-contact
                                 * ignite roll only. */
     for (int i = 0; i < trials; i++) {
         const int base = i * 3;
@@ -1275,11 +1261,10 @@ static void test_water_wets_gunpowder_and_it_dries_out_slowly(void)
     sand_set(&s, 2, H / 2, STONE);
     sand_set(&s, 4, H / 2, STONE);
     /* A CLOSED WELL, not a ledge: floor under the powder AND under both
-     * diagonals, walls beside the powder AND beside the water. A keg soaks at
-     * 2 in 256, a mean of ~128 steps; over that long a loose powder slides
-     * down an open diagonal and a loose cell of water spreads off the side,
-     * and the cell under test is simply gone. Both only ever stayed put here
-     * because the old rate soaked them together within a few steps. */
+     * diagonals, walls beside the powder AND beside the water. A keg soaks
+     * at 2 in 256, a mean of ~128 steps - long enough that an open
+     * diagonal lets the powder slide away and the water spread off,
+     * losing the cell under test. */
     sand_set(&s, 2, H / 2 + 1, STONE);
     sand_set(&s, 3, H / 2 + 1, STONE);
     sand_set(&s, 4, H / 2 + 1, STONE);
@@ -1490,13 +1475,11 @@ static void test_acid_dissolves_gunpowder(void)
 /* --- D1/E1/E2 regression: gunpowder is not soil, a lit fuse is not wet or
  * re-placed --------------------------------------------------------------
  *
- * D1 (the coordinator's own decision, GUNPOWDER_FIXES.md section 7): a new
- * reaction_t field `soil` (nonzero: plants may root in, sprout from,
- * drink from and conduct water into this material) replaces the old
- * `dries != 0` test at every plant/root site that meant "this is soil" -
- * dirt sets `.soil = 1`; nobody else. Moisture DIFFUSION between
- * same-species cells and percolation keep using `dries`, unchanged - only
- * the "is this ground a plant can use" question moves to `soil`. */
+ * D1: reaction_t.soil (nonzero for dirt only) gates whether plants may
+ * root in, sprout from, drink from or conduct water into a material.
+ * Moisture DIFFUSION between same-species cells and percolation keep
+ * using `dries`, unchanged - only the "is this ground a plant can use"
+ * question is `soil`'s. */
 
 /* E2: a lit fuse must not be doused to an arbitrary level by a wet
  * same-species neighbour - soak diffusion's same_species() branch
@@ -1638,29 +1621,14 @@ static void test_plants_do_not_sprout_in_gunpowder(void)
         "or converted");
 }
 
-/* E1: a lit fuse must not be RE-PLACED by heat every single step it sits
- * beside a heat source - try_heat_transform_given()'s heat_chance roll,
- * run against a neighbour that is already burning, used to write the
- * IDENTICAL GUNPOWDER_LIT_CELL byte back onto itself whenever the roll
- * passed: same value, but still a write, so its row was marked dirty and
- * its block woken every step regardless (4 RNG draws + wakes per lit
- * cell, per the fix list this test pins). sand_track_dirty_rows() is the
- * observable chosen here - it is exactly the mechanism a real redraw
- * keys off, and a write that changes nothing must never trip it.
- *
- * Everything else sharing the fuse's row has to be provably inert, or a
- * legitimate, unrelated write there would look exactly like the bug this
- * pins. STONE was tried first and rejected: its own heat_ramp (32,
- * material.c) climbs a variant under conducted heat, which marks the row
- * dirty all by itself a few steps in - confirmed by direct instrumentation
- * while writing this test (dirty[row] flipped at step 6, STONE's own
- * variant climbing 0x33 -> 0x36 over the run, nothing to do with the
- * fuse). WOOD (KIND_STATIC, heat_ramp 0, no `heats_to`/`heat_chance` of
- * its own) walls lava in instead - immune to try_heat_transform_given()
- * outright (its first two checks both fail before either the ramp or the
- * heat_chance roll). Flammability forced to 0 board-wide so wood's own
- * small flammability (6) can never turn it to fire on contact with lava
- * either - this test is about the HEAT path only. */
+/* E1: a lit fuse must not be RE-PLACED by heat every step beside a heat
+ * source - try_heat_transform_given()'s heat_chance roll against an
+ * already-burning neighbour must reject outright, not just rewrite the
+ * same byte, which still marks the row dirty and wakes its block. STONE
+ * fails as the inert wall since its own heat_ramp dirties the row
+ * regardless; WOOD (heat_ramp 0) is immune outright, but flammability is
+ * forced to 0 so it can't ignite from lava contact either - heat path
+ * only. */
 static void test_a_lit_fuse_is_not_re_placed_by_heat(void)
 {
     dirty_fixture();
