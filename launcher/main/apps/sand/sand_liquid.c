@@ -326,7 +326,13 @@ static bool equalise_one_row(sand_t *s, int y, int w, int x_step,
     uint8_t *row = s->cells + (size_t)y * (size_t)w;
 
     const uint8_t *const ax_row = dest_row(s, y + r->ax[1]);
-    const uint8_t *const dg_row = dest_row(s, y + r->dg[1]);
+    /* NAMED AS THE AXIS ROW WHEN THE TILT CANNOT REACH IT: q_q8 is the
+     * tangent of the lean, so a zero one leaves `pat < q_q8` false for every
+     * cell and no ray is ever the diagonal. Saying so here is what lets
+     * rays_blocked() short-circuit on `dg_row == ax_row` and skip a block on
+     * the axis row alone, instead of proving a row no cell will probe. */
+    const uint8_t *const dg_row = (r->q_q8 != 0)
+                                ? dest_row(s, y + r->dg[1]) : ax_row;
     const uint8_t *const below_row = dest_row(s, y + dy);
 
     bool any_liquid = false;
