@@ -381,48 +381,21 @@ static void test_foam_moves_between_frames(void)
 }
 
 /* THE WINDOW MUST ROTATE, NOT STALL - the property ADD buys and XOR
- * broke, and the one that actually matters to how foam reads on the panel.
- *
- * An earlier version of this test used XOR and checked a different,
- * WRONG property: that two widely-separated phases (0 and 6) disagreed
- * about a handful of hashes sharing one blob. That is not a unison bug -
- * cells inside the same 2x2 blob are SUPPOSED to agree, by design (see
- * test_foam_blobs_are_bigger_than_one_cell) - and it never caught the
- * actual defect, which is that XOR's mixing can leave the foaming set
- * IDENTICAL between two phases RIGHT NEXT TO EACH OTHER. Measured on a
- * real sloshing scene at medium curvature, phase 1 to phase 2 changed
- * exactly zero cells out of 635 - foam that is supposed to shimmer every
- * tick instead sat there unchanged for a full step, indistinguishable
- * from the stable dither this whole change exists to replace.
- *
- * So this test checks the two properties that actually separate a
- * shimmer from either failure mode, swept across a full cycle of all 8
- * phases and at each of the three curvatures the threshold table
- * distinguishes (masks chosen for empty-neighbour counts of 4, 1 and 8 -
- * curvature 1, 2 and 3 respectively; see material_colours()'s own comment
- * on curvature for the count-to-curvature arithmetic), against a spread of
- * eight DISTINCT hash values (0 through 7, a complete residue set) rather
- * than a handful of real coordinates that could incidentally land in one
- * blob:
- *
- *   NEITHER DEGENERATE. At any single phase, the foaming subset of the
- *   eight hashes must be neither all of them nor none of them - the
- *   genuine unison guard. This was never actually broken by XOR (with
- *   only water_foam_threshold[curvature] of 8 values ever under the
- *   threshold, the rim cannot turn wholly on or off under any mixing that
- *   only permutes those 8 values) but is worth pinning in its own right.
- *
- *   NEVER STALLS. No two phases NEXT TO EACH OTHER may produce the
- *   identical foaming subset, over the full 8-phase cycle. This is the
- *   property XOR actually failed, at all three curvatures, worst at
- *   medium (see the long comment on the mixing site in material.c for the
- *   measured 4-of-8, 6-of-8, 4-of-8 breakdown) - and the one a future
- *   change back to XOR would break again, which is exactly what this
- *   assertion exists to catch. */
+ * broke. Measured on a real sloshing scene at medium curvature: XOR changed
+ * exactly zero of 635 cells' foaming state between adjacent phases - foam
+ * that should shimmer every tick sat frozen for a full step, indistinguishable
+ * from the stable dither this replaces. */
 static void test_foam_never_stalls_between_frames(void)
 {
     const gfx_color_t *pal = material_palette();
     const gfx_color_t plain = pal[CELL_MAKE(MAT_WATER, FOAM_TEST_FILL)];
+    /* Checks NEITHER DEGENERATE (the foaming subset of 8 hash values must be
+     * neither all nor none, at any single phase) and NEVER STALLS (no two
+     * ADJACENT phases may produce the identical foaming subset, across the
+     * full 8-phase cycle and all three curvatures) - the second is the
+     * property XOR actually failed (measured 4-of-8, 6-of-8, 4-of-8 across
+     * curvatures, see the mixing site's comment in material.c), and what a
+     * future change back to XOR would break again. */
 
     /* Empty-neighbour counts of 4, 1 and 8 give curvatures 1, 2 and 3 -
      * one mask per row of water_foam_threshold[] that the flat entry
