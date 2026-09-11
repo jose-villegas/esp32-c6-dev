@@ -216,6 +216,52 @@ twelve, once the block prologue and the two lines of the mask test it also
 avoids are counted. **A skip's saving is the whole region it stops entering,
 not the loop body you traced.**
 
+## Which PAIR of materials is expensive: the arena
+
+`main/apps/sand/tools/arena/` answers a question the frame-budget scenes
+cannot: of every material against every other, which *combination* costs, and
+why. It pours material A to a share of a 184x224 board, settles it, then
+pours B over it with a dragged brush at the app's own radius
+(`POUR_RADIUS_PX`, 10 px at 2 px per cell), sweeping left to right and back,
+and times every step of the pour.
+
+```sh
+./build_arena.sh
+build/arena_probe --list              # every material the grid can hold
+build/arena_probe Sand 65 Water 10    # settled sand, water poured over it
+python round_robin.py                 # all 380 ordered pairings
+python interactions.py                # rank them
+```
+
+Four things about it are load-bearing, each of which produced a wrong answer
+first:
+
+**The pour is a dragged brush, not a scatter.** Scattering single cells across
+the width is rain; it touches far more of the settled mass at once and
+inflates whichever material has the most contact-driven mechanics. Ice
+measured 576 us scattered and 222 us poured.
+
+**Not everything can be poured.** A `KIND_STATIC` material never falls, so
+pouring stone left 176 cells of 16,486 on the board and it measured 0.3 us -
+absent, not cheap. Statics are built from the floor up; a gas enters at the
+FLOOR and rises, since one released at the top is already at its destination.
+The brush also searches inward and sideways for space, because a player pours
+where there is room.
+
+**Rank the interaction, not the pairing.** A raw ranking puts one expensive
+material at the top of every row it appears in. `interactions.py` decomposes
+cost two-way - grand mean plus a row effect for the settled material plus a
+column effect for the poured one - and ranks the residual, which is the excess
+that exists only because those two met. Water is the cheapest material in the
+tree and `Root <- Water` is near the top.
+
+**Worst step is a third ranking again.** `Oil <- Acid` has an unremarkable
+mean and the largest excursion measured, 5.8x. It appears in neither of the
+other two tables, and a mean-based suite never sees it.
+
+Host timing: good for shape, ranking and screening, silent on absolute cost.
+Anything that has to be priced goes to the board.
+
 ## Before you build anything
 
 The cheapest instruments need no device, no build and no capture. Reach for
