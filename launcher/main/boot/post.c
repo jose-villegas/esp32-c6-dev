@@ -25,7 +25,7 @@ static const char *TAG = "post";
  * clear. Checked against heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
  * not total free heap - see esp32c6-8h2. DELIBERATELY WELL BELOW what a
  * full simulation grid needs, and this is not the check that guards it:
- * pegging this at grid size would false-alarm a healthy diagnostics
+ * pegging this at grid size would false-alarm a healthy development
  * image only a kilobyte or so above it - the grid's fit is checked
  * precisely elsewhere. */
 #define MIN_LARGEST_DMA_BLOCK (32 * 1024)
@@ -197,8 +197,8 @@ static void check_memory(void)
     snprintf(detail, sizeof(detail), "%u KiB free, DMA block %u KiB",
              (unsigned)(free_dma / 1024), (unsigned)(largest_dma / 1024));
     /* Gated on the largest block, not total free: "can this board still
-     * allocate the things it needs" (the sand grid wants one contiguous
-     * 41,216-byte block) is a contiguity question, not a total-bytes one. */
+     * allocate the things it needs" (an app's working grid wants one
+     * contiguous 41,216-byte block) is a contiguity question, not a total-bytes one. */
     report("memory", largest_dma > MIN_LARGEST_DMA_BLOCK, POST_REQUIRED, detail);
 
     /* This board has no PSRAM. Finding some would mean we are running on

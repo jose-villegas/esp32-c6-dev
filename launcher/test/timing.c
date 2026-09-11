@@ -5,13 +5,13 @@
  * starts before it and stops after it returns, so nothing here runs inside
  * setUp(), the test body, or tearDown(). That matters because a handful of
  * tests time their own subject with esp_timer_get_time() around a narrower
- * window (a single sand_step(), say) - this must never be what widens that
- * window.
+ * window (a single simulation step, say) - this must never be what widens
+ * that window.
  *
  * The elapsed-time line is printed AFTER UnityDefaultTestRun returns, so it
- * never touches the existing "file:line:name:PASS" line - the one two
- * tools (launcher/tools/sweeps/validate_capture.py and
- * launcher/main/apps/sand/tools/report_performance.py) already parse.
+ * never touches the existing "file:line:name:PASS" line, which
+ * launcher/tools/sweeps/validate_capture.py and an app's own
+ * performance-report script already parse.
  */
 #include "timing.h"
 
@@ -61,10 +61,8 @@ void suite_run_test_timed(void (*func)(void), const char *name, int line)
 
 #ifdef HOST_HEAP_ARENA
     /* A rise in outstanding blocks means the test freed fewer than it
-     * allocated - the assert-before-free failure mode in
-     * docs/sand/Performance-Tuning-Attempts.md's "recurring failure
-     * modes" (b), which otherwise skips every earlier free() in a fixture
-     * and starves every test that runs after it. Own greppable line, no
+     * allocated. A fixture that asserts before freeing skips
+     * every earlier free() and starves every test that runs after it. Own greppable line, no
      * consumer parses it today, so its shape is free to be whatever reads
      * clearest. */
     size_t blocks_after, bytes_after;

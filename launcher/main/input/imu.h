@@ -8,7 +8,7 @@
  * is easy to reach for the wrong one:
  *
  *   - the ACCELEROMETER senses gravity, so it says which way is down. That is
- *     what tilting the board changes, and what a falling-sand app wants.
+ *     what tilting the board changes, and what steering by tilt wants.
  *   - the GYROSCOPE senses rotation RATE, which is zero however the board is
  *     tilted, as long as it is being held still. It is what tells you the
  *     board is being shaken or spun.
@@ -23,8 +23,8 @@
 
 /* Raw sensor counts, in the chip's own axes.
  *
- * Left raw on purpose: the sand simulation only needs the direction of the
- * acceleration vector and the magnitude of the rotation, and both survive
+ * Left raw on purpose: a caller steering by tilt needs only the direction of
+ * the acceleration vector and the magnitude of the rotation, and both survive
  * scaling. Converting to g and deg/s would cost floating point in the frame
  * loop and buy nothing. The scale factors are here for anyone who does need
  * real units. */

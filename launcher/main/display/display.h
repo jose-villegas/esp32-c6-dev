@@ -47,8 +47,8 @@ typedef struct {
 /* WHAT EACH QUARTER IS, MEASURED NOT DERIVED: which orientation a turn
  * corresponds to is not visible from source - depends on how the case
  * is held versus how the panel's rows/columns are wired - so it was
- * measured (same method as GRAVITY_SCREEN_X/Y in app_sand.c:
- * Diagnostics' "show orientation" toggle, read per hold).
+ * measured, by holding the board each way with a development build's
+ * show-orientation overlay on and reading it off the panel.
  *
  *     0   Portrait               (USB connector to the right)
  *     1   Landscape              (USB connector at the top)
