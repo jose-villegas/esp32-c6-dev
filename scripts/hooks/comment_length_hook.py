@@ -25,6 +25,7 @@ Exit 2 hands the message back to the model as a blocking error.
 
 import json
 import os
+import re
 import sys
 
 TARGET = 300  # aim for this
@@ -33,6 +34,17 @@ TARGET = 300  # aim for this
 # already too long, not a comfortable allowance.
 BANNER_TARGET = 30
 BANNER_LIMIT = 50
+
+# Phrases that only introduce a story about how the code got here. Kept
+# narrow on purpose: the looser set in scripts/find_narrative_comments.py
+# is for building a worklist, where a false positive costs a glance. Here
+# it costs a refused edit, so only openers with no other use qualify.
+NARRATIVE = re.compile(
+    r"(a first attempt|an earlier version|the first version|"
+    r"was considered (?:next|first|and)|used to (?:be|do|have|gate|live|"
+    r"call|read|gat)|verified and reverted|tried (?:this|that|it) first|"
+    r"we (?:tried|first tried)|before the (?:fix|rewrite)|"
+    r"after the rewrite|has since been)", re.I)
 LIMIT = 500  # hard ceiling - only a comment that truly needs the room stays here
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -100,6 +112,24 @@ def main():
     # is wherever the fragment happens to start.
     over = [c for c in scan(path, text)
             if c.length > LIMIT and not c.has_rule]
+
+    story = [c for c in scan(path, text)
+             if c.length > TARGET and NARRATIVE.search(c.text)]
+    if story:
+        print(f"Comment rule: {len(story)} comment"
+              f"{'' if len(story) == 1 else 's'} you just wrote to "
+              f"{os.path.basename(path)} narrate how the code got here.",
+              file=sys.stderr)
+        for c in sorted(story, key=lambda c: -c.length)[:3]:
+            hit = NARRATIVE.search(c.text)
+            print(f"  \"{hit.group(0)}\" in: {c.text[:60]}...", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("A comment states the constraint that holds now - what it is, why "
+              "it exists, how it works, short. git log owns the journey. Keep a "
+              "measured number where it is the evidence, and a rejected "
+              "alternative only where someone would otherwise retry it, as a "
+              "clause.", file=sys.stderr)
+        return 2
 
     tall = [c for c in scan(path, text)
             if c.has_rule and c.lines > BANNER_LIMIT]
