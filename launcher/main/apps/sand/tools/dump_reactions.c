@@ -2069,91 +2069,31 @@ static void emit_pairwise_table(void)
 /*-----------------------------------------------------------------------
  * "How these sentences are built."
  *
- * Not the per-material table itself - that stays clean, unmarked prose,
- * on purpose: it is the deliverable a future brush-description feature
- * will read from, not a place for this file's own internals to leak into.
- * This is a SEPARATE section, appended after the pairwise table, showing
- * one representative sentence per group (see group_id_t) with its slots
- * marked, so a reader can see how much of each sentence is a generated
- * slot and how much is hand-written glue inside an emit_*() function.
+ * A separate section after the pairwise table, showing one representative
+ * sentence per group (group_id_t) with its slots marked. The table itself
+ * stays clean unmarked prose - it is the deliverable a brush-description
+ * feature will read, not a place for this file's internals to leak into.
  *
- * Every marked RATE and OBJECT word below is pulled through the exact
- * same adverb()/to_name()/prose_name() calls (and the exact same live
- * reaction_t rows) the real per-material clauses use above - so those
- * words track material.c and cannot go stale the way a typed-out example
- * would. The GLUE text cannot be sourced the same way: it is prose typed
- * directly into the matching emit_*() function's printf() calls, so it is
- * transcribed by hand from that function here, and needs a matching edit
- * if that function's own wording ever changes - each example below names
- * the emit_*() function and fields it mirrors, to make that edit findable.
+ * Marked RATE and OBJECT words come through the same adverb()/to_name()/
+ * prose_name() calls and the same live reaction_t rows as the real clauses
+ * above, so they cannot go stale. GLUE cannot be: it is typed into an
+ * emit_*() printf and transcribed here by hand, so changing that wording
+ * needs a matching edit here - each example names the function it mirrors.
  *
- * The material slots are marked with inline LaTeX colour spans -
- * $\textcolor{#RRGGBB}{\text{...}}$, SINGLE dollars on each side. An
- * earlier version used $${\color{...}...}$$ per slot and failed three ways
- * at once: $$...$$ is DISPLAY math (a block element), so every marked span
- * broke onto its own centred line and shredded the sentence; VSCode's math
- * extension reads a bare $ as its own inline delimiter, so it saw $$ as two
- * of those and threw a KaTeX parse error; and even rendered correctly,
- * KaTeX sets the words in an italic serif math font that clashes with the
- * surrounding sans prose. A version after that switched to plain markdown
- * emphasis - **bold**, `code`, *italic* - which sidesteps all three
- * failures but loses colour: three visual weights cannot carry five
- * distinct slots, so Subject had to share **bold** with Verb and Cause had
- * to fold into unmarked glue. Inline single-dollar math keeps colour and
- * drops the block-math and font problems: $\textcolor{...}{\text{...}}$
- * flows inline, renders upright (`\text{}` switches back out of math
- * italics), and every material name below gets its own colour rather than
- * sharing a channel - see COLOUR MEANS MATERIAL, NOTHING ELSE below for
- * why grammar roles do NOT also compete for that same channel any more,
- * which is what lets plain markdown emphasis back in for them without
- * repeating that earlier failure.
+ * COLOUR MEANS MATERIAL, NOTHING ELSE. Every material name renders in that
+ * material's own colour, read from material_palette() - the array the panel
+ * itself renders from. Grammar role is carried by typography instead:
+ * MARK_VERB italic, MARK_RATE bold, MARK_CAUSE bold italic, glue unmarked.
+ * One channel per question, so neither has to share.
  *
- * WHICH COLOUR A MATERIAL GETS
+ * Colour spans are inline $\textcolor{#RRGGBB}{\text{...}}$, single dollars:
+ * display math ($$) is a block element and breaks each span onto its own
+ * centred line, shredding the sentence.
  *
- * Subject and Object used to be two fixed, unrelated colours (a flat red
- * for whichever row the sentence is about, a flat green for whichever
- * material a field's value names) - which meant the colour told you SLOT,
- * not SUBSTANCE: Wood and Glass rendered in the identical red, Steam and
- * Sand in the identical green, even though the whole point of colouring a
- * material anywhere else in this game is that no two materials share a
- * colour. Every material NAME below - subject or object, and the literal
- * word "fire" inside "Catches fire" (emit_ignite()'s own wording for
- * ignites_to's 0/MAT_FIRE default, not a to_name() call, but naming
- * MAT_FIRE all the same) - now renders in THAT material's own colour
- * instead: material_hex() below reads it straight out of
- * material_palette(), the exact array the panel itself renders from, at
- * the same representative swatch a freshly painted cell of that material
- * actually takes - see representative_variant()'s own comment for why that
- * is not simply app_sand.c's brush_color() variant-13 shortcut, and
- * material_hex()'s for the extended-cell case, which still is.
- *
- * COLOUR MEANS MATERIAL, NOTHING ELSE
- *
- * Verb, Rate/frequency and Cause used to keep one fixed colour each, the
- * same way Subject/Object once did before the fix just above - which left
- * colour answering two unrelated questions at once (WHICH material, and
- * WHICH grammar role), and the palette only ever had an opinion on the
- * first one: nothing in material_palette() says what colour `melts`
- * should be, so those three colours were arbitrary picks this file made
- * up out of nowhere, not derived from anything the game itself knows.
- * Colour now means exactly one thing on this whole page - "this word is a
- * material" - and grammar role moved to typography instead: MARK_VERB
- * prints as *italic* (a light touch for the action), MARK_RATE as
- * **bold** (every rate word scannable in one pass - which is exactly what
- * made the by-feel adverb tuning pass legible once it landed), and
- * MARK_CAUSE as ***bold italic*** (a clause rather than a single word, and
- * the rarest thing on this page - every instance today is a clause
- * recovered from a REACTION_DOC() call in sand_reactions.c, via cause_at()
- * above). Glue stays plain and unmarked, same as always. This
- * is not a return to the all-markdown attempt two paragraphs up, which
- * failed because it had to carry FIVE distinct slots (Subject, Object,
- * Verb, Rate, Cause) through three visual weights: with material identity
- * now handled entirely by its own per-instance LaTeX colour span, the
- * typography channel only has to tell apart THREE grammar roles plus
- * unmarked glue - one weight per role, nothing sharing, nothing left
- * over. See print_marked() below for where each mark_t turns into its
- * treatment, and the Legend this function prints for the reader-facing
- * version of this same rationale. */
+ * See print_marked() for where a mark_t becomes its treatment,
+ * representative_variant() and material_hex() for which swatch a material
+ * is drawn at, and the Legend this function prints for the reader-facing
+ * version of the same rationale. */
 
 typedef enum {
     MARK_NONE,     /* glue (see the Legend below) - printed as ordinary
