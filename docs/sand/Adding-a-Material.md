@@ -240,7 +240,7 @@ a density relationship needs code at all. A **powder** moves via
 `can_enter()`, which admits a mover only if it is denser than the target
 - so for a powder, "lighter than water" already means "floats", for free.
 A **liquid** never consults `can_enter()`, which is why oil floating on
-water needed a rule of its own (`sink_through_lighter_liquid()`). **Check
+water needed a rule of its own (`float_lighter_liquids()`). **Check
 the mechanism before assuming a density relationship needs enforcing.**
 
 Two consequences worth internalising, both real limitations rather than
@@ -261,16 +261,21 @@ bugs to chase:
   it. Worth knowing as a precedent - **when a rule cannot express what
   you need, adding the exception to the cold or warm pass is usually
   right, and teaching the hot predicate is usually wrong.**
-- **Two liquids of different densities also needed their own rule, and it
-  was nearly free.** `room_in()` refuses a cell holding another material,
-  so oil and water simply blocked each other. The fix
-  (`sink_through_lighter_liquid()`, `sand_liquid.c`) is phrased as *the
-  denser liquid moves DOWN* rather than *the lighter one rises* - and
-  that phrasing is the whole trick, because down is gravity-ward and so
-  inherits the main sweep's existing no-double-move guarantee. The
-  mirror-image rule would have needed its own reversed pass, exactly like
-  gas's. **When a new movement has to be added, check whether it can be
-  stated gravity-ward before writing a pass for it.**
+- **Two liquids of different densities also needed their own rule, and
+  the cheap phrasing did not last.** `room_in()` refuses a cell holding
+  another material, so oil and water simply blocked each other. The first
+  fix was phrased as *the denser liquid moves DOWN* rather than *the
+  lighter one rises*, because down is gravity-ward and so inherits the
+  main sweep's existing no-double-move guarantee; the mirror-image rule
+  would have needed its own reversed pass, exactly like gas's. It got one
+  anyway - `float_lighter_liquids()` (`sand_liquid.c`) is that reversed
+  pass, and it replaced the sinking rule outright. What the reversal
+  costs is the ordering guarantee: sweep order protects the cell that
+  moves, never the one it displaces, so the pass carries one bit per
+  column to stop a displaced cell cascading the length of the board.
+  **Gravity-ward is still the phrasing to reach for first, but a reversed
+  pass is affordable - budget for the displaced cell, not the moving
+  one.**
 
 **Does it need `slip`/`repose` to mean "no resistance", like a liquid,
 even if it is whole-grain?** Gas's `slip = 255`/`repose = 0` copy water's
