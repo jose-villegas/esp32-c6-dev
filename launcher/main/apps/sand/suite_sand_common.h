@@ -38,11 +38,9 @@ extern uint8_t  cells[W * H];
  * ever live at a time, each test's own fixture helper re-inits it with
  * sand_init() before use, and no function mixes two members of fx, or one
  * of these with s/wide (this split's other two heavily-shared fixtures -
- * see suite_sand_motion.c, suite_sand_locality.c and
- * suite_sand_materials.c for the same idea applied to fixtures - big,
- * pool, pour - that turned out to be reused by only one file each rather
- * than across the split, and so stayed static there instead of moving
- * here).
+ * big, pool, pour, in suite_sand_motion.c, suite_sand_locality.c and
+ * suite_sand_materials.c - are each reused by only one file, so they stay
+ * static there instead of moving here).
  *
  * Rule for new tests: use exactly ONE member of fx. A fixture that must
  * stay alive alongside another needs its own static, local to whichever
