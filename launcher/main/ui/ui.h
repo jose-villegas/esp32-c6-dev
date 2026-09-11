@@ -12,16 +12,14 @@
  *
  * That command-list model is why microui suits this device. A retained-mode
  * toolkit wants to own the display and the refresh cycle, which fights an app
- * like the cube that owns its own framebuffer. Here we render a list of
- * primitives whenever we like, into whatever we like.
+ * that owns its own drawing. Here we render a list of primitives whenever we
+ * like, into whatever we like.
  *
- * WHY THIS MODULE KNOWS ABOUT DIRTY BANDS
- *
- * Immediate mode rebuilds and repaints the whole UI every frame, which
- * normally means clearing the screen every frame, which marks every band dirty
- * and forces a full 9.6 ms transfer - throwing away the saving that partial
- * updates exist to provide. That is not a launcher problem; it would hit any
- * app that drew a UI.
+ * This module knows about dirty bands because immediate mode rebuilds and
+ * repaints the whole UI every frame, which normally means clearing the screen
+ * every frame, marking every band dirty and forcing a full 9.6 ms transfer -
+ * throwing away the saving partial updates exist to provide. That would hit
+ * any app that drew a UI, not only the launcher.
  *
  * The fix is that an immediate-mode UI is only *rebuilt* every frame, not
  * necessarily *changed*. microui's command list is a complete description of

@@ -1,22 +1,21 @@
 /*
  * Device-only suite: boot animation performance profiling.
  *
- * Unlike suite_cube_perf.c's steady-state spinning cube, boot_anim_draw_
- * frame() is a pure function of now_ms, and the whole point of this suite
+ * Unlike a steady-state render loop, boot_anim_draw_frame() is a pure
+ * function of now_ms, and the whole point of this suite
  * is that its cost is NOT steady across the animation's own timeline: grid
  * rings arrive progressively, the space transform's scale grows across
  * keyframes, and the photograph's crossfade adds a full-framebuffer blend
- * on top of whatever else is drawing. A single flat-out capture the way
- * cube_perf runs one would average all of that away.
+ * on top of whatever else is drawing. A single flat-out capture, the way a
+ * steady-state suite takes one, would average all of that away.
  *
  * So this FREEZES time instead of letting it run: boot_anim_draw_frame()
  * being a pure function of now_ms means calling it repeatedly at one fixed
  * timestamp is a legitimate, repeatable measurement of exactly what that
  * moment in the animation costs - not a hand-picked scene standing in for
  * it. A handful of checkpoints (see build_checkpoints() below), each timed
- * per-phase (clear/floor/axes/curve/zeros/image/title/present) the same
- * way cube_perf breaks down logic/rasterize/hud/present, with the same
- * min/max/avg/median/p95 report.
+ * per-phase (clear/floor/axes/curve/zeros/image/title/present), with the
+ * same min/max/avg/median/p95 report every performance suite here reports.
  *
  * Runs under DEVICE_BUILD only - needs real panel, DMA, and framebuffer.
  */

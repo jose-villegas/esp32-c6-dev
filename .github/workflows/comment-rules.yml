@@ -1,10 +1,10 @@
 name: Comment Rules
 
 # The comment rules CLAUDE.md states, measured rather than argued: nothing
-# beside code over 500 characters, no file header over 50 lines, and no comment
-# naming a function that does not exist. The PostToolUse hook already refuses
-# these on an edit's own new text, but a hook only binds an agent that has it
-# configured - this is what holds the whole tree.
+# beside code over 500 characters, no file header over 50 lines, no comment
+# naming a function that does not exist, and none below apps/ naming an app.
+# The PostToolUse hook already refuses some of these on an edit's own new text,
+# but a hook only binds an agent that has it configured - this holds the tree.
 #
 # Own workflow file, like the other four, purely so it gets its own badge -
 # GitHub exposes whole-workflow badges and never per-job ones. See
@@ -28,3 +28,6 @@ jobs:
 
       - name: Every function a comment names exists
         run: python3 scripts/check_comment_symbols.py
+
+      - name: No comment below apps/ names an app
+        run: python3 scripts/check_comment_layers.py

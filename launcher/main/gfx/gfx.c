@@ -1037,13 +1037,13 @@ static void restore_border(gfx_color_t *buf, int stride, int w, int h,
 }
 
 /* 6240 px combined, borrowed from gather_buf's front rather than
- * malloc'd separately: two separate buffers once cost sand its needed
- * contiguous allocation, and this debug overlay must never be why sand
- * cannot start. gather_buf is provably idle here: gather_and_send()
- * always waits for its own transfer to finish before returning, and the
- * frame loop is single-threaded. The _Static_assert ties this to
- * GATHER_MAX_PIXELS so a size change that breaks the fit is a compile
- * error, not a silent DMA overflow. */
+ * malloc'd separately: a separate allocation competes for the one
+ * contiguous block an app's working grid needs, and a debug overlay must
+ * never be why an app cannot start. gather_buf is idle here -
+ * gather_and_send() waits for its own transfer before returning, and the
+ * frame loop is single-threaded. The _Static_assert ties the fit to
+ * GATHER_MAX_PIXELS, so breaking it is a compile error rather than a
+ * silent DMA overflow. */
 #define OVERLAY_CELL_SAVE_PIXELS (GRID_COLS * BORDER_PIXELS)
 #define OVERLAY_LEAF_SAVE_PIXELS (LEAF_RECTS_PER_ROW_MAX * LEAF_BORDER_PIXELS)
 _Static_assert(OVERLAY_CELL_SAVE_PIXELS + OVERLAY_LEAF_SAVE_PIXELS <=
@@ -1234,13 +1234,12 @@ static void send_full_row(int row, int *queued)
 }
 
 /* Third, cheapest send path: a full-width box is already contiguous in
- * `fb`, so it sends exactly the panel's bytes with no packing. Possible
- * only because the box carries a real sub-strip Y extent, from
- * cell_y0/cell_y1 tracking (gfx_dirty.h), not the coarse strip grid.
- * Measured ~10% fewer pixels per frame on falling-sand/lava scenes, 0%
- * where strips are genuinely full-height. Declines whenever either
- * overlay layer is on: their save/restore machinery assumes
- * send_full_row()'s full STRIP_HEIGHT box. */
+ * `fb`, so it sends exactly the panel's bytes with no packing. Needs the
+ * box's real sub-strip Y extent (cell_y0/cell_y1, gfx_dirty.h), not the
+ * coarse strip grid. Measured ~10% fewer pixels per frame on scenes that
+ * dirty many short spans, 0% where strips are genuinely full-height.
+ * Declines whenever either overlay layer is on: their save/restore
+ * machinery assumes send_full_row()'s full STRIP_HEIGHT box. */
 static bool send_partial_band(int y0, int y1, int *queued)
 {
 #if CONFIG_LAUNCHER_DEVELOPMENT

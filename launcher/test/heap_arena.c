@@ -2,9 +2,9 @@
  * A first-fit arena allocator that stands in for malloc/calloc/realloc/free
  * in the HOST test build, sized to what this project's device profile says
  * is actually free once the framebuffer is carved out (device_profiles/
- * esp32c6.sh's DP_FREE_HEAP_BYTES) - see docs/sand/Performance-Tuning-
- * Attempts.md's "recurring failure modes" for why a laptop-scale heap
- * cannot stand in for the device's.
+ * esp32c6.sh's DP_FREE_HEAP_BYTES). A laptop-scale heap cannot stand in for
+ * the device's: an allocation that fits on the host and not on the board is
+ * exactly the failure this exists to catch.
  *
  * FIRST-FIT WITH REAL FRAGMENTATION is the point: a doubly-linked list of
  * address-ordered blocks, failing an allocation exactly when no ONE free
@@ -32,9 +32,9 @@
  * __real_free / __real_realloc untouched.
  *
  * Compiled in ONLY when HOST_HEAP_ARENA is defined. launcher/test/timing.c
- * is also compiled into the device firmware (main/CMakeLists.txt) and the
- * sand perf_probe harness (main/apps/sand/tools/perf_probe/build_probe.sh);
- * neither defines this macro or adds this file to its source list.
+ * is also compiled into the device firmware (main/CMakeLists.txt) and into an
+ * app's own performance-probe harness; neither defines this macro or adds this
+ * file to its source list.
  */
 #ifdef HOST_HEAP_ARENA
 

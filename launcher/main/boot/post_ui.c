@@ -3,7 +3,7 @@
  *
  * Kept out of post.c so that file stays about hardware. This is presentation
  * only, shared by the two places the report is shown: the failure screen at
- * boot, and the Diagnostics app.
+ * boot, and whichever app re-runs POST on demand.
  *
  * Rendered at glyph scale 1 (8x8). At the UI's normal scale of 2 the panel is
  * only 23 characters wide, which is narrower than most of the detail strings.

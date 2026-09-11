@@ -7,9 +7,8 @@
  * (that is what UNITY_SKIP_DEFAULT_RUNNER exists for). Forcing this header
  * in ahead of a suite's own "#include unity.h" - via the build's -include
  * flag, see main/CMakeLists.txt and test/run_tests.sh - makes that happen
- * for every suite at once, including the sand test suite (suite_sand_*.c)
- * this project is not free to edit right now, and the two dozen others
- * not worth touching just for this.
+ * for every suite at once, including the ones this project is not free to
+ * edit right now and the two dozen others not worth touching just for this.
  *
  * Do NOT force this onto framework/unity.c's own compilation: that trips
  * the same guard from the other side and compiles UnityDefaultTestRun's

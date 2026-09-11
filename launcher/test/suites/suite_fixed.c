@@ -46,9 +46,9 @@ static void test_mul_floor_matches_a_hand_written_widened_shift(void)
 }
 
 /*
- * floor vs round: the divergence that would change sand's physics
+ * floor vs round: the divergence that would change a simulation's output.
  *
- * mom_x_q8 in sand.c is signed and routinely negative. Its decay uses
+ * A momentum accumulator is signed and routinely negative. Its decay uses
  * fx_mul_floor(), matching a plain `>> 8` on a negative accumulator - which
  * FLOORS toward negative infinity, not toward zero. If a future reader swaps
  * that for fx_mul_round() because "round" sounds more correct, this is the
@@ -174,13 +174,13 @@ static void test_mul_round_survives_a_32_bit_overflowing_product(void)
 }
 
 /*
- * Both shifts the tree actually uses: Q8 (sand, tilt) and Q16.16 (the UI
- * transform) are the same helper, parameterised
+ * Both shifts the tree actually uses - Q8 for simulation state, Q16.16 for
+ * the UI transform - are the same helper, parameterised
  */
 
 static void test_the_same_helpers_serve_both_shift_8_and_shift_16(void)
 {
-    /* Q8 "one times one is one", as sand's fixed point would need. */
+    /* Q8 "one times one is one", as a Q8 accumulator needs. */
     TEST_ASSERT_EQUAL_INT32(256, fx_mul_floor(256, 256, 8));
     TEST_ASSERT_EQUAL_INT32(256, fx_mul_round(256, 256, 8));
 
