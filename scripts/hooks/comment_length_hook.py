@@ -42,6 +42,11 @@ BANNER_LIMIT = 50
 # style(9) has three comment shapes and none of them has headings inside.
 # A comment needing sections is a document, and the code is not where a
 # document goes.
+# A function needing its parts commented wants splitting. Most functions
+# here carry no internal comment at all, so five in one edit is an
+# outlier rather than a busy day.
+INTERNAL_COMMENTS_MAX = 5
+
 CAPS_HEADING = re.compile(r"^[A-Z][A-Z0-9 ,'()/-]{14,}$")
 
 NARRATIVE = re.compile(
@@ -117,6 +122,23 @@ def main():
     # is wherever the fragment happens to start.
     over = [c for c in scan(path, text)
             if c.length > LIMIT and not c.has_rule]
+
+    # Counted off the raw text: scan() strips a comment's indentation, and
+    # indentation is exactly what says "inside a function" here.
+    inside = sum(1 for ln in text.splitlines()
+                 if ln[:1] in (" ", "\t")
+                 and ln.lstrip().startswith(("/*", "//")))
+    if inside >= INTERNAL_COMMENTS_MAX:
+        print(f"Comment rule: this edit puts {inside} comments inside a "
+              f"function body in {os.path.basename(path)}.", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("Commenting the parts of a function is the signal that the "
+              "function wants splitting, not annotating - name the pieces and "
+              "the comments stop being necessary. Linux coding-style says a "
+              "function needing this should be revisited against its rules for "
+              "functions: one or two screenfuls, doing one thing.",
+              file=sys.stderr)
+        return 2
 
     heads = []
     for c in scan(path, text):
