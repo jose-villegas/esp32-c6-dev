@@ -146,32 +146,15 @@ static uint32_t clamp_below(uint32_t ms, uint32_t exclusive_max)
     return ms < exclusive_max ? ms : exclusive_max - 1;
 }
 
-/* Seven moments along the animation's own timeline, all derived from the
- * generated constants rather than hand-guessed literals - boot_anim_
- * timeline.json is the author's own actively-tuned file (see its own
- * comment history), so a checkpoint written as a raw ms number would
- * silently stop meaning what its label says the moment the timeline is
- * retuned. clamp_below() only matters if a future retune makes one
- * checkpoint's natural formula land past where it is meant to stay inside
- * (grid settling past IMAGE_START_MS, or any of them past BOOT_ANIM_MS
- * itself) - normal today, but not guaranteed to stay that way.
+/* Every checkpoint is derived from the generated timeline constants, never a
+ * raw ms literal: the timeline is actively tuned, and a literal would stop
+ * meaning what its label says at the next retune.
  *
- * "curve_climbing" only ever sampled the EARLY half of the pen's own
- * travel (PEN_START_MS + PEN_MS/2) - misleading as a name for "how
- * expensive does the curve get", since BOOT_ANIM_PEN_FINISH_MS is
- * ordinarily well past PEN_START_MS + PEN_MS (a slow settle/hold tail
- * after the fast initial stroke, not a second pass at the same speed):
- * draw_curve()'s own cost grows with how much of the path is visible, so
- * the curve is still getting MORE expensive long after this checkpoint,
- * right up to PEN_FINISH_MS. Renamed to say what it actually samples, and
- * "crossfade_late" added below to catch the true worst case this suite
- * was missing entirely: the curve near its own most-expensive (fully or
- * almost-fully grown) still overlapping the crossfade's own per-pixel
- * dithered Image loop, which only runs while reveal is strictly between 0
- * and 255 - one frame after this the memcpy branch in draw_image() takes
- * over and gets cheap again. Placed at 90% through the crossfade window,
- * not right at its edge, so a frame this close is not accidentally rounded
- * into that cheap branch by boot_anim_image_reveal()'s own tween math. */
+ * "crossfade_late" is the worst case - a nearly fully grown curve still
+ * overlapping the per-pixel dithered image loop, which runs only while
+ * reveal is strictly between 0 and 255. It sits at 90% through the window,
+ * not at the edge, so tween rounding cannot drop the frame into the cheap
+ * memcpy branch. */
 static void build_checkpoints(checkpoint_t out[7])
 {
     const uint32_t grid_settled = BOOT_ANIM_GRID_START_MS +

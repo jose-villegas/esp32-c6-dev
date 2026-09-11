@@ -31,23 +31,15 @@
 
 /* --- dirty rows: nothing changes without saying so ---------------------- */
 
-/* The invariant the renderer depends on, asserted directly for every
- * material rather than inferred from the passes that maintain it.
+/* app_sand.c only repaints rows whose dirty_rows byte is set, so a cell
+ * that changes on an unmarked row leaves a stale pixel - a failure every
+ * other test here is blind to, since the grid is right and only the screen
+ * is wrong.
  *
- * app_sand.c only repaints rows whose dirty_rows byte is set, so a cell
- * that changes on a row nobody marked is a pixel left stale on the panel
- * until something else happens to redraw that band. That failure is
- * invisible in every other test here - the grid is right, only the screen
- * is wrong - and it is exactly the kind of thing that gets noticed on
- * device and not before.
- *
- * TRANSIENT materials are the reason this is worth a test of its own.
- * A grain of sand changes when it moves, and a move is hard to forget
- * about. Fire, gas, steam and smoke also change when they merely AGE:
- * tick_decay() rewrites the variant nibble in place, the palette turns
- * that into a different colour, and nothing has moved at all. A pass that
- * remembered to mark its moves and forgot to mark its decay would look
- * perfectly correct right up until a flame stopped fading on screen. */
+ * TRANSIENT materials are why this is worth its own test: fire, gas, steam
+ * and smoke change colour when they merely AGE, with nothing moving at all,
+ * so a pass that marks its moves and forgets its decay looks correct right
+ * up until a flame stops fading on screen. */
 static void assert_every_change_is_marked(material_id_t m, int steps,
                                           const char *what)
 {
@@ -562,17 +554,11 @@ static void test_an_emitted_powder_still_lands_in_a_valid_shade(void)
         "painted grain one of the shades reserved for cullet");
 }
 
-/* The same claim test_the_brush_and_the_setter_agree_about_every_material
- * makes about sand_set() versus the brush, but for the emitter versus
- * sand_spawn_cell() - and exhaustive over every material an emitter may
- * ever hold, rather than sampled to the handful above. The reason to walk
- * all of them rather than trust water/lava/gas/sand as representatives is
- * exactly what made this bug ship: variant 0 means something DIFFERENT for
- * each material kind - a liquid's fill level, a transient's life, glass's
- * temperature, soil's tone and moisture, a powder's shade - and picking
- * representatives only catches the kinds someone thought to check. A loop
- * over every emit-eligible material catches the next one added with a
- * variant meaning nobody anticipated, the same way this one got through. */
+/* The emitter against sand_spawn_cell(), exhaustive over every material an
+ * emitter may hold rather than sampled. Variant 0 means something different
+ * for each kind - a liquid's fill level, a transient's life, glass's
+ * temperature, soil's tone and moisture, a powder's shade - so a handful of
+ * representatives only ever catches the kinds someone thought to check. */
 static void test_an_emitter_and_sand_spawn_cell_agree_about_every_material(void)
 {
     const int x = 3, y = 3;
@@ -873,15 +859,10 @@ static void test_sand_init_clears_emitters_from_a_previous_use(void)
         "once");
 }
 
-/* Every entry the app's palette offers - see brushes[] in app_sand.c - by
- * KIND rather than by importing that table: this file cannot see
- * app_sand.c and should not start to. The four flowing kinds (powder,
- * liquid, gas) come out true and the two static ones false, which is
- * exactly the KIND_POWDER/LIQUID/GAS-may, KIND_STATIC-may-not rule
- * material_can_emit() implements - see its own comment in material.h, and
- * test_the_extended_row_being_static_is_what_emitter_eligibility_leans_on
- * above for why the two extended entries both land on `false` through one
- * shared row rather than two independent answers. */
+/* Every entry the app's palette offers, spelled out by KIND rather than by
+ * importing brushes[]: this file cannot see app_sand.c and should not start
+ * to. Flowing kinds come out true and static ones false, which is the rule
+ * material_can_emit() implements. */
 static void test_material_can_emit_matches_every_brush_by_kind(void)
 {
     static const struct { cell_t cell; bool can_emit; const char *why; } cases[] = {

@@ -12,18 +12,13 @@
 
 #include "sand_priv.h"
 
-/* WATER ONLY - see acid_bubble() (sand_reactions.c) for what replaced
- * this trigger there. MASKED TO `mat_id`, not a plain sand_displace():
- * an unmasked throw scatters whatever else is nearby too, not just
- * water splashing itself. WATER DECAYS TWO WAYS, INDEPENDENTLY - see
- * SAND_SPLASH_RADIUS_WATER's own comment in sand.h for the full
- * account. */
+/* WATER ONLY - acid_bubble() (sand_reactions.c) replaced this trigger
+ * there. MASKED TO `mat_id`, because an unmasked throw scatters whatever
+ * else is nearby too. */
 /* NOT INLINED, though it lives in a header for the one caller that is.
- * Inlining move_liquid_grain() into the sweep won 18.4% on liquid scenes
- * but grew sand_step() 975 -> 1425 instructions, because the whole helper
- * chain came with it - and that growth is paid by every cell, which cost
- * the liquid-free rows 5.5%. This body is big and its success path is
- * uncommon, so it is the wrong thing to duplicate at the call site. */
+ * Inlining move_liquid_grain() into the sweep won 18.4% on liquid scenes but
+ * grew sand_step() 975 -> 1425 instructions, and that growth is paid by
+ * every cell - the liquid-free rows lost 5.5%. */
 static __attribute__((noinline, unused)) void splash_displace(sand_t *s, int x, int y, uint8_t mat_id)
 {
     if (mat_id != MAT_WATER) {

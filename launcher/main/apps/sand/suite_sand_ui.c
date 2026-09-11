@@ -100,14 +100,10 @@ static void test_a_boot_hold_in_running_changes_nothing_at_all(void)
     TEST_ASSERT_EQUAL_INT(SAND_MODE_ERASE, ui.mode);
 }
 
-/* Bug (commit faad9bb): closing the palette on `.pressed` split one
- * physical BOOT press across two screens - the panel closed on the press
- * edge, and the matching release arrived a frame later with screen already
- * back to RUNNING, where the (since-removed) cycling code read it as a
- * request to advance the brush. The fix, still in force here, is that
- * closing only ever happens on `.released` - a `.pressed` while the panel
- * is open must do nothing at all, and the brush must come through a close
- * completely untouched regardless. */
+/* Closing on `.pressed` splits one physical BOOT press across two screens,
+ * leaving the matching release to arrive a frame later in RUNNING. So
+ * closing only ever happens on `.released`: a `.pressed` while the panel is
+ * open must do nothing, and the brush must come through untouched. */
 static void test_closing_the_palette_leaves_brush_exactly_as_it_was(void)
 {
     sand_ui_t ui;

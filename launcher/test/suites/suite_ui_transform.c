@@ -184,24 +184,14 @@ static void test_a_mapped_rect_swaps_width_and_height_on_an_odd_turn(void)
 }
 
 /*
- * ui_transform_icon_blocks() - a baked icon's runs, mapped under a quarter
- * turn
+ * A synthetic 4x4 "L" - the minimum shape that is NOT symmetric under any
+ * quarter turn, so a bug mapping only the enclosing box produces runs a
+ * symmetric glyph could never distinguish from correct ones. Expected
+ * geometry is hand-derived from ui_transform_quarter_turn()'s matrices.
  *
- * icon_bits/icon_stride below is a synthetic 4x4 "L" - the minimum shape
- * that is NOT symmetric under any quarter turn, so a bug that maps only the
- * enclosing box (MU_COMMAND_ICON's actual shipped bug - see ui.c's
- * draw_command()) produces runs a symmetric glyph could never distinguish
- * from correct ones. Expected geometry below is hand-derived from the
- * matrices ui_transform_quarter_turn()'s own comment gives, not from
- * ui_transform_rect() - see the CROSS-CHECK test further down for that
- * independent angle too.
- *
- * Content bbox: col 0 is set on every row, and row 3 reaches col 2, so the
- * bitmap's own content box is x:[0,2] y:[0,3] - 3 wide, 4 tall. At a 4x4
- * box that is scale 1 with a zero origin on both axes (integer division:
- * (4 - 3*1)/2 == 0, (4 - 4*1)/2 == 0), so LOCAL run coordinates below equal
- * native bitmap coordinates - no separate scale/centre arithmetic to also
- * get right before the transform math can be checked in isolation.
+ * Its content box is 3 wide and 4 tall, which at a 4x4 box is scale 1 with
+ * a zero origin, so LOCAL run coordinates below equal native bitmap ones
+ * and no centring arithmetic stands in front of the transform math.
  */
 
 static const uint8_t icon_l_rows[4] = {
@@ -311,17 +301,10 @@ static void test_icon_blocks_match_ui_transform_rect_run_by_run(void)
 }
 
 /*
- * ui_text_glyph0_origin() - where a string's first glyph belongs, under a
- * quarter turn, for a PROPORTIONAL font
- *
- * gfx_font_8x8 (the only font that existed when this function's formula was
- * first written) is square - cell_w == cell_h == 8 - so it could never have
- * exposed a cell_w/cell_h mixup: whichever of the two a bug read, the
- * number would come out the same. Every test below uses glyph0_font
- * instead, deliberately non-square (cell_w=6, cell_h=10) AND proportional
- * (advances 3/5/4/6, none equal to cell_w), the same kind of synthetic
- * descriptor suite_gfx_font.c already uses for the same reason. Its atlas
- * is unread (nothing here draws) and left zeroed.
+ * A square font (cell_w == cell_h) can never expose a cell_w/cell_h mixup,
+ * since whichever a bug reads the number comes out the same. glyph0_font is
+ * deliberately non-square (6 x 10) AND proportional (advances 3/5/4/6, none
+ * equal to cell_w); its atlas is unread and left zeroed.
  */
 
 static const uint8_t glyph0_atlas[4 * 10] = { 0 };   /* 4 glyphs * cell_h rows, unread */
@@ -404,15 +387,10 @@ static void test_glyph0_origin_needs_no_correction_at_turn_0_or_1(void)
     TEST_ASSERT_EQUAL_INT_MESSAGE(box.y, my, "turn 1: origin is box.y");
 }
 
-/* Direct demonstration of the mistake this function's own comment warns
- * against: swapping cell_w for cell_h at quarter 3 LOOKS plausible (quarter
- * 3 corrects box.h, the "other" dimension from quarter 2's box.w) but is
- * wrong - see that comment for the derivation of why "col" always maps to
- * the walk axis regardless of turn. This does not need to break the source
- * to prove the point: cell_w (6) and cell_h (10) are different enough in
- * glyph0_font that the two formulas provably disagree, so showing the real
- * function's answer is NOT the cell_h one is itself evidence this test
- * could catch that exact mistake. */
+/* Swapping cell_w for cell_h at quarter 3 LOOKS plausible, since quarter 3
+ * corrects box.h where quarter 2 corrects box.w. No mutation is needed to
+ * show this test would catch it: 6 and 10 make the two formulas disagree,
+ * so the real answer not being the cell_h one is the evidence. */
 static void test_glyph0_origin_at_turn_3_is_not_the_cell_h_mistake(void)
 {
     const int quarter = 3;

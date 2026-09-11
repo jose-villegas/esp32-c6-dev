@@ -33,13 +33,11 @@ typedef struct {
 #define UI_POINTER_MAX_EVENTS 3
 
 /* MOVE-only frames a press waits through before its DOWN is fed, and both
- * are load-bearing. microui resolves a control's hover only when the mouse
- * is over it AND not already down, and mu_mouse_over() needs hover_root,
- * which mu_begin() copies from the PREVIOUS frame. So frame one only tells
- * microui which window the finger is in, frame two is the first that can
- * actually mark the control hovered, and a DOWN before that lands with
- * nothing hovered - which means nothing focused, and a button that draws
- * its pressed state but never submits. */
+ * are load-bearing: mu_mouse_over() needs hover_root, which mu_begin()
+ * copies from the PREVIOUS frame. Frame one only tells microui which window
+ * the finger is in; frame two is the first that can mark the control
+ * hovered. A DOWN before that focuses nothing, giving a button that draws
+ * its pressed state and never submits. */
 #define UI_POINTER_HOVER_FRAMES 2
 
 typedef struct {

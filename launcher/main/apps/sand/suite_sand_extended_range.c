@@ -33,19 +33,12 @@
  * The extended range: sixteen materials behind the last slot.
  * =================================================================== */
 
-/* Heat through a wall LIGHTS oil. It does not boil it away.
+/* Heat through a wall LIGHTS oil. It does not boil it away: conduct_heat()
+ * steaming any non-burning liquid was right only while water was the only
+ * liquid that could be on the far side.
  *
- * conduct_heat() turned anything on the far side into steam if it was a
- * liquid and did not itself burn. Water is a liquid and does not burn, so
- * that was right when water was the only liquid that could be there - and
- * it has been wrong for every liquid added since. Lava was caught first,
- * because lava boiling itself is spectacular. Oil is quieter: it just
- * disappears.
- *
- * Measured before the fix: 180 units of oil in a stone pan over a fire
- * went to zero in sixty steps, leaving fourteen cells of steam. Steam is
- * the tell - oil has no business producing any at all, which is what makes
- * it a sharper assertion than the oil count. */
+ * Steam is the tell, and a sharper assertion than the oil count, because oil
+ * has no business producing any at all. */
 static void test_heat_through_a_pan_lights_oil_rather_than_boiling_it(void)
 {
     fixture();

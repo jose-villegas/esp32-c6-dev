@@ -31,20 +31,13 @@ extern sand_t   s;
 extern uint8_t  cells[W * H];
 
 /* DIRAM on-device is one pool for .data/.bss AND the heap, so every static
- * byte here is a byte the heap never gets - sand_t is 232 B, and some of
- * this split's tests need one contiguous 41,216 B (184x224, real screen
- * size) grid the diagnostics image can't spare from a ~37-38 KiB largest
- * free DMA block (bd esp32c6-e82). Safe to union: only one fixture below is
- * ever live at a time, each test's own fixture helper re-inits it with
- * sand_init() before use, and no function mixes two members of fx, or one
- * of these with s/wide (this split's other two heavily-shared fixtures -
- * big, pool, pour, in suite_sand_motion.c, suite_sand_locality.c and
- * suite_sand_materials.c - are each reused by only one file, so they stay
- * static there instead of moving here).
+ * byte here is a byte the heap never gets, against a largest free DMA block
+ * of ~37-38 KiB (bd esp32c6-e82). Safe to union because only one fixture is
+ * ever live at a time and each test's own helper re-inits it with
+ * sand_init().
  *
- * Rule for new tests: use exactly ONE member of fx. A fixture that must
- * stay alive alongside another needs its own static, local to whichever
- * one file uses it. */
+ * Rule for new tests: use exactly ONE member of fx. A fixture that must stay
+ * alive alongside another needs its own static, local to its one file. */
 typedef union {
     sand_t loc, splash_sim, crater_sim, cascade_test_sim, stir_sim,
            liq_cascade_sim, quench_sim, obst_pool, blend_pool,

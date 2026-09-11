@@ -84,17 +84,12 @@
 #define ARRAY_LEN(a) (sizeof(a) / sizeof((a)[0]))
 
 /*
- * The field table.
- *
  * One row per reaction_t field. `group` says which clause it contributes
- * to (see the emit_* functions below, one per group); `kind` says how a
- * TARGET field's value decodes. `verb`/`adverb_override` exist because the
- * plan asks for them explicitly - an irregular verb form, or a rate whose
- * ladder bucket reads wrong once partner count or persistence is accounted
- * for (sand -> glass, the ignition family - see the plan's "The ladder
- * lies in two directions" section). Phase 1 sets neither: every adverb
- * below takes the computed bucket, unedited, on purpose - that by-feel
- * pass is explicitly phase 2's job, not this file's.
+ * to (one emit_* function per group below); `kind` says how a TARGET
+ * field's value decodes. `verb`/`adverb_override` cover an irregular verb
+ * form, or a rate whose ladder bucket reads wrong once partner count or
+ * persistence is accounted for; nothing here sets either yet, so every
+ * adverb takes the computed bucket unedited.
  */
 
 typedef enum {
@@ -375,24 +370,15 @@ static const field_doc_t *field_doc(const char *name)
 }
 
 /*
- * REACTION_DOC parsing - the cause clauses this file cannot derive from
- * material.c's tables at all, because the condition that gates them lives
- * entirely at a read site in sand_reactions.c (see shatters_to's two
- * SAND_SHOCK_HEAT/SAND_SHOCK_COLD thresholds, and spoils_to's "only while
- * the cell is still wet" gate - neither appears anywhere in reactions[]/
- * extended_reactions[]).
+ * REACTION_DOC parsing - the cause clauses no table can yield, because the
+ * condition gating them lives at a read site in sand_reactions.c and
+ * appears nowhere in reactions[]/extended_reactions[].
  *
- * sand_reactions.c is read as TEXT here, never linked - see reaction_doc.h's
- * own top comment for why that is not a reversal of "compile the tables, do
- * not parse them" (that rule is about constant EXPRESSIONS needing the
- * preprocessor; a string literal has nothing to evaluate, only to read back
- * verbatim), and report_reactions.sh for how its path reaches this program.
- *
- * is_known_field() below deliberately duplicates field_doc()'s own lookup
- * rather than calling it, because a bad field name here is not fatal in the
- * way field_doc() assumes - it just refers to a REACTION_DOC() invocation
- * (reported by number, `errno`/exit(1) same as the rest of this file) rather
- * than a `%s` this program already trusts elsewhere.
+ * sand_reactions.c is read as TEXT here, never linked; reaction_doc.h says
+ * why that does not reverse "compile the tables, do not parse them".
+ * is_known_field() below duplicates field_doc()'s lookup rather than
+ * calling it, because a bad field name here is not fatal the way
+ * field_doc() assumes.
  */
 
 /* Comfortably more than the number of REACTION_DOC() calls sand_reactions.c
@@ -885,24 +871,12 @@ static void material_hex(uint8_t v, char *buf, size_t cap)
 }
 
 /*
- * Legibility overrides - material_hex() above returns the device's exact
- * palette value, which is what the anatomy section below still shows (see
- * its own top comment: raw values are the documentation of the actual
- * palette). The DEFAULT per-material section and Legend read colour
- * through legible_hex() instead: several of those exact values fail a 3:1
- * WCAG contrast floor against GitHub's light (#FFFFFF) and dark (#0D1117)
- * page backgrounds - snow and steam wash out on light, oil and lava wash
- * out on dark, and so on - so a name coloured with the raw value can be
- * unreadable in whichever theme the reader is in.
- *
- * Same idiom as ADVERB_EXCEPTIONS above: a small table of RESULTS, not a
- * live HSL bisection in C (that was done once, offline, in Python, to get
- * exact numbers - see the table's own comment below), with a startup
- * check that recomputes the raw value LIVE through material_hex() and
- * exits(1) on any mismatch, so a future palette change cannot silently
- * leave a stale override in place the way it could with no check at all.
- * Only materials that actually fail get a row - passing materials read
- * straight through material_hex(), unmodified, forever.
+ * Legibility overrides. Several exact palette values fail a 3:1 WCAG
+ * contrast floor against GitHub's light (#FFFFFF) and dark (#0D1117) page
+ * backgrounds, so a name in the raw value can be unreadable in whichever
+ * theme the reader is in. A startup check recomputes each raw value through
+ * material_hex() and exit(1)s on a mismatch, so a palette change cannot
+ * leave a stale override behind.
  */
 typedef struct {
     uint8_t     cell;    /* matched against mrow_t.color_id, same as
@@ -1907,33 +1881,14 @@ static void emit_pairwise_table(void)
 }
 
 /*
- * "How these sentences are built."
+ * "How these sentences are built" - one marked example per group_id_t. The
+ * pairwise table above stays unmarked prose, being the deliverable a
+ * brush-description feature reads.
  *
- * A separate section after the pairwise table, showing one representative
- * sentence per group (group_id_t) with its slots marked. The table itself
- * stays clean unmarked prose - it is the deliverable a brush-description
- * feature will read, not a place for this file's internals to leak into.
- *
- * Marked RATE and OBJECT words come through the same adverb()/to_name()/
- * prose_name() calls and the same live reaction_t rows as the real clauses
- * above, so they cannot go stale. GLUE cannot be: it is typed into an
- * emit_*() printf and transcribed here by hand, so changing that wording
- * needs a matching edit here - each example names the function it mirrors.
- *
- * COLOUR MEANS MATERIAL, NOTHING ELSE. Every material name renders in that
- * material's own colour, read from material_palette() - the array the panel
- * itself renders from. Grammar role is carried by typography instead:
- * MARK_VERB italic, MARK_RATE bold, MARK_CAUSE bold italic, glue unmarked.
- * One channel per question, so neither has to share.
- *
- * Colour spans are inline $\textcolor{#RRGGBB}{\text{...}}$, single dollars:
- * display math ($$) is a block element and breaks each span onto its own
- * centred line, shredding the sentence.
- *
- * See print_marked() for where a mark_t becomes its treatment,
- * representative_variant() and material_hex() for which swatch a material
- * is drawn at, and the Legend this function prints for the reader-facing
- * version of the same rationale.
+ * GLUE is the one slot that can go stale: it is typed into an emit_*()
+ * printf and transcribed here by hand, so each example names the function
+ * it mirrors. Colour spans use single-dollar inline math - display math
+ * ($$) is a block element and shreds the sentence.
  */
 
 typedef enum {
