@@ -48,7 +48,7 @@ static const char *TAG = "shell";
 #include "esp_heap_caps.h"
 
 /* Free heap alone never predicts whether the next big allocation fits:
- * the framebuffer and the sand grid each need ONE CONTIGUOUS block, and
+ * the framebuffer and an app's working grid each need ONE CONTIGUOUS block, and
  * free space can sit outside the largest one with nothing saying where
  * it went. Printing both numbers at each boot phase says which phase
  * loses it. */

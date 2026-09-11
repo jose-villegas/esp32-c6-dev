@@ -57,10 +57,10 @@ typedef struct {
      * tracks the edge-swipe-home gesture and draws its hint strip while
      * an app with this true is running - an app that leaves it unset
      * gets neither, and is responsible for its own way back to the
-     * launcher. The falling-sand app is the reason this exists: a touch
-     * drag near a screen edge to pour or steer sand is easy to mistake
-     * for the swipe-home gesture, so it needs the generic one off and a
-     * deliberate control of its own instead. */
+     * launcher. It exists for an app whose own input is a touch drag
+     * near a screen edge, which the swipe-home gesture cannot be told
+     * apart from: such an app turns the generic one off and offers a
+     * deliberate control instead. */
     bool home_gesture;
 
     /* Opt-in, like home_gesture above: NULL unless an app sets it. If

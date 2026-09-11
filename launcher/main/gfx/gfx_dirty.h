@@ -63,9 +63,8 @@ static uint32_t cell_dirty;
 /* Set once dirty_mark_all() has run this frame, cleared alongside
  * cell_dirty by dirty_frame_sent(). Every cell is already claimed at
  * that point, so any further mark_band()/dirty_mark() call this frame
- * can only ever repeat work already done - real for an app that clears
- * then draws many small primitives on top (microui, the cube
- * renderer). */
+ * can only ever repeat work already done - real for anything that clears
+ * then draws many small primitives on top, as microui does. */
 static bool all_dirty;
 
 /* Per cell, the (x0,x1) x (y0,y1) box actually known to be dirty this

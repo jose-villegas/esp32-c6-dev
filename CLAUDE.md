@@ -135,10 +135,12 @@ no code.
 
 A hook only binds an agent that has it configured, so the whole tree is held
 by CI instead (`.github/workflows/comment-rules.yml`): nothing beside code
-over 500 characters, no header over 50 lines, and
-`scripts/check_comment_symbols.py` on top of those — a comment may not name a
-function that does not exist, which is how a trim that garbles a symbol gets
-caught rather than shipped.
+over 500 characters, no header over 50 lines, plus two checks a length rule
+cannot express — `scripts/check_comment_symbols.py`, since a comment may not
+name a function that does not exist, and `scripts/check_comment_layers.py` for
+the layering rule below. Both take their vocabulary from the tree (every
+`name()` a comment writes, every folder under `apps/`), so neither needs
+updating when code moves.
 
 Requires a **host** compiler (not the ESP32 toolchain) for the host tests:
 Windows `winget install BrechtSanders.WinLibs.POSIX.UCRT`, Debian/Ubuntu
@@ -187,14 +189,18 @@ build.
 `"gfx/gfx.h"`, not `"gfx.h"`, even between files in the same folder — so an
 app reaching past `ui` into `gfx` is visible at the include line.
 
-**Comments obey the same direction as includes.** A file in `gfx/`, `ui/`,
-`boot/`, `util/` or `test/suites/` must not name a particular app — an app
-is a folder designed to be deleted whole, so a lower layer naming one is a
-dangling reference by construction, and the comment survives the code it
-described. Say what shape of caller needs the thing ("a checkbox toggle", "a
-per-tile badge"), or state the rule a caller must follow, rather than naming
-the file that currently does it. An app's own files may name anything below
-them freely; that direction is the one that cannot dangle. Layers:
+**Comments obey the same direction as includes.** Nothing below `apps/` —
+`boot/`, `display/`, `gfx/`, `input/`, `ui/`, `util/`, all of `test/`, and the
+shell's own `main.c` and `app.h` — may name a particular app. An app is a
+folder designed to be deleted whole, so a lower layer naming one is a dangling
+reference by construction, and the comment survives the code it described. Say
+what shape of caller needs the thing ("a checkbox toggle", "a per-tile badge",
+"an app's working grid"), or state the rule a caller must follow, rather than
+naming the file that currently does it. An app's own files may name anything
+below them freely; that direction is the one that cannot dangle. Enforced by
+`scripts/check_comment_layers.py`, which reads the app names out of `apps/`
+itself; "the diagnostics build" is the build variant behind `build.diag` and is
+free for any layer to name. Layers:
 `boot/` (runs once, before the frame loop exists), `gfx/` (the one
 framebuffer + primitives), `ui/` (microui integration), `input/` (touch,
 gesture), `util/` (pure arithmetic), `apps/`.

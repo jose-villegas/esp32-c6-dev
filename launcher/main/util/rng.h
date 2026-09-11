@@ -6,7 +6,7 @@
  * no state beyond a single word - which matters on a chip with no hardware
  * divider and 424 KiB of RAM. Its statistical quality is nowhere near a
  * cryptographic generator's and it is not meant to be: this is for scattering
- * sand grains and picking shades.
+ * particles and picking shades.
  *
  * NOT for anything security-related. It is trivially predictable from a couple
  * of outputs.
@@ -16,10 +16,10 @@
  * say "shaking flattens this pile" and get the same answer every run, and what
  * makes a bug reproducible from a seed rather than only sometimes.
  *
- * Header-only and inline on purpose. The sand simulation calls this tens of
- * thousands of times a second from its innermost loop, and a function call per
- * draw across a translation-unit boundary would be a real cost - removing that
- * generator from the common path was once worth a factor of two.
+ * Header-only and inline on purpose. A per-cell simulation loop calls this
+ * tens of thousands of times a second, where a function call per draw across a
+ * translation-unit boundary is a real cost - measured at a factor of two on
+ * such a loop's common path.
  */
 #pragma once
 
