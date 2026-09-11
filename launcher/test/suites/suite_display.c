@@ -2,8 +2,8 @@
  * Specification for display - shell-owned orientation, decided from a
  * smoothed gravity vector with hysteresis around the quarter boundaries.
  *
- * The test that matters is the boundary sweep: a slow tilt crossing the old
- * 45-degree snap point must change orientation exactly once, not chatter
+ * The test that matters is the boundary sweep: a slow tilt crossing the
+ * 45-degree quarter boundary must change orientation exactly once, not chatter
  * back and forth as the reading wobbles either side of it. Everything else
  * here pins down the four unambiguous orientations, the no-oscillation
  * behaviour parked exactly on a boundary, the asymmetric "60 out, 30 back"
