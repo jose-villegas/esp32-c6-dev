@@ -255,15 +255,12 @@ static void test_a_point_further_from_the_camera_projects_smaller(void)
 }
 
 /* boot_anim_project_point()'s entire reason to exist over plain
- * boot_anim_project() - see its own comment in boot_anim.h - is refusing
- * to write anything for a point at or behind the near plane, rather than
- * projecting it to an ordinary-looking but geometrically nonsense screen
- * position. Pinned right AT the boundary rather than somewhere clearly
- * behind it - `im_q12 = 408` is chosen so that, under an identity
- * transform, BOOT_ANIM_ZETA_TO_S3L(408) = 408 >> 3 = 51 = BOOT_ANIM_
- * NEAR_Z exactly - so this specifically exercises the `<=`, not just
- * "somewhere behind", which a `<` typo in the real check would still
- * pass at a point further back. */
+ * boot_anim_project() is refusing to write anything for a point at or
+ * behind the near plane, rather than projecting it to an ordinary-looking
+ * but geometrically nonsense screen position. `im_q12 = 408` sits exactly
+ * ON the boundary - under an identity transform
+ * BOOT_ANIM_ZETA_TO_S3L(408) = 51 = BOOT_ANIM_NEAR_Z - so this exercises
+ * the `<=`, which a `<` typo would still pass anywhere further back. */
 static void test_project_point_rejects_a_point_at_the_near_plane(void)
 {
     const boot_anim_view_t view = identity_view(S3L_F);
@@ -372,17 +369,15 @@ static void test_spoke_reveal_target_hits_its_endpoints_exactly(void)
         boot_anim_spoke_reveal_target(near, far, 255));
 }
 
-/* The whole point of switching to reciprocal interpolation (see this
- * function's own comment in boot_anim.h) is keeping ON-SCREEN growth
- * roughly even - which this test cannot see a screen to check directly,
- * but 1/target advancing in roughly EQUAL steps as `reach` advances in
- * equal steps is the exact algebraic property that guarantees it (screen
- * position is itself roughly proportional to 1/target under a
- * perspective projection - see boot_anim_camera_to_screen()). Checked as
- * a difference-of-differences bound rather than exact equality: the
- * reach-to-r0 knot and integer rounding both perturb it slightly, so
- * "each step's own shrinkage is within a small tolerance of the next
- * step's" is the property that actually matters, not bit-exact evenness. */
+/* Reciprocal interpolation exists to keep ON-SCREEN growth roughly even,
+ * which this test cannot see a screen to check directly; 1/target
+ * advancing in roughly equal steps as `reach` does is the algebraic
+ * property that guarantees it, since screen position is itself roughly
+ * proportional to 1/target under a perspective projection (see
+ * boot_anim_camera_to_screen()).
+ *
+ * Bounded as a difference-of-differences rather than by exact equality:
+ * the reach-to-r0 knot and integer rounding both perturb it. */
 static void test_spoke_reveal_target_advances_evenly_in_screen_space(void)
 {
     const int32_t near = 10 * BOOT_ANIM_ONE;
@@ -848,14 +843,13 @@ static void test_a_span_climbs_steadily_when_its_points_do(void)
     }
 }
 
-/* boot_anim_spline_cs()'s whole reason to exist: transforming three control
- * points to camera space and THEN interpolating them must land on the same
- * point (modulo fixed-point rounding order, not a real difference) as
- * interpolating in world space and THEN transforming - draw_curve() relies
- * on this to skip a full matrix transform on every drawn sub-point. Checked
- * against a real, non-identity view (rotated, translated, perspective) -
- * an identity transform would not catch a bug that only shows up once
- * translation and rotation are actually mixed in. */
+/* boot_anim_spline_cs()'s whole reason to exist: transforming three
+ * control points to camera space and THEN interpolating must land on the
+ * same point as interpolating in world space and THEN transforming, which
+ * is what lets a caller skip a full matrix transform per drawn sub-point.
+ * Checked against a real rotated, translated, perspective view - an
+ * identity transform would not catch a bug that only shows up once
+ * translation and rotation are mixed in. */
 static void test_spline_cs_matches_transforming_the_world_space_spline(void)
 {
     const boot_anim_view_t view = boot_anim_view(PANEL_W, PANEL_H, CURVE_DONE_MS);
@@ -1084,16 +1078,12 @@ static void test_the_scene_leaves_exactly_as_fast_as_the_photograph_arrives(void
         BOOT_ANIM_IMAGE_START_MS + BOOT_ANIM_IMAGE_FADE_MS));
 }
 
-/* The two clocks (ink and the crossfade) are independent by design - see
- * boot_anim_scene_reach()'s own comment - but draw_image() still
- * multiplies them together, so the picture needs to be at full ink for
- * the whole time the photograph is arriving, or the mountain would fade
- * in already dimmed rather than arriving bright and only later
- * dissolving. Not true of every timeline the generator could author (it
- * only WARNS if the two windows overlap) - asserted here for the one
- * this repo actually ships. Ignored while the seed's own image_start_ms
- * sits at its inert, no-photograph-authored default (== BOOT_ANIM_MS) -
- * see gen_boot_anim_timeline.py's own setdefault comment. */
+/* The two clocks (ink and the crossfade) are independent by design, but
+ * the renderer multiplies them together, so the picture has to be at full
+ * ink the whole time the photograph is arriving or it fades in already
+ * dimmed. The generator only WARNS if the two windows overlap, so this is
+ * asserted for the timeline this repo actually ships. Ignored while
+ * image_start_ms sits at its inert default (== BOOT_ANIM_MS). */
 static void test_the_seed_finishes_the_crossfade_before_the_dissolve_starts(void)
 {
     if (BOOT_ANIM_IMAGE_START_MS >= BOOT_ANIM_MS) {
@@ -1424,14 +1414,11 @@ static void test_the_live_end_of_the_curve_is_drawn_thicker(void)
 /*
  * The title
  *
- * boot_anim_title_letter() now takes the font it is laying out - see its
- * own comment in boot_anim.h - so the layout tests below exercise the REAL
- * font the seed authors (see TITLE_FONT below) rather than a
- * synthetic stand-in: these are checks against the actual authored
- * geometry (BOOT_ANIM_TITLE_VIEW_X/Y, the real "Autana" advances), not
- * just the layout FORMULA in the abstract - suite_gfx_font.c already
- * covers gfx_font_text_width()/gfx_font_advance() themselves against a
- * synthetic proportional font, so there is no need to repeat that here.
+ * boot_anim_title_letter() takes the font it is laying out, so the tests
+ * below exercise the REAL font the seed authors (TITLE_FONT) rather than
+ * a synthetic stand-in: checks against the actual authored geometry, not
+ * the layout FORMULA in the abstract. suite_gfx_font.c already covers
+ * gfx_font_text_width()/gfx_font_advance() themselves.
  */
 
 /* Whichever font the timeline actually AUTHORS, resolved the same way
@@ -1589,14 +1576,11 @@ static void test_final_x_matches_the_advance_sum(void)
 
 /* The layout guard, in the same spirit as
  * test_the_whole_scene_fits_on_the_panel_throughout_the_orbit(): every
- * letter, at every moment of its own flight including the wildest part of
- * the wobble, must land within the VIEWER's frame once it is actually
- * visible - BOOT_ANIM_TITLE_VIEW_W/H, not PANEL_W/PANEL_H, because
- * boot_anim_title_letter() lays the word out in that frame now (see its own
- * comment in boot_anim.h) and boot_anim.c's draw_title() is what turns it
- * into a panel coordinate afterward - a step this test does not need to
- * repeat, since a letter kept inside its own frame here stays on the panel
- * there by construction. */
+ * letter, at every moment of its flight including the wildest part of the
+ * wobble, must land within the VIEWER's frame once it is actually visible
+ * - BOOT_ANIM_TITLE_VIEW_W/H, not PANEL_W/PANEL_H, since
+ * boot_anim_title_letter() lays the word out in that frame and a letter
+ * kept inside it stays on the panel by construction. */
 static void test_the_title_stays_on_the_panel_once_visible(void)
 {
     /* The full glyph cell, not just its anchor corner - (x, y) is where a
