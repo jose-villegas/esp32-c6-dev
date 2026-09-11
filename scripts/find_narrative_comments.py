@@ -38,7 +38,7 @@ def find(root, min_chars):
             if c.length > min_chars and SIGNS.search(c.text):
                 yield {"chars": c.length, "lines": c.lines,
                        "path": p.as_posix(), "line": c.line,
-                       "banner": c.has_rule}
+                       "banner": c.is_banner}
 
 
 def main():
