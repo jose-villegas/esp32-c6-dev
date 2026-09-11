@@ -209,33 +209,17 @@ static void test_a_root_column_does_not_spend_the_trees_lift(void)
         "a root must cost the tree no TREE_LIFT at all");
 }
 
-/* A root with dirt piled back on top of it does not cut the tree off
- * from the water below it. Dirt shifts, so a root that formed at a
- * collar can end up buried under fresh soil later - and without the
- * transparency fix in find_water()'s own soil walk, a root would look
- * exactly like the dead end it exists to prevent, reintroducing the bug
- * from the other side.
- *
- * A DEEP wet reserve below the root, not the original single row - since
- * PART 2 of the roots feature, a root sitting directly on its only
- * reachable water is itself a second consumer of that exact cell
- * (step_one_rooting_cell(), sand_reactions.c): given enough steps it
- * will eventually eat the very cell this test's ORIGINAL one-row version
- * depended on and convert it to more root, which the soil walk then
- * crosses too, arriving at stone with nothing left to find - a real
- * race between the root's own slow, serial, one-cell-at-a-time eating
- * and the tree's growth roll, and for the fixed seed this suite always
- * runs with, the root used to win it (measured: FAILED, deterministically,
- * against the single-row version). That is not the transparency bug this
- * test exists to catch - find_water()'s own walk was never touched by
- * PART 2 - it is the new mechanism competing for the one cell of water
- * the old, narrower scene happened to offer. Six rows deep is far more
- * than the root can plausibly eat through (each conversion needs its own
- * independent roll, one cell at a time, only ever on the single newest
- * cell of the column) before the tree's own, faster-firing growth roll
- * succeeds at least once - which is the actual claim under test. */
+/* A root with dirt piled back on top of it must not cut the tree off
+ * from the water below it (find_water()'s own soil-walk transparency). */
 #define BURIED_ROOT_TEST_W 8
 #define BURIED_ROOT_TEST_H 16
+/* A DEEP wet reserve (6 rows), not a single row: since PART 2 of the
+ * roots feature, a root on its only reachable water is itself a second
+ * consumer of that cell (step_one_rooting_cell()) - a single-row reserve
+ * races the root's own slow eating against the tree's growth roll,
+ * deterministically losing for this suite's fixed seed, a different
+ * failure from the transparency bug under test. Six rows is far more than
+ * the root can plausibly eat through before growth succeeds once. */
 #define BURIED_ROOT_WET_ROWS 6
 
 static void test_a_buried_root_does_not_cut_off_the_water_below_it(void)
