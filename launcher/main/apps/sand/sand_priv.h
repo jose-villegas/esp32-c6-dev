@@ -698,13 +698,11 @@ void sand_step_gas(sand_t* s, int gx, int gy, int dx, int dy, const int* slide_a
  * must run LAST - see sand_impulse.c's own banner. */
 void step_impulses(sand_t *s, int dx, int dy);
 
-/* try_fall_or_scatter()/try_slide() moved here, static inline, same
- * reason as dest_row()/mark_rows(): hottest-path, called once per grain
- * per step. Un-static-ing for sand_gas.c, or inlining the whole chain
- * into both files, each regressed a frame-budget test badly (loses
- * inlining, or duplicates flash). Shipped: _impl versions stay static
- * inline here; sand_gas.c calls thin non-inline wrappers in sand.c,
- * keeping the hot path inlined, at most two flash copies. See
+/* try_fall_or_scatter()/try_slide() live here, static inline, same
+ * reason as dest_row()/mark_rows(): hottest path, called once per grain
+ * per step. sand_gas.c calls thin non-inline wrappers in sand.c instead
+ * of un-static-ing these or duplicating the chain - both regressed a
+ * frame-budget test (lost inlining, or duplicated flash). See
  * docs/sand/Simulation-Lessons.md. */
 
 /* Static materials never yield regardless of density, so a wall stays a
