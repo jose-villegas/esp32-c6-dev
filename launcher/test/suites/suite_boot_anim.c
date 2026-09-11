@@ -422,11 +422,10 @@ static void test_spoke_reveal_target_advances_evenly_in_screen_space(void)
                     "1/target - a plateau these test constants should "
                     "never actually produce");
                 /* Consecutive per-step shrinkages should stay within 25%
-                 * of each other - loose on purpose (this is a fixed-point
+                 * of each other - loose on purpose (a fixed-point
                  * approximation, not exact reciprocal interpolation), but
-                 * tight enough that the OLD linear-in-radius formula (whose
-                 * first step alone covers ~90% of the total 1/near-to-
-                 * 1/far span) would fail it outright. */
+                 * tight enough to reject a linear-in-radius formula, whose
+                 * first step alone covers ~90% of the span. */
                 const double ratio = delta / prev_delta;
                 TEST_ASSERT_TRUE_MESSAGE(ratio > 0.75 && ratio < 1.25,
                     "consecutive reach steps should shrink 1/target by "
