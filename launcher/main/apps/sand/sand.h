@@ -585,17 +585,13 @@ void sand_set_acid_dilute_mass_bias(sand_t *s, int bias);
  * tests. */
 void sand_set_mobility(sand_t *s, int chance);
 
-/* Swaps gas movement from the exhaustive powder mover to a biased random walk:
- * mostly toward the three cells "above" it in gravity's frame, a small chance
- * straight down, a smaller one sideways - hot gas rather than a grain that
- * falls upward. Off by default, so behaviour is unchanged until asked.
+/* Swaps gas movement from the exhaustive powder mover to a biased random
+ * walk - hot gas rather than a grain that falls upward. Off by default.
  *
- * The point is cost as much as looks. The powder path TRIES each option in turn
- * - rise, scatter, two slides, bubble - so its worst case is a packed grid,
- * where nothing succeeds and every option is paid for. A full screen of fire is
- * exactly that, and the gas sweep is 49% of it. A walk draws one direction and
- * probes once, so the cost stops depending on how blocked the neighbourhood is.
- */
+ * Cost as much as looks: the powder path TRIES each option in turn, so its
+ * worst case is a packed grid where nothing succeeds and everything is paid
+ * for. A full screen of fire is exactly that, and the gas sweep is 49% of
+ * it. A walk draws one direction and probes once. */
 void sand_set_gas_walk(sand_t *s, bool on);
 #define SAND_MOBILITY_PER_MATERIAL (-1)
 

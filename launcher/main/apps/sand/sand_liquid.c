@@ -338,18 +338,14 @@ static bool equalise_one_row(sand_t *s, int y, int w, int x_step,
         const int hi = (lo + SAND_BLOCK_W < w) ? lo + SAND_BLOCK_W : w;
 
         /* SKIPPED WHOLE when both rays land where nothing can be lower - the
-         * shape a SETTLED pool holds, and it pays to rediscover every step
-         * forever, because BLOCK_LIQUID_NEAR only says liquid is present,
-         * never that it is still moving. Halves a settled basin.
+         * shape a SETTLED pool holds, and worth rediscovering every step,
+         * because BLOCK_LIQUID_NEAR only says liquid is present, never that
+         * it is still moving. Halves a settled basin.
          *
-         * RNG-NEUTRAL, which is what makes it safe rather than merely faster:
-         * these cells would all have rejected at neighbour_is_lower(), and
-         * liquid_may_move()'s viscosity roll sits after that, so no draw is
-         * skipped and oil's stream is untouched.
-         *
-         * PER BLOCK, NOT PER ROW: a row-level form of the same fact only ever
-         * fires on a pool spanning the whole screen, and measured nothing on a
-         * pool with air beside it - which is every pool the app holds. */
+         * RNG-NEUTRAL: these cells would all have rejected at
+         * neighbour_is_lower(), and liquid_may_move()'s viscosity roll sits
+         * after that, so no draw is skipped. PER BLOCK, NOT PER ROW - a
+         * row-level form only fires on a pool spanning the whole screen. */
         if (rays_blocked(ax_row, dg_row, lo, hi, w, is_liquid)) {
             if (span_has_liquid(row, lo, hi, is_liquid)) {
                 any_liquid = true;

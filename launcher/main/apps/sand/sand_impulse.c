@@ -22,14 +22,11 @@
 #include "sand_priv.h"
 
 /* Exact number of lattice cells inside a disc of radius r - every cell with
- * dx*dx + dy*dy <= r*r. displace_disc() wants it only as a scalar, to size
- * `keep` against the room left in the impulse buffer.
+ * dx*dx + dy*dy <= r*r.
  *
- * A TABLE, because it is a pure function of one small integer and every radius
- * a caller can reach is bounded: water's splash decays from 20, gunpowder
- * blasts at 20, lava bursts at 12, and the app's own detonate reaches 25 at
- * ULTRA quality. So the lookup answers every call the tree can make today in a
- * single load. */
+ * A TABLE, because it is a pure function of one small integer and every
+ * radius a caller can reach is bounded: the largest today is 25, at ULTRA
+ * quality, so the lookup answers every call in a single load. */
 #define DISC_COUNT_MAX_RADIUS 32
 
 static const uint16_t disc_counts[DISC_COUNT_MAX_RADIUS + 1] = {

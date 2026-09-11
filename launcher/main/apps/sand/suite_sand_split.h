@@ -22,25 +22,13 @@
 #if CONFIG_LAUNCHER_SAND_PASS_GATES
 
 /*
- * The single-step decomposition harness.
+ * The single-step decomposition harness, one place so two techniques cannot
+ * drift into measuring different scenes. See docs/sand/Perf-Instruments.md.
  *
- * Every gated round needs the same five steps: rebuild the scene, warm it with
- * everything on, flip ONE gate, time exactly one step, take the min. Doing it
- * by hand per round is how two techniques drift into measuring different
- * scenes, which is the bug water_scene_single_step_us()'s own comment was
- * written to prevent for one scene. This does it for any of them.
- *
- * WHY REBUILD PER REPEAT rather than stepping on: a gate that is off changes
- * the board, so twenty steps with a pass disabled measure a DIFFERENT
- * simulation. Rebuilding means every configuration sees a byte-identical
- * board at the moment it is timed, which is what makes the phases add up to
- * the whole rather than merely being upper bounds.
- *
- * MIN, NEVER MEAN: the interesting number is the cost with nothing else
- * intruding, and an RTOS tick landing inside a timed step only ever adds.
- *
- * A NULL gate times the same step with nothing flipped - the baseline every
- * phase is subtracted from. See docs/sand/Perf-Instruments.md.
+ * REBUILD PER REPEAT, not stepping on: a gate that is off changes the board,
+ * so twenty steps with a pass disabled measure a DIFFERENT simulation, and
+ * byte-identical boards are what make the phases add up to the whole. MIN,
+ * NEVER MEAN - an RTOS tick inside a timed step only ever adds.
  */
 typedef struct {
     const char *name;
