@@ -39,6 +39,11 @@ BANNER_LIMIT = 50
 # narrow on purpose: the looser set in scripts/find_narrative_comments.py
 # is for building a worklist, where a false positive costs a glance. Here
 # it costs a refused edit, so only openers with no other use qualify.
+# style(9) has three comment shapes and none of them has headings inside.
+# A comment needing sections is a document, and the code is not where a
+# document goes.
+CAPS_HEADING = re.compile(r"^[A-Z][A-Z0-9 ,'()/-]{14,}$")
+
 NARRATIVE = re.compile(
     r"(a first attempt|an earlier version|the first version|"
     r"was considered (?:next|first|and)|used to (?:be|do|have|gate|live|"
@@ -112,6 +117,25 @@ def main():
     # is wherever the fragment happens to start.
     over = [c for c in scan(path, text)
             if c.length > LIMIT and not c.has_rule]
+
+    heads = []
+    for c in scan(path, text):
+        for raw in c.raw_lines:
+            if CAPS_HEADING.match(re.sub(r"^[/* ]+", "", raw).strip()):
+                heads.append(c)
+                break
+    if heads:
+        print(f"Comment rule: {len(heads)} comment"
+              f"{'' if len(heads) == 1 else 's'} you just wrote to "
+              f"{os.path.basename(path)} use an ALL-CAPS heading.",
+              file=sys.stderr)
+        print("", file=sys.stderr)
+        print("This tree follows OpenBSD style(9): a one-line comment, a "
+              "'VERY important' one-liner, or a multi-line comment written as "
+              "real sentences filled like a paragraph. None of them has "
+              "sections. A comment that needs headings is a document - say the "
+              "constraint instead, or move it to docs/.", file=sys.stderr)
+        return 2
 
     story = [c for c in scan(path, text)
              if c.length > TARGET and NARRATIVE.search(c.text)]

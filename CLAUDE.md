@@ -71,6 +71,11 @@ alternative only where someone would otherwise retry it, as a clause. Cut
 the journey: git log owns it. `scripts/find_narrative_comments.py` lists
 candidates.
 
+**Comment style follows OpenBSD `style(9)`:** a one-line `/* ... */`, a
+`VERY important` one-liner in a three-line block, or a multi-line comment
+written as real sentences and filled like a paragraph. No headings inside
+a comment — one that needs sections is a document, and belongs in `docs/`.
+
 **Comment the WHY, not the WHAT — and only when the code doesn't already say
 it.** Clean, well-named code mostly speaks for itself; a comment exists for
 context, a decision, or a non-obvious constraint, not to restate what the
