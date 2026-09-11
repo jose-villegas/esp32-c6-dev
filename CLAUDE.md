@@ -64,6 +64,18 @@ scripts/check-format.sh <file.c> [<file.h> ...]         # format in place
 scripts/check-format.sh --check <file.c> [<file.h> ...]  # verify only
 ```
 
+**A comment states the constraint that holds now. It never narrates how the
+code got here.** This is the rule the length limits below are only a symptom
+of: "a first attempt gated X behind Y — verified on device and reverted; a
+literal per-cell history was considered next and is not affordable either"
+is sixty lines whose surviving content is one sentence (a per-cell history
+costs 41,216 bytes, the size of the grid buffer). Keep the conclusion, which
+is the constraint; drop the journey, which is git log's. A rejected
+alternative earns a clause only where it is still rejected for a reason that
+still holds and someone would otherwise retry it — not as a record that it
+was tried. Measured on this tree: 227 comments carry that narrative shape,
+282,711 characters of prose between them.
+
 **Comment the WHY, not the WHAT — and only when the code doesn't already say
 it.** Clean, well-named code mostly speaks for itself; a comment exists for
 context, a decision, or a non-obvious constraint, not to restate what the
