@@ -3,19 +3,15 @@
  * in the HOST test build, sized to what this project's device profile says
  * is actually free once the framebuffer is carved out (device_profiles/
  * esp32c6.sh's DP_FREE_HEAP_BYTES) - see docs/sand/Performance-Tuning-
- * Attempts.md's "recurring failure modes": a fixture that fits comfortably
- * in a laptop's gigabytes has twice now turned out to be impossible on the
- * board, and nothing on the host caught it before a whole capture cycle
- * was spent finding out.
+ * Attempts.md's "recurring failure modes" for why a laptop-scale heap
+ * cannot stand in for the device's.
  *
- * FIRST-FIT WITH REAL FRAGMENTATION is the point. This is not a byte
- * counter that fails a fixture once some running total crosses a line - it
- * is a doubly-linked list of address-ordered blocks, and an allocation
- * fails exactly when no ONE free block is big enough, even if the sum of
- * several is. That is the same rule the device's own allocator runs under,
- * and it is the difference that matters: a 41 KB grid can fail on a heap
- * with 50 KB free but no block over 38 KB, which a total-bytes check would
- * wave through.
+ * FIRST-FIT WITH REAL FRAGMENTATION is the point: a doubly-linked list of
+ * address-ordered blocks, failing an allocation exactly when no ONE free
+ * block is big enough, even if the sum of several is - the same rule the
+ * device's own allocator runs under, which a running-total byte counter
+ * would not catch (a 41 KB grid can fail on a heap with 50 KB free but no
+ * block over 38 KB).
  *
  * Deliberately simple: one header per block (prev/next/size/in_use/magic),
  * first-fit search, split on allocate, coalesce-both-directions on free.
@@ -33,16 +29,12 @@
  * import our --wrap redirects. So every function below that receives a
  * pointer (free, realloc) MUST tell an arena pointer from a foreign one
  * before touching any block header, and forward the foreign case to
- * __real_free / __real_realloc untouched. Getting this backwards means
- * reading three bytes past a strdup'd string as if they were {prev, next,
- * size} - which is exactly as bad as it sounds.
+ * __real_free / __real_realloc untouched.
  *
- * Everything in this file is compiled in ONLY when HOST_HEAP_ARENA is
- * defined. launcher/test/timing.c is also compiled into the device
- * firmware (main/CMakeLists.txt) and into the sand perf_probe harness
- * (main/apps/sand/tools/perf_probe/build_probe.sh); neither defines this
- * macro, and this file is never even added to either of their source
- * lists, so neither sees so much as this file existing.
+ * Compiled in ONLY when HOST_HEAP_ARENA is defined. launcher/test/timing.c
+ * is also compiled into the device firmware (main/CMakeLists.txt) and the
+ * sand perf_probe harness (main/apps/sand/tools/perf_probe/build_probe.sh);
+ * neither defines this macro or adds this file to its source list.
  *===========================================================================*/
 #ifdef HOST_HEAP_ARENA
 
