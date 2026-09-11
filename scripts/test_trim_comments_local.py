@@ -135,6 +135,25 @@ check(
     True,
 )
 
+# The prompt once carried a worked example naming a real function; the
+# model pasted it into an unrelated file and every copy RESOLVED, so the
+# existence check missed it. A citation the original never made is a
+# fabrication whether or not it points at something real.
+check(
+    "invented citation is caught even though it resolves",
+    any("invented citation" in p for p in
+        tcl.response_problems("anchored() checks for non-kin gravity-ward, see material.c.",
+                              "anchored() checks non-kin. see step_impulses()'s own comment in sand.c", 500)),
+    True,
+)
+
+check(
+    "control: a citation the original carried is not invented",
+    tcl.response_problems("anchored() checks for non-kin gravity-ward, see material.c.",
+                          "anchored() wants non-kin gravity-ward. See material.c.", 500),
+    [],
+)
+
 print()
 if FAILURES:
     print(f"FAILED: {len(FAILURES)} of {TOTAL} case(s) - see FAIL lines above")

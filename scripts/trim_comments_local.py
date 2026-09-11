@@ -138,7 +138,7 @@ Hard rules, regardless of length:
 - A comment that contains a cross-reference - a function name written
   `like_this()`, a file path such as `sand.c`, or a named test - can
   never be answered with DELETE. Keep the citation alone, stripped of
-  everything else: `see step_impulses()'s own comment in sand.c` is
+  everything else: a bare "see <that function>'s own comment" is
   itself a complete, correct answer. Losing it is not a shorter comment,
   it is navigation the code cannot recover on its own.
 - Never invent, compute, or round a number, name, or fact that is not
@@ -453,6 +453,20 @@ def unresolved_citations(prose):
     return bad
 
 
+def invented_citations(original, prose):
+    """Cross-references the rewrite makes that the original never made.
+
+    Existence is NOT the test, and that is the whole point: this script's own
+    prompt once carried a worked example naming a real function, the model
+    copied it verbatim into comments in an unrelated file, and every one of
+    those citations resolved. A pointer the source comment never carried is a
+    fabrication however plausible it reads - and a citation that resolves to
+    the wrong place is worse than one that resolves nowhere, because nothing
+    downstream will ever flag it."""
+    had = set(cited_tokens(original))
+    return [c for c in cited_tokens(prose) if c not in had]
+
+
 def response_problems(original, prose, ceiling):
     """Automated defects in a candidate rewrite - the concrete failure
     shapes a model has actually produced in this repo, not a meaning check
@@ -472,6 +486,9 @@ def response_problems(original, prose, ceiling):
         problems.append("dropped attribution/licence notice")
     if not shares_vocabulary(original, prose):
         problems.append("no shared vocabulary")
+    invented = invented_citations(original, prose)
+    if invented:
+        problems.append("invented citation: " + ", ".join(invented[:3]))
     bad_citations = unresolved_citations(prose)
     if bad_citations:
         problems.append(
