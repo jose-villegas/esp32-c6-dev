@@ -1038,7 +1038,7 @@ static void restore_border(gfx_color_t *buf, int stride, int w, int h,
 
 /* 6240 px combined, borrowed from gather_buf's front rather than
  * malloc'd separately: a separate allocation competes for the one
- * contiguous block an app's working grid needs, and a debug overlay must
+ * contiguous 41 KB block an app needs, and a debug overlay must
  * never be why an app cannot start. gather_buf is idle here -
  * gather_and_send() waits for its own transfer before returning, and the
  * frame loop is single-threaded. The _Static_assert ties the fit to

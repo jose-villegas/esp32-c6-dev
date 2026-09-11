@@ -197,10 +197,15 @@ reference by construction, and the comment survives the code it described. Say
 what shape of caller needs the thing ("a checkbox toggle", "a per-tile badge",
 "an app's working grid"), or state the rule a caller must follow, rather than
 naming the file that currently does it. An app's own files may name anything
-below them freely; that direction is the one that cannot dangle. Enforced by
-`scripts/check_comment_layers.py`, which reads the app names out of `apps/`
-itself; "the diagnostics build" is the build variant behind `build.diag` and is
-free for any layer to name. Layers:
+below them freely; that direction is the one that cannot dangle. A NAME is
+what `scripts/check_comment_layers.py` enforces, reading the app names out of
+`apps/` itself ("the diagnostics build" is the build variant behind
+`build.diag`, free for any layer to name). Borrowing an app's VOCABULARY is the
+same fault one step quieter — "an app's working grid" names no app but still
+assumes apps have grids, and `gfx` has no concept of a grain — and that one is
+read rather than scripted, since the dirty tracker really does have a grid of
+cells and a font really does have a glyph cell. State the constraint itself
+instead: how large the block is, or how often the call happens. Layers:
 `boot/` (runs once, before the frame loop exists), `gfx/` (the one
 framebuffer + primitives), `ui/` (microui integration), `input/` (touch,
 gesture), `util/` (pure arithmetic), `apps/`.

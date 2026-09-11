@@ -16,9 +16,9 @@
  * say "shaking flattens this pile" and get the same answer every run, and what
  * makes a bug reproducible from a seed rather than only sometimes.
  *
- * Header-only and inline on purpose. A per-cell simulation loop calls this
- * tens of thousands of times a second, where a function call per draw across a
- * translation-unit boundary is a real cost - measured at a factor of two on
+ * Header-only and inline on purpose. Callers reach this tens of thousands of
+ * times a second from an innermost loop, where a function call per draw across
+ * a translation-unit boundary is a real cost - measured at a factor of two on
  * such a loop's common path.
  */
 #pragma once
@@ -70,7 +70,7 @@ static inline int rng_below(rng_t *r, int bound)
  * rather than an optimisation: callers express "always" as 256 and "never" as
  * 0, and those have to mean exactly that. A bare `(rng_next(r) & 0xFF) < chance`
  * can never be true 256 times out of 256, so "always" would quietly become
- * "almost always" - the kind of thing that shows up as one grain in a thousand
+ * "almost always" - the kind of thing that shows up as one case in a thousand
  * behaving oddly. */
 static inline bool rng_chance(rng_t *r, int chance)
 {

@@ -10,6 +10,12 @@ thing, or state the rule a caller must follow. An app's own files may name
 anything below them - that direction cannot dangle.
 
 App names come from the folders themselves, so adding an app extends the check.
+
+A name is all this checks. Borrowing an app's VOCABULARY is the same fault one
+step quieter - "an app's working grid" names no app but still assumes apps have
+grids, and gfx has no concept of a grain - but no word list can judge it: the
+dirty tracker really does have a grid of cells, and a font really does have a
+glyph cell. That one is read, not scripted.
 """
 import pathlib
 import re
