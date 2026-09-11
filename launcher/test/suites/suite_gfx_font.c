@@ -71,10 +71,9 @@ static void test_width_scales_linearly_with_length(void)
 }
 
 /* The monospace shortcut (gfx_font_text_width's `advance == NULL` branch)
- * never inspects the string's content when `len >= 0` - matching the old
- * gfx_text_width(), which computed `len * GFX_CHAR_W` without touching the
- * string either. A `len` longer than what a literal actually holds must
- * therefore still be safe (and still just len * cell_w * scale), not a
+ * never inspects the string's content when `len >= 0`. A `len` longer
+ * than what a literal actually holds must therefore still be safe (and
+ * still just len * cell_w * scale), not a
  * newly-introduced out-of-bounds read. */
 static void test_monospace_width_does_not_need_len_to_fit_the_string(void)
 {
