@@ -111,6 +111,24 @@ liquid_mask(void) {
     return mask;
 }
 
+/* A full cell, a foreign material and a wall all refuse mass alike, so this
+ * answers for every liquid at once without being told which one is asking.
+ * Breaks on the first cell that could take mass: a span still moving costs a
+ * handful of loads, not its length. */
+static inline bool
+span_has_no_liquid_room(const uint8_t* row, int x0, int x1, uint16_t is_liquid) {
+    for (int x = x0; x < x1; x++) {
+        const cell_t c = row[x];
+        if (CELL_IS_EMPTY(c)) {
+            return false;
+        }
+        if (((is_liquid >> CELL_MATERIAL(c)) & 1u) != 0 && CELL_VARIANT(c) < MASS_MAX) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static inline int
 block_of(const sand_t* s, int x, int y) {
     return (y / SAND_BLOCK_H) * s->block_cols + (x / SAND_BLOCK_W);
