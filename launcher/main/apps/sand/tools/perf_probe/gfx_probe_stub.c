@@ -1,12 +1,12 @@
 /*
- * gfx_probe_stub - link-only stand-ins for the handful of gfx/ and app_sand.c
- * symbols suite_sand.c's DEVICE_BUILD blocks reference outside the frame-
- * budget scenes this probe actually runs (the present-cost section, and the
- * alloc-selfcheck test) - the whole translation unit still needs every
- * symbol it references to resolve at link time, even ones whose call site
- * never executes at runtime (their address is taken by the file's own
- * RUN_TEST table, which is enough to need a definition). Nothing here is
- * exercised by any scene probe_main.c can select.
+ * gfx_probe_stub - link-only stand-ins for the handful of symbols the
+ * DEVICE_BUILD blocks reference outside the frame-budget scenes this probe
+ * actually runs: the present-cost section, the alloc-selfcheck test, and the
+ * cache-counter rows. The whole translation unit still needs every symbol it
+ * references to resolve at link time, even ones whose call site never
+ * executes at runtime (their address is taken by the file's own RUN_TEST
+ * table, which is enough to need a definition). Nothing here is exercised by
+ * any scene probe_main.c can select.
  *
  * Re-verify this against suite_sand.c (grep for gfx_/sand_app_ calls across
  * the whole file, not just the SAND_HOST_PROBE scenes) whenever a new
@@ -15,8 +15,18 @@
  */
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include "gfx/gfx.h"
+
+/* The cache-counter rows read a cycle count either side of their window.
+ * No scene here selects them, but the file they live in is compiled whole,
+ * so the symbol has to resolve; the register reads around it are discarded
+ * by launcher/test/stubs/soc/soc.h. */
+uint32_t
+esp_cpu_get_cycle_count(void) {
+    return 0;
+}
 
 void
 gfx_mark_dirty(int x, int y, int w, int h) {

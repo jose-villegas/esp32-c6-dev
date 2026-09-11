@@ -1603,6 +1603,229 @@ void sand_host_probe_run_gunpowder_basin(void)
 }
 #endif
 
+/* --- the interaction round's three scenes -------------------------------
+ *
+ * Picked from a 380-pairing arena rather than from the shape of the board.
+ * Each builder (suite_sand_scenes.c) carries the measurement that earned it
+ * a row, and the coverage test beside it proves the scene does that inside
+ * the window timed here. */
+
+/* Placeholders until the first capture, scaled from each scene's host figure
+ * by the host-to-device ratio the three comparable rows already have (the
+ * growing plant bed 179x, wet earth 186x, the water slab 214x). A host
+ * number cannot price a scene, only rank it - these exist so the rows
+ * compile and report, and the capture replaces every one with measured x
+ * 0.9 rounded down, the file-wide rule. */
+#define PLANT_RUIN_BUDGET_US    150000
+#define FILLING_BASIN_BUDGET_US  25000
+#define SNOWFALL_BUDGET_US       90000
+
+/* A grown plant bed with acid eating down to its roots on one side of a wall
+ * and lava burning its canopy on the other (build_plant_ruin_scene(), shared
+ * with test_the_plant_ruin_scene_eats_roots_and_burns_a_canopy). The acid
+ * leads the lava by PLANT_RUIN_ACID_LEAD_STEPS because the two do not peak
+ * together - see that constant. */
+static void test_the_plant_ruin_scene_fits_in_the_frame_budget(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 11u);
+    sand_enable_sleeping(&real, blocks);
+    sand_set_scatter(&real, SAND_SCATTER_PER_MATERIAL);
+    sand_set_decay(&real, SAND_DECAY_PER_MATERIAL);
+    sand_set_soak(&real, SAND_SOAK_PER_MATERIAL);
+    sand_set_mobility(&real, SAND_MOBILITY_PER_MATERIAL);
+
+    build_plant_ruin_scene(&real);
+    for (int i = 0; i < PLANT_BED_SETTLE_STEPS; i++) {
+        if (i == PLANT_BED_RAIN_A || i == PLANT_BED_RAIN_B) {
+            plant_bed_rain(&real);
+        }
+        sand_step(&real, 0, 1000, 0);
+    }
+    for (int i = 0; i < PLANT_RUIN_ACID_LEAD_STEPS; i++) {
+        if (i % PLANT_RUIN_ACID_EVERY == 0) {
+            plant_ruin_acid_pour(&real);
+        }
+        sand_step(&real, 0, 1000, 0);
+    }
+    plant_ruin_lava_pour(&real);
+
+    const int steps = PLANT_RUIN_MEASURED_STEPS;
+    int64_t worst = 0;
+    const int64_t start = esp_timer_get_time();
+    for (int i = 0; i < steps; i++) {
+        if (i % PLANT_RUIN_ACID_EVERY == 0) {
+            plant_ruin_acid_pour(&real);
+        }
+        const int64_t t0 = esp_timer_get_time();
+        sand_step(&real, 0, 1000, 0);
+        const int64_t took = esp_timer_get_time() - t0;
+        if (took > worst) {
+            worst = took;
+        }
+    }
+    const int64_t per_step = (esp_timer_get_time() - start) / steps;
+
+    ESP_LOGI("device_tests", "plant ruin scene, %dx%d: %lld us per step, "
+                             "worst single step %lld us",
+             REAL_W, REAL_H, (long long)per_step, (long long)worst);
+
+    free(big);
+    free(blocks);
+
+    /* PROVISIONAL, not a measured peg: this row has never run on the device.
+     * The first capture replaces it with measured x 0.9 rounded down, the
+     * file-wide rule (see FULL_STEP_BUDGET_US's comment). Host timing puts
+     * this above the growing plant bed and above wet earth, the two dearest
+     * rows it is comparable with, so the placeholder is scaled from the
+     * plant bed's own device number rather than invented. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(PLANT_RUIN_BUDGET_US, (int)per_step,
+        "PROVISIONAL ceiling - see this test's own comment. Once captured "
+        "this row becomes measured x 0.9, a reduction target, not a "
+        "loosened guard");
+}
+
+#ifdef SAND_HOST_PROBE
+/* Host-only timing probe - the plant ruin scene (see the full-step
+ * control's own wrapper for the pattern). */
+void sand_host_probe_run_plant_ruin(void)
+{
+    test_the_plant_ruin_scene_fits_in_the_frame_budget();
+}
+#endif
+
+/* Water running down a ramp into a pool (build_filling_basin_scene(), shared
+ * with test_the_filling_basin_scene_runs_from_the_lip_to_the_pool) - the
+ * companion to the free-falling slab above, on the same board and with a
+ * comparable body of water, but settling rather than dropping into vacuum.
+ * The slab row is deliberately left exactly as it was: PRs #174 and #175
+ * quote its numbers, and redefining it would invalidate that history. */
+static void test_the_filling_basin_scene_fits_in_the_frame_budget(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 17u);
+    sand_enable_sleeping(&real, blocks);
+    sand_set_scatter(&real, SAND_SCATTER_PER_MATERIAL);
+    sand_set_decay(&real, SAND_DECAY_PER_MATERIAL);
+    sand_set_mobility(&real, SAND_MOBILITY_PER_MATERIAL);
+
+    build_filling_basin_scene(&real);
+    for (int i = 0; i < FILLING_BASIN_SETTLE_STEPS; i++) {
+        if (i % FILLING_BASIN_POUR_EVERY == 0) {
+            filling_basin_pour(&real);
+        }
+        sand_step(&real, 0, 1000, 0);
+    }
+
+    const int steps = FILLING_BASIN_MEASURED_STEPS;
+    int64_t worst = 0;
+    const int64_t start = esp_timer_get_time();
+    for (int i = 0; i < steps; i++) {
+        if (i % FILLING_BASIN_POUR_EVERY == 0) {
+            filling_basin_pour(&real);
+        }
+        const int64_t t0 = esp_timer_get_time();
+        sand_step(&real, 0, 1000, 0);
+        const int64_t took = esp_timer_get_time() - t0;
+        if (took > worst) {
+            worst = took;
+        }
+    }
+    const int64_t per_step = (esp_timer_get_time() - start) / steps;
+
+    ESP_LOGI("device_tests", "filling basin scene, %dx%d: %lld us per step, "
+                             "worst single step %lld us",
+             REAL_W, REAL_H, (long long)per_step, (long long)worst);
+
+    free(big);
+    free(blocks);
+
+    /* PROVISIONAL - see the plant ruin row above for what replaces it. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(FILLING_BASIN_BUDGET_US, (int)per_step,
+        "PROVISIONAL ceiling, not yet pegged from a device capture");
+}
+
+#ifdef SAND_HOST_PROBE
+/* Host-only timing probe - the filling basin scene (see the full-step
+ * control's own wrapper for the pattern). */
+void sand_host_probe_run_filling_basin(void)
+{
+    test_the_filling_basin_scene_fits_in_the_frame_budget();
+}
+#endif
+
+/* Snow falling onto a bank that has already crusted, over sand and dirt
+ * (build_snowfall_scene(), shared with test_the_snowfall_scene_holds_a_
+ * crusting_bank_and_a_live_fall). Forced crust - see the builder's own
+ * declaration for why a scene left at the shipped rate holds no ice at all
+ * inside any window this file times. */
+static void test_the_snowfall_scene_fits_in_the_frame_budget(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 23u);
+    sand_enable_sleeping(&real, blocks);
+    sand_set_scatter(&real, SAND_SCATTER_PER_MATERIAL);
+    sand_set_decay(&real, SAND_DECAY_PER_MATERIAL);
+    sand_set_mobility(&real, SAND_MOBILITY_PER_MATERIAL);
+    sand_set_crust(&real, CRUST_ROLL_MAX);
+
+    build_snowfall_scene(&real);
+    for (int i = 0; i < SNOWFALL_SETTLE_STEPS; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+
+    const int steps = SNOWFALL_MEASURED_STEPS;
+    int64_t worst = 0;
+    const int64_t start = esp_timer_get_time();
+    for (int i = 0; i < steps; i++) {
+        if (i % SNOWFALL_DRIFT_EVERY == 0) {
+            snowfall_drift(&real);
+        }
+        const int64_t t0 = esp_timer_get_time();
+        sand_step(&real, 0, 1000, 0);
+        const int64_t took = esp_timer_get_time() - t0;
+        if (took > worst) {
+            worst = took;
+        }
+    }
+    const int64_t per_step = (esp_timer_get_time() - start) / steps;
+
+    ESP_LOGI("device_tests", "snowfall scene, %dx%d: %lld us per step, "
+                             "worst single step %lld us",
+             REAL_W, REAL_H, (long long)per_step, (long long)worst);
+
+    free(big);
+    free(blocks);
+
+    /* PROVISIONAL - see the plant ruin row above for what replaces it. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(SNOWFALL_BUDGET_US, (int)per_step,
+        "PROVISIONAL ceiling, not yet pegged from a device capture");
+}
+
+#ifdef SAND_HOST_PROBE
+/* Host-only timing probe - the snowfall scene (see the full-step control's
+ * own wrapper for the pattern). */
+void sand_host_probe_run_snowfall(void)
+{
+    test_the_snowfall_scene_fits_in_the_frame_budget();
+}
+#endif
+
 /* --- gfx_present() cost against real sand scenes ------------------------
  *
  * Every frame-budget test above times sand_step() alone, with no drawing
@@ -2283,6 +2506,9 @@ void run_sand_perf_suite(void)
     RUN_TEST(test_the_wet_earth_scene_fits_in_the_frame_budget);
     RUN_TEST(test_the_water_over_lava_scene_fits_in_the_frame_budget);
     RUN_TEST(test_the_gunpowder_basin_scene_fits_in_the_frame_budget);
+    RUN_TEST(test_the_plant_ruin_scene_fits_in_the_frame_budget);
+    RUN_TEST(test_the_filling_basin_scene_fits_in_the_frame_budget);
+    RUN_TEST(test_the_snowfall_scene_fits_in_the_frame_budget);
 
     RUN_TEST(test_present_cost_against_a_falling_sand_scene);
     RUN_TEST(test_a_real_frame_is_sim_plus_present_on_a_falling_sand_scene);

@@ -110,6 +110,9 @@ typedef void (*scene_fn)(sand_t *s);
 #define FP_HOT_GLASS CELL_MAKE(MAT_GLASS, SAND_SHOCK_HEAT - 1)
 #define FP_ICE    MATX(MATX_ICE)
 #define FP_POWDER GUNPOWDER_CELL(0)                    /* dry, unlit */
+#define FP_PLANT  MATX(MATX_PLANT)
+#define FP_LEAF   MATX(MATX_LEAF)
+#define FP_ROOT   MATX(MATX_ROOT)
 
 
 /* Scene 1: dry grains over a floor. The main sweep and nothing else - no
@@ -482,6 +485,77 @@ static void scene_powder_keg(sand_t *s)
     }
 }
 
+/* Snow resting on DRY SAND and DRY DIRT, which nothing else here presents it
+ * with: snow_thaw stands its bank on water, saturated dirt, stone and ice,
+ * and snow_crust stands it on stone alone. A dry powder is a foreign face
+ * like any other, so seeding rolls against it, and chills reaches it - and
+ * the two are measured to be snow's dearest partners on a 380-pairing
+ * arena. */
+static void scene_snow_earth(sand_t *s)
+{
+    sand_set_crust(s, 4);
+
+    for (int x = 0; x < FP_W; x++) {
+        sand_set(s, x, FP_H - 1, FP_STONE);
+    }
+    for (int y = FP_H - 14; y < FP_H - 1; y++) {
+        for (int x = 0; x < FP_W; x++) {
+            sand_set(s, x, y, ((x / 8) & 1) ? FP_DIRT : FP_SAND);
+        }
+    }
+    for (int y = FP_H - 24; y < FP_H - 14; y++) {
+        for (int x = 4; x < FP_W - 4; x++) {
+            sand_set(s, x, y, FP_SNOW);
+        }
+    }
+}
+
+/* Acid and lava on GREENERY, which no row here has ever put them near, and
+ * Root <- Acid, Plant <- Lava and Leaf <- Lava are three of the six dearest
+ * interactions on the same arena.
+ *
+ * Painted rather than grown: a fingerprint scene has one board and no way to
+ * pour at a later step, so a grown bed would still be sprouting when the
+ * acid was long spent. The wall keeps the two from quenching each other. */
+static void scene_plant_ruin(sand_t *s)
+{
+    sand_set_soak(s, SAND_SOAK_PER_MATERIAL);
+
+    for (int x = 0; x < FP_W; x++) {
+        sand_set(s, x, FP_H - 1, FP_STONE);
+    }
+    for (int y = FP_H - 16; y < FP_H - 1; y++) {
+        for (int x = 0; x < FP_W; x++) {
+            sand_set(s, x, y, FP_WET_DIRT);
+        }
+    }
+    for (int x = 4; x < FP_W; x += 8) {
+        for (int y = FP_H - 14; y < FP_H - 4; y++) {
+            sand_set(s, x, y, FP_ROOT);
+        }
+        for (int y = FP_H - 22; y < FP_H - 16; y++) {
+            sand_set(s, x, y, FP_PLANT);
+            sand_set(s, x - 1, y, FP_LEAF);
+            sand_set(s, x + 1, y, FP_LEAF);
+        }
+    }
+
+    for (int y = 0; y < FP_H; y++) {
+        for (int x = FP_W / 2 - 1; x <= FP_W / 2 + 1; x++) {
+            sand_set(s, x, y, FP_STONE);
+        }
+    }
+
+    for (int y = FP_H - 30; y < FP_H - 24; y++) {
+        for (int x = 0; x < FP_W / 2 - 1; x++) {
+            sand_set(s, x, y, FP_ACID);
+        }
+        for (int x = FP_W / 2 + 2; x < FP_W; x++) {
+            sand_set(s, x, y, FP_LAVA);
+        }
+    }
+}
+
 /* GRAVITY IS PER SCENE, and the six original rows keep the straight-down
  * vector they were baselined with - their hashes must not move.
  *
@@ -535,6 +609,11 @@ static const struct {
 
     /* The gunpowder row - see the builder for what was invisible without it. */
     { "powder_keg",  scene_powder_keg,  29u, 0,    1000, 0 },
+
+    /* Two pairings the rows above never put in contact - see each builder.
+     * Sleeping ON for the snow row, since seeding is settled-gated. */
+    { "snow_earth",  scene_snow_earth,  71u, 0,    1000, 1 },
+    { "plant_ruin",  scene_plant_ruin,  67u, 0,    1000, 0 },
 };
 
 int main(void)
