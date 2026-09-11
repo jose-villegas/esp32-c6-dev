@@ -251,9 +251,23 @@ repeatable to 1 µs, so not noise. The objdump said why: two gates in one inline
 region made GCC tail-duplicate the remainder of that region, so flipping one
 gate does not skip its work, it moves execution onto a **second copy** of the
 code with the other gate's check arranged differently. Two phases measured in
-two different programs cannot be shares of one. Check the disassembly for a
-duplicated tail before trusting two gates inside the same inlined function; the
-fix is one gate per configuration, or a gate at a real call boundary.
+two different programs cannot be shares of one.
+
+**Count a gate's load sites before reading its number**, which is the cheap
+check that separates the two cases:
+
+```sh
+riscv32-esp-elf-objdump -d build.diag/launcher.elf | grep sand_step_gate_
+```
+
+One site per source call site means the gate isolates what it names. *More*
+sites than the source has call sites means the compiler restructured around it
+— in the round above, `move_splash` had three for one call, one of them in a
+path where the guarded work can never run, loading the gate only to discard it
+(`volatile`, so it could not be removed). That gate was pricing the
+restructuring as well as the work; the single-site gates in the same image
+partitioned perfectly. The fix is one gate per configuration, or a gate at a
+real call boundary.
 
 **Gate overhead is not a constant, and where it lands decides which figures are
 clean.** The five-percent figure earlier rounds recorded was for a handful of
