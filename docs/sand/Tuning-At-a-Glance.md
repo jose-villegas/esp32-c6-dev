@@ -19,51 +19,84 @@ who pegged it — do not "correct" it to × 0.9 for consistency. The three
 present-cost rows are tight regression guards on a bus-bound path, not
 reduction targets.
 
-Numbers below are the 2026-09-02 capture of main at `58b1f42` (attempt 19
-merged), **except the two control rows, re-captured `--perf-scope` on
-2026-09-10 at `5b57f62`**: they now land at 5,653/5,753, not the
-5,907/6,002 the rest of this table was taken beside. Nibble 15's hot table
-doubling (2026-09-05) changed `material_of()`'s shift inside the controls'
-own hot path, so the old pair was measuring different compiled bytes; the
-new pair reproduced to ±2 µs across seven different binaries the same day.
-Every other row here is still the September 2nd number and several are
-stale by more than the controls moved - do not read a row-to-row delta off
-this table, take a capture.
+Numbers below are one `--perf-scope` capture of `main` at `c2c672e`,
+2026-09-11, and the whole table comes from that single capture rather than
+being assembled from several. It was taken **twice on the same image** and
+every row reproduced to within 2 µs, so this instrument's run-to-run spread
+is under 0.01%: the ±1% band the campaign reads deltas against is entirely
+cross-binary (flash layout), never run-to-run. Six rows were re-pegged from
+it, marked below.
 
 | Test | Measured | Target | To close |
 |---|---:|---:|---:|
-| Settled screen, nothing moves | 58 µs | 52 | re-measured and re-pegged 2026-09-10, unlike the rest of this table - the sweep stopped building a per-row context for block rows it skips whole, and the row went 269 -> 58 µs |
-| Full-size step, all falling | 5,653 µs | 5,800 | passes: 147 µs spare |
-| Gravity flip, settled pile | 5,753 µs | 5,900 | passes: 147 µs spare |
-| Mixed scene flip | 15,347 µs | 11,700 | 3,647 µs |
-| Screen of water collapsing | 20,812 µs | 14,400 | 6,412 µs |
-| Boiler, sustained boil | 30,422 µs | 28,500 | 1,922 µs |
-| Every material at once | 86,209 µs | 67,500 | 18,709 µs |
-| Wet earth (× 0.8 row) | 93,783 µs | 80,000 | 13,783 µs |
-| Thermal shock lattice | 98,227 µs | 89,000 | 9,227 µs |
-| Lava stress scene | 125,119 µs | 109,000 | 16,119 µs |
-| Four liquids reacting | 126,485 µs | 112,000 | 14,485 µs |
-| Smoke + steam screen | 143,568 µs | 127,000 | 16,568 µs |
-| Full screen of fire, steady | 250,069 µs | 229,500 | 20,569 µs |
-| Fire cascade through gas | 341,343 µs | 298,000 | 43,343 µs |
+| Settled screen, nothing moves | 59 µs | 52 | 7 µs, but one microsecond is 1.7% at this magnitude - read this row as quantised |
+| Full-size step, all falling (control) | 5,584 µs | 5,800 | passes: 216 µs spare, and deliberately not tightened |
+| Gravity flip, settled pile (control) | 5,684 µs | 5,900 | passes: 216 µs spare, same |
+| Mixed scene flip | 9,311 µs | 8,300 | 1,011 µs · **re-pegged** from 11,700 |
+| Screen of water collapsing | 12,060 µs | 10,800 | 1,260 µs · **re-pegged** from 14,400 |
+| Filling basin | 16,077 µs | 14,400 | 1,677 µs |
+| Settled pool → landscape | 18,981 µs | 17,000 | 1,981 µs · **re-pegged** from 27,100 |
+| Boiler, sustained boil | 28,125 µs | 25,300 | 2,825 µs · **re-pegged** from 28,500 |
+| Gunpowder basin | 33,114 µs | 28,200 | 4,914 µs - left red, see below |
+| Half screen of gas, quarter turn | 47,956 µs | 46,100 | 1,856 µs |
+| Campfire on a sand bed | 56,612 µs | 51,200 | 5,412 µs |
+| Snowfall | 63,371 µs | 57,000 | 6,371 µs |
+| Growing plant bed | 68,078 µs | 65,800 | 2,278 µs |
+| Plant ruin | 83,170 µs | 74,800 | 8,370 µs |
+| Four liquids reacting | 86,920 µs | 78,200 | 8,720 µs · **re-pegged** from 89,200 |
+| Wet earth (× 0.8 row) | 91,618 µs | 80,000 | 11,618 µs |
+| Thermal shock lattice | 93,029 µs | 89,000 | 4,029 µs |
+| Full screen of fire, steady | 93,062 µs | 87,700 | 5,362 µs |
+| Every material at once | 93,696 µs | 81,600 | 12,096 µs |
+| Lava stress scene | 106,354 µs | 95,700 | 10,654 µs · **re-pegged** from 109,000 |
+| Smoke + steam screen | 110,572 µs | 103,600 | 6,972 µs |
+| Packed screen of gas, quarter turn | 138,552 µs | 128,800 | 9,752 µs |
+| Water over lava | 190,721 µs | 179,300 | 11,421 µs |
+| Fire cascade through gas | 225,190 µs | 222,700 | 2,490 µs |
+
+The three present-cost rows from the same capture, with the strip-send
+counts that are the only movable part of them:
+
+| Test | Measured | Target | Full / gathered / partial band-sends |
+|---|---:|---:|---|
+| Present, falling sand checkerboard | 9,790 µs | 9,650 | 50 / 13 / 26 over 20 frames |
+| Present, lava stress | 13,821 µs | 12,200 | 81 / 24 / 19 over 20 frames |
+| Present, thermal shock lattice | 17,850 µs | 17,450 | 70 / 0 / 0 over 10 frames |
 
 - Fixed RNG seeds reproduce these numbers to the microsecond on an
   identical build; what moves them *between* builds is flash layout — see
   [the layout lottery](#the-layout-lottery). `sand_step` is pinned, so
   the two control rows no longer draw a ticket; read every other swing
   against them first.
-- **Both control rows now pass their own reduction targets** (2026-09-10),
-  which no other row does. Nothing has been re-pegged off that: a control
-  is there to be compared against, and tightening it to 5,088/5,178 would
-  buy a reduction target on the two rows nobody is trying to reduce.
+- **Both control rows pass their own reduction targets**, which no other
+  row does, and they stay untightened for the reason they were left alone
+  in 2026-09-10's re-peg: a control is there to be compared against, and
+  giving the two rows nobody is trying to reduce a reduction target of
+  their own costs the campaign its only stable reference.
 - The present-cost falling-sand guard was thought to pass on a favourable
   layout roll. It does not: `gfx_present()`'s own placement was measured
   across five addresses on 2026-09-10 and moves that row by at most 1.4%
   (see [the layout lottery](#the-layout-lottery)). The guard is still not
   re-pegged tighter, on the older reasoning that a bus-bound row's cost
-  follows the scene's band count, which any behaviour change moves.
+  follows the scene's band count, which any behaviour change moves. It now
+  sits on the knife edge: two images of `c2c672e` measured 9,790 and 9,649
+  against a 9,650 budget, with identical 50/13/26 strip-sends, so the row
+  fails by 1 µs in one and passes by 1 µs in the other.
+- **A row that passes gets re-pegged; a row that fails does not.** The
+  target is the demand, so resetting it on a row that has not met it
+  erases the demand rather than restating it — which is why nine rows
+  measured under their own anchor in this capture and none of them moved.
 - One standing coverage gap: no budgeted row runs a tilted gravity, and
   attempt 14's off-axis cost (+29–37%) is therefore measured by nothing.
+- **The gunpowder basin is the one row moving the wrong way, and the scope
+  excuse for it is now spent.** Its 28,200 target came from 31,399 measured
+  on 2026-09-06 in an *unscoped* image, which left open whether the later
+  33,000-odd readings were a scope artefact. An unscoped capture of
+  `c2c672e`, taken beside the perf-scoped one, reads **32,917** against that
+  capture's 33,114 — 0.6% apart. Same scope as the anchor, controls 9.4%
+  *faster* than the anchor capture's 6,166/6,260, and still 4.8% more time.
+  It is a real regression, unattributed to a commit, and the row stays red
+  as a target rather than being re-pegged around.
 - **Vent spam dropped from this table, not re-pegged.** The mechanism it
   measured (lava venting through a covering) was removed and replaced by
   a covered-lava burst (bd esp32c6-0f2/esp32c6-mqt); its scene was
@@ -237,8 +270,15 @@ half-row split (`Architecture.md`'s "The material budget, and what is
 left"). `material_of()` reads that shift and is inlined into the hot
 path the pinned controls exercise, so this is not the surrounding-code
 churn the pin was built to survive - the controls' own compiled bytes
-changed. Re-captured 2026-09-10: the pair is **5,653/5,753**, and it held
+changed. Re-captured 2026-09-10: the pair was **5,653/5,753**, and it held
 to ±2 µs across seven binaries whose flash layouts differed by design.
+
+**The pair is now 5,584/5,684** (2026-09-11, `c2c672e`, `--perf-scope`).
+Both rows are exactly 69 µs lower and their 100 µs separation is intact,
+which is the signature of a layout re-roll and not of a change in work -
+the same shape 5,768/5,864 and 5,653/5,753 showed the day before. Use
+5,584/5,684 as the reference pair; a capture whose controls land elsewhere
+is measuring a different layout, not a different simulation.
 
 **The present path does not draw the same ticket.** `gfx_present()` was
 measured on 2026-09-10 at five different addresses - offsets 16, 20, 24,
@@ -253,6 +293,17 @@ how many bands the scene's dirty pattern produces, not where the code
 sits. A present-cost row that jumps tens of percent is reporting a
 behaviour change, not a layout roll - read the strip-send counts in its
 log line. See bd esp32c6-ai8.
+
+**The lava-stress present row is the worked example, and it has been
+climbing.** Its full-band count across the captures on disk reads 66 → 73
+→ 76 → 79 → 81, and its cost tracks that count at every step: 11,814 →
+~12,600 → ~13,500 → ~13,400 → 13,821 µs. Its 12,200 guard was pegged in
+the 73-band era, so the row is not a slower present - the scene simply
+dirties more of the screen than it did when the number was set. The
+falling-sand row is the counter-example that keeps the question open: it
+sent the identical 50/13/26 in 2026-09-06 and 2026-09-11 and still
+measured 9,536 against 9,790, so band count does not explain everything
+these rows do.
 
 ### The inlining cliff
 

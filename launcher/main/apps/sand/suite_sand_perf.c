@@ -166,10 +166,9 @@ static void test_a_screen_of_water_fits_in_the_frame_budget(void)
      * rather than a cell, and takes a second sweep across the flow (the only
      * reason a tilted pool levels at all). This is the transient cost of a
      * screen-wide collapse - water at rest is 45 us; if this cost becomes
-     * sustained, argue the budget down instead of up. Re-based 2026-08-26:
-     * measured 16043 -> target 14400 (see FULL_STEP_BUDGET_US's comment for
-     * the re-base). */
-    TEST_ASSERT_LESS_THAN_MESSAGE(14400, (int)per_step,
+     * sustained, argue the budget down instead of up. Re-pegged 2026-09-11,
+     * perf-scoped: measured 12060 -> target 10800, from 16043 -> 14400. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(10800, (int)per_step,
         "a screen-wide collapse of water must still land inside a frame or "
         "two - the search across the flow is the thing to suspect");
 }
@@ -515,11 +514,10 @@ static void test_turning_a_settled_pool_to_landscape_fits_in_the_frame_budget(vo
         "turning the board must move water, not create or destroy it - the "
         "cell COUNT changes as the pool re-levels, the mass must not");
 
-    /* MEASURED 30,134 us per step on device, 2026-09-10
-     * (capture_ref_303c7f9_20260910_011940.md). Budget is that x 0.9 =
-     * 27,120, rounded DOWN to 27,100 so the target is never looser than
-     * the convention. Was 37,300 from 41,509 measured 2026-09-06; the row
-     * came in under it without anyone aiming at it. */
+    /* MEASURED 18,981 us per step on device, 2026-09-11, perf-scoped.
+     * Budget is that x 0.9 rounded DOWN to 17,000. The 27,100 it replaces
+     * came from 30,134 measured 2026-09-10; cross-flow stopped walking
+     * rows and spans it cannot draw from between the two. */
 
     /* THE 14000 THIS REPLACES WAS NEVER A BUDGET - it was borrowed from
      * the water screen so the row would compile, and said so. It also
@@ -530,7 +528,7 @@ static void test_turning_a_settled_pool_to_landscape_fits_in_the_frame_budget(vo
      * never runs here at all - s->impulse_count is 0 for all 390 steps,
      * host-counted 2026-09-06 - and a host pass map puts ~48% of the cost
      * in cross-flow, ~1% reactions, ~1.5% gas. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(27100, (int)per_step,
+    TEST_ASSERT_LESS_THAN_MESSAGE(17000, (int)per_step,
         "turning the board a quarter turn with a settled pool on it must "
         "still fit in a frame or two - the pool re-levels across the whole "
         "grid width, so the cross-flow search is the thing to suspect, and "
@@ -968,11 +966,10 @@ static void test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget(void
     free(blocks);
 
     /* A deliberate reduction target from the day it was written (12000
-     * against a then-measured 15144), never headroom. Re-based
-     * 2026-08-26: measured 12999 after the materials wave -> target
-     * 11700 (measured * 0.9, rounded) - see FULL_STEP_BUDGET_US's
-     * comment for the uniform re-base this is part of. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(11700, (int)per_step,
+     * against a then-measured 15144), never headroom. Re-pegged
+     * 2026-09-11, perf-scoped: measured 9311 -> target 8300, from the
+     * 12999 -> 11700 that had stopped asking for anything. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(8300, (int)per_step,
         "reversing gravity over a mixed sand/water/stone scene should come "
         "down to this - a target to optimize toward, not yet the reality");
 }
@@ -1205,10 +1202,10 @@ static void test_four_liquids_reacting_at_once_fits_in_the_frame_budget(void)
     free(big);
     free(blocks);
 
-    /* RE-PEGGED 2026-09-10: 99,203 us measured, inside the 112000 it
-     * carried, so that number had stopped being a target. x 0.9 rounded
-     * DOWN -> 89,200. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(89200, (int)per_step,
+    /* RE-PEGGED 2026-09-11, perf-scoped: 86,920 us measured, inside the
+     * 89,200 it carried, so that number had stopped being a target.
+     * x 0.9 rounded DOWN -> 78,200. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(78200, (int)per_step,
         "four liquids reacting under the app's own per-material mobility "
         "is held to 10% below its last measured number, as a reduction "
         "target - failing means the work is not done, not that something "
@@ -1257,8 +1254,10 @@ static void test_the_lava_stress_scene_fits_in_the_frame_budget(void)
     free(big);
     free(blocks);
 
-    TEST_ASSERT_LESS_THAN_MESSAGE(109000, (int)per_step,
-        "the lava stress scene is held to 10% below its first measured "
+    /* RE-PEGGED 2026-09-11, perf-scoped: 106,354 us measured, inside the
+     * 109,000 it carried. x 0.9 rounded DOWN -> 95,700. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(95700, (int)per_step,
+        "the lava stress scene is held to 10% below its last measured "
         "number, as a reduction target - failing means the work is not "
         "done, not that something broke");
 }
@@ -1411,8 +1410,10 @@ static void test_the_boiler_scene_fits_in_the_frame_budget(void)
     free(big);
     free(blocks);
 
-    TEST_ASSERT_LESS_THAN_MESSAGE(28500, (int)per_step,
-        "the boiler scene is held to 10% below its first measured "
+    /* RE-PEGGED 2026-09-11, perf-scoped: 28,125 us measured, inside the
+     * 28,500 it carried. x 0.9 rounded DOWN -> 25,300. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(25300, (int)per_step,
+        "the boiler scene is held to 10% below its last measured "
         "number, as a reduction target - failing means the work is not "
         "done, not that something broke");
 }
@@ -1462,10 +1463,10 @@ static void test_the_wet_earth_scene_fits_in_the_frame_budget(void)
     free(blocks);
 
     TEST_ASSERT_LESS_THAN_MESSAGE(80000, (int)per_step,
-        "PROVISIONAL ceiling, not yet re-pegged from a device capture - "
-        "see this test's own comment. Once measured this row becomes "
-        "measured x 0.8 (a deliberately tighter reduction target than "
-        "the rest of the file's x 0.9), not a loosened guard");
+        "wet earth is held to measured x 0.8 - a deliberately tighter "
+        "reduction target than the rest of the file's x 0.9, set by "
+        "explicit instruction - so failing means the work is not done, "
+        "not that something broke");
 }
 
 #ifdef SAND_HOST_PROBE
