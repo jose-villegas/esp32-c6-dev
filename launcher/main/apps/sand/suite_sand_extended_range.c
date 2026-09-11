@@ -87,14 +87,9 @@ static void test_heat_through_a_pan_lights_oil_rather_than_boiling_it(void)
 
 /* A powder lands ON another powder, and still sinks through a liquid.
  *
- * Displacement used to be "anything not static, if you are heavier", so a
- * heavier powder fell straight through a lighter one - dirt through snow,
- * sand through snow, dirt through sand. Reported as dirt passing through a
- * snowbank instead of landing on it, which is what it looked like.
- *
  * A grain can push its way down through water or through smoke and cannot
- * push its way through packed grains however heavy it is. Density still
- * decides fluids and stops deciding anything between solids.
+ * push its way through packed grains however heavy it is. Density decides
+ * fluids and stops deciding anything between solids.
  *
  * Both halves in one test, because "powders stack" passes just as well on
  * a board where nothing displaces anything at all - which would leave sand
@@ -169,16 +164,11 @@ static void test_a_powder_lands_on_a_powder_but_sinks_in_a_liquid(void)
 
 /* Hot gas warms what it touches - convection.
  *
- * It is here for what it makes VISIBLE rather than for what it achieves.
- * Measured three times against whether it helps shatter glass, it does
- * not: warmer air costs snow its life, because a pane above room
- * temperature charges snow for touching it, and snow is the scarce thing.
- *
- * What it does do is make heat reach where conduction cannot. Measured on
- * a stone flue with a wood fire at the bottom, the top of the flue sits at
- * ambient without it and one to two levels above with - the difference
- * between a chimney that is stone cold at the top and one that is warm,
- * which is only worth anything now that stone shows its temperature. */
+ * It exists for what it makes VISIBLE rather than for what it achieves:
+ * warmer air does not help shatter glass - it costs snow, the scarce
+ * resource, its life. What it does do is make heat reach where
+ * conduction cannot: on a stone flue with a fire at the bottom, the top
+ * sits at ambient without it and one to two levels above with it. */
 static void test_hot_gas_warms_what_it_touches(void)
 {
     fixture();
