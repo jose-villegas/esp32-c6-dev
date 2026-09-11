@@ -111,11 +111,10 @@ typedef uint8_t cell_t;
 
 /* Lives here, not in sand_reactions.c, since the shatter rule, glass's
  * palette (which changes colour at exactly this level, making "will
- * shatter" visible) and the tests all have to agree on it - a private
- * #define once let the number and the colour drift apart. Set to ambient+2,
- * not a more dramatic ambient+4: the glass a snowflake actually touches
- * sits near ambient, several cells from the heat and actively chilled by
- * the snow itself, so ambient+4 asked for heat the scene can never reach. */
+ * shatter" visible) and the tests must agree on it - a private #define
+ * would let the number and colour drift apart. Set to ambient+2, not
+ * ambient+4: the glass a snowflake touches sits near ambient, chilled by
+ * the snow itself, so ambient+4 asks for heat the scene never reaches. */
 #define SAND_SHOCK_HEAT (SAND_AMBIENT_HEAT + 2)
 
 #define SAND_SHOCK_COLD (SAND_AMBIENT_HEAT - 2)
