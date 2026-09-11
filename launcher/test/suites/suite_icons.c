@@ -1,7 +1,6 @@
 /*=============================================================================
- * Portable suite: gfx/icons_system.h's ICON_SYSTEM_CHECK - the artwork that
- * used to be icons.h's hand-typed uint16_t check mark, before MU_ICON_CHECK
- * was rerouted onto the baked atlas (see ui.c's draw_command()).
+ * Portable suite: gfx/icons_system.h's ICON_SYSTEM_CHECK - the artwork
+ * MU_ICON_CHECK renders from the baked atlas (see ui.c's draw_command()).
  *
  * Same reasoning as suite_sand_icons.c: check_expected_rows below is
  * transcribed BY HAND from icons.h's own icon_check_bitmap picture, not
