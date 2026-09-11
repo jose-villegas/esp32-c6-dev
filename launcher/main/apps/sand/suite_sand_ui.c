@@ -1,12 +1,12 @@
 /*=============================================================================
  * Portable suite: sand_ui - the falling-sand app's UI state machine.
  *
- * Four of these tests each pin a bug that shipped to hardware before this
- * logic could be host-tested at all - see sand_ui.h's own top comment for
- * the shape they share. Those are marked below with the commit that fixed
- * them (or, for the one still unfixed on this branch until now, the commit
- * that reported it). The rest exercise the ordinary behaviour a refactor
- * this close to four shipped bugs cannot afford to get wrong either.
+ * Four of these tests each pin a bug that shipped to hardware because
+ * this logic could not be host-tested before - see sand_ui.h's own top
+ * comment for the shape they share; several are marked below with the
+ * commit that fixed them. The rest exercise the ordinary behaviour a
+ * refactor this close to four shipped bugs cannot afford to get wrong
+ * either.
  *===========================================================================*/
 
 #include <string.h>
