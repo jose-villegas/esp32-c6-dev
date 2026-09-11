@@ -35,11 +35,10 @@
  * scale: a CAMERA, and the SPACE the grid and curve live in. Both are
  * keyframed data (boot_anim_keyframes[], generated from
  * boot_anim_timeline.json by tools/gen_boot_anim_timeline.py - see "The
- * timeline" below), edited live in tools/boot_anim_editor.html rather than
- * hand-derived once the way this file's camera math used to be. Projection
- * is real perspective, not the old axonometric three-fixed-directions
- * trick - see "The projection" below, including how to get back to
- * orthographic if that ever turns out to be wanted.
+ * timeline" below), edited live in tools/boot_anim_editor.html. Projection
+ * is real perspective, not axonometric three-fixed-directions - see "The
+ * projection" below, including how to get back to orthographic if that
+ * ever turns out to be wanted.
  *
  * ONE SPACE-UNIT IS ONE METER
  *
@@ -58,9 +57,9 @@
  *   S3L_F  small3dlib's own fixed point (512 = 1.0) - meters once
  *          projected, camera/space transform numbers throughout, and a
  *          full turn of rotation.
- *   Q15    sines and cosines from this file's own trig table (still used
- *          by the title's wobble/wave - see "Trigonometry" below - even
- *          though the camera no longer reads it directly).
+ *   Q15    sines and cosines from this file's own trig table, used by the
+ *          title's wobble/wave (see "Trigonometry" below), not by the
+ *          camera.
  *===========================================================================*/
 #pragma once
 
@@ -92,17 +91,15 @@ static inline void boot_anim_unused_pixel(S3L_PixelInfo *pixel) { (void)pixel; }
 /*---------------------------------------------------------------------------
  * The timeline
  *
- * Where the camera - and now the space it looks at - actually come from:
+ * Where the camera - and the space it looks at - come from:
  * boot_anim_keyframes[], generated into boot_anim_timeline.h from
  * boot_anim_timeline.json by tools/gen_boot_anim_timeline.py, each entry
  * carrying TWO full small3dlib transforms (S3L_Transform3D: translation,
  * rotation, scale) - one for the camera, one for the "space" the grid and
- * curve live in - rather than the single hand-derived rotation+2D-drift
- * this used to be. Interpolating them is the same idea as before, just more
- * channels: find the two keyframes bracketing `now_ms`, ramp between their
- * times, ease that ramp by whichever shape the arriving keyframe names, and
- * lerp every number by it - still util/tween.h's own vocabulary, nothing
- * new invented to interpret the table.
+ * curve live in. Interpolating them: find the two keyframes bracketing
+ * `now_ms`, ramp between their times, ease that ramp by whichever shape
+ * the arriving keyframe names, and lerp every number by it - util/tween.h's
+ * own vocabulary, nothing new invented to interpret the table.
  *
  * UNITS
  *
