@@ -770,33 +770,16 @@ surface_rule_lets_growth_through(int satellite_roots)
     return grew;
 }
 
-/* A tip keeps going the way it was going - away from its parent - and
- * down. Reported from the device: the uniform pick let moisture's own
- * sideways spread near the surface decide everything, so deeper roots
- * only happened at the angles the geometry favoured. Now a candidate that
- * continues away from the cell's root neighbours weighs +2 and one that
- * reaches gravity-ward +1, over a base of 1 (step_one_rooting_cell()).
+/* A tip keeps going away from its parent, and gravity-ward: a candidate
+ * continuing away from the cell's root neighbours weighs +2, one reaching
+ * down +1, over a base of 1 (step_one_rooting_cell()). Statistical over
+ * many seeds - a weighted roll is a tendency, not a rule.
  *
- * STATISTICAL, over many seeds, because a weighted roll is a tendency and
- * not a rule. The scene is a tip with its parent directly ABOVE it in a
- * moist bed, so "away from parent" and "down" point the same way: the
- * three cells below the tip weigh 4 each, the two beside it 1 each -
- * 12 against 2. Only the first conversion adjacent to the tip is
- * classified, per seed.
+ * The parent is silenced past ROOT_SURFACE_MAX, or its away-vector
+ * points UP into the tip's side cells and drowns the skew.
  *
- * THE PARENT IS SILENCED, and that is the whole difficulty of this scene.
- * A live parent competes for the tip's two side cells (they touch both),
- * and its own away-vector points UP, so it reaches them with no penalty
- * at all: measured with the parent free to grow, the weights only moved
- * "below" from 49% to 59%, which is a real skew drowned in a confound.
- * Three roots above the parent give it four root neighbours, past
- * ROOT_SURFACE_MAX, so it never rolls; the three extras can only reach
- * rows above the tip, never the cells classified here. What is left is
- * the tip's own pick and nothing else.
- *
- * Watched red with both weights stubbed to zero - the tip's uniform pick
- * over five candidates, three of them below, lands "below" 3 in 5. The
- * bar is 75%: well above 60%, well below the 86% the weights predict. */
+ * The bar is 75%: a uniform pick lands "below" 3 in 5, the weights
+ * predict 86%. */
 static void test_a_root_tip_grows_on_away_from_its_parent_and_down(void)
 {
     const int cx = W / 2, ty = H - 4;
@@ -1027,31 +1010,15 @@ static void test_roots_grow_toward_the_wet_side_only(void)
         "system preferred");
 }
 
-/* THE RUNAWAY SCENE, scaled for the host suite - see the Roots section
- * of docs/sand/Sand-Simulation.md for the full six-seed, 20,000-step
- * version this is a fast stand-in for. A root pre-planted (so the rare
- * one-time collar seed cannot confound the reading - see
- * spend_soil_moisture()'s own comment), its collar rewatered to
- * SOIL_MOISTURE_MAX every single step - about as generous as this
- * feature ever sees - and the claim is not "it stays small", it is that
- * the count REACHES A FIXED POINT: two counts taken apart in time, late
- * enough that growth has had its chance, must be equal. A system still
- * climbing between them is the shape of the runaway this whole feature
- * exists to avoid.
+/* THE RUNAWAY SCENE, scaled for the host suite - the full six-seed,
+ * 20,000-step version is in docs/sand/Sand-Simulation.md. A pre-planted
+ * root, collar rewatered to SOIL_MOISTURE_MAX every step, and the claim
+ * is that the count REACHES A FIXED POINT: two counts taken apart in time
+ * must be equal.
  *
- * WHAT THIS DOES NOT ISOLATE, watched red and found wanting: bumping
- * ROOT_SURFACE_MAX itself far past its real value does NOT turn this
- * test red - a board this small (20x14) runs out of reachable moist dirt
- * within 3000 steps regardless of the surface rule, so the count still
- * plateaus, just later and higher. This test is a regression guard on
- * SATURATION happening at all, not a proof of which of the three bounds
- * (moisture, surface rule, roll) is doing the work at this scale -
- * test_a_thickly_rooted_cell_stops_growing pins ROOT_SURFACE_MAX
- * specifically, and the real evidence that it is the surface rule
- * carrying the full-size scene (not merely a smaller board's own limits)
- * is the six-seed, 20,000-step measurement recorded in ROOT_SURFACE_MAX's
- * own comment (sand_reactions.c), where a bed sixty cells wide gives the
- * system far more room than 3,000 steps could plausibly exhaust. */
+ * It does not isolate WHICH bound does the work - a 20x14 board runs out
+ * of reachable moist dirt within 3000 steps whatever ROOT_SURFACE_MAX
+ * is. */
 #define RUNAWAY_TEST_W 20
 #define RUNAWAY_TEST_H 14
 
@@ -1117,25 +1084,13 @@ static void test_a_continuously_watered_root_system_still_saturates(void)
  * HATCHED rather than SPECKLED, for its travelling shine - so it gets
  * its own pattern check instead of sharing the other four's. */
 
-/* The woven diagonal line that used to sit under that shine read as a
- * printed grid rather than metal, and was dropped; the shine itself
- * stayed. */
-
-/* An extended material's variant IS which one it is, so neither can carry
- * a shade and the position hash is the only variation available - the same
- * tool stone and wood use, and right here for the same reason it was wrong
- * for dirt: neither a wall of ice, a grown tree, nor a smelted metal bar
- * moves.
- *
- * The negative half matters as much. The switch is on the low nibble, and
- * a mistake there does not fail to build - it paints some other extended
- * material in leaf green, which is the sort of thing nobody notices until
- * a fourteenth material arrives and comes out looking like a hedge. */
+/* An extended material's variant IS which one it is, so the position hash
+ * is the only variation available - the same tool stone and wood use. The
+ * switch is on the low nibble, and a mistake there does not fail to
+ * build: it paints some other extended material in leaf green. */
 /* A root darkens by STRUCTURE: `depth` carries the count of root
- * neighbours (material_root_neighbours()), and the shade steps toward a
- * wood-like brown as it climbs - checked per channel, not as a luminance,
- * so a hue drift cannot pass as "darker". Wood and leaf read `depth` too,
- * but as a wave fraction, not a neighbour count - see their own tests. */
+ * neighbours (material_root_neighbours()). Checked per channel, not as a
+ * luminance, so a hue drift cannot pass as "darker". */
 static unsigned r5(gfx_color_t c) { const unsigned n = (unsigned)((c >> 8) | (c << 8)) & 0xFFFFu; return (n >> 11) & 31u; }
 static unsigned g6(gfx_color_t c) { const unsigned n = (unsigned)((c >> 8) | (c << 8)) & 0xFFFFu; return (n >> 5) & 63u; }
 static unsigned b5(gfx_color_t c) { const unsigned n = (unsigned)((c >> 8) | (c << 8)) & 0xFFFFu; return n & 31u; }
@@ -1550,28 +1505,14 @@ static void test_metal_shine_does_not_vary_between_cells(void)
 }
 
 /* The three airborne materials agree with themselves about weight, speed
- * and lifetime.
+ * and lifetime. The ordering that matters is a heavy flammable gas
+ * outlasting the two lighter, quicker ones - a pocket of gas that goes
+ * first cannot be built with. Steam is only ever forbidden from fading
+ * FASTER than smoke, so its own figure can move without this moving.
  *
- * Steam is the lightest and quickest; a heavy flammable gas should pool
- * and wait. For a long time gas outlived both - gas faded in about 120
- * steps, steam in 160, smoke in 240 - so the heaviest, slowest thing in
- * the air was also the first to disappear, and a pocket of gas could not
- * be built with.
- *
- * STEAM'S OWN DECAY HAS MOVED SEVERAL TIMES SINCE, ALWAYS DOWNWARD (24,
- * then 18, then 16 - briefly landing exactly on smoke's own figure and
- * matching it on purpose - then 12, on a later request for steam to last
- * at least 30% longer still). None of those moves ever required smoke to
- * be equal or slower - the assertion below only ever forbade steam fading
- * FASTER than smoke, so it has never needed to change alongside steam's
- * figure; the ordering that actually matters is gas outlasting both of
- * the lighter, quicker-fading ones.
- *
- * Asserted on the TABLE rather than by watching cells fade. Three
- * populations decaying past each other is a slow and noisy way to check a
- * fact that is written down in one place, and this is the same reasoning
- * as the acid test above: nonzero is not a claim about the right value,
- * only that somebody chose one and that the three still agree. */
+ * Asserted on the TABLE, not by watching cells fade: three populations
+ * decaying past each other is a slow, noisy way to check a fact written
+ * down in one place. */
 static void test_the_air_agrees_about_weight_speed_and_lifetime(void)
 {
     /* Lighter rises faster. */
@@ -1602,21 +1543,14 @@ static void test_the_air_agrees_about_weight_speed_and_lifetime(void)
 
 /* Steam melts ice. Ordinary gas does not.
  *
- * Reported from a scene anyone would build: lava in a pan, water poured on
- * to make a boiler, a sheet of ice above it - and the steam rising into
- * the ice did nothing at all.
+ * Glass and stone bank heat a level at a time; ice cannot, and
+ * structurally never will, because it is an extended material whose low
+ * nibble is which material it is, leaving no room in the cell for a
+ * temperature. Convection reaches it through try_heat_transform()'s
+ * second, memoryless branch instead.
  *
- * The gap was that convection only knew how to warm a material whose
- * variant IS a temperature. Glass and stone bank heat and climb a level at
- * a time; ice cannot, and structurally never will, because it is an
- * extended material whose low nibble is which material it is. There is no
- * room left in the cell to hold a temperature. So hot gas walked straight
- * past it, while a flame touching the same cell melted it at once -
- * try_heat_transform() has always had a second, memoryless branch for
- * exactly this, and convection had simply never learned it.
- *
- * The negative half is what pins the gas's own gate: plain gas has no
- * `warms` at all, and must leave ice alone however much of it there is. */
+ * The negative half pins the gas's own gate: plain gas has no `warms` at
+ * all, and must leave ice alone however much of it there is. */
 static void test_steam_melts_ice_and_plain_gas_does_not(void)
 {
     const int cx = W / 2, cy = H / 2;
@@ -1687,27 +1621,15 @@ static void test_steam_melts_ice_and_plain_gas_does_not(void)
 
 
 
-/* Two pours apart in time come out as two different shades.
+/* Two pours apart in time come out as two different shades - that is how
+ * a pile gets its layers, and it costs only a different number in the one
+ * draw that was already being made. A pour spread over the whole band
+ * instead puts every shade in every layer and there is no line anywhere.
  *
- * This is how a pile gets layers, and the whole of what it costs is
- * choosing a different number in the one draw that was already being
- * made. A grain's shade was always picked at spawn and always lived in
- * the cell; it was simply spread across the entire band, so every pour
- * looked like every other and a pile was uniform speckle from top to
- * bottom. Centring the draw on a slowly drifting band instead means a
- * brushful is nearly one shade, the next brushful is another, and the
- * first pile stays legible after the second is poured on top of it.
- *
- * Worth stating what this is NOT, because that was built first and
- * measured: it does not look at cells, it does not know which of them are
- * at a surface, and it adds no pass, no flag and no per-cell test. A
- * version that crusted exposed grains in place did all of those and cost
- * 4.4 microseconds a step against 1.0 on a settled board. This one
- * measures 1.0 - the same as having nothing at all.
- *
- * The narrowness matters as much as the difference. A pour spread over
- * the whole band again would put every shade in every layer and there
- * would be no line anywhere. */
+ * It looks at no cells, knows nothing about surfaces, and adds no pass,
+ * flag or per-cell test. Crusting exposed grains in place does all of
+ * those and costs 4.4 microseconds a step against 1.0 on a settled
+ * board. */
 static void test_two_pours_apart_in_time_lay_down_different_shades(void)
 {
     int lo[2] = { 99, 99 }, hi[2] = { -1, -1 };
@@ -1753,23 +1675,14 @@ static void test_two_pours_apart_in_time_lay_down_different_shades(void)
 }
 
 
-/* A grain carries its shade wherever it goes.
+/* A grain carries its shade wherever it goes - the invariant the layering
+ * rests on. It holds because the sweep MOVES cells rather than making new
+ * ones: the byte travels, and the shade is in the byte. Anything that
+ * re-rolls a shade when a grain settles leaves every other test passing
+ * and quietly turns every pile back into uniform speckle.
  *
- * This is the invariant the whole of the layering rests on, and nothing
- * asserted it. The shade is chosen once, at spawn, and layers only mean
- * anything because a grain that falls, slides, avalanches and gets buried
- * arrives with the shade it started with - so a buried surface is still
- * the shade it was when it was a surface.
- *
- * It holds today because the sweep MOVES cells rather than making new
- * ones: the byte travels, and the shade is in the byte. That is easy to
- * break by accident. Anything that re-rolls a shade when a grain settles,
- * or picks one from where the grain has landed, would leave every other
- * test passing and quietly turn every pile back into uniform speckle.
- *
- * Checked as a MULTISET rather than cell by cell, because where each
- * grain ends up is the sweep's business and not this test's. What matters
- * is that the same shades are still on the board, in the same numbers. */
+ * Checked as a MULTISET: where each grain ends up is the sweep's
+ * business, not this test's. */
 static void test_a_moving_grain_keeps_the_shade_it_was_poured_with(void)
 {
     int before[MATERIAL_VARIANTS] = { 0 }, after[MATERIAL_VARIANTS] = { 0 };
@@ -1878,21 +1791,11 @@ static void test_wet_sand_becomes_soil_wet_with_no_tone_of_its_own(void)
 /* Every material has a colour, and every extended material has one too.
  *
  * The palette is one flat array of 256 entries indexed by the whole cell
- * byte, and C zero-fills whatever an initialiser does not reach. So a
+ * byte, and C zero-fills whatever an initialiser does not reach, so a
  * material whose block is missing does not fail to build - it renders
- * BLACK, which looks like a styling choice rather than a bug.
- *
- * That has happened twice. Both times a block was added or removed
- * somewhere in the middle and every block after it shifted by sixteen: the
- * first time the extended range landed on the wrong id, the second time
- * folding ember out left ice reading from the zero-filled tail. Reported
- * as "ice look is pretty bad, just black", which is exactly what an unset
- * palette entry looks like.
- *
- * The blocks carry explicit `[MAT_X * MATERIAL_VARIANTS] =` designators
- * now, so removing a material cannot shift the ones after it. This checks
- * the result rather than the mechanism, because the failure is silent
- * either way. */
+ * BLACK, which reads as a styling choice rather than a bug. Checked on
+ * the result rather than on the designators, because the failure is
+ * silent either way. */
 static void test_every_material_has_a_palette_block(void)
 {
     const gfx_color_t *pal = material_palette();
@@ -2056,26 +1959,13 @@ static void test_every_extended_material_shares_one_physics_row(void)
         "gunpowder is the one extended-range material that moves");
 }
 
-/* Same fact as the test above, asserted again on purpose - this one exists
- * for a different reader. The rule deciding which materials may be
- * emitters (see sand_add_emitter() in sand.h) is KIND_POWDER/LIQUID/GAS
- * may, KIND_STATIC may not - a static source would bury itself on its
- * first step and jam forever. That rule has to ask material_of(c)->kind.
+/* Same fact as the test above, asserted again for a different reader.
+ * sand_add_emitter() asks material_of(c)->kind, and Ice, Plant, Leaf,
+ * Metal and Root all answer through ONE shared row that has to stay
+ * KIND_STATIC; gunpowder answers through its own, KIND_POWDER on purpose.
  *
- * Since the hot table split (MATERIAL_ROWS, material.h), material_of() DOES
- * tell gunpowder apart from an extended static - they are different rows
- * now. Ice, Plant, Leaf, Metal and Root still answer the emitter question
- * through ONE shared row, and that row still has to stay KIND_STATIC for
- * the derivation below to hold for them; gunpowder answers through its OWN
- * row, which is KIND_POWDER on purpose - it is the one extended-range
- * material meant to emit.
- *
- * This cannot be a _Static_assert: materials[] is `extern const`, so its
- * contents are not a constant expression the preprocessor or compiler can
- * see. A host test that fails loudly is the next best thing - and it
- * needs to fail loudly right here, not wherever the emitter-eligibility
- * code eventually lands, since that code will have no way to know this
- * assumption exists. */
+ * materials[] is `extern const`, so this cannot be a _Static_assert, and
+ * it has to fail here rather than wherever the eligibility code lands. */
 static void test_the_extended_row_being_static_is_what_emitter_eligibility_leans_on(void)
 {
     TEST_ASSERT_EQUAL_INT_MESSAGE(KIND_STATIC,
