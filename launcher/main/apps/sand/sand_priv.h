@@ -376,9 +376,9 @@ neighbor_smothers(const sand_t* s, int nx, int ny, int w, int h, uint8_t density
  * cardinals and could never fire for a wide pool sealed by a crust (only
  * the cell directly above ever counted). The lid is the three cells
  * centred on anti-gravity - opposite gravity plus its two diagonals -
- * ALL THREE must cover. The two perpendiculars were tried first
- * (five-cell semi-disc) but a hand-drawn wall notches then read as a
- * seal at brush radii 2-4, bursting basins that should hold. */
+ * ALL THREE must cover; the two perpendiculars alone (five-cell
+ * semi-disc) read a hand-drawn wall notch as a seal at brush radii 2-4,
+ * bursting basins that should hold. */
 #define COVER_LID 0x7u
 
 /* Covering is neighbor_smothers(): in bounds, not liquid, denser than
@@ -640,55 +640,25 @@ tick_decay(sand_t* s, uint8_t* row, int x, int y, cell_t* grain, const material_
     return true;
 }
 
-/* Per-pass volatile gates for sand_step() (bd esp32c6-8zx), default enabled
- * so behaviour is untouched. One binary, five configurations, one boot - a
- * device pass decomposition with no layout difference between
- * configurations, unlike four separate images each drawing their own
- * flash-layout ticket. Defined in sand.c. */
-
-/* OPT-IN, for the reason sand_work_counters.h spells out: development
- * alone puts these in build.diag, the capture build, and an instrument
- * that shifts every measurement is worse than none. CONFIG_LAUNCHER_
- * SAND_PASS_GATES cannot be set without LAUNCHER_DEVELOPMENT, so the
- * guard checks only this option. Kept separate from the work counters: the
- * gates measure TIME, the counters measurably perturb codegen, so one
- * option covering both would perturb exactly what the gates measure. */
-/* Per-pass volatile gates - SCAFFOLDING for one round, removed at the end of
- * it by scripts/strip-pass-gates.py. See docs/sand/Perf-Round-Guide.md,
- * "Instrumenting a round". Volatile is load-bearing: an `#if` would let the
- * compiler prove the guarded work unreachable and delete the walk that reaches
- * it, which is how an earlier code-skip probe in this campaign measured
- * nothing at all. */
-/* Defined in sand_reactions.c: the whole of a step's fire-chemistry work
- * for every burning cell (reaction_t.burns - fire and ember today) -
- * ignition of adjacent flammable neighbours, extinguishing by adjacent
- * liquid, burning out via tick_decay() above, (ember only) flaring a
- * flame upward, and now heat conduction through a material like stone
- * (reaction_t.conducts - see conduct_heat() in sand_reactions.c). Called
- * once from sand_step(), after sand_step_gas() finishes and before
- * finalize_settling() - same slot, same reasoning as sand_step_liquids()/
- * sand_step_gas() before it: BLOCK_ACTIVE has to reflect the whole step.
- * Gated on s->may_have_burning alone (not may_have_gas too) - a burning
- * cell is the only actor here; gas is passive fuel with nothing to do on
- * its own.
- *
- * Takes only `s`. It briefly took (gx, gy) too, while boiling walked
- * against gravity to find a liquid's surface; boiling happens at the
- * heat source now and the steam bubbles up by itself, so this pass has
- * no interest in gravity at all. That also restores the original reason
- * may_have_burning is checked INSIDE rather than at the call site:
- * there are no arguments to marshal for a call that will immediately
- * return. */
+/* Per-pass volatile gates (bd esp32c6-8zx, sand.c), default enabled,
+ * opt-in via CONFIG_LAUNCHER_SAND_PASS_GATES (dev-only). SCAFFOLDING,
+ * removed by scripts/strip-pass-gates.py - volatile is load-bearing: an
+ * #if would let the compiler delete the walk it guards.
+ * sand_step_reactions() (sand_reactions.c): a step's fire chemistry,
+ * called after sand_step_gas(), before finalize_settling(). Gated on
+ * may_have_burning alone; takes only `s` - boiling happens at the heat
+ * source, no interest in gravity. */
 void sand_step_reactions(sand_t* s);
 
-/* Defined in sand_plants.c: the tree/root/leaf growth half of what used to
- * be one reactions file - see that file's own top comment. Each is one
- * stage of step_one_reacting_row()'s (sand_reactions.c) per-cell dispatch,
- * called across the file boundary the same way sand_step_reactions() above
- * is called from sand.c. */
-/* Exact lattice-cell count for a disc of radius r (sand_impulse.c). Declared
- * here rather than left static so the suite can check the shipped table
- * against a direct count, which is the only way that table is verified. */
+/* Defined in sand_plants.c: the tree/root/leaf growth stages of
+ * step_one_reacting_row()'s (sand_reactions.c) per-cell dispatch, called
+ * across the file boundary the same way sand_step_reactions() above is
+ * called from sand.c.
+ *
+ * sand_disc_count(): exact lattice-cell count for a disc of radius r
+ * (sand_impulse.c). Declared here rather than left static so the suite
+ * can check the shipped table against a direct count, the only way that
+ * table is verified. */
 int sand_disc_count(int radius);
 
 bool step_one_falling_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r);
