@@ -164,7 +164,8 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->soak_convert = SAND_SOAK_CONVERT_PER_MATERIAL;
     s->soak         = 0;    /* nothing soaks unless asked - see
                              * sand_set_soak() */
-    s->mobility     = 255;  /* full speed by default - see sand_set_mobility() */
+    s->mobility     = 255;
+    s->may_have_viscous_liquid = false;  /* full speed by default - see sand_set_mobility() */
     s->gas_walk     = true;   /* random walk, 23% cheaper - see sand_set_gas_walk()
                                 * for the deterministic exhaustive mover */
     s->flammability = SAND_FLAMMABILITY_PER_MATERIAL;  /* see sand_set_flammability() */
@@ -1080,6 +1081,27 @@ static void build_xflow(xflow_t *f, int gx, int gy)
 
 /* CHECK WITH objdump, NOT the diff: .text.sand_step should read 2**4. Binding
  * to the wrong symbol still compiles and passes everything. */
+/* A mobility of 0 or 255 always admits the move; only a value between them
+ * draws a roll. Asked of the global override when it is set, and otherwise of
+ * every liquid actually present. */
+static bool viscous_liquid_possible(const sand_t *s)
+{
+    if (s->mobility >= 0) {
+        return s->mobility != 0 && s->mobility < 255;
+    }
+    for (int m = 0; m < MATERIAL_MAX; m++) {
+        if ((s->may_have_materials & (1u << m)) == 0) {
+            continue;
+        }
+        const material_t *mat = material_by_id((material_id_t)m);
+        if (mat->kind == KIND_LIQUID
+            && mat->mobility != 0 && mat->mobility < 255) {
+            return true;
+        }
+    }
+    return false;
+}
+
 __attribute__((aligned(16)))
 void sand_step(sand_t *s, int gx, int gy, int jostle)
 {
@@ -1090,6 +1112,7 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
     build_sweep_tables();
 
     s->step_phase++;
+    s->may_have_viscous_liquid = viscous_liquid_possible(s);
 
     emit_from_emitters(s);
 

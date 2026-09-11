@@ -125,7 +125,7 @@ static inline bool equalise_one_cell(sand_t *s, uint8_t *row, int x, int y,
     if (!neighbour_is_lower(s, x, y, px, py, id, mass, bias_q8)) {
         return false;
     }
-    if (!liquid_may_move(s, id)) {
+    if (s->may_have_viscous_liquid && !liquid_may_move(s, id)) {
         return false;   /* viscosity affects levelling; syrupy liquid would
                          * level instantly sideways, resembling "runny" */
     }
@@ -518,7 +518,8 @@ static bool float_lighter_liquids(sand_t *s, int dx, int dy)
              * idea as gas's mobility gate - a rise should be a lazy drift,
              * not a guaranteed cell every step. Without it this pass sorts
              * harder than the sinking swap it replaced ever did. */
-            if (!liquid_may_move(s, mine)) {
+            if (s->may_have_viscous_liquid
+                && !liquid_may_move(s, mine)) {
                 continue;
             }
 
