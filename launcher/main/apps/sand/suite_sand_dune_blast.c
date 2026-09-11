@@ -146,51 +146,13 @@ static inline void footprint_set(uint8_t *mask, size_t idx)
     mask[idx >> 3] |= (uint8_t)(1u << (idx & 7));
 }
 
-/* HOW FAR PAST THE DUNE'S OWN EDGE, not how far from an arbitrary point
- * inside it - see this file's own dune-scene tests for why "distance from
- * the detonation centre" turned out to be the wrong question. Found by
- * searching outward from (x, y) in expanding square rings - the same
- * eight-directions-at-once shape ring_dir() in sand_priv.h moves grains
- * in - checking only each ring's own perimeter against `footprint` until
- * one of its bits is set. That is a Chebyshev (8-connected) distance
- * transform, the exact same value a multi-source breadth-first flood
- * fill seeded from every footprint cell would compute for this one cell -
- * two ways of answering the identical question, not two different
- * questions - so switching to it changes nothing about WHAT a grain that
- * merely slid down the dune's own slope reads as versus one genuinely
- * thrown clear (see this file's own top-of-section comment for why that
- * distinction is the entire point).
- *
- * WHY NOT THE FLOOD FILL THIS REPLACED: it answered the question for
- * every one of the grid's 41,216 cells whether or not anything downstream
- * ever asked, which needed `dist` and `queue`, REAL_W*REAL_H ints each -
- * 164,864 bytes apiece, 329,728 together. This scene only ever asks for
- * the handful of cells that turn out to be outside the settled footprint
- * after a blast - 105 of them in a measured run, against the 41,216 the
- * flood fill priced itself for regardless. A bounded RECTANGLE around the
- * footprint - the fix this section's dune scene otherwise follows for
- * `footprint` itself, just scoped down instead of reshaped - could not
- * replace it either: this scene's own settled dune measured 127 cells
- * wide (69% of the grid's own 184-cell width, a wide, short pile rather
- * than a tall narrow one), and even a ZERO-margin box exactly matching
- * that footprint's bounding rectangle costs 24,003 bytes at the smallest
- * correct per-cell types (a 1-byte Chebyshev distance, a 2-byte queue
- * slot - see this file's own commit message for both derivations) against
- * roughly 7,952 bytes left once `big`, `blocks`, `impulses` and the
- * footprint bitset above are accounted for. A per-query outward search
- * has no rectangle to fit into at all: its cost is proportional to how
- * FAR a query cell sits from the nearest footprint cell, not to the
- * footprint's own size, so this pile's actual queries - every one of them
- * resolving within two or three rings, measured - stay cheap regardless
- * of how wide the pile itself gets, and it needs no storage beyond this
- * function's own local variables.
- *
- * `cap` bounds the search so a genuinely pathological grid still
- * terminates - callers pass the largest Chebyshev distance any two cells
- * on this grid could possibly have, (max(REAL_W, REAL_H) - 1) = 223, so
- * the cap can never itself produce a wrong answer for a cell this grid
- * actually contains; it only bounds the search, the same role CRACK_MAX
- * plays for crack_run() in sand_reactions.c, not a correctness knob. */
+/* Distance past the dune's own edge, not from the detonation centre:
+ * searches outward in expanding Chebyshev rings against `footprint`
+ * rather than flood-filling all 41,216 grid cells when only ~105 queries
+ * ever happen (each resolves within two or three rings, measured; no
+ * storage beyond locals). `cap` bounds the search to the largest
+ * possible Chebyshev distance on this grid, so it only bounds the
+ * search, never affects correctness. */
 static int nearest_footprint_distance(const uint8_t *footprint, int w, int h,
                                       int x, int y, int cap)
 {
@@ -238,64 +200,24 @@ static int nearest_footprint_distance(const uint8_t *footprint, int w, int h,
  * rather than a correctness one. */
 #define NEAREST_FOOTPRINT_CAP ((REAL_W > REAL_H ? REAL_W : REAL_H) - 1)
 
-/* Mirrors app_sand.c's DETONATE_RADIUS_PX/APP_IMPULSE_MAX exactly, at the
- * same CELL_MIN scale REAL_W/REAL_H already represent (see their own
- * comment above) - so a sweep run against this scene, and the numbers it
- * reports, read on the same scale a real device detonation does, not
- * some arbitrary test-only radius.
- *
- * WAS 24 (48 px), DOUBLED TO 48 (96 px) - following a device request,
- * "it needs a much bigger radius in general" - and THAT DOUBLING BRIEFLY
- * BROKE THE FEATURE OUTRIGHT on real hardware, TWICE, for two different
- * reasons caught by two different device flashes. First: the impulse
- * buffer used to be sized FROM this radius
- * (`(355*r*r)/113 + 5*r + 3` entries), so doubling it demanded a ~43.8 KB
- * allocation nothing on this board could satisfy. Second, after that got
- * fixed by decoupling buffer size from radius (see below) and sizing the
- * fixed budget against a ~76 KB TOTAL free-heap boot-log figure instead:
- * a live serial capture at that "fixed" budget still failed, showing
- * `heap_caps_get_largest_free_block()` stuck at an identical 14,592
- * bytes across three different quality settings - proof the relevant
- * number was never total free heap at all, but the single largest
- * contiguous run, which can be far smaller than the sum of everything
- * technically free. Neither failure was visible to this test's fixed RNG
- * seed and unlimited host `malloc()` - nothing here ever fails to
- * allocate, which is exactly why this bug needed a device twice to be
- * believed. See SAND_IMPULSE_BUDGET_BYTES's own comment in app_sand.c
- * for the full arithmetic of both incidents.
- *
- * NEITHER FIX WAS A SMALLER RADIUS. Both were decoupling buffer size
- * from radius entirely: APP_IMPULSE_MAX (app_sand.c) is now a FIXED
- * entry count chosen once from the device's own heap budget - now
- * against the observed largest-contiguous-block number, not total free
- * heap - and sand_explode() itself (sand.c) now THINS its own seeding
- * density automatically whenever a disc's true cell count would exceed
- * whatever buffer it was actually given - evenly, across the whole disc,
- * rather than truncating its shape - see queue_outward_impulse()'s own
- * comment in sand.c. That decoupling is what let the radius become a
- * genuinely free choice again - which is exactly what it became next:
- * a real device confirmed 96 px allocating and detonating without a
- * crash, at a visibly thinned density, and the user chose to trade that
- * size back down for a SMALLER radius at FULL density instead, on the
- * actual measured numbers (see DETONATE_RADIUS_PX's own comment in
- * app_sand.c for the full account and the "why 25 cells, not a round
- * number" derivation). This constant follows DETONATE_RADIUS_PX's own
- * value rather than drifting from it, same as before - the point of the
- * fix was never that the radius COULDN'T shrink, only that it no longer
- * HAD to just to keep the buffer allocating. */
+/* Mirrors app_sand.c's DETONATE_RADIUS_PX at the same CELL_MIN scale
+ * REAL_W/REAL_H represent, so a sweep reads on the real device's own
+ * scale. APP_IMPULSE_MAX is a fixed entry count sized from the device's
+ * largest-contiguous-free-block budget, decoupled from this radius;
+ * sand_explode() thins its seeding density automatically, evenly across
+ * the disc, whenever it exceeds the buffer given, rather than truncating
+ * the shape. See DETONATE_RADIUS_PX's comment in app_sand.c for why 25
+ * cells. */
 #define DUNE_BLAST_RADIUS 25
 
-/* A FIXED ENTRY COUNT MIRRORING APP_IMPULSE_MAX EXACTLY, not a formula in
+/* A FIXED ENTRY COUNT MIRRORING APP_IMPULSE_MAX, not a formula in
  * DUNE_BLAST_RADIUS - see APP_IMPULSE_MAX's own comment in app_sand.c for
- * why the two constants split apart: this scene's own impulse buffer no
- * longer needs to be "big enough for whatever DUNE_BLAST_RADIUS's disc
- * requires", because sand_explode() now degrades its own seeding density
- * to fit whatever buffer it is actually given. What this DOES still need
- * to mirror is the app's real device budget, not the app's radius - a
- * host test buffer sized any differently would measure a blast fighting
- * a different memory ceiling than the one the device actually has, which
- * defeats the entire point of this scene reading "on the same scale a
- * real device detonation does" (this file's own top comment, above). */
+ * why the two split apart: sand_explode() degrades its seeding density
+ * to fit whatever buffer it is given, so this buffer need not scale with
+ * the disc DUNE_BLAST_RADIUS implies. It DOES need to mirror the app's
+ * real device budget, not its radius - a differently-sized buffer would
+ * measure a blast against a different memory ceiling than the device
+ * actually has. */
 #define DUNE_IMPULSE_MAX  2048
 
 /* A settled dune, poured rather than painted - the same way app_sand.c's
@@ -510,12 +432,12 @@ static void build_dune_beside_water_scene(sand_t *s)
     sand_spawn(s, REAL_W / 2, REAL_H / 4, REAL_W / 5, MAT_SAND);
 
     /* Laid down at roughly the depth this volume settles to anyway,
-     * spread across the basin, rather than stacked in the right-hand
-     * third. The old shape had its left face open, so the pool spent 2,480
-     * steps - 124 settle batches against 29-39 for every other scene in
-     * this file, and ~98% of this test's runtime - travelling sideways to
-     * reach the same equilibrium. Same water, same basin, same claims;
-     * it simply starts where it was always going to end up. */
+     * spread across the basin, rather than stacked in one third with an
+     * open face: that shape costs 2,480 settle steps (124 batches, ~98%
+     * of this test's runtime) against 29-39 for every other scene here,
+     * just to reach the same equilibrium sideways. Same water, same
+     * basin, same claims - it simply starts where it was always going to
+     * end up. */
     const int pool_depth = 38;
     for (int y = REAL_H - pool_depth; y < REAL_H; y++) {
         for (int x = 0; x < REAL_W; x++) {
@@ -908,17 +830,13 @@ static void test_the_wood_floor_scene_catches_fire(void)
         }
     }
 
-    /* The CORE's own bottom edge placed right at the wood floor's top
-     * surface, not the dune's geometric centre - fire has to actually
-     * touch (or nearly touch) the wood to ignite it, and fire is LIGHTER
-     * than sand (see SAND_EXPLODE_CORE_DIVISOR's own comment on
-     * can_enter()'s displacement rule), so it rises up through the pile
-     * rather than sinking down toward a floor beneath it. A centre placed
-     * at the dune's own middle - tried first, and measured, not assumed -
-     * left the core entirely inside sand, several cells short of the
-     * wood, and ignited nothing at all: this is why "detonated somewhere
-     * in the dune" is not the same claim as "detonated where its fire
-     * can actually reach the fuel". */
+    /* The CORE's bottom edge sits at the wood floor's top surface, not
+     * the dune's geometric centre: fire must actually touch the wood to
+     * ignite it, and fire is LIGHTER than sand (SAND_EXPLODE_CORE_
+     * DIVISOR's comment on can_enter()'s displacement rule), so it rises
+     * through the pile rather than sinking to a floor beneath it. A
+     * centre at the dune's middle leaves the core entirely inside sand,
+     * short of the wood, igniting nothing. */
     const int cx = REAL_W / 2;
     const int cy = (REAL_H - 12) - (DUNE_BLAST_RADIUS / SAND_EXPLODE_CORE_DIVISOR) - 1;
 
