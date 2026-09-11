@@ -347,14 +347,11 @@ static void test_plan_run_finds_a_real_gap_inside_one_cell(void)
     TEST_ASSERT_EQUAL_INT(2, n);
 }
 
-/* Mark width for test_plan_run_rejects_a_split_over_the_gather_budget:
- * derived from GATHER_MAX_PIXELS/STRIP_HEIGHT (plus a margin) rather than
- * hardcoded, so the "over budget" case it builds tracks whatever the
- * budget is tuned to. At today's 8192 this evaluates to 136 - the exact
- * value the test used before it was made parametric. Valid only while two
- * such marks, with a gap between them, still fit inside one 4-cell run -
- * the static assert below catches a GATHER_MAX_PIXELS large enough to
- * break that, rather than this test silently stopping to mean anything. */
+/* Derived from GATHER_MAX_PIXELS/STRIP_HEIGHT plus a margin rather than
+ * hardcoded, so the "over budget" case tracks whatever the budget is tuned
+ * to. Valid only while two such marks, with a gap between them, still fit
+ * inside one 4-cell run - the static assert below catches a
+ * GATHER_MAX_PIXELS large enough to break that. */
 #define OVER_BUDGET_MARK_W ((GATHER_MAX_PIXELS / STRIP_HEIGHT) + 8)
 
 static void test_plan_run_rejects_a_split_over_the_gather_budget(void)

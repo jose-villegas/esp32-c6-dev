@@ -44,14 +44,10 @@ void suite_register(const char *name, suite_fn fn);
 /* Runs every registered suite, in name order so the output is stable. */
 void suites_run_all(void);
 
-/* Runs exactly one registered suite by its exact name - the string SUITE_
- * REGISTER() stringified its own function name into, e.g.
- * "run_boot_anim_perf_suite" or "run_cube_perf_suite". For a targeted run:
- * a perf suite's own report can be minutes behind whatever else registered
- * ahead of it alphabetically (cube_perf alone runs ~40s, sand's own suite
- * much longer), and most of the time only one suite's own output is
- * actually wanted - see screenshot.c's own RUNSUITE console command, the
- * one place this is called from today.
+/* Runs exactly one registered suite by its exact name - the string
+ * SUITE_REGISTER() stringified its own function name into. For a targeted
+ * run: a perf suite's own report can be minutes behind whatever registered
+ * ahead of it alphabetically, and usually only one suite's output is wanted.
  *
  * Returns false (nothing run) if no suite matches `name` exactly, so the
  * caller can report that back rather than silently doing nothing. */

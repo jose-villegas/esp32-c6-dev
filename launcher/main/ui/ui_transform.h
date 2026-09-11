@@ -76,25 +76,13 @@ typedef struct {
 } ui_transform_t;
 
 /*
- * Fixed-point helpers
+ * Thin wrappers over util/fixed.h, where the arithmetic and its
+ * floor-vs-round reasoning live: fixed-point multiply is not a UI concept,
+ * and other callers need the same operation at a different shift.
  *
- * Not part of the public shape of this header, but static inline like
- * everything else here so they still link on their own.
- *
- * These are thin wrappers over util/fixed.h, which is where the actual
- * arithmetic and its floor-vs-round reasoning live now - fixed-point
- * multiply/divide is not a UI concept, and sand.c/sand_liquid.c need the
- * same operation at a different shift. UI_FP_SHIFT is simply baked in here
- * as the shift this transform has always used.
- *
- * ui_fp_round() keeps its own name and shape rather than becoming a plain
- * fx_* call: it rounds an already-computed Q16.16 (or, inside ui_fp_mul(),
- * Q32.32) ACCUMULATOR, not a product of two raw operands - ui_transform_point
- * hands it the sum of two Q16.16 products plus a translation, which
- * fx_mul_round()'s two-operand shape has no way to accept. It delegates to
- * fixed.h's fx_round_shift(), the primitive under fx_mul_round() that takes
- * the combined value directly, so the rounding rule itself still lives in
- * one place.
+ * ui_fp_round() keeps its own shape because it rounds an already-computed
+ * ACCUMULATOR, not two raw operands, which fx_mul_round() cannot accept. It
+ * delegates to fx_round_shift(), so the rounding rule lives in one place.
  */
 
 static inline int64_t ui_fp_round(int64_t v)
