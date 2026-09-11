@@ -10,15 +10,13 @@
  * gfx_font_8x8 so it is an ordinary entry in this scheme rather than a
  * special case something else routes around, and an 8bpp coverage atlas
  * with anti-aliasing and real proportional advances - generated from a TTF
- * by tools/gen_font.py, e.g. main/gfx/fonts/font_lmroman_40.h - which is
- * exactly the "second font" this scheme was originally shaped for before
- * one existed: `bpp` was a field rather than an assumption, and advances
- * were per-glyph-capable, specifically so a font like that could slot in
- * as an ordinary gfx_font_t with no change here. See gfx.c's
+ * by tools/gen_font.py, e.g. main/gfx/fonts/font_lmroman_40.h. `bpp` is a
+ * field and advances are per-glyph-capable so an atlas font like that slots
+ * in as an ordinary gfx_font_t with no change here. See gfx.c's
  * draw_glyph_font() for how a bpp==8 atlas is actually drawn (blended, not
- * masked) and gfx_font.h - this file - stays exactly what it always was:
- * pure metrics, no drawing, so both fonts' widths/advances/heights are
- * computable and testable on a host with neither gfx.h nor a framebuffer.
+ * masked); this file stays pure metrics, no drawing, so both fonts'
+ * widths/advances/heights are computable and testable on a host with
+ * neither gfx.h nor a framebuffer.
  *===========================================================================*/
 #pragma once
 
