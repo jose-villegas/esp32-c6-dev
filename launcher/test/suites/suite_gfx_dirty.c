@@ -1,8 +1,9 @@
 /*=============================================================================
  * Portable suite: gfx_dirty - the grid/leaf dirty-region tracker.
  *
- * None of this was reachable from a host before gfx_dirty.h existed - it
- * lived inside gfx.c, which unconditionally includes ESP-IDF SPI headers.
+ * gfx_dirty.h carries no ESP-IDF dependency, unlike gfx.c (which
+ * unconditionally includes ESP-IDF SPI headers) - that split is what
+ * makes this logic reachable from a host at all.
  * suite_gfx.c (device-only) still covers whether the design is actually
  * cheaper to send; this suite covers whether the geometry and bitmask
  * logic underneath it is correct in the first place, which a timing
