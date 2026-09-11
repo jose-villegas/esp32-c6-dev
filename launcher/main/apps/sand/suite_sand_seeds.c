@@ -183,6 +183,40 @@ static void test_a_seed_in_a_shaft_does_not_stick_to_the_walls(void)
 }
 
 
+/* An overhang is held up by the far end of its own body.
+ *
+ * The support walk gives up at SUPPORT_MAX cells, so anything that makes its
+ * queue grow faster than the body does drops a standing limb. Every other
+ * faller here asserts that something DOES fall, which a walk that gives up
+ * early still satisfies. */
+static void test_an_overhanging_limb_is_held_up_by_its_own_trunk(void)
+{
+    fixture();
+    sand_clear(&s);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    for (int y = 2; y < H - 1; y++) {
+        sand_set(&s, 1, y, MATX(MATX_PLANT));
+    }
+    for (int x = 2; x < W - 1; x++) {
+        sand_set(&s, x, 2, MATX(MATX_PLANT));
+    }
+
+    for (int i = 0; i < 90; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    for (int x = 2; x < W - 1; x++) {
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_PLANT), sand_at(&s, x, 2),
+            "every cell of a limb standing off a grounded trunk must stay "
+            "where it is - the walk has to reach the trunk's foot, and one "
+            "that runs out of room before it gets there drops the limb");
+    }
+}
+
+
 /* A settled faller keeps the pass armed.
  *
  * may_have_faller gates the whole reactions pass, so a plant that sits
@@ -1322,6 +1356,7 @@ void run_sand_seeds_suite(void)
     RUN_TEST(test_two_falling_seeds_do_not_hold_each_other_up);
     RUN_TEST(test_a_brushful_of_seeds_does_not_hang_in_the_air);
     RUN_TEST(test_a_seed_in_a_shaft_does_not_stick_to_the_walls);
+    RUN_TEST(test_an_overhanging_limb_is_held_up_by_its_own_trunk);
     RUN_TEST(test_a_settled_plant_keeps_the_reaction_pass_armed);
     RUN_TEST(test_a_growing_tree_does_not_shed_what_it_grows);
     RUN_TEST(test_a_buried_seed_comes_up_through_the_soil);
