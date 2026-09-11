@@ -591,13 +591,12 @@ static void draw_command(const mu_Command *cmd)
 
         /* WHY THE WHOLE STRING'S BOX IS MAPPED, NOT ITS ORIGIN: every
          * other command maps its rect through ui_transform_rect(), proven
-         * exact under any quarter turn. This used to map only the origin
-         * and walk per-glyph steps from there - a point doesn't commute
-         * with "walk N glyphs, take the far edge", so at quarter 1/3 the
-         * string landed a glyph cell off, at quarter 2 off both axes
-         * (rotated text drifting off-centre). Now measures the LOGICAL
-         * box - same one used to size it - and maps that, like the
-         * others. */
+         * exact under any quarter turn. A point does not commute with
+         * "walk N glyphs, take the far edge" under rotation, so mapping
+         * just the origin and walking per-glyph from there drifts a
+         * string off at quarter turns 1-3. Mapping the LOGICAL box
+         * instead - the same one used to size it - keeps it exact, like
+         * every other command. */
         const int tw = gfx_font_text_width(font, cmd->text.str, -1, scale);
         const int th = gfx_font_height(font, scale);
         const mu_Rect box = ui_transform_rect(
