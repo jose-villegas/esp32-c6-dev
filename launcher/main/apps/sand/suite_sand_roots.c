@@ -959,18 +959,13 @@ static void test_conduction_never_pushes_water_up_or_into_anything_but_soil(void
     }
 }
 
-/* No "brings water deeper than bare soil" test here, deliberately. It was
- * written and it failed for reasons that have nothing to do with the
- * claim: on this 8x8 grid percolation alone floods a six-row bed inside
- * any run long enough to matter, so there is no depth left for a conduit
- * to add - and a column that DOES carry water down then eats the cell it
- * wetted, so measuring moisture in dirt counts the delivery as a loss.
- * The depth claim is established where it can be seen, on the 60x70
- * harness with a 19-row dry bed watered at the collar: mean deepest root
- * 4.6 rows with conduction off, 15.0 with it on, over ten seeds (see
- * ROOT_CONDUCT_CHANCE's own comment in sand_reactions.c, and the Roots
- * section of docs/sand/Sand-Simulation.md). What the suite pins is the
- * mechanism itself - the two tests above. */
+/* No "brings water deeper than bare soil" test here: on this 8x8 grid,
+ * percolation alone already floods a six-row bed, leaving no depth for a
+ * conduit to add, and a conducting column eats the cell it wetted,
+ * undercounting moisture-based measurement. The depth claim is proven on
+ * the 60x70 harness instead: mean deepest root 4.6 rows with conduction
+ * off, 15.0 with it on, over ten seeds (ROOT_CONDUCT_CHANCE's comment,
+ * sand_reactions.c; docs/sand/Sand-Simulation.md). */
 
 static void test_a_thickly_rooted_cell_stops_growing(void)
 {
@@ -1829,21 +1824,12 @@ static void test_a_moving_grain_keeps_the_shade_it_was_poured_with(void)
 
 
 /* Sand that turns to soil arrives WET, and a wet cell carries no tone of
- * its own (material.h's own comment on soil's state split) - so the
- * grain's shade, which used to become the new soil's tone, now simply
- * has nowhere to go. That is the trade this re-encoding makes: soil got
- * its dry tones back by giving up an independent tone while wet, and wet
- * soil's own variation is the moisture gradient percolation lays down
- * instead of a carried tone - see step_one_soaking_cell()'s own comment
- * on its soaks_to branch (sand_reactions.c).
- *
- * What survives instead is simpler: whichever end of the dune band a
- * grain came from, it converts to the SAME moisture - the one unit
- * `soaks` just took - because the shade plays no part in the conversion
- * at all any more. This used to be
- * test_wet_sand_becomes_soil_in_the_tone_its_shade_implies, pinning the
- * derivation that carried a shade across into a tone; there is no
- * derivation left to pin. */
+ * its own (material.h's state-split comment) - so the grain's shade has
+ * nowhere to go. Wet soil's variation instead comes from the moisture
+ * gradient percolation lays down (step_one_soaking_cell()'s soaks_to
+ * branch, sand_reactions.c). Whichever end of the dune band a grain came
+ * from, it converts to the same moisture - the one unit `soaks` just
+ * took - since shade plays no part in the conversion. */
 static void test_wet_sand_becomes_soil_wet_with_no_tone_of_its_own(void)
 {
     const uint8_t dark_shade = 1;                       /* low half  */
