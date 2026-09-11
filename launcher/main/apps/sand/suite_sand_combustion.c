@@ -2198,7 +2198,7 @@ static void test_water_still_puts_fire_out(void)
 /* Two liquids of different densities have to sort themselves out, which
  * nothing before oil required. room_in() refuses a cell holding another
  * material and a liquid never consults can_enter(), so without
- * sink_through_lighter_liquid() the two simply block each other and oil
+ * float_lighter_liquids() the two simply block each other and oil
  * trapped under water stays there forever. */
 /* Viscosity: liquids used to read no rate field at all, so every liquid
  * flowed at exactly the same speed and oil behaved like coloured water.
