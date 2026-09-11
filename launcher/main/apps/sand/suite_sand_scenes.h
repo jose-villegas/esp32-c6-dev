@@ -80,6 +80,42 @@ void build_boiler_scene(sand_t *s);
 void build_campfire_scene(sand_t *s);
 void build_wet_earth_scene(sand_t *s);
 
+/* A stone tank with a zigzag of shelves down it and a pool at the bottom,
+ * poured into from the top corner. The companion to the free-falling water
+ * slab in the perf suite, which reaches move_liquid_grain()'s sideways half
+ * zero times in a window - see the builder. */
+void build_filling_basin_scene(sand_t *s);
+
+/* One refill onto the top shelf, separate from the builder so a caller can
+ * keep the cascade running for a whole measured window - water that has
+ * finished arriving puts its blocks to sleep and costs nothing. */
+void filling_basin_pour(sand_t *s);
+
+/* Long enough for the first sheet to have reached the pool, so the window
+ * times a cascade already running end to end rather than one still on its
+ * way down. */
+#define FILLING_BASIN_SETTLE_STEPS 220
+#define FILLING_BASIN_POUR_EVERY   10
+#define FILLING_BASIN_MEASURED_STEPS 30
+
+/* Snow drifting onto a bed of sand and dirt, the two partners it is measured
+ * to be dearest against. Callers must sand_set_crust() it up - the shipped
+ * rate ices a bank over in minutes, so a scene left at it holds no ice at
+ * all, the same case the water-over-lava scene forces its lava rolls for. */
+void build_snowfall_scene(sand_t *s);
+
+/* One more fall of snow onto the bank, separate from the builder for the
+ * reason plant_bed_rain() is - see that function. */
+void snowfall_drift(sand_t *s);
+
+/* Measured at sand_set_crust(CRUST_ROLL_MAX): the bank's first ice appears
+ * around step 110 and reaches 1,217 cells by 150, against 4,048 snow. Less
+ * settling and the scene is snow on bare earth, which is a different and
+ * cheaper board. */
+#define SNOWFALL_SETTLE_STEPS 150
+#define SNOWFALL_DRIFT_EVERY   10
+#define SNOWFALL_MEASURED_STEPS 30
+
 /* A bed of sand capped with damp dirt, seeded and rained on - the only scene
  * here in which anything grows. See the builder for the spacing rule. */
 /* A grove of bushy trees, painted rather than grown - the shape the wood/leaf
@@ -91,6 +127,34 @@ void build_wet_earth_scene(sand_t *s);
 void build_tree_grove_scene(sand_t *s);
 
 void build_plant_bed_scene(sand_t *s);
+
+/* The plant bed above, walled down the middle, with an acid pour waiting on
+ * one side and a lava pour on the other - the arena's three unreached
+ * plant-family interactions in one board. See the builder. */
+void build_plant_ruin_scene(sand_t *s);
+
+/* The two pours, separate from the builder and from each other: a caller
+ * grows the bed first and only then attacks it, and the two halves do not
+ * peak together. Measured from the moment each lands, the lava has burnt
+ * nearly all the greenery it is going to within 60 steps, while the acid
+ * spends its first 60 eating the canopy and the soil cap and only then
+ * reaches the roots, 112 of them down to 33 over the next 60. Pouring both
+ * at once gives a window with one side or the other already spent. */
+void plant_ruin_acid_pour(sand_t *s);
+void plant_ruin_lava_pour(sand_t *s);
+
+/* Acid first, then lava this much later, so the timed window lands on acid
+ * in the roots and lava in a canopy it has not touched yet. */
+#define PLANT_RUIN_ACID_LEAD_STEPS 60
+
+/* One acid pour does not reach the roots at all: measured, it is entirely
+ * spent on the canopy and the soil cap, and the bed goes on growing behind
+ * it. Only a sustained pour eats down. */
+#define PLANT_RUIN_ACID_EVERY 15
+
+/* The window the frame-budget test times and the coverage test beside it
+ * checks - one number, so neither can drift from the other. */
+#define PLANT_RUIN_MEASURED_STEPS 30
 
 /* Another fall of rain onto an existing bed. One pour is drunk dry in a few
  * hundred steps and growth then stops - see the definition. */
