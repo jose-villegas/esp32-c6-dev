@@ -1072,23 +1072,10 @@ static void build_xflow(xflow_t *f, int gx, int gy)
  * sand_step_gas() already use. */
 
 
-/* This array's own alignment, which is where sand_step()'s went when this
- * definition slid in under the attribute written for it. The function has its
- * own pin again below, at 16 rather than the 32 that measured too dear.
- *
- * Defined here once rather than per TU - see sand_priv.h. */
-__attribute__((aligned(32)))
-const int8_t reaction_dirs[4][2] = {
-    {0, -1},
-    {0, 1},
-    {-1, 0},
-    {1, 0},
-};
-
-/* PINNED at 16, not left to the compiler: an unpinned attribute can bind
- * to reaction_dirs above rather than this function, letting an unrelated
- * change silently shift sand_step()'s alignment and regress performance.
- * 32 costs about 4.5% on liquid-free controls for nothing; 16 is
+/* PINNED at 16, not left to the compiler: an unpinned attribute can bind to
+ * whatever definition follows it rather than to this function, letting an
+ * unrelated change silently shift sand_step()'s alignment and regress
+ * performance. 32 costs about 4.5% on liquid-free controls for nothing; 16 is
  * near-free and still starts within a 32-byte cache block. */
 
 /* CHECK WITH objdump, NOT the diff: .text.sand_step should read 2**4. Binding
