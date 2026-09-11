@@ -85,10 +85,10 @@ static int frame_x0, frame_y0, frame_x1, frame_y1;
 
 /* On-screen framerate readout - the other half of what makes the toggle
  * above worth having: main.c's own report_fps() only ever reaches a
- * serial console, so seeing partial_updates actually change anything
- * used to mean a laptop plugged in next to the board. Windowed on dt_ms
- * rather than esp_timer_get_time() like report_fps() does, so this needs
- * nothing beyond what cube_frame() is already handed. */
+ * serial console, so this is what lets partial_updates' effect be seen
+ * with nothing but the board itself. Windowed on dt_ms rather than
+ * esp_timer_get_time() like report_fps() does, so this needs nothing
+ * beyond what cube_frame() is already handed. */
 #define FPS_WINDOW_MS 500
 static uint32_t fps_frame_count;
 static uint32_t fps_window_elapsed_ms;
