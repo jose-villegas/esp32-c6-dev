@@ -63,11 +63,10 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
 #define SAND_IMPULSE_SPEED_RAMP  2
 
 /* How many cells one successful push-roll moves: 1 + speed / this,
- * uncapped. Before this existed every displacing move covered one cell
- * per roll, the same rate gravity falls at, so a thrown grain could never
- * outrun its own fall. 104 gives a full-speed (255) entry 3 cells and a
- * near-spent one still exactly 1 - see suite_sand_impulse.c's divisor
- * tests. */
+ * uncapped - lets a thrown grain outrun gravity's one-cell-per-step fall,
+ * which a flat one-cell push-roll never could. 104 gives a full-speed
+ * (255) entry 3 cells and a near-spent one still exactly 1 - see
+ * suite_sand_impulse.c's divisor tests. */
 #define SAND_IMPULSE_CELLS_PER_STEP_DIVISOR  104
 
 /* EXTRA speed charge per non-empty cell a KIND_STATIC/KIND_POWDER mover
