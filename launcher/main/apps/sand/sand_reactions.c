@@ -138,6 +138,14 @@ neighbor_quenches(const sand_t* s, int nx, int ny, int w, int h) {
  * Burial skips rotation, side. */
 static inline bool
 smothered(const sand_t* s, int x, int y, int w, int h, uint8_t density) {
+    /* Four walks only - here, conduct_heat(), and step_one_burning_cell()'s
+     * quench and pair walks. On all seventeen it costs campfire 2.1% and
+     * gunpowder 1.1% to buy the plant scenes 2%.
+     *
+     * It does not remove the table loads; the function more than doubles in
+     * instructions and gains them. The win is straight-line paths on a core
+     * with no branch predictor. */
+#pragma GCC unroll 4
     for (int d = 0; d < 4; d++) {
         if (!neighbor_smothers(s, x + reaction_dirs[d][0], y + reaction_dirs[d][1], w, h, density)) {
             return false;
@@ -1214,6 +1222,7 @@ conduct_heat(sand_t* s, int x, int y, int w, int h) {
         return false;
     }
 
+#pragma GCC unroll 4
     for (int d = 0; d < 4; d++) {
         const int dx = reaction_dirs[d][0];
         const int dy = reaction_dirs[d][1];
@@ -1557,6 +1566,7 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cell_
     }
 
     if (s->may_have_liquid) {
+#pragma GCC unroll 4
         for (int d = 0; d < 4; d++) {
             const int nx = x + reaction_dirs[d][0];
             const int ny = y + reaction_dirs[d][1];
@@ -1682,6 +1692,7 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cell_
     }
 
     const uint8_t* my_pair_row = pair_bits[mat_id];
+#pragma GCC unroll 4
     for (int d = 0; d < 4; d++) {
         const int nx = x + reaction_dirs[d][0];
         const int ny = y + reaction_dirs[d][1];
