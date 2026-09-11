@@ -170,20 +170,14 @@ static void test_holding_does_not_resubmit(void)
     TEST_ASSERT_EQUAL_INT(1, taps_counted(40));
 }
 
-/* A press and release arriving in the SAME frame cannot click anything, and
- * that is a property of microui rather than a bug here: hover_root only
- * exists from the frame after the pointer first moves somewhere, so the
- * very first frame at a position can never resolve a control. The old
- * same-frame-release policy had this hole too - it is not something the
- * hover frames introduced.
- *
- * Pinned rather than left undiscovered: ui_pointer_step() still emits the
- * full move/down/up (suite_ui_pointer.c asserts that), so nothing is left
- * dangling, the click is simply not resolvable. touch_fsm only produces
- * this if a whole TOUCH_RELEASE_QUIET_US (60ms) of silence fits inside one
- * frame, so it needs a frame longer than the release debounce. If it ever
- * shows up in practice, the fix is to stage the tap across the hover frames
- * and emit the UP after the DOWN rather than with it. */
+/* A press and release arriving in the SAME frame cannot click anything - a
+ * property of microui, not a bug here: hover_root does not exist until the
+ * frame after the pointer first moves somewhere, so the first frame at a
+ * position can never resolve a control. Pinned rather than left
+ * undiscovered: ui_pointer_step() still emits the full move/down/up
+ * (suite_ui_pointer.c asserts that) - the click is simply not resolvable,
+ * and only touch_fsm's TOUCH_RELEASE_QUIET_US (60ms) makes it reachable at
+ * all. */
 static void test_a_one_frame_tap_cannot_resolve_a_control(void)
 {
     fixture();
