@@ -1,11 +1,11 @@
-/*=============================================================================
+/*
  * imu - QMI8658 driver.
  *
  * Register map and the initialisation values follow the QST QMI8658A/C
  * datasheet. The configuration chosen here is the common one for motion sensing
  * rather than navigation: a wide accelerometer range so a knock does not clip,
  * and a rotation range wide enough to survive a deliberate shake.
- *===========================================================================*/
+ */
 
 #include "input/imu.h"
 

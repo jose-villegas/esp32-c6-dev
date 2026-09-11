@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Portable suite: ui_transform_t - the UI layer's affine map.
  *
  * ui_transform.h is header-only and pure geometry, same reasoning as
@@ -12,7 +12,7 @@
  * spelled out as their own numbers instead of pulled from GFX_WIDTH/HEIGHT,
  * which this suite cannot include (gfx.h needs the BSP headers - see
  * ui_transform.h's own note on why it only takes microui.h).
- *===========================================================================*/
+ */
 
 #include <stdbool.h>
 
@@ -24,9 +24,7 @@
 #define VIEW_W 368
 #define VIEW_H 448
 
-/*---------------------------------------------------------------------------
- * Identity
- *-------------------------------------------------------------------------*/
+/* Identity */
 
 static void test_identity_maps_every_point_to_itself(void)
 {
@@ -57,9 +55,7 @@ static void test_identity_maps_every_rect_to_itself(void)
     TEST_ASSERT_EQUAL_INT(r.h, out.h);
 }
 
-/*---------------------------------------------------------------------------
- * Round trips: point -> transform -> inverse -> back to the start
- *-------------------------------------------------------------------------*/
+/* Round trips: point -> transform -> inverse -> back to the start */
 
 static void assert_round_trips(ui_transform_t t, const char *msg)
 {
@@ -91,7 +87,7 @@ static void test_a_point_round_trips_through_every_quarter_turn(void)
         "turn 3: a point mapped and inverse-mapped must return to itself");
 }
 
-/*---------------------------------------------------------------------------
+/*
  * Quarter turns: where the viewport's own corners land
  *
  * The domain each turn expects is the LOGICAL canvas - VIEW_H x VIEW_W for
@@ -99,7 +95,7 @@ static void test_a_point_round_trips_through_every_quarter_turn(void)
  * ui_height() would report (see ui.h). Expected corners are the ones
  * ui_transform_quarter_turn()'s own doc comment claims: each corner moves to
  * the next one clockwise, once per quarter turn.
- *-------------------------------------------------------------------------*/
+ */
 
 static void check_point(ui_transform_t t, int x, int y, int ex, int ey,
                         const char *msg)
@@ -147,9 +143,7 @@ static void test_turn_3_rotates_corners_three_steps_clockwise(void)
     check_point(t, VIEW_H, VIEW_W, VIEW_W, 0,      "turn 3: logical bottom-right -> physical top-right");
 }
 
-/*---------------------------------------------------------------------------
- * A rect stays axis-aligned and inside the viewport after any quarter turn
- *-------------------------------------------------------------------------*/
+/* A rect stays axis-aligned and inside the viewport after any quarter turn */
 
 static void assert_rect_fits(ui_transform_t t, mu_Rect r, const char *msg)
 {
@@ -189,7 +183,7 @@ static void test_a_mapped_rect_swaps_width_and_height_on_an_odd_turn(void)
     TEST_ASSERT_EQUAL_INT(r.w, t3.h);
 }
 
-/*---------------------------------------------------------------------------
+/*
  * ui_transform_icon_blocks() - a baked icon's runs, mapped under a quarter
  * turn
  *
@@ -208,7 +202,7 @@ static void test_a_mapped_rect_swaps_width_and_height_on_an_odd_turn(void)
  * (4 - 3*1)/2 == 0, (4 - 4*1)/2 == 0), so LOCAL run coordinates below equal
  * native bitmap coordinates - no separate scale/centre arithmetic to also
  * get right before the transform math can be checked in isolation.
- *-------------------------------------------------------------------------*/
+ */
 
 static const uint8_t icon_l_rows[4] = {
     0x80, /* 1000 - col 0 */
@@ -316,7 +310,7 @@ static void test_icon_blocks_match_ui_transform_rect_run_by_run(void)
     }
 }
 
-/*---------------------------------------------------------------------------
+/*
  * ui_text_glyph0_origin() - where a string's first glyph belongs, under a
  * quarter turn, for a PROPORTIONAL font
  *
@@ -328,7 +322,7 @@ static void test_icon_blocks_match_ui_transform_rect_run_by_run(void)
  * (advances 3/5/4/6, none equal to cell_w), the same kind of synthetic
  * descriptor suite_gfx_font.c already uses for the same reason. Its atlas
  * is unread (nothing here draws) and left zeroed.
- *-------------------------------------------------------------------------*/
+ */
 
 static const uint8_t glyph0_atlas[4 * 10] = { 0 };   /* 4 glyphs * cell_h rows, unread */
 static const uint8_t glyph0_advance[4] = { 3, 5, 4, 6 };
@@ -438,9 +432,7 @@ static void test_glyph0_origin_at_turn_3_is_not_the_cell_h_mistake(void)
         "cell_h`, not on the real answer");
 }
 
-/*---------------------------------------------------------------------------
- * Composition and the quarter turn a transform represents
- *-------------------------------------------------------------------------*/
+/* Composition and the quarter turn a transform represents */
 
 static void test_quarter_reports_the_turn_each_matrix_represents(void)
 {
@@ -473,9 +465,7 @@ static void test_composing_two_quarter_turns_sums_mod_4(void)
     TEST_ASSERT_EQUAL_INT(2, ui_transform_quarter(ui_transform_compose(q3, q3)));
 }
 
-/*---------------------------------------------------------------------------
- * The backend-vs-type boundary
- *-------------------------------------------------------------------------*/
+/* The backend-vs-type boundary */
 
 static void test_axis_preserving_accepts_identity_and_every_quarter_turn(void)
 {
@@ -536,9 +526,7 @@ static void test_axis_preserving_rejects_a_non_90_degree_rotation(void)
         "gfx_text_turned() only has four quarters to offer it");
 }
 
-/*---------------------------------------------------------------------------
- * Inversion of a singular matrix
- *-------------------------------------------------------------------------*/
+/* Inversion of a singular matrix */
 
 static void test_invert_fails_on_a_singular_matrix(void)
 {

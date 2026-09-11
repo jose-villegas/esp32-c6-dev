@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * row_runs - finding and reconciling separate runs of occupied cells within
  * one row of a grid, and reporting only what genuinely changed.
  *
@@ -23,7 +23,7 @@
  * Moving to multiple runs per row turns that into a small diff between two
  * short run lists instead of one interval union - see row_runs_reconcile()
  * for the two rules that make it still safe.
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stdint.h>

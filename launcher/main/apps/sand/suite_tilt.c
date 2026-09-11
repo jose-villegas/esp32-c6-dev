@@ -1,11 +1,11 @@
-/*=============================================================================
+/*
  * Portable suite: the tilt filter.
  *
  * Everything here would be miserable to test on hardware - "does a step change
  * arrive in about a quarter of a second" needs a controllable clock, and
  * "is the smoothing framerate-independent" needs two framerates at once. Both
  * are trivial when time is a parameter.
- *===========================================================================*/
+ */
 
 #include "unity.h"
 #include "suites.h"

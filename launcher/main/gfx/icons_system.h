@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * GENERATED FILE - do not edit.
  *
  *     python tools/gen_icons.py ../design/icons/system.png ../design/icons/system.json > main/gfx/icons_system.h
@@ -10,7 +10,7 @@
  * Imported icons are pixelarticons (MIT, Gerrit Halfmann) - see
  * design/icons/LICENSE-pixelarticons - pinned to commit
  * 8275e0af7c16aa40c54ea2b90b7af83b1fe4eb4c.
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stdint.h>

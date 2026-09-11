@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Portable suite: the falling-sand automaton - shared benchmark scenes -
  * four-liquid, lava-stress, smoke-and-steam, thermal-shock, boiler, and wet-
  * earth.
@@ -6,7 +6,7 @@
  * Split out of suite_sand.c (bd esp32c6 test-suite-refactor), which had grown
  * past 32,000 lines across 500+ tests. Shared fixtures and assertion helpers
  * live in suite_sand_common.{c,h} - see that header.
- *===========================================================================*/
+ */
 #include <math.h>   /* not every file in the split still needs atan2()/M_PI,
                      * but every file inherited suite_sand.c's own include
                      * block rather than being pruned by hand, to keep the
@@ -1394,27 +1394,24 @@ static void test_the_boiler_scene_keeps_boiling_across_the_window(void)
  * it was poured with.
  *
  * REACTION DISPATCH UNDER SUSTAINED LOAD is the thing this scene exists to
- * measure, not just liquid movement, and getting that to actually happen
- * turned out to be less obvious than it sounds. sand_step_reactions()
- * (sand_reactions.c) gates its whole pass behind six content flags and
- * clears each one the moment a pass finds nothing for it to do; a flag is
- * re-armed only by a cell WRITE (sand_priv.h's latch_content_flags(),
- * called from sand_set() and from a handful of reaction outcomes) - NEVER
- * by ordinary liquid movement in sand_liquid.c. A board of nothing but
- * water arms may_have_moisture once, at paint time, because water is
- * KIND_LIQUID - and the very first reactions pass clears it straight back
- * off, since nothing wet is touching anything that soaks. Nothing in
- * plain liquid movement ever re-arms it after that. Dirt is what breaks
- * the silence: a soil cell holding any MOISTURE keeps re-arming the flag
- * on every write that touches it (sand_priv.h: `r->dries != 0 &&
- * CELL_MOISTURE(cell) != 0`), so once this scene is wet, the reactions
- * pass keeps running every step for as long as any dirt anywhere is damp
- * - which, measured, is the whole window below. CELL_MOISTURE(), not the
- * raw variant this comment used to name: a DRY cell's variant is a tone,
- * and testing the whole nibble latched this for seven of every eight dry
- * cells for good, whether or not anything on the board was ever wet -
- * fixed alongside the re-encoding that gave dry soil those eight tones in
- * the first place (see material.h's own comment on soil's state split).
+ * measure, not just liquid movement. sand_step_reactions() (sand_reactions.c)
+ * gates its whole pass behind six content flags and clears each one the
+ * moment a pass finds nothing for it to do; a flag is re-armed only by a
+ * cell WRITE (sand_priv.h's latch_content_flags(), called from sand_set()
+ * and from a handful of reaction outcomes) - NEVER by ordinary liquid
+ * movement in sand_liquid.c. A board of nothing but water arms
+ * may_have_moisture once, at paint time, because water is KIND_LIQUID - and
+ * the very first reactions pass clears it straight back off, since nothing
+ * wet is touching anything that soaks. Nothing in plain liquid movement
+ * ever re-arms it after that. Dirt is what breaks the silence: a soil cell
+ * holding any MOISTURE keeps re-arming the flag on every write that touches
+ * it (sand_priv.h: `r->dries != 0 && CELL_MOISTURE(cell) != 0`), so once
+ * this scene is wet, the reactions pass keeps running every step for as
+ * long as any dirt anywhere is damp - which, measured, is the whole window
+ * below. Checks CELL_MOISTURE(), not the raw variant: a DRY cell's variant
+ * is a tone, not moisture (material.h's own comment on soil's state
+ * split), so testing the whole nibble would misclassify most dry cells as
+ * wet.
  *
  * EQUAL, AND MIXED DOWN TO ONE CELL. Sand and dirt are painted as a
  * single-cell checkerboard - material = (x + y) & 1 - rather than as two
@@ -1426,20 +1423,13 @@ static void test_the_boiler_scene_keeps_boiling_across_the_window(void)
  * stable a floor as the other builders' solid blocks above - 12,420 cells
  * of each, verified by the host test below.
  *
- * WHY THE WATER IS PAINTED RESTING DIRECTLY ON THE EARTH, WITH NO GAP.
- * The obvious way to write "drop water over them" is to leave headroom
- * above the bed and let it fall - and an early draft of this scene did
- * exactly that, with a ten-row gap between the water and the earth's
- * surface. It measured nothing at all: see the may_have_moisture
- * reasoning above - the flag is armed once, at paint time, and with a
- * gap to fall through first it is cleared again by the very first
- * reactions pass, ten-odd steps before the water actually reaches the
- * earth, and nothing in ordinary liquid movement ever re-arms it after
- * that. Four hundred steps of that draft produced not one wet dirt cell.
- * Painting the water already flush against the earth's surface keeps
- * real contact present from step one, while the flag is still armed from
- * painting it, so the very first reactions pass finds moisture and keeps
- * the flag alive for the ones that follow.
+ * WHY THE WATER IS PAINTED RESTING DIRECTLY ON THE EARTH, WITH NO GAP: a
+ * gap for the water to fall through first would let the first reactions
+ * pass clear may_have_moisture (see above) before contact ever happens,
+ * and nothing in ordinary liquid movement re-arms it afterward - a
+ * ten-row gap measured zero wet dirt cells across four hundred steps.
+ * Painting it flush keeps real contact, and the still-armed flag, present
+ * from step one.
  *
  * NOT A FULL-WIDTH SLAB, EITHER. A slab already spanning the whole 184
  * columns at a uniform depth is already at rest - flat on a flat floor,
@@ -1646,10 +1636,9 @@ static void wet_earth_scan(const sand_t *s, int *water_mass, int *dirt_count,
 }
 
 /* The scene above really does keep percolating for the whole measured
- * window, checked with counters taken MID-FLIGHT rather than on the
- * freshly built scene - enumerating what a scene is BUILT from is not the
- * same as what it CONTAINS once running, the round-16 finding that let 300
- * metal cells hide inside an earlier benchmark unnoticed.
+ * window, checked with counters taken MID-FLIGHT: enumerating what a scene
+ * is BUILT from is not what it CONTAINS once running (build-time counts
+ * once hid 300 stray metal cells in another benchmark).
  *
  * 35 SETTLE STEPS, not the 20-30 the boiler and lava stress scenes use.
  * The number here is not a "let it get going" allowance in the usual
@@ -1683,21 +1672,11 @@ static void wet_earth_scan(const sand_t *s, int *water_mass, int *dirt_count,
  * measured value, the same margin the rest of this file's coverage
  * assertions use.
  *
- * DIRT GAINED PER QUARTER moved when PART 2 of the roots-and-percolation
- * change split percolation out of `spread` into its own, deliberately
- * slower SOIL_PERCOLATE_CHANCE (sand_reactions.c) - sand converting to
- * dirt BELOW a wet cell is exactly the branch that constant now governs,
- * and lateral diffusion (still at the old, unchanged rate) only ever
- * carried part of this scene's total. Re-measured on this scene's own
- * fixed seed (53u - not the three the water-mass and moisture figures
- * above were originally taken across): 48, 51, 31, 54 per quarter. Still
- * nonzero every quarter - conversion has not stalled, it is simply
- * slower, which is the entire point of PART 2 - so the honest fix is a
- * lower floor, not a faster constant that would undo the change this test
- * exists to guard downstream of. 20, at the same roughly-half-of-worst-
- * case margin the other two floors use against the new worst quarter
- * (31), rather than left at the old 50 to keep this scene "passing"
- * through a regression that was never a regression. */
+ * DIRT GAINED PER QUARTER measures sand converting to dirt below a wet
+ * cell, gated at SOIL_PERCOLATE_CHANCE (sand_reactions.c), deliberately
+ * slower than lateral diffusion's own rate. Measured on this scene's fixed
+ * seed (53u): 48, 51, 31, 54 per quarter - nonzero every quarter, so the
+ * floor is 20, the usual roughly-half-of-worst-quarter margin against 31. */
 static void test_the_wet_earth_scene_keeps_percolating_across_the_window(void)
 {
     uint8_t *big    = malloc(REAL_W * REAL_H);
@@ -1839,34 +1818,14 @@ static void test_the_wet_earth_scene_keeps_percolating_across_the_window(void)
 
 /* --- water over lava: a continuous pour onto a sealed pool --------------
  *
- * REPLACES the vent-spam scene that used to occupy this section (bd
- * esp32c6-0f2 removed the vent machinery it measured; asked for
- * 2026-09-02, "we would just need to rebuild the vent scene it's simple,
- * water over lava, and re-peg the performance"). Its replacement -
- * covered lava converting to stone and bursting (bd esp32c6-mqt) - has no
- * mechanism left anywhere near as expensive as the vent scan this scene
- * used to hold open: one roll per covered lava cell per step, at odds of
- * roughly 1 in 256, with a 3-neighbour cover_mask() walk only after the
- * roll passes. A "burst spam" scene built the same way (many cells
- * forced-covered, chance pinned to maximum) would measure a real cost,
- * but not a REPRESENTATIVE one - production never pins the chance, and
- * the walk it is paying for is cheap. This scene instead measures the
- * ordinary, sustained thing a player actually does: pour water onto
- * lava. That single act chains through three separate reactions -
- * quench (direct water-lava contact converting to stone),
- * cool_off_chain() (that conversion's own cost paid outward into
- * neighbouring lava, sand_reactions.c), and the burst gate (once enough
- * of a stone crust has formed over what's left) - so a regression in any
- * of the three shows up here, not only in its own narrower correctness
- * test.
+ * A pour, not a synthetic max-chance stress scene: production never pins
+ * the burst-gate chance, so forcing it would cost more but not be
+ * representative. Chains quench, cool_off_chain() (sand_reactions.c) and
+ * the burst gate, so a regression in any shows up here.
  *
- * DO NOT compare this row's numbers against the old vent-spam capture
- * that used to sit here. This is a different scene measuring a different
- * mechanism; the old figure describes a machinery that no longer exists,
- * not a slower or faster version of what replaced it. See test_the_
- * water_over_lava_scene_fits_in_the_frame_budget's own comment (below,
- * beside the other frame-budget tests) for the first-capture convention
- * this file already has for exactly this situation. */
+ * DO NOT compare these numbers to an older capture under this name: a
+ * removed vent-spam mechanism (bd esp32c6-0f2) measured a different,
+ * costlier scene here. */
 
 /* Half the grid lava, half water, in direct contact along one full-width
  * seam - not vent-spam's many small sealed pockets, because nothing here

@@ -1,10 +1,10 @@
-/*=============================================================================
+/*
  * Portable suite: the falling-sand automaton - 2D block locality and scatter.
  *
  * Split out of suite_sand.c (bd esp32c6 test-suite-refactor), which had grown
  * past 32,000 lines across 500+ tests. Shared fixtures and assertion helpers
  * live in suite_sand_common.{c,h} - see that header.
- *===========================================================================*/
+ */
 #include <math.h>   /* not every file in the split still needs atan2()/M_PI,
                      * but every file inherited suite_sand.c's own include
                      * block rather than being pruned by hand, to keep the
@@ -30,43 +30,26 @@
 
 /* --- 2D block locality -----------------------------------------------------
  *
- * Sleeping used to be row-shaped: one settled bit per whole row, so a
- * resting region only stayed asleep if the ENTIRE row it sat in was quiet.
- * These tests exercise what that shape could not: genuine locality in both
- * directions, not just in y, and regardless of which way gravity points -
- * the specific case measured on real hardware (a pour keeping a whole row
- * awake, even where most of it was long settled) and the specific reason a
- * row-shaped scheme cannot fix it even in principle (wake propagation only
- * ever reached vertically, which stops meaning much once gravity tilts
- * towards horizontal). A grid of its own: 3x3 SAND_BLOCK_W x SAND_BLOCK_H
- * blocks, enough room for "far apart" to mean something.
- *
- * Capped rather than a bare SAND_BLOCK_W/H*3, and malloc'd per test rather
- * than `static`: this file is compiled into the device build too, where a
- * `static` array is permanent BSS for the whole boot, not just while a
- * test is running. A block-size tuning experiment (SAND_BLOCK_H=64) once
- * grew a `static loc_cells` from 2304 to 9216 bytes that way, and the
- * already-tight device heap (the framebuffer alone claims 322 of ~424 KiB)
- * could not spare it - not just failing a test, but leaving less heap for
- * the REST of that same boot, including the real sand app a user might
- * open afterwards, long after the self-test suite had finished with it.
- * Freed at the end of every test that mallocs it, same as the existing
- * frame-budget tests below already do - the cap on top is extra headroom
- * for block sizes well past anything sane to ship, not the primary fix.
- *
- * The cap can't be a flat 128 independent of the block size, though:
- * test_a_block_wakes_when_disturbed_diagonally() plants its grain at the
- * last row of block-row 0 and boxes it in two rows further down (gy + 2,
- * gy = SAND_BLOCK_H - 1), which needs LOC_H >= SAND_BLOCK_H + 2 to even
- * exist on the grid. A flat 128 cap silently clipped that room away once
- * SAND_BLOCK_H passed ~42 (128/3), and sand_set() on an out-of-range cell
- * is a silent no-op (see sand.c), so the containing stones never landed
- * and the test failed on an assertion that had nothing to do with the
- * simulation. Same reasoning applies to LOC_W for the gx + 1 stone in that
- * same test. So the cap floats: never below what that test's geometry
- * needs, 128 otherwise. */
+ * Sleeping was row-shaped: one settled bit per whole row, so an entire
+ * row had to be quiet before any of it slept. These tests exercise genuine
+ * 2D locality instead, regardless of which way gravity points - the
+ * specific case measured on real hardware (a pour keeping a whole row
+ * awake, most of it long settled) that a row-shaped scheme can't fix even
+ * in principle (wake propagation only ever reached vertically). A
+ * 3x3-block grid gives "far apart" room to mean something. */
 #define LOC_W_CAP (((SAND_BLOCK_W + 2) > 128) ? (SAND_BLOCK_W + 2) : 128)
+/* Capped, and malloc'd per test rather than `static`: this file also
+ * compiles into the device build, where a `static` array is permanent BSS
+ * for the whole boot. A block-size tuning experiment (SAND_BLOCK_H=64) once
+ * grew a `static loc_cells` from 2304 to 9216 bytes, and the already-tight
+ * device heap (framebuffer alone claims 322 of ~424 KiB) could not spare it
+ * for the rest of that boot. */
 #define LOC_H_CAP (((SAND_BLOCK_H + 2) > 128) ? (SAND_BLOCK_H + 2) : 128)
+/* The cap can't be a flat 128 independent of block size:
+ * test_a_block_wakes_when_disturbed_diagonally() needs LOC_H >=
+ * SAND_BLOCK_H + 2 to exist on the grid at all, and sand_set() on an
+ * out-of-range cell is a silent no-op, so a flat cap below that would fail
+ * the test on unrelated grounds once SAND_BLOCK_H passed ~42. */
 #define LOC_W (((SAND_BLOCK_W * 3) < LOC_W_CAP) ? (SAND_BLOCK_W * 3) : LOC_W_CAP)
 #define LOC_H (((SAND_BLOCK_H * 3) < LOC_H_CAP) ? (SAND_BLOCK_H * 3) : LOC_H_CAP)
 #define LOC_BLOCK_COLS ((LOC_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
@@ -106,14 +89,13 @@ static void test_two_separate_active_spots_in_the_same_block_row_do_not_wake_eac
         sand_step(&fx.loc, 0, 1000, 0);
     }
 
-    /* Heap, not a stack array: at the shipped SAND_BLOCK_W (16) this was a
+    /* Heap, not a stack array: at the shipped SAND_BLOCK_W (16) this is a
      * harmless 2 KB, but it scales with the tunable (see loc_fixture()'s
      * own comment on SAND_BLOCK_W being worth retuning) and the device's
-     * main task stack is only 3.5 KB total (CONFIG_ESP_MAIN_TASK_STACK_SIZE)
-     * - a wider block size alone was enough to blow it, with a real
+     * main task stack is only 3.5 KB total (CONFIG_ESP_MAIN_TASK_STACK_
+     * SIZE) - a wider block size alone is enough to blow it, with a real
      * stack-protection panic on device that a host run cannot reproduce
-     * (the host stack is megabytes). Found via exactly that: a block-size
-     * tuning sweep this session hit it at SAND_BLOCK_W=32. */
+     * (the host stack is megabytes). */
     uint8_t *left_before = malloc((size_t)SAND_BLOCK_W * LOC_H);
     TEST_ASSERT_NOT_NULL(left_before);
     for (int y = 0; y < LOC_H; y++) {
@@ -271,24 +253,14 @@ static void test_sideways_tilt_wakes_only_the_disturbed_column(void)
         "too, not only in y");
 }
 
-/* A basin wide enough to span several block-columns, so water poured in at
- * one end and the far wall it must reach are genuinely in different
- * blocks - the direct regression guard for equalise_one_row()'s touched-x
- * range accumulation (see the comment there): getting that range wrong by
- * under-waking would show up here as water that stops levelling partway
- * across.
- *
- * Both the pool and the water source it's fed from scale with SAND_BLOCK_W,
- * not just its width. A single 1-cell-wide column tall enough for the
- * default 16-wide block was tried first and does NOT generalise: at
- * SAND_BLOCK_W=32 (so a pool twice as wide) it still fails to reach the far
- * wall even with sleeping disabled entirely - that is insufficient water
- * mass to cross a wider floor within SAND_LIQUID_SIGHT's per-step reach
- * (see its comment), not a wake/sleep bug. So the source widens along with
- * the pool (POOL_WATER_COLS) as well as filling whatever vertical room the
- * pool has (POOL_WATER_H), instead of a fixed height. POOL_H itself grows
- * with POOL_W too, keeping the basin's proportions - and the vertical room
- * available to the source - the same at every block size. */
+/* A basin wide enough to span several block-columns, so the pour and far
+ * wall are genuinely in different blocks - the regression guard for
+ * equalise_one_row()'s touched-x range accumulation. Both the pool and
+ * its water source scale with SAND_BLOCK_W: a fixed-width source can't
+ * supply enough water mass to cross a wider floor within
+ * SAND_LIQUID_SIGHT's per-step reach. The source widens with the pool
+ * and fills its vertical room; POOL_H grows with POOL_W too, keeping
+ * proportions constant. */
 #define POOL_W (SAND_BLOCK_W * 2)
 #define POOL_H (POOL_W / 2)
 #define POOL_WALL_ROWS 3
@@ -357,46 +329,23 @@ static void test_liquid_cross_flow_wakes_only_the_blocks_it_touches_by_range(voi
 }
 
 /* The one case where a move of something that is NOT a liquid still
- * relocates liquid: move_to() (sand_priv.h) is a SWAP, so sand entering a
- * water cell sends that water back UP into the row the sand came from - a
- * row that had no liquid in it at all a moment earlier. Whatever machinery
- * decides which rows the cross-flow pass looks at has to cope with liquid
- * arriving that way, and this is the test that says so.
- *
- * It was written against a specific such mechanism, ROW_NO_LIQUID - a
- * per-row "proved dry" cache that skipped rows, and that was cleared by
- * every move of every material. That cache has since been deleted outright
- * for costing more than it saved (see docs/sand/Performance-Tuning-
- * Attempts.md's ninth attempt), and cross-flow now walks every row every
- * step, which passes this trivially. The test stays anyway: it was the
- * derivation that killed the cache's last proposed narrowing, and anything
- * that tries to skip rows again will need exactly this scenario to be
- * checked against. Verified to genuinely catch the failure when it was
- * written - with the clear suppressed, it failed with the water frozen in
- * the single cell the swap put it in.
- *
- * No test covered it before: the sleeping/liquid tests above use water
- * alone, and the sand-through-water tests (test_sand_sinks_through_water
- * and friends) run with sleeping off entirely.
- *
- * The setup is built so that ONLY cross-flow can spread the displaced
- * water, which is what makes the assertion sharp. The pool is full
- * (MASS_MAX), so once the water is pushed up it has no room below it and
- * no room down either slope - move_liquid_grain() inside the main sweep can
- * do nothing with it. If the row it landed in is examined, cross-flow
- * halves it into a neighbour on the very next pass and the row holds two
- * water cells; if that row is skipped, it holds exactly the one cell the
- * swap put there, for ever. The sand is dropped from the top row rather
- * than placed on the surface on purpose: an external sand_set() reports its
- * own rows, so a grain placed directly above the pool would itself announce
- * the landing row and mask the case under test. Falling from three rows up
- * makes the swap the only thing that reports it. */
+ * relocates liquid: move_to() is a SWAP, so sand entering water sends that
+ * water UP into a row that had none a moment earlier. Written against
+ * ROW_NO_LIQUID, a per-row dry cache since deleted for costing more than it
+ * saved - kept anyway, since any future row-skip optimization needs exactly
+ * this scenario checked against it. */
 static void test_sand_pushing_water_up_wakes_the_dry_row_it_lands_in(void)
 {
     fixture();
     sand_enable_sleeping(&s, sleep_blocks);
     sand_clear(&s);
 
+    /* The setup is built so ONLY cross-flow can spread the displaced water:
+     * the pool is full (MASS_MAX), so once pushed up it has nowhere below or
+     * down either slope for move_liquid_grain() to use. Dropped from three
+     * rows up rather than placed on the surface, since an external
+     * sand_set() would itself announce the landing row and mask the case
+     * under test. */
     /* A full pool, two rows deep. Full matters: nothing in it has anywhere
      * to flow, so it settles and every row above it is genuinely dry. */
     for (int y = H - 2; y < H; y++) {
@@ -496,21 +445,14 @@ static void test_water_falling_into_the_next_block_down_still_spreads(void)
         "the grid at all");
 }
 
-/* The cross-flow block skip proves a whole block cannot flow and then does not
- * walk it. Its rays reach ONE CELL PAST the block on each side, so the span it
- * checks has to be wider than the block it guards - check only [lo, hi) and a
- * block of full water reads as settled while the empty cell just outside it is
- * exactly where the water was about to go.
- *
- * A SEALED ONE-CELL CHANNEL is the fixture, and the shape is the whole point:
- * the main sweep's two slides are diagonal-DOWN, so an open-topped column
- * spreads sideways through the sweep whatever cross-flow does - an earlier
- * version of this test passed with the margin deleted for exactly that reason.
- * Stone directly above and below leaves no diagonal to take, so the only thing
- * that can move this water is the pass under test.
- *
- * Verified to fail before it was kept: with the margin dropped the water never
- * leaves the first block column and this reports 0. */
+/* The cross-flow block skip proves a block cannot flow and does not walk
+ * it. Rays reach one cell past the block each side, so the span checked
+ * is wider than the block - [lo, hi) alone reads a full block as settled
+ * while the cell just outside is where the water was about to go. A
+ * sealed one-cell channel is the fixture: the main sweep's diagonal-down
+ * slides would spread an open-topped column sideways regardless of
+ * cross-flow, but stone above/below leaves no diagonal, so only this
+ * pass can move it. */
 #define XSPAN_W (SAND_BLOCK_W * 2)
 #define XSPAN_H 80
 #define XSPAN_COLS ((XSPAN_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)

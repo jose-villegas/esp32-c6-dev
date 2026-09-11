@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * gfx_probe_stub - link-only stand-ins for the handful of gfx/ and app_sand.c
  * symbols suite_sand.c's DEVICE_BUILD blocks reference outside the frame-
  * budget scenes this probe actually runs (the present-cost section, and the
@@ -12,7 +12,7 @@
  * the whole file, not just the SAND_HOST_PROBE scenes) whenever a new
  * DEVICE_BUILD symbol shows up unresolved at link time - don't assume this
  * file is still complete just because it built last round.
- *===========================================================================*/
+ */
 #include <stdbool.h>
 #include <stddef.h>
 

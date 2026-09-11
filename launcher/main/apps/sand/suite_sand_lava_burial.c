@@ -1,11 +1,11 @@
-/*=============================================================================
+/*
  * Portable suite: the falling-sand automaton - lava buried in stone - burial,
  * venting, and bursting.
  *
  * Split out of suite_sand.c (bd esp32c6 test-suite-refactor), which had grown
  * past 32,000 lines across 500+ tests. Shared fixtures and assertion helpers
  * live in suite_sand_common.{c,h} - see that header.
- *===========================================================================*/
+ */
 #include <math.h>   /* not every file in the split still needs atan2()/M_PI,
                      * but every file inherited suite_sand.c's own include
                      * block rather than being pruned by hand, to keep the
@@ -70,30 +70,14 @@ static void test_lava_buried_in_stone_is_not_deleted(void)
         "burning anything");
 }
 
-/* bd esp32c6-mqt: burial no longer means "lasts forever" either. A lava
- * cell with a complete gravity-relative lid over it (covered_at(),
- * sand_priv.h - bd esp32c6-a2j) gets a
- * tiny per-step chance to convert to MAT_STONE and burst - the chosen
- * replacement for the vent machinery (bd esp32c6-0f2 removes that
- * separately, later) and the mechanism that reopens a sealed pool's crust
- * so a sustained pour can keep reaching lava (see cool_off_chain()'s own
- * comment, sand_reactions.c).
- *
- * Exactly the same fully-walled scene test_lava_buried_in_stone_is_not_
- * deleted uses, this time with the burst chance pinned to its maximum
- * instead of pinned off - every one of the 8 surrounding cells is stone,
- * so all three lid cells are covered regardless of which way is down.
- *
- * PINS THE ONE BEHAVIOUR THE BRIEF FOR THIS CHANGE CALLS OUT BY NAME:
- * sand_explode() fills a core of radius `radius / SAND_EXPLODE_CORE_
- * DIVISOR` with fire FIRST, unconditionally, before it queues a single
- * flight entry (sand.h, SAND_EXPLODE_CORE_DIVISOR's own comment) - at
- * SAND_LAVA_BURST_RADIUS(8) and divisor 5 that core radius is 1, so the
- * MAT_STONE this feature just wrote at the centre is immediately
- * overwritten by fresh fire. Asserted directly, not assumed - the same
- * discipline test_a_confined_gas_pocket_bursts_instead_of_just_catching
- * already applies to its own centre cell for gas's identical sand_
- * explode() core fill. */
+/* bd esp32c6-mqt: a lava cell with a complete gravity-relative lid
+ * (covered_at(), sand_priv.h) gets a tiny per-step chance to convert to
+ * MAT_STONE and burst, reopening a sealed pool's crust so a pour keeps
+ * reaching lava (cool_off_chain(), sand_reactions.c). sand_explode() fills
+ * a core (radius / SAND_EXPLODE_CORE_DIVISOR) with fire FIRST, before any
+ * flight entry - at radius 8 and divisor 5 that core is 1 cell, so the
+ * MAT_STONE just written at the centre gets overwritten by fire, asserted
+ * directly. */
 static void test_buried_lava_bursts_into_stone_and_fire(void)
 {
     fixture();
@@ -348,17 +332,13 @@ static void test_cover_primitive_matches_the_exhaustive_shape_table(void)
     }
 }
 
-/* THE HEADLINE CASE - bd esp32c6-a2j. An INTERIOR cell of a lava pool
- * wider than one cell and more than one cell deep, sealed only by a
- * crust directly above it, must still burst - the case cover_count()'s
- * cardinal rule could never fire for at all (see this file's own header
- * comment and bd esp32c6-a2j's own notes for why): the tested cell's
- * left, right AND below neighbours are all more lava - KIND_LIQUID,
- * which neighbor_smothers() never counts - so under the OLD screen-fixed
- * cardinal rule only "up" ever counted, one of the three it needed.
- * Under THIS rule up-left, up and up-right are the whole question, and
- * all three are crust - a complete lid, regardless of what the pool does
- * below or beside the tested cell. */
+/* THE HEADLINE CASE - bd esp32c6-a2j: an INTERIOR cell of a lava pool
+ * wider than one cell and deeper than one cell, sealed only by a crust
+ * directly above it, must still burst. Its left, right and below
+ * neighbours are all more lava (KIND_LIQUID, which neighbor_smothers()
+ * never counts), so only the gravity-relative up-left/up/up-right lid
+ * (this file's header comment) can cover it - all three crust, regardless
+ * of what the pool does below or beside the tested cell. */
 static void test_a_wide_pool_under_a_crust_bursts(void)
 {
     fixture();

@@ -1,10 +1,10 @@
-/*=============================================================================
+/*
  * The suite registry, shared by both runners.
  *
  * Deliberately free of Unity and of anything platform-specific: it is a sorted
  * list of function pointers filled in before main(), so it links identically
  * into the host runner and the firmware.
- *===========================================================================*/
+ */
 
 #include "suites.h"
 

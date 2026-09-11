@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * counters_scene_main - the "current probe support file" compare_counters.py
  * (this directory) carries unmodified into every scratch tree it extracts
  * with `git archive` (bd esp32c6-8zx).
@@ -28,7 +28,7 @@
  * Deliberately not linked against unity/timing/suites.c - none of that
  * exists to serve this file's one job, which is counting, not asserting or
  * timing.
- *===========================================================================*/
+ */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>

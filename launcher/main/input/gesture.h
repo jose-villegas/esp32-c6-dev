@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * gesture - recognising touch gestures from input state.
  *
  * Pure logic, deliberately free of hardware and of any screen it might be
@@ -10,7 +10,7 @@
  * which edge the shell currently wants - that mapping is a piece of
  * shell-integration knowledge that belongs in main.c, not here. All this
  * module knows is "an edge", expressed as one of the four values below.
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stdbool.h>

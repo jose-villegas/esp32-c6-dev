@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * coverage_scene_main - host driver for reaction_coverage.py.
  *
  * A twin of probe_main.c (same SCENES table, same suite_run_test_timed()
@@ -29,7 +29,7 @@
  *   coverage_probe SCENE [SCENE...] run exactly the named scenes, in order,
  *                                   then print the fired-slot report once
  *                                   for the union of everything just run
- *===========================================================================*/
+ */
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>

@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * app_diagnostics - shows the POST report on demand, plus a second page of
  * developer-only toggles.
  *
@@ -28,7 +28,7 @@
  * one-off control that reads a button directly. Any future developer
  * toggle belongs on this same page as another mu_checkbox() row, not as
  * its own bespoke screen.
- *===========================================================================*/
+ */
 
 #include <stdio.h>
 
@@ -206,11 +206,9 @@ static void diagnostics_frame(uint32_t dt_ms, const input_t *input)
      * opens - never from inside mu_button()'s own if-block in
      * draw_toggles_page(). selftest_run() runs suite_ui.c, whose
      * fixture() calls ui_init()/mu_init() on the same ui_context()
-     * singleton every window in this shell draws through. Running it
-     * synchronously from mu_button()'s if-block used to do that
-     * mid-frame, resetting state ui_end() further down still relied on
-     * - reading like a dead touchscreen until main.c's next periodic
-     * resync. */
+     * singleton every window in this shell draws through; running it
+     * synchronously mid-frame would stomp state ui_end() further down
+     * still relies on. */
     if (selftest_pending) {
         selftest_pending = false;
         selftest_failures = selftest_run();

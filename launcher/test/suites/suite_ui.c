@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Device suite: the UI layer's canvas model.
  *
  * The claim under test is the one an app relies on: a UI that has not changed
@@ -12,7 +12,7 @@
  * Windows here are deliberately non-overlapping. Overlapping ones must repaint
  * together (painter's order), which is correct but would hide the independence
  * these tests exist to prove.
- *===========================================================================*/
+ */
 
 #include "unity.h"
 #include "suites.h"
@@ -131,7 +131,7 @@ static void test_invalidate_forces_a_repaint(void)
         "this UI - returning to the launcher after an app has been running");
 }
 
-/*---------------------------------------------------------------------------
+/*
  * ui_layout_generation()
  *
  * Device-only for the same reason the rest of this suite is: the counter
@@ -143,7 +143,7 @@ static void test_invalidate_forces_a_repaint(void)
  * generation reset to its defined starting value - these tests read deltas
  * off that rather than hard-coding the starting value itself, so they do
  * not need to know or care what it is.
- *-------------------------------------------------------------------------*/
+ */
 
 static void test_layout_generation_unchanged_by_a_repeated_equal_transform(void)
 {
@@ -192,28 +192,15 @@ static void test_layout_generation_counts_a_sequence_of_genuine_changes(void)
         "exactly three times, not four and not fewer");
 }
 
-/*---------------------------------------------------------------------------
+/*
  * ui_begin_screen()
  *
- * The bug this reproduces: mu_begin_window_ex() only trusts its rect
- * argument the FIRST time a given window (by title) is ever opened -
- * `if (cnt->rect.w == 0) { cnt->rect = rect; }` in microui.c - and remembers
- * it forever after, which is correct for a desktop window manager and wrong
- * here, where every full-screen window in this shell is meant to always BE
- * (0, 0, ui_width(), ui_height()) for the frame currently being built. Once
- * ui_width()/ui_height() can change at runtime (a quarter-turn transform),
- * a window opened once in one orientation and revisited in a different,
- * larger one keeps the SMALLER, stale rect - which is exactly why
- * repaint_marked_canvases() in ui.c then clears too little of the screen
- * and leaves a previous app's pixels sitting in whatever the old rect
- * didn't cover.
- *
- * Device-only for the same reason the rest of this suite is: it needs a real
- * mu_Container living in the real container pool across multiple frames and
- * multiple ui_set_transform() calls, which is exactly the kind of stateful,
- * multi-frame behaviour suite_ui_transform.c's pure ui_transform_rect() math
- * is not shaped to exercise.
- *-------------------------------------------------------------------------*/
+ * mu_begin_window_ex() trusts a rect only on the FIRST open of its title,
+ * but a full-screen window here must always BE (0, 0, ui_width(),
+ * ui_height()) for this frame. Those change at runtime on a quarter-turn,
+ * so a revisit in a larger orientation would keep the stale rect.
+ * Device-only: needs a live mu_Container across frames.
+ */
 
 /* Opens and immediately closes one full-screen window via ui_begin_screen(),
  * simulating one visit to it in whatever orientation `quarter` selects
@@ -268,22 +255,14 @@ static void test_ui_begin_screen_corrects_a_stale_rect_from_a_prior_orientation(
         "of a rotated screen uncleared");
 }
 
-/*---------------------------------------------------------------------------
+/*
  * repaint_marked_canvases() under an odd quarter
  *
- * A second, independent bug in the same neighbourhood as the stale-rect one
- * above, and easy to mistake for the same fix having missed a spot: even
- * with cnt->rect correctly tracking ui_width()/ui_height() every frame (see
- * ui_begin_screen() above), the background clear in repaint_marked_canvases()
- * used to pass that LOGICAL rect straight to gfx_fill_rect() with no
- * transform - unlike every command draw_command() paints, which all go
- * through ui_transform_rect() first. Under an odd quarter (Landscape or
- * Landscape upside down, where GFX_WIDTH != GFX_HEIGHT makes the logical and
- * physical canvases different shapes, not just different orientations) an
- * unrotated (0, 0, 448, 368) clipped onto a 368x448 physical framebuffer
- * covers only its first 368 of 448 rows. The remaining 80 physical rows
- * never got cleared - reported on hardware as pieces of the previous screen
- * stuck in place after rotating from Portrait to Landscape. */
+ * The background clear must transform its LOGICAL rect before
+ * gfx_fill_rect(). Under an odd quarter (GFX_WIDTH != GFX_HEIGHT), an
+ * untransformed rect covers only 368 of the physical framebuffer's 448
+ * rows.
+ */
 static void test_repaint_clears_every_physical_row_under_an_odd_quarter(void)
 {
     fixture();

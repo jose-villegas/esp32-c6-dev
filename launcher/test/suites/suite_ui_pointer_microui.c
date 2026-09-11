@@ -1,13 +1,10 @@
-/*=============================================================================
+/*
  * Portable suite: ui_pointer driving REAL microui.
  *
- * WHY THIS EXISTS, AND WHY suite_ui_pointer.c WAS NOT ENOUGH
- *
- * That suite asserts the event LIST ui_pointer_step() produces. It was green
- * for a build in which no button in the shell could be pressed at all: every
- * app became unreachable from the launcher, because the events were fed to
- * microui in an order microui cannot resolve a click from. A list of events
- * is not a click; only microui decides that.
+ * suite_ui_pointer.c only asserts the event LIST ui_pointer_step()
+ * produces - a list of events matching does not mean microui can resolve
+ * a click from them; only microui itself decides that. This suite links
+ * real microui.c to prove it.
  *
  * The mechanism, so nobody re-derives it from scratch: mu_mouse_over() needs
  * in_hover_root(), and mu_begin() copies hover_root from the PREVIOUS frame's
@@ -20,7 +17,7 @@
  * microui.c is plain C over stdio/stdlib/string, so it links here unchanged -
  * this is the only suite that links it, and the reason the "nothing here
  * links microui.c" note in run_tests.sh no longer holds.
- *===========================================================================*/
+ */
 
 #include <stdlib.h>
 #include <string.h>
@@ -145,9 +142,7 @@ static int taps_counted(int held_frames)
     return submits;
 }
 
-/*---------------------------------------------------------------------------
- * The regression this suite was written for.
- *-------------------------------------------------------------------------*/
+/* The regression this suite was written for. */
 
 static void test_a_tap_submits_the_button_underneath_it(void)
 {
@@ -170,20 +165,14 @@ static void test_holding_does_not_resubmit(void)
     TEST_ASSERT_EQUAL_INT(1, taps_counted(40));
 }
 
-/* A press and release arriving in the SAME frame cannot click anything, and
- * that is a property of microui rather than a bug here: hover_root only
- * exists from the frame after the pointer first moves somewhere, so the
- * very first frame at a position can never resolve a control. The old
- * same-frame-release policy had this hole too - it is not something the
- * hover frames introduced.
- *
- * Pinned rather than left undiscovered: ui_pointer_step() still emits the
- * full move/down/up (suite_ui_pointer.c asserts that), so nothing is left
- * dangling, the click is simply not resolvable. touch_fsm only produces
- * this if a whole TOUCH_RELEASE_QUIET_US (60ms) of silence fits inside one
- * frame, so it needs a frame longer than the release debounce. If it ever
- * shows up in practice, the fix is to stage the tap across the hover frames
- * and emit the UP after the DOWN rather than with it. */
+/* A press and release arriving in the SAME frame cannot click anything - a
+ * property of microui, not a bug here: hover_root does not exist until the
+ * frame after the pointer first moves somewhere, so the first frame at a
+ * position can never resolve a control. Pinned rather than left
+ * undiscovered: ui_pointer_step() still emits the full move/down/up
+ * (suite_ui_pointer.c asserts that) - the click is simply not resolvable,
+ * and only touch_fsm's TOUCH_RELEASE_QUIET_US (60ms) makes it reachable at
+ * all. */
 static void test_a_one_frame_tap_cannot_resolve_a_control(void)
 {
     fixture();
@@ -211,9 +200,7 @@ static void test_a_tap_outside_the_button_submits_nothing(void)
     TEST_ASSERT_EQUAL_INT(0, submits);
 }
 
-/*---------------------------------------------------------------------------
- * The capability the held pointer exists for.
- *-------------------------------------------------------------------------*/
+/* The capability the held pointer exists for. */
 
 /* A slider needs mouse_down to persist ACROSS frames - microui only tracks
  * its value while (mouse_down | mouse_pressed) is set. This is what the

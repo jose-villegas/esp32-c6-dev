@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * buttons - the board's two physical buttons, for the shell and for apps.
  *
  * Sits beside touch.c as the other source of physical input. Apps never call
@@ -28,7 +28,8 @@
  * btn_pwroff_en, so both fire from the same hold: this module reports it as
  * `held` well before the PMU's own, longer power-off threshold is ever
  * reached (1-2.5 s long-press vs 4-10 s power-off - see the levels
- * pmu_init() logs at boot for what this board actually has both set to). */
+ * pmu_init() logs at boot for what this board actually has both set to).
+ */
 #pragma once
 
 #include <stdbool.h>

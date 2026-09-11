@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * sand_reactions - fire chemistry: ignites fuel, spreads, is extinguished,
  * burns out.
  *
@@ -34,30 +34,26 @@
  *
  * Quenching (water touching a burning cell) produces MAT_STEAM at a cost
  * to the quenching liquid's own mass (pay_quench_cost()); simply running
- * out of life produces MAT_SMOKE instead. They were one material at
- * first: physically almost identical, but wrong on the SCREEN - a fire
- * burning out in mid-air, nowhere near water, puffing bright kettle-steam
- * reads as a bug to anyone who can see there was nothing there to boil.
- * The split is mostly a palette difference (cool/bright for steam,
+ * out of life produces MAT_SMOKE instead. Kept as two materials because a
+ * fire burning out in mid-air, nowhere near water, puffing bright
+ * kettle-steam reads as a bug to anyone who can see there was nothing there
+ * to boil. The split is mostly a palette difference (cool/bright for steam,
  * warm/dim for smoke).
  *
  * THE BOILER: fire never crosses stone directly - conduct_heat() conducts
  * heat through it instead, boiling a liquid or igniting fuel on the far
  * side, never creating fire in empty space, which is what keeps a sealed
- * box sealed. The alternative (a can_enter() special case letting fire
- * pass through) was rejected: it would leak fire through every sealed
- * stone container. Boiling happens at the heat source; the steam bubbles
- * out on its own through try_bubble() (sand_gas.c) - an earlier version
- * had to walk the pool upward and boil the LAST cell instead, back when
- * steam had no way to rise past the liquid above it, but that workaround
- * came back out once try_bubble() lifted the limitation it was dodging.
- * conduct_heat()'s own reach has to attenuate with thickness rather than
- * stop at one conductor cell: the pour brush cannot draw a wall one cell
- * thick, so a reach-of-one boiler was unbuildable on the device despite
- * reading as a clean rule in isolation. CONDUCT_REACH bounds the walk's
- * cost but must stay generous enough that attenuation, not the cap, is
- * what limits depth in any scene the brush can actually draw.
- *===========================================================================*/
+ * box sealed. Not a can_enter() special case letting fire pass through:
+ * that would leak fire through every sealed stone container. Boiling
+ * happens at the heat source; the steam bubbles out on its own through
+ * try_bubble() (sand_gas.c). conduct_heat()'s own reach has to attenuate
+ * with thickness rather than stop at one conductor cell: the pour brush
+ * cannot draw a wall one cell thick, so a reach-of-one boiler is
+ * unbuildable on the device despite reading as a clean rule in isolation.
+ * CONDUCT_REACH bounds the walk's cost but must stay generous enough that
+ * attenuation, not the cap, is what limits depth in any scene the brush can
+ * actually draw.
+ */
 
 #include "reaction_doc.h"
 #include "sand_priv.h"
@@ -1133,33 +1129,15 @@ emit_into_empty_neighbor(sand_t* s, int x, int y, int w, int h, uint8_t spec) {
 
 /* KIND_STATIC exempt; never moves, thus unaffected by gravity. */
 
-/* Flame goes UP, and up is wherever gravity is not - so this tries the cell
- * against gravity and the two either side of it, and nothing else. Never
- * sideways, never down.
+/* Tries the cell against gravity, then its two neighbours, never sideways
+ * or down. Not emit_into_empty_neighbor(): its screen-space order can put
+ * fire beside/beneath lava and breaks under tilt. Not straight-up-only:
+ * measured, 6% of rolls land vs 14% for this spread, costing the
+ * thermal-shock scene 59% of its fire (827/2000 cells); raising `flare`
+ * can't substitute - it sets a rate, not a density.
  *
- * WHY NOT emit_into_empty_neighbor(): that walks reaction_dirs in a fixed
- * SCREEN-space order, up-down-left-right, and takes the first empty cell it
- * finds. Two things go wrong. It falls through, so a lava cell with something
- * above it puts fire BESIDE or BENEATH itself. And its "up" is the screen's,
- * not the board's, so once the device is tilted the preferred direction is
- * sideways in world terms and once inverted it is downward. Every fire fixture
- * holds gravity vertical, which is why neither was visible.
- *
- * THREE CANDIDATES, NOT ONE: the cell against gravity, then the two either
- * side of it. Never sideways, never down.
- *
- * Straight-up-only is the tidier reading of "flame rises" and it is wrong.
- * Measured, it lands 6% of rolls against the old walk's 14%, and that costs
- * the thermal-shock scene 59% of its fire - 827 cells against 2000. Flame
- * blocked directly above does not stop, it curls around the obstruction, and
- * allowing that recovers the density structurally (12% land) instead of by
- * raising `flare`, which cannot do the job: raise it far enough and a lava
- * grain in free fall starts flaring and a brief touch of lava melts glass. It
- * sets a rate, not a density.
- *
- * Uses last_step, the dithered direction, not last_load - the same vector
- * try_flare() checks for "below" one line earlier, so the cell it refuses to
- * flare from and the cells it flares into stay consistent. */
+ * Uses last_step, not last_load, matching try_flare()'s "below" check one
+ * line earlier. */
 static inline bool
 emit_against_gravity(sand_t* s, int x, int y, int w, int h, uint8_t spec) {
     const int dx = s->last_step_dx, dy = s->last_step_dy;

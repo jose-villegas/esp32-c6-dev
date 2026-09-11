@@ -1,11 +1,11 @@
-/*=============================================================================
+/*
  * Portable suite: the falling-sand automaton - material appearance -
  * painting, stone/glass speckle, and cullet's colour cycle.
  *
  * Split out of suite_sand.c (bd esp32c6 test-suite-refactor), which had grown
  * past 32,000 lines across 500+ tests. Shared fixtures and assertion helpers
  * live in suite_sand_common.{c,h} - see that header.
- *===========================================================================*/
+ */
 #include <math.h>   /* not every file in the split still needs atan2()/M_PI,
                      * but every file inherited suite_sand.c's own include
                      * block rather than being pruned by hand, to keep the
@@ -30,19 +30,13 @@
 #include "util/intmath.h"
 #include "suite_sand_common.h"
 
-/* The brush and the setter must agree about what a cell implies.
- *
- * They did not, and the way they failed is the point. sand_set() and
- * try_spawn_one() each carried their own copy of the may_have_* latch
- * list, both with a comment noting the other one. A fifth flag was added
- * to one of them. Snow PLACED by sand_set() melted in water; snow PAINTED
- * with the brush never woke the reactions pass at all, so on a board with
- * no fire and no acid it sat in a pond forever and chilled nothing.
- *
- * Every test at the time used sand_set(), so every test passed and the
- * only way to find it was to draw snow into water by hand. This one walks
- * every material through both doors and compares what each one latched,
- * so a sixth flag cannot repeat it. */
+/* The brush and the setter must agree about what a cell implies:
+ * sand_set() and try_spawn_one() each carry their own copy of the
+ * may_have_* latch list, so a flag added to one and not the other leaves
+ * a material that behaves differently PAINTED than PLACED - snow PAINTED
+ * with the brush, for instance, could stop waking the reactions pass at
+ * all. Walks every material through both doors and compares what each
+ * one latched. */
 static void test_the_brush_and_the_setter_agree_about_every_material(void)
 {
     for (int m = 1; m < MAT_COUNT; m++) {
@@ -184,29 +178,13 @@ static void test_snow_melts_in_any_liquid(void)
     }
 }
 
-/* And what it melts INTO is water, whatever melted it.
- *
- * Snow is frozen water and turns back into water; it does not become
- * more of whatever it touched. That would be an exploit rather than a
- * flourish - acid is spent as it dissolves, so snow that melted into
- * acid would be a bucket that refills itself, and snow melting into oil
- * would be a fuel printer.
- *
- * Checked by whether water ever APPEARED across the window, not whether
- * it is still there at the very end. The acid direction in particular
- * is a busy scene by 600 steps: melted water can dilute into the acid
- * pool it landed on (see step_one_dissolver_cell()'s own comment,
- * sand_reactions.c), and once that pool's own steam can actually rise
- * and condense back into water the way it always should have (a real
- * bug this file's own place_cell()-bypass fix corrected - the vapour
- * used to sit frozen in place, unable to go anywhere), the scene has
- * more genuine give-and-take in it than it used to, not less. A single
- * end-of-window snapshot can land on a step where every last drop of
- * melted water has momentarily gone back into acid, which is a real
- * possible state of a healthy simulation, not evidence that melting
- * ever produced the wrong material - that only ever needs one sighting
- * to disprove, and this window is long enough to reliably catch it if
- * it were happening. */
+/* It melts INTO water, not more of whatever melted it - acid is spent as
+ * it dissolves, so melting into acid would refill it, and into oil would
+ * be a fuel printer. Checked by whether water ever APPEARED across the
+ * window, not whether it survives to the end: it can dilute back into
+ * the acid pool it landed on, so a snapshot can catch a moment where
+ * none is left - not evidence of a wrong material, which needs only one
+ * sighting to disprove. */
 static void test_melting_snow_makes_water_not_more_of_the_liquid(void)
 {
     static const uint8_t liquids[] = { MAT_OIL, MAT_ACID };
@@ -300,14 +278,10 @@ static void test_stone_heats_up_next_to_lava(void)
 /* Seals a single WATER cell at (4, 3) into a one-cell pocket, walled on
  * every side except the face touching the hot stone this test cares
  * about - stone at (3, 3), left open on purpose. Without this, water is
- * KIND_LIQUID and falls: a bare CELL_MAKE(MAT_WATER, ...) placed beside
- * the target drains away under gravity within the first step or two, and
- * the "wet" test only ever sees the target cell for that first step - the
- * rest of a long cooldown then runs at the plain DRY rate regardless of
- * SAND_WET_COOLING_FACTOR, which is indistinguishable from the feature
- * being absent (caught by this test itself: it failed exactly this way
- * on the first pass, both runs converging to the same step count, before
- * the pocket was added). */
+ * KIND_LIQUID and falls: it drains away under gravity within the first
+ * step or two, and the rest of a long cooldown runs at the plain DRY
+ * rate regardless of SAND_WET_COOLING_FACTOR, indistinguishable from the
+ * feature being absent. */
 static void seal_water_beside(int wx, int wy)
 {
     sand_set(&s, wx, wy, WATER);
@@ -617,10 +591,9 @@ static void test_glass_grain_is_quieter_than_stone(void)
 
 /* Stone's speckle comes from the cell's POSITION, not from its variant.
  *
- * Stone used to carry a random shade and a wall looked like rock because
- * of it. Spending the variant on temperature took that away; deriving the
- * shade from a per-cell hash instead puts it back without the variant
- * having to mean two things at once.
+ * The variant is spent on temperature, so the speckle that makes a wall
+ * read as rock has to come from somewhere else; a per-cell position hash
+ * supplies it without the variant having to mean two things at once.
  *
  * Both halves are asserted because both can fail on their own: a speckle
  * that does not vary is a flat slab again, and one that varies with
@@ -672,7 +645,7 @@ static void test_stone_speckles_by_position_at_every_temperature(void)
  * cullet/tone tests and the soil-tone test it was originally written for
  * need the same unpacking math. */
 
-/*=============================================================================
+/*
  * CULLET'S COLOUR CYCLE - each of the four reserved shades (SAND_CULLET_BASE
  * .. MATERIAL_VARIANTS - 1) is a STARTING POINT on a shared, slowly-advancing
  * 16-step colour cycle rather than a fixed colour of its own - see
@@ -685,7 +658,7 @@ static void test_stone_speckles_by_position_at_every_temperature(void)
  * it to 0 before returning, so none of them can depend on run order, and a
  * test run after this file finishes sees the same phase-0 rest look it would
  * have seen if none of these had run at all.
- *===========================================================================*/
+ */
 
 /* At rest (phase 0), the four cullet shades are four distinct tints, not one
  * colour repeated - the same claim test_each_material_is_painted_the_way_it_
@@ -868,19 +841,19 @@ static void test_cullet_stays_pale_at_every_phase(void)
     material_set_cullet_phase(0u);
 }
 
-/*=============================================================================
+/*
  * CULLET'S GLINT - the pale cycle above read as too white on the device, so
  * material_colours()'s MAT_SAND case now flashes a grain PURE WHITE instead
  * of its pale cycle colour, rarely (CULLET_GLINT_ONE_IN), for a different
  * few grains every phase step - a facet catching the light. See
  * CULLET_GLINT's and CULLET_GLINT_ONE_IN's own comments in material.c.
- *===========================================================================*/
+ */
 
 /* A glint is the brightest thing the panel can show, full white - not a
- * brighter tint of the grain's own colour, which was tried first and read
- * worse on the device. This searches hashes from 0 up, black-box, for the
- * first one that actually glints at shade 12 phase 0, rather than assuming
- * the roll formula's shape. */
+ * brighter tint of the grain's own colour, which reads worse on the
+ * device. This searches hashes from 0 up, black-box, for the first one
+ * that actually glints at shade 12 phase 0, rather than assuming the
+ * roll formula's shape. */
 static void test_a_cullet_glint_is_pure_white(void)
 {
     material_set_cullet_phase(0u);

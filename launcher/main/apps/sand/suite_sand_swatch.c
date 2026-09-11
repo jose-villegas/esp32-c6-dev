@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Portable suite: sand_swatch - the deterministic (col, row) -> cell mapping
  * behind the brush screen's material swatch.
  *
@@ -6,7 +6,7 @@
  * accident: that array lives in app_sand.c (an app_*.c, hardware-facing and
  * not host-linkable - see CLAUDE.md's naming convention), so a portable
  * suite cannot include it and keeps its own copy instead.
- *===========================================================================*/
+ */
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -37,9 +37,7 @@ static cell_t fixture(cell_t spec, int col, int row)
     return sand_swatch_cell(spec, col, row, SWATCH_CELLS);
 }
 
-/*-----------------------------------------------------------------------------
- * Determinism - what ui_end()'s repaint-skip hash depends on.
- *---------------------------------------------------------------------------*/
+/* Determinism - what ui_end()'s repaint-skip hash depends on. */
 
 static void test_the_same_spec_col_row_return_the_same_cell_every_call(void)
 {
@@ -59,9 +57,7 @@ static void test_the_same_spec_col_row_return_the_same_cell_every_call(void)
     }
 }
 
-/*-----------------------------------------------------------------------------
- * Every variant stays within the material's real shade range.
- *---------------------------------------------------------------------------*/
+/* Every variant stays within the material's real shade range. */
 
 static void test_every_variant_stays_within_the_material_shade_span(void)
 {
@@ -84,9 +80,7 @@ static void test_every_variant_stays_within_the_material_shade_span(void)
     }
 }
 
-/*-----------------------------------------------------------------------------
- * Gunpowder and the MATX() extended materials: no shade axis, flat swatch.
- *---------------------------------------------------------------------------*/
+/* Gunpowder and the MATX() extended materials: no shade axis, flat swatch. */
 
 static void test_gunpowder_and_extended_cells_yield_a_uniform_swatch(void)
 {
@@ -104,10 +98,10 @@ static void test_gunpowder_and_extended_cells_yield_a_uniform_swatch(void)
     }
 }
 
-/*-----------------------------------------------------------------------------
+/*
  * A multi-shade material actually varies - the texture-is-secretly-flat
  * failure the uniform-swatch test above cannot catch.
- *---------------------------------------------------------------------------*/
+ */
 
 static void test_a_multi_shade_material_uses_more_than_one_variant(void)
 {
@@ -127,9 +121,7 @@ static void test_a_multi_shade_material_uses_more_than_one_variant(void)
         "texture that is secretly flat");
 }
 
-/*-----------------------------------------------------------------------------
- * Every brush spec is handled - nothing indexes off the end.
- *---------------------------------------------------------------------------*/
+/* Every brush spec is handled - nothing indexes off the end. */
 
 static void test_every_brush_spec_stays_in_range_across_the_whole_grid(void)
 {

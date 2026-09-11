@@ -1,6 +1,4 @@
-/*=============================================================================
- * ui_pointer - see ui_pointer.h.
- *===========================================================================*/
+/* ui_pointer - see ui_pointer.h. */
 #include "ui/ui_pointer.h"
 
 static ui_pointer_event_t make(ui_pointer_kind_t kind, int x, int y)

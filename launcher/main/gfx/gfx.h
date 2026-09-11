@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * gfx - framebuffer ownership and drawing primitives.
  *
  * Everything on this device draws into ONE full-screen RGB565 framebuffer that
@@ -8,7 +8,7 @@
  *
  * Colours are given as plain 0xRRGGBB so callers never deal with the panel's
  * byte-swapped RGB565 layout - gfx_rgb() handles that conversion.
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stdint.h>
@@ -40,12 +40,12 @@
  * 80, with a measured full present of 17.6 ms saying there is no software slack
  * left at this clock. Vendor/Espressif validate only 40.
  *
- * NOT, AS THIS COMMENT USED TO SAY, "a real panel ceiling". 80 MHz produces
- * corner artifacts - corruption at the START of a transfer rather than noise
- * across the frame - and that was twice taken for a bandwidth limit. Raising the
- * pads to 40 mA (CONFIG_LAUNCHER_GFX_QSPI_STRONG_PADS) makes them rare rather
- * than routine, which says the failure is edge rate or setup margin at the
- * receiver. Rare is not gone, so 80 stays opt-in - see bd esp32c6-kfg.
+ * 80 MHz produces corner artifacts - corruption at the START of a transfer
+ * rather than noise across the frame - not a bandwidth ceiling. Raising
+ * the pads to 40 mA (CONFIG_LAUNCHER_GFX_QSPI_STRONG_PADS) makes them rare
+ * rather than routine, which says the failure is edge rate or setup
+ * margin at the receiver. Rare is not gone, so 80 stays opt-in - see bd
+ * esp32c6-kfg.
  *
  * No in-between exists: the 80 MHz source's integer divider (n>=2 floor)
  * resolves to exactly 40 or 80, which is why the option is a bool.
@@ -143,7 +143,7 @@ void gfx_pixel(int x, int y, gfx_color_t color);
  * primitive in the file. */
 void gfx_line(int x0, int y0, int x1, int y1, gfx_color_t color);
 
-/*---------------------------------------------------------------------------
+/*
  * Lines, with options
  *
  * Two independent choices - how it composites, and whether it owns its first
@@ -163,7 +163,7 @@ void gfx_line(int x0, int y0, int x1, int y1, gfx_color_t color);
  *
  * gfx_line() above is the no-flags case, kept as its own name because it is
  * what most callers want and reads better than passing a zero.
- *-------------------------------------------------------------------------*/
+ */
 
 /* Add to what is already in the framebuffer instead of replacing it, so two
  * strokes crossing on a black field make a brighter, mixed colour rather than
@@ -255,7 +255,7 @@ bool gfx_suspend(void);
  * true only if the panel has actually lost power. */
 bool gfx_resume(bool full_init);
 
-/*---------------------------------------------------------------------------
+/*
  * Dirty tracking
  *
  * gfx_present() sends only the horizontal bands that changed. The panel holds
@@ -269,7 +269,7 @@ bool gfx_resume(bool full_init);
  * It matters only for code writing through gfx_framebuffer() directly, which
  * gfx cannot see. Such code MUST mark what it wrote. Forgetting looks like a
  * frozen or partially stale screen, not a crash.
- *-------------------------------------------------------------------------*/
+ */
 
 /* Declare that a rectangle of the framebuffer has changed. Tracked as a real
  * box per grid cell, not just which cell - a caller that knows it only

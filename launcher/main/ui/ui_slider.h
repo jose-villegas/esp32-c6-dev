@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * ui_slider - pure geometry for an integer-valued slider: the knob and
  * filled-track rects for a value, and the inverse (a touch x -> a value).
  *
@@ -11,7 +11,7 @@
  *
  * Integer arithmetic throughout, no floats: this is a "06 PX" control, not a
  * continuous one, and the rest of ui/ stays integer for the same reason.
- *===========================================================================*/
+ */
 #pragma once
 
 #include "microui.h"

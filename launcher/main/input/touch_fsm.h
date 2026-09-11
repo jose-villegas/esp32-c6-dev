@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * touch_fsm - turns raw contact reports into press/release events.
  *
  * Deliberately free of hardware: no I2C, no FreeRTOS, and time arrives as an
@@ -7,7 +7,7 @@
  * behaviour, which would otherwise need real waiting on real hardware.
  *
  * touch.c supplies the samples; this decides what they mean.
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stdbool.h>

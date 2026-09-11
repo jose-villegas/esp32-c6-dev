@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Portable suite: brush_screen - the three-panel layout for the sand app's
  * brush screen.
  *
@@ -6,7 +6,7 @@
  * its quarter turn, 448x368 - since a layout that only holds upright is
  * exactly the bug this suite exists to catch (see brush_screen.c's own
  * BLOCK_H comment on why 368, the shorter height, is the binding one).
- *===========================================================================*/
+ */
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -50,9 +50,7 @@ static int min_dim(mu_Rect r)
     return (r.w < r.h) ? r.w : r.h;
 }
 
-/*---------------------------------------------------------------------------
- * Every rect stays on the canvas
- *-------------------------------------------------------------------------*/
+/* Every rect stays on the canvas */
 
 static void assert_all_rects_inside(int screen_w, int screen_h)
 {
@@ -84,9 +82,7 @@ static void test_every_rect_inside_canvas_landscape(void)
     assert_all_rects_inside(LANDSCAPE_W, LANDSCAPE_H);
 }
 
-/*---------------------------------------------------------------------------
- * Panels: no overlap, top-to-bottom order
- *-------------------------------------------------------------------------*/
+/* Panels: no overlap, top-to-bottom order */
 
 static void assert_panels_stacked(int screen_w, int screen_h)
 {
@@ -115,9 +111,7 @@ static void test_panels_stacked_top_to_bottom_landscape(void)
     assert_panels_stacked(LANDSCAPE_W, LANDSCAPE_H);
 }
 
-/*---------------------------------------------------------------------------
- * Segments: equal width, equal gaps, inside the mode panel
- *-------------------------------------------------------------------------*/
+/* Segments: equal width, equal gaps, inside the mode panel */
 
 static void assert_segments_equal_and_contained(int screen_w, int screen_h)
 {
@@ -151,9 +145,7 @@ static void test_segments_equal_and_contained_landscape(void)
     assert_segments_equal_and_contained(LANDSCAPE_W, LANDSCAPE_H);
 }
 
-/*---------------------------------------------------------------------------
- * Header: swatch is square, info button is square and clear of the name
- *-------------------------------------------------------------------------*/
+/* Header: swatch is square, info button is square and clear of the name */
 
 static void assert_header_shapes(int screen_w, int screen_h)
 {
@@ -175,9 +167,7 @@ static void test_header_shapes_landscape(void)
     assert_header_shapes(LANDSCAPE_W, LANDSCAPE_H);
 }
 
-/*---------------------------------------------------------------------------
- * Size row: value sits right of the caption, no overlap
- *-------------------------------------------------------------------------*/
+/* Size row: value sits right of the caption, no overlap */
 
 static void assert_size_row(int screen_w, int screen_h)
 {
@@ -199,10 +189,10 @@ static void test_size_row_landscape(void)
     assert_size_row(LANDSCAPE_W, LANDSCAPE_H);
 }
 
-/*---------------------------------------------------------------------------
+/*
  * Tap targets: segments, info button, slider track >= MIN_TAP in the
  * smaller dimension
- *-------------------------------------------------------------------------*/
+ */
 
 static void assert_tap_targets(int screen_w, int screen_h)
 {

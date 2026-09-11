@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Shared benchmark scenes - see suite_sand_scenes.c.
  *
  * Each of these builds a scene once, both for its own correctness test in
@@ -8,7 +8,7 @@
  * against this exact scene?) - one scene, two questions, so a regression in
  * either the mechanism or its performance shows up against the same
  * fixture rather than two that could quietly drift apart.
- *===========================================================================*/
+ */
 #pragma once
 
 #include "sand.h"

@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Portable suite: gfx/icons_system.h - the baked system icon atlas.
  *
  * The check mark's own artwork is pinned independently in suite_icons.c
@@ -11,7 +11,7 @@
  * 16-wide/2-byte-stride shape - the atlas mixes the 16x16 PNG-sourced check
  * mark with 24x24 SVG-sourced imports, and icon_t's own w/h/stride fields
  * are what make that mixing safe.
- *===========================================================================*/
+ */
 
 #include <stdbool.h>
 #include <stddef.h>

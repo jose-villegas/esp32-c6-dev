@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * screenshot - streaming the current framebuffer to a host script over the
  * console's own serial connection, as an uncompressed 24-bit BMP, together
  * with a JSON dump of device state at that same frame (sensors, memory,
@@ -30,7 +30,7 @@
  * Declared unconditionally here regardless, the same way the rest of this
  * header stays plain C with no #if of its own - main.c is what decides
  * whether anything ever calls them.
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stdbool.h>
@@ -39,10 +39,10 @@
 
 #include "app.h"
 
-/*-----------------------------------------------------------------------------
+/*
  * BMP encoding - see screenshot.c's write loop for how these two are used
  * together to build one row at a time.
- *---------------------------------------------------------------------------*/
+ */
 
 /* BITMAPFILEHEADER (14 bytes) + BITMAPINFOHEADER (40 bytes), with no pixel
  * data - see screenshot_bmp_header() below. */
@@ -103,7 +103,7 @@ static inline void screenshot_bmp_header(uint8_t out[SCREENSHOT_BMP_HEADER_SIZE]
     out[50] = out[51] = out[52] = out[53] = 0;       /* biClrImportant */
 }
 
-/*-----------------------------------------------------------------------------
+/*
  * Base64 - the console UART carries text (ESP_LOG lines, the REPL a human
  * might be typing into), so the framebuffer's raw bytes cannot go down it
  * unescaped: a stray 0x0A in pixel data would look like a line break, and
@@ -115,7 +115,7 @@ static inline void screenshot_bmp_header(uint8_t out[SCREENSHOT_BMP_HEADER_SIZE]
  *
  * RFC 4648, no line breaks of its own (screenshot.c adds those, one encoded
  * chunk per printed line) and '=' padding for a trailing partial group.
- *---------------------------------------------------------------------------*/
+ */
 
 /* How many bytes screenshot_base64_encode() writes for `len` input bytes -
  * NOT including a NUL terminator, which callers wanting a C string must
@@ -163,9 +163,7 @@ static inline void screenshot_base64_encode(const uint8_t *in, int32_t len, char
     }
 }
 
-/*-----------------------------------------------------------------------------
- * The device-only half - see screenshot.c
- *---------------------------------------------------------------------------*/
+/* The device-only half - see screenshot.c */
 
 /* Starts the background task that listens on the console for a capture
  * request. Call once, from app_main() - the same place and the same

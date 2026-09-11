@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * sand - a falling-sand cellular automaton.
  *
  * The whole simulation is one rule applied to every grain: try to move the way
@@ -15,7 +15,7 @@
  * liquid - the two things that are NOT gravity-ward - lives in
  * sand_liquid.c. See sand_priv.h for why they need to share a few small
  * helpers, and sand_step_liquids() for where the two meet.
- *===========================================================================*/
+ */
 
 #include "sand_priv.h"
 
@@ -122,9 +122,7 @@ static cell_t random_gunpowder(sand_t *s, int band)
     return GUNPOWDER_CELL((uint8_t)tone);
 }
 
-/*---------------------------------------------------------------------------
- * Grid access
- *-------------------------------------------------------------------------*/
+/* Grid access */
 
 void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
 {
@@ -362,11 +360,11 @@ int sand_erase(sand_t *s, int cx, int cy, int radius)
  * outward-flight subsystem is one file, separate from this one's
  * gravity-ward sweep. */
 
-/*---------------------------------------------------------------------------
+/*
  * Emitters - see the `emitters` field of sand_t and the EMITTERS section of
  * sand.h for the design. What is here is just list management; the actual
  * per-step write lives in emit_from_emitters() below, next to sand_step().
- *-------------------------------------------------------------------------*/
+ */
 
 bool sand_add_emitter(sand_t *s, int x, int y, cell_t cell)
 {
@@ -449,9 +447,7 @@ static void emit_from_emitters(sand_t *s)
     }
 }
 
-/*---------------------------------------------------------------------------
- * Movement
- *-------------------------------------------------------------------------*/
+/* Movement */
 
 /* The sign/magnitude split both gravity_direction functions below start
  * with. Returns false for a zero vector, in which case the direction is
@@ -1076,15 +1072,11 @@ static void build_xflow(xflow_t *f, int gx, int gy)
  * sand_step_gas() already use. */
 
 
-/* PINNED at 16, and the 16 is the point.
- *
- * This was unpinned for nineteen commits: the attribute written for it bound
- * to reaction_dirs when that array slid in underneath (00e13ce), which is why
- * an unrelated change could move a scene holding no liquid by 11.6%.
- *
- * 32 was tried and cost 4.5% on both liquid-free controls for nothing. 16 is
- * near free - controls 5654/5753 against 5653/5753, worst row 1.5%. Cache
- * blocks are 32 bytes, so 16 still fixes the start within a block. */
+/* PINNED at 16, not left to the compiler: an unpinned attribute can bind to
+ * whatever definition follows it rather than to this function, letting an
+ * unrelated change silently shift sand_step()'s alignment and regress
+ * performance. 32 costs about 4.5% on liquid-free controls for nothing; 16 is
+ * near-free and still starts within a 32-byte cache block. */
 
 /* CHECK WITH objdump, NOT the diff: .text.sand_step should read 2**4. Binding
  * to the wrong symbol still compiles and passes everything. */
@@ -1126,14 +1118,11 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
     const uint8_t settled_bit = compute_settled_bit(s, jostle, dx, dy,
                                                     load_dx, load_dy);
 
-    /* Remembered AFTER compute_settled_bit() has compared against it, and
-     * OUTSIDE it, which is the point: it used to be set in there, past an
-     * early return taken whenever block sleeping is off. That made it a
-     * fact about the sleeping bookkeeping rather than about the board, and
-     * anything else asking which way is down - growth, for one - read
-     * (0,0) on any grid without block_state. It is the settled direction
-     * of the step just taken, so it is written once the step has decided
-     * it. */
+    /* Written AFTER compute_settled_bit() returns, and OUTSIDE it: this is
+     * a fact about the board's settled direction, not about sleeping
+     * bookkeeping, so it must not depend on block sleeping being on -
+     * anything else asking which way is down (growth, for one) needs it
+     * on any grid, with or without block_state. */
     s->last_load_dx = load_dx;
     s->last_load_dy = load_dy;
     s->last_step_dx = dx;

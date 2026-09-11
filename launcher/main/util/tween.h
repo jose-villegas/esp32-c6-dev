@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * tween - timeline ramps, easing and lerps, in one place.
  *
  * Pulled out of boot_anim.h, where every one of these was hand-rolled first:
@@ -25,7 +25,7 @@
  * divided by 255 again, so nothing is lost by keeping it in a single byte,
  * and a single byte is what threads cleanly through boot_anim.h's existing
  * arithmetic without a second fixed-point scale to keep straight there.
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stdint.h>

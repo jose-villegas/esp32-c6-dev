@@ -1,11 +1,11 @@
-/*=============================================================================
+/*
  * Portable suite: the falling-sand automaton - dirt - soaking, drying, and
  * sand turning into soil.
  *
  * Split out of suite_sand.c (bd esp32c6 test-suite-refactor), which had grown
  * past 32,000 lines across 500+ tests. Shared fixtures and assertion helpers
  * live in suite_sand_common.{c,h} - see that header.
- *===========================================================================*/
+ */
 #include <math.h>   /* not every file in the split still needs atan2()/M_PI,
                      * but every file inherited suite_sand.c's own include
                      * block rather than being pruned by hand, to keep the
@@ -130,10 +130,8 @@ static void test_dirt_takes_on_moisture_and_dries_out_again(void)
  *
  * A brushful is centred on ONE pour band with the same +/-1 jitter sand's
  * own shade uses, so it is NOT expected to use every one of
- * SOIL_DRY_TONES - that was only ever true of the old two-tone encoding,
- * where "one tone" and "the whole dry range" were the same statement. It
- * only has to be more than a single flat fill, which is the flatness
- * eight tones exist to fix. */
+ * SOIL_DRY_TONES - it only has to be more than a single flat fill, which
+ * is the flatness eight tones exist to fix. */
 static void test_new_dirt_starts_dry_in_a_random_tone(void)
 {
     fixture();
@@ -453,20 +451,10 @@ static void test_a_watered_bank_does_not_dry_back_to_one_flat_tone(void)
 }
 
 /* ONE MONOTONE RAMP, not two independently-shifted tones that each had to
- * clear the other.
- *
- * Soil's whole nibble is read by STATE now - a dry tone below
- * SOIL_DRY_TONES, a moisture level from there up (material.h's own
- * comment) - so the constraint that used to bound how far apart two
- * tones could be pushed no longer applies: this used to be
- * test_the_two_soil_tones_are_different_colours, asserting "the wettest
- * soil of the pale tone must still be darker than the driest soil of the
- * dark one", which cleared by only seven points of luminance, "all the
- * headroom there is". Reading by state removes the constraint outright -
- * there is only one ramp left to be monotone, not two to keep from
- * overlapping - and replaces it with something stronger: EVERY variant
- * must be darker than the one before it, the whole way from bone dry to
- * saturated. */
+ * clear the other: soil's whole nibble is read by STATE - a dry tone
+ * below SOIL_DRY_TONES, a moisture level from there up (material.h's own
+ * comment) - so every variant must be strictly darker than the one
+ * before it, the whole way from bone dry to saturated. */
 static void test_soil_is_one_monotone_luminance_ramp(void)
 {
     const gfx_color_t *pal = material_palette();
@@ -570,18 +558,11 @@ static void test_soaking_is_off_unless_asked_for(void)
 }
 
 
-/* A wetting front has to REACH.
- *
- * Moisture used to move one level per hop and only downhill by two or
- * more, and a grain converted by wet soil was born holding exactly 1 - one
- * short of the 2 it needed to pass anything on. So the front died at the
- * first ring of new soil, every time, however much water was behind it.
- * Reported as "the diffusion of wet sand to dirt is either too slow or
- * reaches a range limit now", which is precisely what it was.
- *
- * Moving half the difference instead is the ordinary way a diffusion
- * settles, and it is what this test pins: soil several cells away from
- * anything the water touched must still end up wet. */
+/* A wetting front has to REACH: moving half the difference at each hop,
+ * the ordinary way a diffusion settles, so soil several cells away from
+ * anything the water touched must still end up wet - a front that hands
+ * over only enough to leave the receiver below the pass-on threshold
+ * dies at the first ring. */
 static void test_a_wetting_front_spreads_past_the_cells_it_touched(void)
 {
     fixture();
@@ -654,14 +635,11 @@ static void test_moisture_is_conserved_as_it_spreads(void)
 }
 
 
-/* And what it hands over is a SHARE, not a token.
- *
- * This is the half of the front that reach alone does not pin down. Soil
- * converted by a passing wetting front used to be born holding exactly 1,
- * which is one short of the 2 it needs to wet anything itself - so every
- * new grain was a dead end, and the patch only ever crept outward as fast
- * as the original wet cell could top up the grain next to it. Half the
- * difference means a new grain arrives able to carry the front on. */
+/* And what it hands over is a SHARE, not a token: a converted grain must
+ * arrive able to carry the front on itself, holding enough to wet a
+ * neighbour in turn - one holding less would make every new grain a dead
+ * end, creeping outward only as fast as the original cell could top it
+ * up. */
 static void test_soil_a_wetting_front_converts_is_handed_a_real_share(void)
 {
     fixture();

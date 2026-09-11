@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Portable suite: ui_centered_rect - fixed-width, centred content.
  *
  * ui_centered_rect() (ui.h) is pure geometry, `static inline` for the same
@@ -11,7 +11,7 @@
  * A separate file rather than folded into suite_ui_transform.c: that suite
  * covers ui_transform.h's own affine map, a different header with a
  * different job, and ui_centered_rect() lives in ui.h instead.
- *===========================================================================*/
+ */
 
 #include "unity.h"
 #include "suites.h"

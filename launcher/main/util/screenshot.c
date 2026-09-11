@@ -1,89 +1,24 @@
-/*=============================================================================
- * screenshot.c - the device-only half: listens on the console for a
- * one-word trigger, and on request walks the live framebuffer through
- * gfx_color_rgb888() and screenshot_base64_encode(), printing the result
- * between marker lines a host script (tools/screenshot.py) reads back out
- * of the same stream idf_monitor/ESP_LOG already use.
+/*
+ * screenshot - the device half: listens on the console for a trigger, then
+ * prints the live framebuffer as base64 between marker lines that
+ * tools/screenshot.py reads back out of the stream idf_monitor already uses.
  *
- * ALSO OWNS RUNSUITE, A SECOND, UNRELATED COMMAND
+ * Also owns RUNSUITE (CONFIG_LAUNCHER_SELFTEST), which runs one named suite
+ * instead of the whole boot-time run. It lives in this file because the
+ * console has room for exactly one blocking reader - a second task reading
+ * the same stream would race it for every byte.
  *
- * CONFIG_LAUNCHER_SELFTEST only: "RUNSUITE <name>" runs exactly one
- * registered suite (suites_run_one() in test/suites.c) instead of
- * suites_run_all()'s everything-at-boot run - the targeted way to see one
- * suite's own report (a perf suite's especially) without waiting through
- * whatever else registered ahead of it alphabetically first. It lives
- * here, in a file otherwise about screenshots, rather than in its own
- * listener, because the console can only have one blocking reader:
- * usb_serial_jtag_vfs_use_driver() below hands this task exclusive,
- * interrupt-driven ownership of stdin, and a second task calling fgetc()
- * on the same stream would race it for every incoming byte. One line
- * listener, two commands - not a generic, registrable dispatch table,
- * since two is what this project actually has today (see CLAUDE.md on
- * designing for hypothetical future requirements).
+ * BOTH COMMANDS ONLY SET A FLAG. main.c's loop does the work, at a frame
+ * boundary. There is no lock on the framebuffer, so a capture - or worse, a
+ * suite that draws and presents on its own - running on this task while the
+ * render loop runs on the main one is two tasks driving one panel.
  *
- * Like SCREENSHOT below, RUNSUITE only ever sets a flag here - see "WHY
- * THE RESULT COMES BACK THROUGH A FLAG" further down, which now covers
- * both commands. Calling suites_run_one() directly from this task once
- * genuinely shipped, and genuinely raced the shell's own frame loop for
- * gfx_present() and the framebuffer's own dirty-tracking state (two
- * tasks, no lock, one panel) - caught by test_partial_clear_erases_
- * only_previous_drawn_region in suite_gfx.c intermittently failing when
- * run through RUNSUITE specifically, never when run as part of the
- * normal boot-time suites_run_all() sequence, which is what pointed at
- * the actual cause.
- *
- * WHY USB-SERIAL-JTAG, NOT UART
- *
- * This board's one USB-C port is the ESP32-C6's own native USB-Serial/JTAG
- * peripheral, not an external bridge chip wired to UART0 - see
- * sdkconfig.defaults' own comment for the full story (Waveshare's docs say
- * so directly, and CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y there is what makes
- * it the primary console channel - the one that is actually read as well as
- * written). Everything below targets that peripheral for exactly the same
- * reason the first version of this file targeted UART0: match whatever the
- * console's own primary channel is, so this listener sees the same bytes
- * idf_monitor does.
- *
- * WHY A TASK, NOT AN ISR OR A POLL IN main.c's LOOP
- *
- * The default console reader (usb_serial_jtag_vfs.c's non-blocking path) is
- * non-blocking by construction - it returns "no data" instantly rather than
- * waiting, which is fine for code that also has other work to do but would
- * mean main.c's render loop busy-polling every frame just to ask "did
- * anyone type SCREENSHOT yet", 40-plus thousand times a minute at this
- * shell's frame rate. screenshot_start() below switches the console fd onto
- * the driver's interrupt-driven reader instead (usb_serial_jtag_vfs_use_driver
- * - the same call ESP-IDF's own esp_console REPL makes internally for this
- * peripheral, for the exact same reason), which is what makes a genuinely
- * blocking read possible, and gives that blocking read its own small task
- * rather than stalling anything else.
- *
- * WHY THE RESULT COMES BACK THROUGH A FLAG, NOT A DIRECT CALL
- *
- * screenshot_task() below could call screenshot_dump() itself the instant
- * the trigger line arrives, but the framebuffer it would be reading is
- * whatever the render loop happens to have half-drawn at that exact
- * instant - there is no lock between the two tasks. Going through
- * screenshot_take_request()/main.c's loop instead means the capture always
- * happens at a clean frame boundary, after step_app() has finished drawing
- * and before gfx_present() sends it - the same reasoning main.c already
- * applies to display_update() (see its own comment on why that runs ahead
- * of step_app() rather than whenever the IMU happens to be read).
- *
- * RUNSUITE needs this even more than SCREENSHOT does. A suite is not a
- * one-shot read of whatever is already on screen - it draws, clears and
- * presents on its own, repeatedly, for however long it runs. Calling
- * suites_run_one() from this task would have it doing exactly that
- * WHILE the shell's own loop is still running step_app()/gfx_present()
- * every frame on the main task, unsynchronised - two tasks racing to
- * write the one framebuffer and drive the one panel handle. Going
- * through screenshot_take_runsuite_request()/main.c's loop instead
- * means the suite runs on the main task itself, with the shell's own
- * drawing for that iteration deferred until it returns - the same
- * "exactly one frame loop, one framebuffer" invariant this project
- * states everywhere else, just not previously enforced for a command
- * that runs one of its own suites.
- *===========================================================================*/
+ * USB-Serial/JTAG, not UART: this board's USB-C is the C6's own peripheral
+ * and the console's primary channel, so this listener sees the bytes
+ * idf_monitor does. Its own task, because screenshot_start() switches the fd
+ * to the driver's interrupt-driven reader, which is what lets a read block
+ * instead of main.c polling every frame.
+ */
 #include "util/screenshot.h"
 
 #include <stdio.h>

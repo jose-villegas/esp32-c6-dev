@@ -1,11 +1,11 @@
-/*=============================================================================
+/*
  * Portable suite: the falling-sand automaton - gas, fire, wood/embers/steam,
  * bubbles, oil/lava, and acid.
  *
  * Split out of suite_sand.c (bd esp32c6 test-suite-refactor), which had grown
  * past 32,000 lines across 500+ tests. Shared fixtures and assertion helpers
  * live in suite_sand_common.{c,h} - see that header.
- *===========================================================================*/
+ */
 #include <math.h>   /* not every file in the split still needs atan2()/M_PI,
                      * but every file inherited suite_sand.c's own include
                      * block rather than being pruned by hand, to keep the
@@ -464,27 +464,14 @@ static void test_tilted_equalise_still_spreads_a_packed_row_under_the_sight_boun
 
 /* --- fire ------------------------------------------------------------- */
 
-/* A stone box sealing columns x0..x1 of row 3 on all four sides with NO
- * spare cells inside, so nothing placed inside it can drift away via its
- * OWN movement pass (main sweep, sand_step_liquids(), or sand_step_gas()
- * - all of which run before reactions, in the same step) before the
- * reactions pass gets a chance to check adjacency: gas/fire rise against
- * gravity (blocked by the row 2 ceiling) and disperse sideways (blocked
- * by walls immediately at x0-1 and x1+1 - not just somewhere further
- * out, since ANY empty cell inside the box is still room for
- * equalise_gas() to hop into), water falls (blocked by the row 4
- * floor). Fire needing this too, not just gas, is new since fire became
- * kind = KIND_GAS - it is now just as capable of drifting off during the
- * SAME step it was placed as gas always was, and a room with even one
- * spare empty cell left room for exactly that (confirmed: the first
- * version of this room, walled only two columns further out than
- * strictly necessary, let both the fire and gas cells each hop one cell
- * sideways into the slack before reactions ever ran). The caller passes
- * the exact span it is about to fill (x0..x1 inclusive) - no slack, no
- * spare cells, by construction.
- *
- * fire_room() now lives in suite_sand_common.{c,h} - reused past this
- * section too. */
+/* A stone box sealing columns x0..x1 of row 3 with no spare cells inside:
+ * movement passes (main sweep, liquids, gas) all run before reactions in
+ * the same step, so slack lets a cell drift off before reactions can
+ * check adjacency. Gas/fire rise (blocked by the row 2 ceiling) and
+ * disperse sideways (blocked immediately at x0-1/x1+1); water falls
+ * (blocked by the row 4 floor). Caller passes the exact span it fills -
+ * no slack, by construction. Lives in suite_sand_common.{c,h}, reused
+ * past this section. */
 
 static void test_fire_ignites_an_adjacent_flammable_neighbour(void)
 {
@@ -650,13 +637,8 @@ static void test_fire_burns_out_and_disappears_over_time(void)
         "decay mechanism gas already uses");
 }
 
-/* Supersedes the old test_fire_does_not_move_under_gravity: fire was
- * KIND_STATIC and this test asserted the opposite of what it asserts
- * now. Kept under the same topic heading rather than silently deleted,
- * mirroring how sand_reactions.c's own top comment narrates the
- * KIND_STATIC-era design as history worth keeping visible. Mirrors
- * test_gas_rises_straight_up_under_ordinary_gravity exactly - fire is
- * kind = KIND_GAS now, swept by the identical pass. */
+/* Mirrors test_gas_rises_straight_up_under_ordinary_gravity exactly -
+ * fire is kind = KIND_GAS now, swept by the identical pass. */
 static void test_fire_rises_and_disperses_like_gas(void)
 {
     fixture();
@@ -673,14 +655,10 @@ static void test_fire_rises_and_disperses_like_gas(void)
         "immobile-ember behaviour this test used to assert");
 }
 
-/* Supersedes the old test_fire_is_not_displaced_by_falling_sand, for
- * the same reason as the test above - mirrors test_sand_sinks_through_gas
- * exactly, since fire's displacement rules are now identical to gas's
- * (density-based, not KIND_STATIC's blanket refusal). Burying it
- * completely is a different question - see
- * test_fire_is_smothered_when_fully_buried below, which is the actual
- * replacement for "sand can put fire out", just via smothering rather
- * than simple contact. */
+/* Mirrors test_sand_sinks_through_gas exactly - fire's displacement rules
+ * are identical to gas's (density-based, not a blanket refusal). See
+ * test_fire_is_smothered_when_fully_buried below for burying fire out
+ * completely, via smothering rather than contact. */
 static void test_sand_sinks_through_fire(void)
 {
     fixture();
@@ -730,8 +708,7 @@ static void test_fire_is_not_smothered_with_a_gap(void)
      * cardinal ones - try_slide()'s own fallback would otherwise carry
      * fire diagonally out of (3,3) via the two open corners before
      * reactions ever ran, leaving the cell empty for a reason that has
-     * nothing to do with smothering (confirmed: this is exactly what
-     * happened the first version of this test wrote). */
+     * nothing to do with smothering. */
     sand_set(&s, 2, 2, STONE);
     sand_set(&s, 4, 2, STONE);
     /* (3,4), below, deliberately left open - a KIND_GAS material only
@@ -780,14 +757,12 @@ static void test_liquid_wins_over_smothering(void)
     sand_set(&s, 2, 3, STONE);
     sand_set(&s, 4, 3, STONE);
     /* The two upward diagonals also need blocking, not just the three
-     * cardinal sides above - the straight-up cell being blocked leaves
-     * try_slide()'s own diagonal fallback free to carry fire out to
-     * (2,2) or (4,2) before reactions ever runs, now that the assertion
-     * below checks WHAT fire became rather than merely that (3,3) ended
-     * up empty (which a fire that drifted away would also satisfy,
-     * masking exactly this - confirmed: this is what the first version
-     * of this test, without these two lines, actually did). Mirrors
-     * test_fire_is_not_smothered_with_a_gap's identical reasoning. */
+     * cardinal sides - leaving the straight-up cell blocked alone still
+     * leaves try_slide()'s diagonal fallback free to carry fire out to
+     * (2,2) or (4,2) before reactions run, and the assertion below checks
+     * WHAT fire became, not merely that (3,3) ended up empty (a
+     * drifted-away fire would also satisfy that, masking the bug).
+     * Mirrors test_fire_is_not_smothered_with_a_gap's reasoning. */
     sand_set(&s, 2, 2, STONE);
     sand_set(&s, 4, 2, STONE);
     sand_set(&s, 3, 4, WATER);
@@ -949,14 +924,11 @@ static int snow_left_over_soil_at(uint8_t moisture)
 
 
 
-/* COLD REACHES THROUGH THE MEDIUM, not just into the cell it touches.
- *
- * A snowbank on glass used to chill three rows and stop, identical at 250
- * steps and at 1000. The slab is deliberately taller than CONDUCT_REACH, so a
- * pass means the cold travelled rather than simply hitting the bottom.
- *
- * This is the REACH-AND-STRENGTH test, not a rate test: how long the slab
- * takes to get there is tuning, and lives in the two period constants. */
+/* COLD REACHES THROUGH THE MEDIUM, not just into the cell it touches. The
+ * slab is deliberately taller than CONDUCT_REACH, so a pass means the
+ * cold travelled rather than simply hitting the bottom. This is the
+ * REACH-AND-STRENGTH test, not a rate test: how long the slab takes to
+ * get there is tuning, and lives in the two period constants. */
 static void test_cold_conducts_deep_into_a_slab(void)
 {
     const int W2 = 40, H2 = 60;
@@ -1002,39 +974,33 @@ static void test_cold_conducts_deep_into_a_slab(void)
     const int depth = deepest - slab_top + 1;
     free(cells);
 
-    /* Measured 11 rows with the walk and 3 without, so this sits between them
-     * and fails loudly rather than drifting.
-     *
-     * It was 31, on a reach shared with heat. Thirty-two cells of cold read as
-     * unrealistic in play, so cold got its own COLD_REACH at a third of it -
-     * the walk still has to travel several times what a bare contact gives,
-     * which is what this pins, but it no longer crosses a whole screen. */
+    /* Measured 11 rows with the walk and 3 without, so this sits between
+     * them and fails loudly rather than drifting. COLD_REACH is a third
+     * of the reach shared with heat: the walk still has to travel
+     * several times what bare contact gives (which is what this pins),
+     * but no longer crosses a whole screen. */
     TEST_ASSERT_GREATER_THAN_INT_MESSAGE(6, depth,
         "cold must conduct well down a glass slab, not stop at the cells it "
         "touches - three rows is what it managed before it could travel");
 
-    /* AND ARRIVE COLD, not merely tinted. Reach alone was not what the
-     * report asked for: a slab where every chilled cell sits one level under
-     * ambient looks weak and never reaches SAND_SHOCK_COLD, so heat from
-     * below cannot shatter it. Measured 20% at or below that threshold,
-     * against 12% when the walk attenuated at every cell. It was 43% on the
-     * old reach shared with heat; a third of the reach costs most of that,
-     * and what matters is that glass still arrives cold enough to break. */
+    /* AND ARRIVE COLD, not merely tinted. A slab where every chilled cell
+     * sits one level under ambient looks weak and never reaches
+     * SAND_SHOCK_COLD, so heat from below cannot shatter it. Measured 20%
+     * at or below that threshold, against 12% when the walk attenuated at
+     * every cell - what matters is that glass still arrives cold enough
+     * to break. */
     TEST_ASSERT_GREATER_THAN_INT_MESSAGE((W2 * (H2 - slab_top)) / 6, shocked,
         "a sixth of the slab at least must reach SAND_SHOCK_COLD, or the "
         "cold is too shallow for heat below to break the glass");
 }
 
-/* WET SOIL MELTS SNOW, DRY SOIL DOES NOT.
- *
- * Snow melted only against open water before this, because the thaw test
- * reads the neighbour's KIND and dirt carries its water as a moisture nibble
- * instead - so a soaked bank and a dry one looked identical to it
- * (bd esp32c6-bl4).
- *
- * The dry bed is the control, doing two jobs: it proves the melt is about the
- * WATER in the soil and not about dirt, and it pins the floor, since the rate
- * scales with moisture and is meant to reach zero well before bone dry. */
+/* WET SOIL MELTS SNOW, DRY SOIL DOES NOT. The thaw check reads a
+ * neighbour's KIND, and dirt carries its water as a moisture nibble
+ * instead - so a soaked bank and a dry one look identical to it unless
+ * threaded through (bd esp32c6-bl4). The dry bed is the control: it
+ * proves the melt is about the WATER in the soil, not about dirt, and
+ * pins the floor, since the rate scales with moisture and is meant to
+ * reach zero well before bone dry. */
 static void test_snow_melts_on_wet_soil_but_not_on_dry(void)
 {
     const reaction_t *dr = reaction_of(CELL_MAKE(MAT_DIRT, 0));
@@ -1542,26 +1508,14 @@ static void test_a_material_created_during_the_pass_stays_in_the_mask(void)
         "window, or this test proves nothing");
 }
 
-/* A DRY BOARD WITH SAND ON IT HAS TO LET THE MOISTURE PASS GO.
- *
- * Sand soaks but does not dry, so its variant is a SHADE, not a wetness -
- * and step_one_soaking_cell() reads CELL_MOISTURE() off every cell it
- * runs on, sand included. Soil's dry tones put real values in the low
- * half of the nibble, so that read only returns zero for a shade below
- * SOIL_DRY_TONES: a grain shaded any higher reported moisture it never
- * had, the pass kept setting FOUND_MOISTURE, and may_have_moisture -
- * which only ever CLEARS from that flag, never sets from it - could
- * never go back down once any water had armed it.
- *
- * Same justification for touching the field directly as
- * test_pouring_stone_never_arms_the_reactions_pass above: the only
- * symptom is a full-board pass that never switches off again, which
- * costs frame time on device and changes no simulation output at all,
- * so there is nothing behavioural to assert on instead.
- *
- * The shade is set explicitly rather than poured, because the pour band
- * decides which shades a brushful gets and this needs the specific half
- * of the range that used to lie. */
+/* A dry board with sand has to let the moisture pass go: sand soaks but
+ * does not dry (variant is a SHADE, not wetness), yet
+ * step_one_soaking_cell() reads CELL_MOISTURE() off every cell including
+ * sand. Soil dry tones use the low nibble half, so a shaded grain above
+ * SOIL_DRY_TONES reports moisture it never had, and may_have_moisture
+ * (only clears, never re-set) never switches off. Field touched
+ * directly, as in test_pouring_stone_never_arms_the_reactions_pass: no
+ * behavioural symptom to assert on. */
 static void test_sand_alone_lets_the_moisture_pass_switch_off_again(void)
 {
     fixture();
@@ -1588,18 +1542,14 @@ static void test_placing_fire_arms_both_gas_and_fire_passes(void)
 {
     fixture();
 
-    /* Guards the else-if ordering bug found before this shipped: fire is
+    /* Guards against testing kind and burns as an else-if chain: fire is
      * BOTH kind == KIND_GAS (needs sand_step_gas() to rise/disperse) AND
      * reactions[].burns (needs sand_step_reactions() to ignite/
-     * extinguish/burn out) at once. sand_set()/try_spawn_one() used to
-     * test these as an else-if chain with the kind check first, which
-     * would shadow the burns check for every fire cell the moment fire's
-     * kind became KIND_GAS - may_have_burning would silently never get
-     * set, and a freshly painted fire spark would rise correctly
-     * (kind-generic, unaffected) but never ignite, extinguish, or burn
-     * out. No public getter for either flag - reading them directly is
-     * intentional, mirroring test_pouring_stone_never_arms_the_reactions_pass's
-     * own justified exception. */
+     * extinguish/burn out), so an else-if with the kind check first would
+     * shadow the burns check and may_have_burning would silently never
+     * get set. No public getter for either flag - reading them directly
+     * is intentional, mirroring
+     * test_pouring_stone_never_arms_the_reactions_pass's own exception. */
     TEST_ASSERT_EQUAL_INT_MESSAGE(1, sand_spawn(&s, 3, 3, 0, MAT_FIRE),
         "setup: exactly one fire cell placed");
     TEST_ASSERT_TRUE_MESSAGE(s.may_have_gas,
@@ -1614,23 +1564,14 @@ static void test_placing_fire_arms_both_gas_and_fire_passes(void)
 
 /* --- wood, embers and steam ---------------------------------------------- */
 
-/* Sets up a fire cell at (3,3) beside a wood cell at (4,3), boxed just
- * enough to keep the fire from smothering itself or drifting away
- * before reactions gets a turn.
- *
- * fire_room() (used by the plain-fire tests above) will not do here: it
- * seals a fire cell in on all four sides with stone, which works for a
- * GAS neighbour (density 10, lighter than fire's 15, so it never counts
- * towards smothered()'s ALL-of-4 test) but not for a WOOD one - wood's
- * density (150) is, unlike gas's, denser than fire, so a wood neighbour
- * on the one remaining open side completes the smother all by itself,
- * clearing the fire before it ever reaches the ignite loop (confirmed:
- * this is exactly what the first version of these two tests did). The
- * cell below fire is deliberately left open instead, mirroring
- * test_fire_is_not_smothered_with_a_gap's identical reasoning: gas only
- * ever rises or spreads sideways, never falls, so leaving it empty
- * cannot let fire drift away before this step's reactions pass runs,
- * and it is one fewer denser neighbour, so smothered() reads false. */
+/* Sets up fire at (3,3) beside wood at (4,3), boxed to keep fire from
+ * smothering itself or drifting away before reactions runs. fire_room()
+ * won't do here: it seals all four sides with stone, which works for GAS
+ * (density 10, lighter than fire's 15, never completes smothered()'s
+ * ALL-of-4) but not WOOD (density 150, denser than fire) - a wood
+ * neighbour on the last open side would complete the smother alone. The
+ * cell below fire stays open: gas only rises or spreads sideways, never
+ * falls. */
 static void wood_ignition_room(void)
 {
     fixture();
@@ -1906,10 +1847,8 @@ static void test_creating_steam_arms_the_gas_pass(void)
      * move_liquid_grain() tries down, then down-the-slope both ways, and
      * a mostly-empty cell (WATER here is CELL_MAKE(MAT_WATER, 8), not a
      * full MASS_MAX) can hand its ENTIRE mass to a single open diagonal
-     * in one main-sweep call, draining (3,4) completely before
-     * reactions ever gets a turn to check it for a liquid neighbour
-     * (confirmed: this is exactly what the first version of this test,
-     * with only the floor blocked, actually did). */
+     * in one main-sweep call, draining (3,4) completely before reactions
+     * ever gets a turn to check it for a liquid neighbour. */
     sand_set(&s, 3, 5, STONE);
     sand_set(&s, 2, 5, STONE);
     sand_set(&s, 4, 5, STONE);
@@ -2122,15 +2061,10 @@ static void test_only_the_exposed_surface_of_an_oil_pool_can_ignite(void)
         "does not go up all at once");
 }
 
-/* The other half of needs_air, and the bug that shipped in the first
- * draft of it.
- *
- * "Exposed" originally meant "has an EMPTY cardinal neighbour", which is
- * wrong in the one situation that matters: a flame sitting on the pool is
- * not empty space, so the surface stopped counting as exposed at exactly
- * the moment it caught fire, and a slick with a fire blob parked on it
- * burned for thirty steps without ever lighting. Air has to include
- * gases. */
+/* Air has to include gases, not just EMPTY cells: a flame sitting on the
+ * pool is not empty space, so counting only EMPTY cardinal neighbours as
+ * exposed would misclassify a lit surface as unexposed right when it
+ * catches. */
 static void test_oil_ignites_with_a_flame_sitting_directly_on_it(void)
 {
     const int surface = oil_pool(3);
@@ -2195,39 +2129,14 @@ static void test_water_still_puts_fire_out(void)
         "quench on one touch - and still turn the fire to steam");
 }
 
-/* Two liquids of different densities have to sort themselves out, which
- * nothing before oil required. room_in() refuses a cell holding another
- * material and a liquid never consults can_enter(), so without
- * float_lighter_liquids() the two simply block each other and oil
- * trapped under water stays there forever. */
-/* Viscosity: liquids used to read no rate field at all, so every liquid
- * flowed at exactly the same speed and oil behaved like coloured water.
- * material.h's `mobility` is that rate - read by a gas as buoyancy and by
- * a liquid as viscosity inverted.
- *
- * Measured as steps for a tall column to reach the far wall: water 8,
- * oil 28 when this was written. Held to "oil takes at least twice as
- * long" so ordinary tuning does not trip it. */
-/* Every liquid must DECLARE a mobility, checked in the table rather than
- * in motion.
- *
- * This exists because one did not. `mobility` arrived as a gas-only field
- * and only grew a liquid reader later, so lava's row - written before
- * that - left it unset, and an unset byte is zero.
- *
- * The obvious test is behavioural: place a column and assert it spreads.
- * That was written first and it does not work, which is worth recording.
- * A mobility of zero does not actually freeze a liquid, because (at the
- * time this was measured) the wall-rebound splash moved liquid without
- * consulting the gate, since removed (2026-08-30, see git history) - lava
- * at zero still crossed the same distance, in 249 steps against 20. Any
- * budget loose enough not to be flaky is loose enough to let that pass,
- * and any budget tight enough to catch it is pinning a performance figure
- * rather than an invariant.
- *
- * So this checks the table instead. Nonzero is not a claim about the
- * right value - only that somebody chose one, which is precisely the step
- * that got skipped. */
+/* Liquids sink/float by density via float_lighter_liquids():
+ * room_in() refuses a cell holding another material and a liquid never
+ * consults can_enter(), so without it two liquids simply block each other
+ * and the lighter one stays trapped forever. material.h's `mobility` is
+ * read as buoyancy by a gas and as inverted viscosity by a liquid.
+ * Measured steps for a tall column to reach the far wall: water 8, oil 28
+ * - oil held to "at least twice as long" so ordinary tuning does not trip
+ * it. */
 /* --- acid ---------------------------------------------------------------- */
 
 /* count_cells_of()/acid_tank() live in suite_sand_common.{c,h} - reused far

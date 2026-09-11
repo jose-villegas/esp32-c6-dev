@@ -1,10 +1,10 @@
-/*=============================================================================
+/*
  * intmath - small integer helpers used from more than one file.
  *
  * `static inline`: some of these run in the sand simulation's innermost
  * loop, tens of thousands of times a second, where a cross-file function
  * call is not free.
- *===========================================================================*/
+ */
 #pragma once
 
 /* Not named `abs`/`sign` - those collide with <stdlib.h>. */

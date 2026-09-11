@@ -1,8 +1,8 @@
-/*=============================================================================
+/*
  * device_state.c - the device-only half: everything device_state_read()
  * needs actual hardware for. See device_state.h for the pure formatting
  * side and the module's own reason to exist.
- *===========================================================================*/
+ */
 #include "util/device_state.h"
 
 #include "driver/temperature_sensor.h"

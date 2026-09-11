@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * gfx_color - what a pixel is, separately from how the panel works.
  *
  * Split out of gfx.h because this part is pure arithmetic and nothing else:
@@ -11,7 +11,7 @@
  * flash at zero cost in RAM - which on this board is the resource that actually
  * runs out. Computing the same table at startup would cost real bytes of the
  * scarcest thing there is.
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stdbool.h>

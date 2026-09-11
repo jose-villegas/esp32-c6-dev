@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * sand_plants - tree, root and leaf growth: from a bare seed cell to a
  * branching, thickening trunk with a canopy, fed by soil moisture a root
  * system draws down through itself.
@@ -6,12 +6,11 @@
  * Shares almost no call graph with sand_reactions.c's fire chemistry -
  * nothing here reads pair_bits[]/PAIR_*, calls try_ignite_given(),
  * conduct_heat() or cool_off_chain(), and nothing over there calls a
- * grow/root/sprout/bud function. The two halves used to sit in one
- * 2,870-line file only because both are reaction_t-driven per-cell passes
- * dispatched by the same step_one_reacting_row() (sand_reactions.c) - that
- * dispatch table, and the handful of helpers genuinely needed by BOTH
+ * grow/root/sprout/bud function. Both are reaction_t-driven per-cell
+ * passes dispatched by the same step_one_reacting_row()
+ * (sand_reactions.c); the handful of helpers genuinely needed by BOTH
  * halves (place_cell()/place_reacted(), reaction_dirs, pay_quench_cost(),
- * soil_set_moisture()), live in sand_priv.h instead, the same way sand.c
+ * soil_set_moisture()) live in sand_priv.h instead, the same way sand.c
  * and sand_liquid.c already share what a gravity-ward move and a
  * cross-flow pass both need.
  *
@@ -20,7 +19,7 @@
  * sits between a leaf and the ground. step_one_growing_cell() is the one
  * that actually shapes a tree: height, lean, branch or thicken, then
  * harden a mature run into wood with a canopy on top.
- *===========================================================================*/
+ */
 
 #include "reaction_doc.h"
 #include "sand_priv.h"

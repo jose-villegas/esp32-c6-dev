@@ -72,9 +72,7 @@ static bool power_held;
  * essentially free here. */
 static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 
-/*---------------------------------------------------------------------------
- * The PMU
- *-------------------------------------------------------------------------*/
+/* The PMU */
 
 static bool pmu_write(uint8_t reg, uint8_t value)
 {
@@ -177,9 +175,7 @@ static void pmu_take_events(bool *short_press, bool *long_press)
     *long_press  = (status & AXP2101_PKEY_LONG) != 0;
 }
 
-/*---------------------------------------------------------------------------
- * Polling
- *-------------------------------------------------------------------------*/
+/* Polling */
 
 static void poll_once(void)
 {

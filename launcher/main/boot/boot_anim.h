@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * boot_anim - the startup animation: the zeta function spiralling up its own
  * critical line.
  *
@@ -35,11 +35,10 @@
  * scale: a CAMERA, and the SPACE the grid and curve live in. Both are
  * keyframed data (boot_anim_keyframes[], generated from
  * boot_anim_timeline.json by tools/gen_boot_anim_timeline.py - see "The
- * timeline" below), edited live in tools/boot_anim_editor.html rather than
- * hand-derived once the way this file's camera math used to be. Projection
- * is real perspective, not the old axonometric three-fixed-directions
- * trick - see "The projection" below, including how to get back to
- * orthographic if that ever turns out to be wanted.
+ * timeline" below), edited live in tools/boot_anim_editor.html. Projection
+ * is real perspective, not axonometric three-fixed-directions - see "The
+ * projection" below, including how to get back to orthographic if that
+ * ever turns out to be wanted.
  *
  * ONE SPACE-UNIT IS ONE METER
  *
@@ -58,10 +57,10 @@
  *   S3L_F  small3dlib's own fixed point (512 = 1.0) - meters once
  *          projected, camera/space transform numbers throughout, and a
  *          full turn of rotation.
- *   Q15    sines and cosines from this file's own trig table (still used
- *          by the title's wobble/wave - see "Trigonometry" below - even
- *          though the camera no longer reads it directly).
- *===========================================================================*/
+ *   Q15    sines and cosines from this file's own trig table, used by the
+ *          title's wobble/wave (see "Trigonometry" below), not by the
+ *          camera.
+ */
 #pragma once
 
 #include <stdbool.h>
@@ -89,20 +88,18 @@ static inline void boot_anim_unused_pixel(S3L_PixelInfo *pixel) { (void)pixel; }
 #define BOOT_ANIM_ONE  (1 << BOOT_ANIM_Q)   /* 4096 == 1.0 */
 #define BOOT_ANIM_TQ   8                    /* t's own fixed point */
 
-/*---------------------------------------------------------------------------
+/*
  * The timeline
  *
- * Where the camera - and now the space it looks at - actually come from:
+ * Where the camera - and the space it looks at - come from:
  * boot_anim_keyframes[], generated into boot_anim_timeline.h from
  * boot_anim_timeline.json by tools/gen_boot_anim_timeline.py, each entry
  * carrying TWO full small3dlib transforms (S3L_Transform3D: translation,
  * rotation, scale) - one for the camera, one for the "space" the grid and
- * curve live in - rather than the single hand-derived rotation+2D-drift
- * this used to be. Interpolating them is the same idea as before, just more
- * channels: find the two keyframes bracketing `now_ms`, ramp between their
- * times, ease that ramp by whichever shape the arriving keyframe names, and
- * lerp every number by it - still util/tween.h's own vocabulary, nothing
- * new invented to interpret the table.
+ * curve live in. Interpolating them: find the two keyframes bracketing
+ * `now_ms`, ramp between their times, ease that ramp by whichever shape
+ * the arriving keyframe names, and lerp every number by it - util/tween.h's
+ * own vocabulary, nothing new invented to interpret the table.
  *
  * UNITS
  *
@@ -120,7 +117,7 @@ static inline void boot_anim_unused_pixel(S3L_PixelInfo *pixel) { (void)pixel; }
  * Placed ahead of "The camera" rather than after it: boot_anim_view() below
  * needs this, and so does boot_anim_finale_reach() much further down, so
  * this has to exist before both rather than living beside just one of them.
- *-------------------------------------------------------------------------*/
+ */
 
 typedef struct {
     S3L_Transform3D camera;
@@ -201,7 +198,7 @@ static inline boot_anim_timeline_state_t boot_anim_timeline_sample(uint32_t now_
     return s;
 }
 
-/*---------------------------------------------------------------------------
+/*
  * Trigonometry
  *
  * Used to be "The camera" - the sine table and the two functions built on
@@ -212,7 +209,7 @@ static inline boot_anim_timeline_state_t boot_anim_timeline_sample(uint32_t now_
  * above). Kept, unrenamed in what they compute: "The title"'s own wobble/
  * wave (boot_anim_title_wobble(), boot_anim_title_wave()) still use
  * boot_anim_sin() directly and always have, independently of the camera.
- *-------------------------------------------------------------------------*/
+ */
 
 static const int16_t boot_anim_sin_quarter[65] = {
          0,    804,   1608,   2410,   3212,   4011,   4808,   5602,
@@ -258,7 +255,7 @@ static inline int32_t boot_anim_cos(uint16_t phase)
     return boot_anim_sin((uint16_t)(phase + 16384u));
 }
 
-/*---------------------------------------------------------------------------
+/*
  * The projection
  *
  * Perspective, via small3dlib - the same library apps/cube already uses for
@@ -284,7 +281,7 @@ static inline int32_t boot_anim_cos(uint16_t phase)
  * including small3dlib.h, for the same host-portability reason
  * gfx_dirty.h's own literals exist) are what small3dlib itself sizes the
  * projection against.
- *-------------------------------------------------------------------------*/
+ */
 
 #define BOOT_ANIM_T_MAX 126    /* the top of the climb            */
 
@@ -443,7 +440,7 @@ static inline bool boot_anim_project_segment(
         view, ax, ay, bx, by);
 }
 
-/*---------------------------------------------------------------------------
+/*
  * The wave
  *
  * A genuine radial sine wave - height(r, t) = amplitude * sin(2*pi*r /
@@ -461,7 +458,8 @@ static inline bool boot_anim_project_segment(
  *
  * Per VERTEX for a spoke, ONCE per ring for a ring's own circle - see
  * draw_grid_circle()/draw_grid_spoke() in boot_anim.c for why a circle
- * gets away with one lookup where a spoke cannot. */
+ * gets away with one lookup where a spoke cannot.
+ */
 
 #define BOOT_ANIM_WAVE_ENVELOPE_RAMP_MS 500
 
@@ -512,14 +510,14 @@ static inline int32_t boot_anim_wave_height(int32_t r_q12, uint32_t now_ms,
     return boot_anim_zeta_to_t_q8(amp_zeta_q12);
 }
 
-/*---------------------------------------------------------------------------
+/*
  * Smoothing
  *
  * 205 samples of a curve that crosses most of the screen is a chord every six
  * pixels or so, and at that size a polyline reads as a polyline - the tight
  * turns near the axis visibly have corners. Rather than carry more samples,
  * the ones there are get drawn as a spline.
- *-------------------------------------------------------------------------*/
+ */
 
 #define BOOT_ANIM_SPLINE_STEPS 4
 
@@ -666,14 +664,14 @@ static inline int boot_anim_curve_stride(const boot_anim_view_t *view)
     return boot_anim_lod_stride_for_extent((max_x - min_x) + (max_y - min_y));
 }
 
-/*---------------------------------------------------------------------------
+/*
  * The choreography
  *
  * Every phase is a function of milliseconds since power-up rather than of a
  * frame counter, so the animation lasts five seconds whatever the frame rate
  * turns out to be - and it does move, because a frame costs a full-screen
  * transfer plus however much curve there is to draw by then.
- *-------------------------------------------------------------------------*/
+ */
 
 /* A FRACTION, not a pixel count: arms have different lengths. */
 static inline uint8_t boot_anim_axis_reach(uint32_t now_ms)
@@ -764,7 +762,7 @@ static inline uint8_t boot_anim_grid_whiten(uint32_t now_ms)
  * tools/gen_boot_anim_timeline.py's validate() now that these timings are
  * generated data, not source. */
 
-/*---------------------------------------------------------------------------
+/*
  * The title
  *
  * "Autana", in ordinary horizontal type - wide and short, the way any word
@@ -792,7 +790,7 @@ static inline uint8_t boot_anim_grid_whiten(uint32_t now_ms)
  * does not merely slide to a stop - it visibly settles, the way a struck
  * bell's ring narrows before it goes quiet, arriving exactly flat and
  * exactly on target at the same instant.
- *-------------------------------------------------------------------------*/
+ */
 
 #define BOOT_ANIM_TITLE     "Autana"
 #define BOOT_ANIM_TITLE_LEN 6
@@ -896,7 +894,7 @@ static inline void boot_anim_title_shadow_offset(int dx, int dy,
  * the curve still drawing when the fade starts (unambiguously broken), a
  * letter still arriving as the picture dissolves might be wanted. */
 
-/*---------------------------------------------------------------------------
+/*
  * Colour
  *
  * The panel is an AMOLED: an unlit pixel is genuinely off, not a backlight
@@ -910,7 +908,7 @@ static inline void boot_anim_title_shadow_offset(int dx, int dy,
  * gfx_color_mix() in gfx_color.h - already written, already tested, and
  * already aware that the panel's green channel has a bit more range than the
  * other two.
- *-------------------------------------------------------------------------*/
+ */
 
 /* A whole turn: six sectors of 256, so the sector is a shift and the ramp
  * within one is a byte. */
@@ -1089,7 +1087,7 @@ static inline boot_anim_stroke_t boot_anim_stroke(int32_t along_q12,
     return s;
 }
 
-/*---------------------------------------------------------------------------
+/*
  * The finale
  *
  * The camera does not stop turning once the curve is finished, and the
@@ -1110,7 +1108,7 @@ static inline boot_anim_stroke_t boot_anim_stroke(int32_t along_q12,
  * boot_anim_ink() already dissolves the whole picture over - means the axes
  * finish unbounding exactly as the picture finishes disappearing, which
  * reads as one ending rather than two separately-timed ones.
- *-------------------------------------------------------------------------*/
+ */
 
 static inline uint8_t boot_anim_finale_reach(uint32_t now_ms)
 {
@@ -1128,13 +1126,13 @@ static inline uint8_t boot_anim_finale_reach(uint32_t now_ms)
  * enters. */
 #define BOOT_ANIM_AXIS_FAR_UNITS 500
 
-/*---------------------------------------------------------------------------
+/*
  * Entry points into boot_anim.c
  *
  * Declared here and defined in boot_anim.c, the same arrangement ui_draw_icon()
  * has at the bottom of ui.h: a declaration costs this header none of its
  * host-portability, and a second header for one function would be worse.
- *-------------------------------------------------------------------------*/
+ */
 
 /* Public, not just boot_anim_run()'s own inner loop: gfx.c's primitives
  * are host-portable, so a plain host binary can call gfx_init(), this,

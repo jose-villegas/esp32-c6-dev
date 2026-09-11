@@ -3,11 +3,11 @@
                       * the toolchain rather than of this file */
 #include "material.h"
 
-/*=============================================================================
+/*
  * The table.
  *
  * `const`, so it lives in flash rather than RAM. Adding a material is a row.
- *===========================================================================*/
+ */
 
 #define TWIN_ROW(id, ...)                                                \
     [MATERIAL_ROW(id)] = __VA_ARGS__, [MATERIAL_ROW(id) + 1] = __VA_ARGS__
@@ -324,7 +324,7 @@ const material_t materials[MATERIAL_ROWS] = {
         },
 };
 
-/*=============================================================================
+/*
  * The reaction table - see material.h's own comment on reaction_t for why
  * this is a second table rather than more fields on materials[] above.
  *
@@ -332,7 +332,7 @@ const material_t materials[MATERIAL_ROWS] = {
  * field: never catches, never a heat source, never conducts, never smokes,
  * vanishes on quench, never flares. Adding a material that does not react
  * at all - most of them - costs nothing here.
- *===========================================================================*/
+ */
 
 const reaction_t reactions[MATERIAL_MAX] = {
     /* Water's effects on materials come from the outside; `soaks` in sand and

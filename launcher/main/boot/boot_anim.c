@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * boot_anim - drawing the startup animation, and the five seconds it owns.
  *
  * The projection, the smoothing, the colour and the timeline are all in
@@ -25,7 +25,7 @@
  * what the additive strokes need underneath them and (until the photograph
  * arrives - see draw_image()'s own comment on why that phase composites
  * rather than clearing into) what the dissolve at the end fades into.
- *===========================================================================*/
+ */
 
 #include "boot/boot_anim.h"
 
@@ -77,9 +77,7 @@ static const char *TAG = "boot_anim";
 /* A zero of zeta, marked on the t axis where the curve crosses it. */
 #define ZERO_DOT 5
 
-/*---------------------------------------------------------------------------
- * Colour
- *-------------------------------------------------------------------------*/
+/* Colour */
 
 /* Folds global dissolve into existing alpha. */
 static uint8_t scale8(uint8_t a, uint8_t b)
@@ -104,32 +102,28 @@ static gfx_color_t lit_whitened(uint32_t rgb, uint8_t whiten, uint8_t alpha)
     return gfx_color_mix(COL_BG, whitened, alpha);
 }
 
-/*---------------------------------------------------------------------------
+/*
  * Projection
  *
  * boot_anim.h's projection family - a matrix-vector multiply by the frame's
  * composed space-then-camera transform, then a perspective divide - does
- * the real work; there is no local wrapper here any more, so every draw_*
- * call site below reads one of boot_anim.h's own functions directly.
- * Which one depends on what is being drawn, not a single shared choice:
- * a lone point (a zero marker, a pen head, an axis label anchor) reads
- * boot_anim_project_point(), which rejects outright rather than draw
- * somewhere nonsensical for a point behind the camera (see that
- * function's own comment); a LINE (a curve segment, a grid ring or
+ * the real work; every draw_* call site below reads one of its functions
+ * directly, never the raw, unclipped boot_anim_project() (see the three
+ * "Not boot_anim_project() directly" comments below). Which one depends on
+ * what is being drawn: a lone point (a zero marker, a pen head, an axis
+ * label anchor) reads boot_anim_project_point(), which rejects outright
+ * rather than draw somewhere nonsensical for a point behind the camera (see
+ * that function's own comment); a LINE (a curve segment, a grid ring or
  * spoke, an axis arm) reads boot_anim_project_segment()/boot_anim_
- * project_segment_cs() instead, which clips a segment straddling the
- * near plane to where it actually crosses it rather than rejecting the
- * whole thing - see that function's own comment for why a segment needs
- * the extra step a lone point does not. Nothing left here calls the raw,
- * unclipped boot_anim_project() at all - see the three "Not boot_anim_
- * project() directly" comments below for the class of bug that used to
- * risk.
+ * project_segment_cs() instead, which clips a segment straddling the near
+ * plane to where it actually crosses it rather than rejecting the whole
+ * thing - see that function's own comment for why a segment needs the
+ * extra step a lone point does not.
  *
- * There is no separate "shrunk" variant either - what used to be a post-
- * projection pixel-space shrink (boot_anim_motif_shrink_q8(), applied here
- * via csx()/csy()) is now the space transform's own SCALE channel, baked
- * into the matrix `view` already carries. Every draw_* call below reads
- * this, at full scale, always. */
+ * There is no separate "shrunk" variant: scale lives in the space
+ * transform's own SCALE channel, baked into the matrix `view` already
+ * carries. Every draw_* call below reads this, at full scale, always.
+ */
 
 /* A whole number of grid units, as a Q12 value. */
 static int32_t units(int n)
@@ -137,32 +131,15 @@ static int32_t units(int n)
     return (int32_t)n * BOOT_ANIM_ONE;
 }
 
-/*---------------------------------------------------------------------------
+/*
  * The floor
  *
- * The complex plane zeta's value lives in, drawn as a floor at t = 0.
- * Giving it a floor rather than leaving the two axes bare is what makes
- * the third axis read as height instead of as a third line through the
- * same point.
- *
- * A POLAR grid - concentric rings, each a genuine circle, plus a handful
- * of radial spokes - not the square lattice of crossing horizontal/
- * vertical lines this used to be. Two things needed that, together:
- * boot_anim_wave_height() (see boot_anim.h's "The wave" section) already
- * lifts a point by its true distance from the origin, so a ring drawn as
- * a real circle rises as one uniform ring, exactly like a water ripple's
- * own wavefront; a square ring cannot ever BE that shape, whatever its
- * height does, and neither can its COLOUR - boot_anim_grid_hue() below
- * still colours one ring in one flat tone, so on the old crossing-line
- * grid that tone traced the same square/diamond the lines themselves did,
- * not the circle the maths already treated it as. A circle fixes both
- * with the one change.
- *
- * `far`/`d` are fixed local-space reach now, not scaled by a shrink of
- * their own - the grid IS the plane the curve and axes are drawn against,
- * and now reads as the same scale changing they do because it goes
- * through the exact same space transform they do (see "Projection" above),
- * rather than riding its own separate pulse the way it used to. */
+ * Drawn at t = 0 as a POLAR grid (concentric circles + radial spokes),
+ * not a square lattice - boot_anim_wave_height() lifts a point by its
+ * true distance from the origin, so only a real circle rises as one
+ * uniform ring, and only a real circle matches boot_anim_grid_hue()'s
+ * one-tone-per-ring colouring.
+ */
 
 #define BOOT_ANIM_GRID_CIRCLE_STEPS 12
 
@@ -356,9 +333,7 @@ void draw_floor(uint32_t now_ms, uint8_t ink,
     }
 }
 
-/*---------------------------------------------------------------------------
- * The axes
- *-------------------------------------------------------------------------*/
+/* The axes */
 
 /* Arms arrive together despite differing lengths. */
 static void draw_arm(int32_t re, int32_t im, int32_t t, uint8_t reach,
@@ -425,9 +400,7 @@ void draw_axes(uint32_t now_ms, uint8_t ink,
     }
 }
 
-/*---------------------------------------------------------------------------
- * The zeros
- *-------------------------------------------------------------------------*/
+/* The zeros */
 
 void draw_zeros(int32_t pen_t_q8, uint8_t ink,
                 const boot_anim_view_t *view)
@@ -448,9 +421,7 @@ void draw_zeros(int32_t pen_t_q8, uint8_t ink,
     }
 }
 
-/*---------------------------------------------------------------------------
- * The curve
- *-------------------------------------------------------------------------*/
+/* The curve */
 
 static void draw_stroke(int x0, int y0, int x1, int y1,
                         gfx_color_t c, int width, bool joined)
@@ -643,9 +614,7 @@ int32_t draw_curve(uint32_t now_ms, uint8_t ink,
     return boot_anim_spline(final_c0, final_c1, final_c2, part).t;
 }
 
-/*---------------------------------------------------------------------------
- * The title
- *-------------------------------------------------------------------------*/
+/* The title */
 
 static void title_glyph_origin(int view_x, int view_y, int glyph_w,
                                int glyph_h, int *panel_x, int *panel_y)
@@ -659,10 +628,10 @@ static void title_glyph_origin(int view_x, int view_y, int glyph_w,
  * Drop-shadow dx/dy (authored, signed) go through
  * boot_anim_title_shadow_offset()'s quarter-turn first: "down-right" in
  * the reader's frame differs from panel space. DITHERED, not solid: fake
- * transparency, this panel's usual trick with no real blending. 255 is
- * pixel-identical to the old plain call; 0 disables. Halo is plain
- * COL_BG, not luminance-derived: that flips white the instant ink dips
- * dark, backwards for fading to black. */
+ * transparency, this panel's usual trick with no real blending - 255 is
+ * pixel-identical to a solid draw, 0 disables. Halo is plain COL_BG, not
+ * luminance-derived: that flips white the instant ink dips dark,
+ * backwards for fading to black. */
 void draw_title(uint32_t now_ms, uint8_t ink)
 {
     const gfx_color_t c = gfx_color_mix(COL_BG, COL_WHITE, ink);
@@ -700,7 +669,7 @@ void draw_title(uint32_t now_ms, uint8_t ink)
     }
 }
 
-/*---------------------------------------------------------------------------
+/*
  * The photograph
  *
  * The one thing here that is not drawn but COMPOSITED: every draw_* call
@@ -733,7 +702,8 @@ void draw_title(uint32_t now_ms, uint8_t ink)
  * live-content) is exactly what an app transition or image viewer will
  * want, which is this whole animation's real job - proving out the
  * machinery the apps get to keep. See its contract in gfx.h; it marks its
- * own dirty band, so there is no gfx_mark_all_dirty() here any more. */
+ * own dirty band, so there is no gfx_mark_all_dirty() here any more.
+ */
 void draw_image(uint8_t ink, uint8_t reveal)
 {
     if (reveal == 0) {
@@ -756,9 +726,7 @@ void draw_image(uint8_t ink, uint8_t reveal)
     }
 }
 
-/*---------------------------------------------------------------------------
- * The loop
- *-------------------------------------------------------------------------*/
+/* The loop */
 
 /* EVERY FRAME IS A FULL REPAINT suite_boot_anim_perf.c times this phase
  * gfx_clear() cost in gfx.c */

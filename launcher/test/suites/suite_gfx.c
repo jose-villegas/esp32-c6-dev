@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Device-only suite: the graphics layer.
  *
  * Covers what a host cannot: real framebuffer memory, real DMA, real I2C and
@@ -15,7 +15,7 @@
  *
  * Anything that is pure logic belongs in the host suite instead. See
  * docs/Testing-Guide.md.
- *===========================================================================*/
+ */
 
 #include <stdint.h>
 #include <stdlib.h>

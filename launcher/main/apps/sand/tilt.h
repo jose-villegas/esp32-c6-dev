@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * tilt - turning raw accelerometer counts into a direction worth steering sand
  * with.
  *
@@ -69,7 +69,7 @@
  * Genuine free fall is different from all of the above and is reported
  * separately: there the TOTAL magnitude collapses, nothing is holding the sand
  * up, and it should hang.
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stdbool.h>

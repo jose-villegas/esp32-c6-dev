@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * brush_screen - pure layout for the sand app's second screen: header
  * (material swatch/name/info), brush mode (POUR/ERASE/BOOM segments) and
  * brush size (caption/value/slider).
@@ -23,7 +23,7 @@
  * None of the three are renamed here; this header only exists to say so
  * before the next reader has to work it out from three similarly-named
  * enums at once.
- *===========================================================================*/
+ */
 #pragma once
 
 #include "microui.h"

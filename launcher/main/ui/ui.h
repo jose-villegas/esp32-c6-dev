@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * ui - shared microui integration, for the shell and for apps.
  *
  * Everything an app needs to draw a UI, and nothing about any particular UI.
@@ -28,7 +28,7 @@
  * the output, so if it hashes the same as last frame the picture is identical
  * and both the repaint and the transfer can be skipped. A static menu then
  * costs nothing at all.
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stdbool.h>
@@ -156,7 +156,7 @@ int ui_height(void);
  * uncleared, showing a previous app's frame. */
 int ui_begin_screen(mu_Context *ctx, const char *title, int opt);
 
-/*---------------------------------------------------------------------------
+/*
  * Fixed-width content
  *
  * A canvas under a changing transform holds two different kinds of content.
@@ -174,7 +174,8 @@ int ui_begin_screen(mu_Context *ctx, const char *title, int opt);
  * geometry, `canvas_w` taken as a parameter rather than read internally via
  * ui_width() - that is what keeps it host-testable without pulling in
  * gfx.h/BSP, the same split ui_bezel_spans() (ui_style.h) and
- * ui_transform_rect() (ui_transform.h) already use. */
+ * ui_transform_rect() (ui_transform.h) already use.
+ */
 
 /* A rect `w` wide, `h` tall, horizontally centred within a canvas
  * `canvas_w` wide, at vertical position `y`. Does not clamp `w` to
