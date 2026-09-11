@@ -127,14 +127,10 @@ int ui_measure_text(const char *str);
  * is deliberately unpatched, so there is no per-widget nesting. */
 void ui_set_transform(ui_transform_t t);
 
-/* Increments whenever the canvas shape genuinely changes - currently,
- * whenever ui_set_transform() gets a transform differing from the one
- * in force. Starts at 0, set in ui_init(). THIS IS NOT A CALLBACK,
- * NOBODY SUBSCRIBES TO IT: a cheap number, nothing more - a caller reads
- * it, remembers it, compares a fresh read later. No listeners, no event
- * fired - resist a subscriber list; the value comes from being pulled
- * and diffed on a caller's own schedule, same as a cached last-seen
- * generation number an app keeps beside its own redraw-skip check. */
+/* Increments whenever the canvas shape genuinely changes. THIS IS NOT A
+ * CALLBACK, NOBODY SUBSCRIBES TO IT: a caller reads it, remembers it and
+ * compares a fresh read later. Resist a subscriber list - the value comes
+ * from being pulled and diffed on the caller's own schedule. */
 uint32_t ui_layout_generation(void);
 
 /* The logical canvas size: the physical viewport (GFX_WIDTH x GFX_HEIGHT)
@@ -157,24 +153,14 @@ int ui_height(void);
 int ui_begin_screen(mu_Context *ctx, const char *title, int opt);
 
 /*
- * Fixed-width content
- *
- * A canvas under a changing transform holds two different kinds of content.
  * FILL content - a banner, a status strip - has no natural width of its own
- * and always spans whatever width the canvas currently is; the launcher's
- * banner is the model for this and needs no helper, since mu_layout_row()
- * with a -1 column already does exactly that.
+ * and spans whatever the canvas currently is, which mu_layout_row() with a
+ * -1 column already does. FIXED content - a few large tap targets sized to
+ * what they need to say - should keep that width and centre instead.
  *
- * FIXED content - a small number of large tap targets sized to what they
- * need to say - should stay that width and centre in the canvas rather than
- * stretch to fill it. A boot menu with a hand-placed pair of large tap
- * targets is the model this generalises: it already centres them this way.
- *
- * ui_centered_rect() is the shared primitive for the fixed case. Pure
- * geometry, `canvas_w` taken as a parameter rather than read internally via
- * ui_width() - that is what keeps it host-testable without pulling in
- * gfx.h/BSP, the same split ui_bezel_spans() (ui_style.h) and
- * ui_transform_rect() (ui_transform.h) already use.
+ * ui_centered_rect() is the shared primitive for the fixed case. `canvas_w`
+ * is a parameter rather than an internal ui_width() call, which is what
+ * keeps it host-testable without pulling in gfx.h/BSP.
  */
 
 /* A rect `w` wide, `h` tall, horizontally centred within a canvas

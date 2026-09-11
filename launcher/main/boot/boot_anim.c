@@ -103,26 +103,13 @@ static gfx_color_t lit_whitened(uint32_t rgb, uint8_t whiten, uint8_t alpha)
 }
 
 /*
- * Projection
- *
- * boot_anim.h's projection family - a matrix-vector multiply by the frame's
- * composed space-then-camera transform, then a perspective divide - does
- * the real work; every draw_* call site below reads one of its functions
- * directly, never the raw, unclipped boot_anim_project() (see the three
- * "Not boot_anim_project() directly" comments below). Which one depends on
- * what is being drawn: a lone point (a zero marker, a pen head, an axis
- * label anchor) reads boot_anim_project_point(), which rejects outright
- * rather than draw somewhere nonsensical for a point behind the camera (see
- * that function's own comment); a LINE (a curve segment, a grid ring or
- * spoke, an axis arm) reads boot_anim_project_segment()/boot_anim_
- * project_segment_cs() instead, which clips a segment straddling the near
- * plane to where it actually crosses it rather than rejecting the whole
- * thing - see that function's own comment for why a segment needs the
- * extra step a lone point does not.
- *
- * There is no separate "shrunk" variant: scale lives in the space
- * transform's own SCALE channel, baked into the matrix `view` already
- * carries. Every draw_* call below reads this, at full scale, always.
+ * Which projection a call site reads depends on what it draws: a lone point
+ * reads boot_anim_project_point(), which rejects rather than draw somewhere
+ * nonsensical for a point behind the camera; a LINE reads
+ * boot_anim_project_segment(), which clips a segment straddling the near
+ * plane instead of rejecting it whole. Nothing reads the raw, unclipped
+ * boot_anim_project(). There is no "shrunk" variant - scale lives in the
+ * space transform's own SCALE channel.
  */
 
 /* A whole number of grid units, as a Q12 value. */
@@ -670,39 +657,12 @@ void draw_title(uint32_t now_ms, uint8_t ink)
 }
 
 /*
- * The photograph
- *
- * The one thing here that is not drawn but COMPOSITED: every draw_* call
- * above computes a colour and STORES it - lit()/lit_whitened() both mix
- * off the constant COL_BG, and gfx_pixel()/gfx_line_ex() write whatever
- * they are handed. Nothing above ever reads the pixel already sitting in
- * the framebuffer. That is fine over black and wrong over a photograph -
- * a half-faded grid line drawn that way would paint a dark, OPAQUE
- * scratch across the mountain, not a fading-transparent one - so the
- * crossfade happens here instead, the one place that can leave a scene
- * pixel exactly as drawn rather than overwrite it outright. NOT by
- * reading and blending it, though - gfx_dither_covers() below never
- * inspects a pixel's own value, only its (x, y) - but by choosing not to
- * write over it at all for whichever pixels the current reveal fraction
- * does not yet cover. boot_anim_draw_frame() below draws the scene
- * (floor/axes/curve/zeros) at full, undimmed ink, gated off once boot_
- * anim_scene_reach() says it is about to be fully covered anyway; this
- * then dithers the photograph OVER whatever that left behind, at boot_
- * anim_image_reveal()'s own coverage fraction - a stippled coverage
- * split between the two pictures, not a true per-pixel blend (see draw_
- * image()'s own comment below for why, and what that trades away). The
- * title is drawn AFTER this call, untouched by any of it - see boot_
- * anim_scene_reach()'s own comment in boot_anim.h for why that is a
- * deliberate departure from this file's "one multiply takes the whole
- * picture down together" design elsewhere.
- *
- * The compositing itself is gfx_blit_dither() - a gfx primitive now, not
- * boot-local code: it started life as this file's own row-pattern loop and
- * was extracted once it was clear the technique (cheap dithered image-over-
- * live-content) is exactly what an app transition or image viewer will
- * want, which is this whole animation's real job - proving out the
- * machinery the apps get to keep. See its contract in gfx.h; it marks its
- * own dirty band, so there is no gfx_mark_all_dirty() here any more.
+ * The one thing here that is not drawn but COMPOSITED. Every draw_* call
+ * above stores a colour without reading the framebuffer, which is fine over
+ * black and wrong over a photograph - a half-faded grid line drawn that way
+ * paints an opaque scratch across the mountain. So the crossfade is a choice
+ * not to WRITE: gfx_dither_covers() inspects only a pixel's (x, y), and the
+ * scene stays as drawn wherever the reveal does not yet cover it.
  */
 void draw_image(uint8_t ink, uint8_t reveal)
 {
