@@ -8,6 +8,7 @@ this is the toolbox.
 |---|---|---|
 | **ceiling probe** (host counters) | how OFTEN work finds nothing | how long it takes |
 | **cache counters** (EXTMEM L1) | whether a scene stalls on fetch | which instructions it ran |
+| **instruction model** (`instruction_model.py`) | where a step's instructions go | what a candidate will save |
 | **pass gate** (`volatile bool`) | what one phase costs, within one image | whether the phase was worth running |
 | **single step** from a rebuilt board | a phase's cost without compounding | anything about steady state |
 | **control pass** | which part of a loop is yours | the part you did not isolate |
@@ -154,6 +155,66 @@ cross-flow's probes their rows (PR for bd `esp32c6-61h`) moved water by −581
 µs; the counters on the same pair of images read −93,120 cycles, which is
 −582 µs, and −85,680 fetches. Cycles fell 1.09 per fetch removed. A layout
 accident cannot produce that agreement.
+
+## Where the instructions go: the line model
+
+If a pass costs what it executes, the question about any hot loop is how many
+instructions it runs — and that needs no device.
+`tools/perf_probe/instruction_model.py` joins the two halves:
+
+| half | from |
+|---|---|
+| riscv instructions per source line | `objdump -dl` on `build.diag`'s own `.obj` |
+| executions per source line | `gcov`, running the same scene on a host |
+
+**Divide by the number of code sites a line owns, or the answer is 2× too
+big.** One source line lands at several places in the object — a loop
+versioned for its two directions, a tail GCC duplicated, a `static inline`
+expanded at fifteen call sites — and gcov reports the *sum* of their
+executions. The naive product squares that multiplicity: 3,812,840
+instructions per water step against a measured 1,961,884.
+
+Against the device's fetch counter, water scene:
+
+| ref | model | device ibus | error |
+|---|---:|---:|---:|
+| 4d9efa7 | 1,918,761 | 1,961,884 | −2.2% |
+| 01d12db | 2,122,082 | 2,047,557 | +3.6% |
+
+So the **shape** of a step is trustworthy. It put cross-flow at 48% of the
+water step against the gated decomposition's 51%, and ranked the two grid
+walks first and second — which is what choosing a target needs.
+
+### It cannot price a candidate, and the trap is that it looks like it can
+
+**Differencing two runs of the model is not a prediction, and it is wrong in
+both directions.** Across the pair above it reads −203,321 instructions where
+the device measured −85,673 fetches, 2.4× over. Across the two skips of the
+round that built this tool it reads −156,929 against a measured −250,289, 1.6×
+*under*. The ±2–4% absolute errors are independent per build, and their
+difference is several percent of a two-million-instruction step — wider than
+most effects worth chasing. A change also relabels work: the first pair reads
+−171,276 on `equalise_one_row_cell` and +56,013 on `equalise_one_block`, which
+is one function's instructions being counted as another's.
+
+**Price a candidate with counters times a hand-counted path instead.** Work
+counters (`counters_scene_main.c`) for how often the work happens; the
+disassembly for what one occurrence costs, weighting each exit by how often it
+is taken and *including whatever the change pushes back into its caller*.
+Leaving that out is most of why PR #174's own static model said 9–10% and the
+device gave 4.0%: it counted the 7 and 11 instructions its two probes lost and
+not the row selection and address arithmetic the caller picked up. Counting a
+function's whole static size rather than the path a call actually walks is the
+other half — that alone over-weights by 1.8×.
+
+Done that way, PR #175's ray skip was predicted at −69,000 instructions a step
+against a measured −76,547 fetches — 10% out, the best any instrument in this
+campaign has managed before a build. Its empty-span skip was predicted at
+−107,000 against −173,742, 38% under, and the disassembly says why: the price
+of a *skipped cell* is not the reject loop's nine instructions alone but about
+twelve, once the block prologue and the two lines of the mask test it also
+avoids are counted. **A skip's saving is the whole region it stops entering,
+not the loop body you traced.**
 
 ## Before you build anything
 
