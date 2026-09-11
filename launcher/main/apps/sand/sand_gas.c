@@ -57,6 +57,48 @@ static uint16_t gas_mask(void)
     return mask;
 }
 
+/* Which rows hold gas, carried from the rise sweep's own scan to the spread
+ * pass below, which otherwise repeats the same whole-grid scan to find the
+ * same cells. A bitmap, not a byte per row: RAM is this board's binding
+ * constraint, and this is read once per row against a per-cell loop.
+ *
+ * GAS_ROW_WORDS caps the grid height it can describe. A taller grid is not
+ * wrong, it just leaves the map off and spreads as before. */
+#define GAS_ROW_WORDS 16
+#define GAS_ROW_MAX   (GAS_ROW_WORDS * 32)
+
+typedef struct {
+    uint32_t w[GAS_ROW_WORDS];
+} gas_rows_t;
+
+/* File-static rather than threaded through the pass: step_one_gas_grain()
+ * already carries sixteen parameters, and this is built and consumed inside
+ * one sand_step_gas() call, which never nests. */
+static gas_rows_t gas_row_map;
+static bool       gas_row_map_live;
+
+/* THE SKIP'S WHOLE SAFETY ARGUMENT: every mover below arms the row it lands
+ * in, so the map records what happened rather than inferring it from how far
+ * a cell can travel. Widening the map by a fixed number of rows instead does
+ * not work - a walk drawing straight down lands in a row the rise sweep has
+ * not reached yet, takes a second turn there, and can repeat, so travel in
+ * one pass has no bound. A mover that forgets to arm is what
+ * sand_gas_row_audit_enable() catches. */
+static inline void gas_row_arm(int y)
+{
+    if (gas_row_map_live && (unsigned)y < (unsigned)GAS_ROW_MAX) {
+        gas_row_map.w[(unsigned)y >> 5] |= 1u << ((unsigned)y & 31u);
+    }
+}
+
+static inline bool gas_row_may_hold(int y)
+{
+    if (!gas_row_map_live) {
+        return true;
+    }
+    return ((gas_row_map.w[(unsigned)y >> 5] >> ((unsigned)y & 31u)) & 1u) != 0u;
+}
+
 /*
  * Sub-pass 1: rise, and the two diagonal slides - try_fall_or_scatter()/
  * try_slide(), reused from sand.c with the direction inverted.
@@ -116,6 +158,7 @@ static bool try_bubble(sand_t *s, uint8_t *row, uint8_t *prow, int x, int y,
     row[x]   = target;
 
     mark_rows(s, y, y + rdy);
+    gas_row_arm(y + rdy);
     wake_block_and_neighbors(s, x, y);
     wake_block_and_neighbors(s, nx, y + rdy);
     return true;
@@ -208,6 +251,7 @@ static inline bool gas_walk_once(sand_t *s, uint8_t *row, int x, int y, int w,
         trow[nx] = grain;
         row[x]   = target;
         mark_rows(s, y, ny);
+        gas_row_arm(ny);
         return true;
     }
 
@@ -229,9 +273,21 @@ static inline bool gas_walk_once(sand_t *s, uint8_t *row, int x, int y, int w,
     trow[nx] = grain;
     row[x]   = target;
     mark_rows(s, y, ny);
+    gas_row_arm(ny);
     wake_block_and_neighbors(s, x, y);
     wake_block_and_neighbors(s, nx, ny);
     return true;
+}
+
+/* try_fall_or_scatter_impl()/try_slide_impl() report only that they moved,
+ * not where to, so the three rows their fall and two slides can reach are
+ * armed together. Only the exhaustive mover pays this - the walk and
+ * try_bubble() each arm the one row they actually landed in. */
+static inline void arm_exhaustive_landing(int y)
+{
+    gas_row_arm(y - 1);
+    gas_row_arm(y);
+    gas_row_arm(y + 1);
 }
 
 static bool step_one_gas_grain(sand_t *s, uint8_t *row, uint8_t *prow,
@@ -306,6 +362,7 @@ static bool step_one_gas_grain(sand_t *s, uint8_t *row, uint8_t *prow,
         moved = try_bubble(s, row, prow, x, y, w, rdx, rdy, grain, density);
     }
     if (moved) {
+        arm_exhaustive_landing(y);
         wake_block_and_neighbors(s, x, y);
     }
     return moved;
@@ -341,7 +398,10 @@ static bool step_one_gas_row(sand_t *s, int y, int w, int rdx, int rdy,
          * existed, but with decay it would strand that gas immortal,
          * since sand_step_gas() early-returns on !may_have_gas and decay
          * only ever rolls from inside this loop. */
-        any = true;
+        if (!any) {
+            any = true;
+            gas_row_arm(y);
+        }
         step_one_gas_grain(s, row, prow, arow, brow, x, y, w, rdx, rdy,
                            rslide_a, rslide_b, rload_dx, rload_dy, jostle,
                            driven_gas);
@@ -652,6 +712,14 @@ static bool equalise_gas_one_row(sand_t *s, int y, int w, int x_from,
         return any_gas;
     }
 
+    /* After row_is_packed(), not before: *clean_run has to stay an exact
+     * count of consecutive packed rows for the tilted skip above. That scan
+     * breaks on the first empty cell, so on a sparse row it is a handful of
+     * loads and the per-cell loop below is what the skip is worth. */
+    if (!gas_row_may_hold(y)) {
+        return false;
+    }
+
     for (int x = x_from; x != x_to; x += x_step) {
         if (equalise_gas_one_row_cell(s, row, arow, nrow, x, y, px, py, rdx, rdy,
                                       is_gas, &touched, &touched_x0,
@@ -667,6 +735,39 @@ static bool equalise_gas_one_row(sand_t *s, int y, int w, int x_from,
                           (int)((unsigned)touched_x1 / SAND_BLOCK_W), by);
     }
     return any_gas;
+}
+
+static bool gas_row_audit_on;
+
+void sand_gas_row_audit_enable(bool on)
+{
+    gas_row_audit_on = on;
+}
+
+unsigned sand_gas_row_audit_failures;
+unsigned sand_gas_row_audit_skippable;
+
+/* Re-derives the map the expensive way and compares, so a mover that moves a
+ * gas cell without arming the row it lands in is caught on whatever board the
+ * caller is already running rather than on one written to suspect it. Off by
+ * default and read once per pass, not per row. */
+static void gas_row_audit(const sand_t *s)
+{
+    for (int y = 0; y < s->h; y++) {
+        if (gas_row_may_hold(y)) {
+            continue;
+        }
+        sand_gas_row_audit_skippable++;
+        const uint8_t *row = s->cells + (size_t)y * (size_t)s->w;
+        for (int x = 0; x < s->w; x++) {
+            const cell_t c = row[x];
+            if (!CELL_IS_EMPTY(c) &&
+                ((gas_kind_mask >> (c >> 3)) & 1u) != 0u) {
+                sand_gas_row_audit_failures++;
+                return;
+            }
+        }
+    }
 }
 
 static bool equalise_gas(sand_t *s, const int *perp, int rdx, int rdy)
@@ -746,12 +847,19 @@ void sand_step_gas(sand_t *s, int gx, int gy, int dx, int dy,
 
     bool found_any = false;
     const int w = s->w;
+    gas_row_map_live = (s->h <= GAS_ROW_MAX);
+    memset(gas_row_map.w, 0, sizeof gas_row_map.w);
+
     for (int y = y_from; y != y_to; y += y_step) {
         if (step_one_gas_row(s, y, w, rdx, rdy, rslide_a, rslide_b,
                              rx_step, rload_dx, rload_dy, jostle,
                              driven_gas)) {
             found_any = true;
         }
+    }
+
+    if (gas_row_audit_on) {
+        gas_row_audit(s);
     }
 
     /* Then spread, alternating which way it looks each step - same reason

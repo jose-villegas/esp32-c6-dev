@@ -90,6 +90,14 @@ mark_depth_band(sand_t* s, int y) {
     memset(&s->dirty_rows[y0], 1, (size_t)(y1 - y0 + 1));
 }
 
+/* Not sand.h API: a test hook for the gas spread pass's row skip. With it on,
+ * every board a suite already runs becomes a check that no mover moved gas
+ * into a row the skip had written off. Counts rather than aborts, so one
+ * failure does not hide the rest. */
+void sand_gas_row_audit_enable(bool on);
+extern unsigned sand_gas_row_audit_failures;
+extern unsigned sand_gas_row_audit_skippable;
+
 #define BLOCK_SETTLED_NEAREST 0x1
 #define BLOCK_SETTLED_OTHER   0x2
 #define BLOCK_ACTIVE          0x4
