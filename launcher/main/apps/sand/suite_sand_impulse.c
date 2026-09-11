@@ -499,70 +499,15 @@ static void test_the_cap_degrades_gracefully(void)
         "be lost");
 }
 
-/* THE BUG THIS PINS: sand_explode()'s density math used to size `keep`
- * against `s->impulse_max` - the buffer's TOTAL capacity - not against
- * how much of it a still-in-flight EARLIER explosion had already spent.
- * sand_impulse() itself never overflows regardless (its own
- * `impulse_count >= impulse_max` guard is unconditional), but the
- * DENSITY the accumulator aims for was computed as if the whole buffer
- * were free, so a second explosion fired before a first one's grains
- * finish would seed entries the buffer no longer had room for, and
- * sand_impulse() would silently refuse them one by one - reintroducing
- * the exact lopsided, one-sided truncation the accumulator exists to
- * prevent, just from CONTENTION between two blasts instead of bias
- * within one. See sand_explode()'s own comment on `room` in sand.c for
- * the fix and the full reasoning; this proves it holds.
+/* THE BUG THIS PINS: sand_explode()'s `keep` was sized against total
+ * buffer capacity, not room left by an in-flight earlier explosion - a
+ * second blast before the first's grains flew got silently truncated
+ * lopsided by CONTENTION between blasts (fix: sand_explode()'s `room`,
+ * sand.c).
  *
- * THE SCENE: axis_impulse_buf[8] (8 entries total, no more), grid fully
- * packed with sand so every disc candidate either explosion visits is
- * occupied and queueable - no gravity-direction or empty-cell exits to
- * complicate which candidates are "true" disc members. Two blasts, far
- * enough apart (x 0-2 versus x 3-7) that neither's core or ring ever
- * touches the other's cells, fired back to back with NO sand_step() in
- * between - the first blast's four grains are still exactly where they
- * were queued, "in flight" in every sense this bug cares about.
- *
- * FIRST BLAST: centre (1,1), radius 1 - the same shape test_the_cap_
- * degrades_gracefully already works out by hand: disc_count 5, buffer
- * fully free (room 8), so `keep` == 5 and all 4 real neighbours (the
- * centre itself has no direction to throw it in) queue cleanly.
- * impulse_count is 4 afterward - checked below as this test's own
- * precondition, not really the property under test.
- *
- * SECOND BLAST: centre (5,2), radius 2 - true disc_count 13 (see
- * exact_disc_count()'s own comment in sand.c), fired with only
- * `s->impulse_max - s->impulse_count` == 8 - 4 == 4 entries of room
- * actually left. Worked by hand against THAT room, in sand_explode()'s
- * own ring-then-edge scan order (centre, then ring 1's four diagonals-
- * then-cardinals interleaved per column, then ring 2's own edges - see
- * sand_explode()'s "QUEUED BY RING" comment in sand.h): accum starts at
- * 0, gains keep=4 per true disc member (r2 <= 4) visited, fires whenever
- * it reaches disc_count=13 -
- *   (0,0) centre:  accum  0->4,  no fire (no direction either way)
- *   (-1,-1):       accum  4->8,  no fire
- *   (-1,1):        accum  8->12, no fire
- *   (0,-1) UP:     accum 12->16, FIRES (->3) - 1st: (5,1), index 13
- *   (0,1):         accum  3->7,  no fire
- *   (1,-1):        accum  7->11, no fire
- *   (1,1):         accum 11->15, FIRES (->2) - 2nd: (6,3), index 30
- *   (-1,0):        accum  2->6,  no fire
- *   (1,0):         accum  6->10, no fire
- *   ring 2, (0,-2) - the only ring-2 top/bottom cell inside r2<=4:
- *                  accum 10->14, FIRES (->1) - 3rd: (5,0), index 5
- *   (0,2):         accum  1->5,  no fire
- *   ring 2, (-2,0) - the only ring-2 left cell inside r2<=4:
- *                  accum  5->9,  no fire
- *   ring 2, (2,0) - the only ring-2 right cell inside r2<=4:
- *                  accum  9->13, FIRES (->0) - 4th: (7,2), index 23
- * Exactly 4 fires for a `keep` of 4, ending with accum back at 0 - the
- * whole disc visited, the whole `room` spent, nothing wasted and nothing
- * overrun. Against the OLD, buggy `keep` (computed from `s->impulse_max`
- * == 8, not `room` == 4), the SAME accumulator instead fires 8 times,
- * and the first 4 of those 8 - (-1,-1) index 12, (0,-1) index 13,
- * (0,1) index 29, (1,1) index 30 - are what actually queue before
- * sand_impulse()'s own hard cap silently swallows the remaining 4: a
- * completely different, ring-1-only set that never reaches ring 2 at
- * all, which is exactly the lopsided shape this test exists to catch. */
+ * Two non-overlapping blasts, no sand_step() between. The second blast's
+ * fire order (room=4) matches sand_explode()'s ring-then-edge scan order
+ * (sand.h's "QUEUED BY RING") - see the assertions below. */
 static void test_two_overlapping_blasts_share_the_buffer_evenly(void)
 {
     fixture();
@@ -707,77 +652,17 @@ static void test_a_flying_grain_keeps_its_outward_push_while_falling(void)
  * on the one cell straight below (bd - "a thrown static chunk settles too
  * eagerly") -------------------------------------------------------------- */
 
-/* THE CORE BUG, IN ITS SIMPLEST FORM: a thrown KIND_STATIC chunk directly
- * over a powder column. can_impulse_enter() (sand.c) only ever refuses
- * KIND_STATIC - a powder is not static, so the gravity-drift ("AIRBORNE
- * SOLIDS FALL TOO", step_impulses(), sand.c) has always been willing to
- * swap the falling chunk straight into the sand beneath it, one row per
- * step. The OLD settled check disagreed with its own drift: it asked only
- * CELL_IS_EMPTY() on that same straight-down cell, saw sand (not empty),
- * and declared the chunk settled - dropping it from impulse tracking after
- * a single row of fall, even though the very next step's drift would have
- * happily swapped it another row down had it still been tracked.
- *
- * TWO TESTS NOW, NOT ONE - device feedback for rung 4 ("a thrown chunk
- * entering a powder bank does not stop") added SAND_IMPULSE_SINK_MIN_SPEED
- * (sand.h), which narrows can_impulse_enter_gravity_ward() (sand.c, the one
- * predicate the drift and this settled check both call) so a SPENT
- * KIND_STATIC entry may only continue into a genuinely CELL_IS_EMPTY()
- * cell. The single test that used to live here drove a speed-0 entry -
- * spent from its very first step, by design, to isolate drift-vs-settle
- * disagreement from any lateral push - and asserted it reached the bottom
- * row. That assertion is now exactly backwards for a spent entry: rung 4
- * says a spent chunk over a packed bank settles right there instead of
- * swapping through the whole thing. Splitting keeps BOTH halves of the
- * history alive rather than picking one: an ENERGETIC chunk must still
- * sink all the way through - the original bug this section guards against,
- * a chunk settling after only one row - while a SPENT one must now rest
- * instead of sinking forever, this rung's own new guarantee. Neither test
- * touches the OTHER concern (drift/settle agreement on the CANDIDATE list
- * itself), which test_a_chunk_stacked_on_an_in_flight_chunk_waits_instead_
- * of_settling_and_both_eventually_land, below, still covers on its own.
- *
- * BOTH SCENES FILL THE ENTIRE ROW THE CHUNK SITS OVER, not just the one
- * column beneath it, and both call sand_clear() first rather than trusting
- * `cells` to already be blank - two things the original single test got
- * away without. Neither matters for an ENERGETIC entry, which can swap
- * through any non-static occupant regardless of what is either side of it,
- * but a SPENT entry can now be turned aside by an EMPTY diagonal exactly
- * as readily as it is stopped by a full one: a single narrow column (the
- * original scene's own shape) leaves both diagonal neighbours of a spent
- * chunk empty, and CELL_IS_EMPTY() there is true, so the chunk slides
- * sideways into open air and free-falls the rest of the way down - not
- * "no opening anywhere," which is what the spent test actually needs to
- * exercise. Measured directly: the narrow-column shape under the spent
- * test below settles at row 5, not row SETTLE_TOP_ROW, purely from that
- * sideways escape route - whatever residue `cells` happened to still hold
- * from an earlier test decided which column it escaped into. Filling every
- * column removes both problems at once.
- *
- * "STILL SINKS ALL THE WAY THROUGH" IS NO LONGER THE CLAIM, as of a later
- * rung (step_impulses(), sand.c: impulse_charge_displacement(), shared by
- * this gravity-drift and the ordinary push move) - device evidence was a
- * sand pyramid with a stone column beside it: a chunk thrown from CLOSE
- * moved sand visibly, one thrown from FAR tunnelled straight through and
- * ejected nothing, penetrating exactly as deep regardless of how far it
- * had already flown. The cause was this test's own "energetic chunk sinks
- * to the bottom" behaviour, taken to its logical extreme: the drift used
- * to charge NO drag at all, so an energetic KIND_STATIC mover swapped
- * through an entire packed bank for free, one row a step, with nothing to
- * show for it on the way. Charging the same drag (and firing the same
- * TRANSFER) at the drift site that the push site already charged is what
- * fixes the device bug, and it means an energetic chunk over a packed
- * powder bank now stops within the first few layers instead - see
- * SAND_IMPULSE_DRAG_POWDER_SHIFT's own comment in sand.h for the measured
- * push-site figure ("dirt stopping inside one cell is the point, not an
- * overshoot") this now matches from the drift side too. The test below is
- * renamed and its assertion rewritten to say so; the SPENT test right
- * after it needed no change at all, since a spent (speed 0) entry never
- * reaches this call in the first place - can_impulse_enter_gravity_ward()
- * already refuses it a non-empty candidate before any drag would be
- * charged. */
+/* can_impulse_enter() only refuses KIND_STATIC, so gravity-drift always
+ * swaps into powder beneath a falling chunk; the old settled check
+ * disagreed, declaring it settled after one row. Split into two tests:
+ * ENERGETIC must still sink deep, SPENT (below SAND_IMPULSE_SINK_MIN_SPEED,
+ * sand.h) must rest instead. */
 enum { SETTLE_COL = 3, SETTLE_TOP_ROW = 0 };
 
+/* The drift used to charge no drag, so an energetic chunk tunnelled an
+ * entire powder bank for free regardless of how far it had travelled. Now
+ * charges the same drag the push site does (SAND_IMPULSE_DRAG_POWDER_SHIFT,
+ * sand.h), stopping within the first few layers instead. */
 static void test_an_energetic_static_chunk_over_a_powder_bank_now_stops_within_the_first_few_layers(void)
 {
     fixture();
@@ -822,6 +707,10 @@ static void test_an_energetic_static_chunk_over_a_powder_bank_now_stops_within_t
         "there) impulse_charge_displacement() exists to close");
 }
 
+/* Both scenes fill the entire row, not one column: a SPENT chunk's empty
+ * diagonal lets it slide sideways and free-fall past the bed instead of
+ * resting there - measured, a narrow column let it escape to row 5 instead
+ * of settling at the rim. */
 static void test_a_spent_static_chunk_rests_on_a_powder_bank_instead_of_sinking_forever(void)
 {
     fixture();
@@ -1062,54 +951,13 @@ static void test_a_spent_static_chunk_still_sinks_through_water_to_the_bottom(vo
         "the floor had always looked right");
 }
 
-/* THE INVARIANT GUARD. Deleting the drift's liquid exclusion is only safe
- * because the move it gates is a SWAP, not an overwrite - four lines below
- * the can_impulse_enter() check in step_impulses(), `gdisplaced` is read
- * out of the target cell and written back into the entry's OLD cell, the
- * same move_to() trick every other kind here already relies on. A lava
- * cell a thrown chunk swaps into does not stop existing, it changes which
- * cell it occupies. This test is what turns that claim from an argument
- * into a measurement.
- *
- * MASS, NOT CELL COUNT, IS THE EXACT INVARIANT - see mass_of()'s own
- * comment for why: a liquid's cell count is free to change even under
- * ordinary, unrelated movement (one full cell splitting into several
- * shallower ones as it spreads is not a leak), while the sum of every
- * lava cell's own CELL_VARIANT is not. MEASURED, not assumed: an early
- * version of this test asserted the cell count unchanged too, and it
- * failed - 48 before, 55 after - which looked at first like exactly the
- * duplication this test exists to catch. It was not. Instrumenting the
- * scene (a full material-by-material dump, kept out of the final test)
- * showed mass staying exactly 720 throughout, and the extra 7 cells were
- * two genuinely unrelated, pre-existing mechanics, neither one anything
- * to do with step_impulses(): the swap itself displaces lava upward one
- * cell at a time as the chunk sinks, ordinary sand_step_liquids()
- * equalisation then spreads that displaced lava sideways across the row
- * (see mass_of()'s own comment on this being expected for ANY liquid,
- * lava included), and once spread that lava's own top surface sits
- * exposed to open air for the first time - which is exactly what lets
- * reaction_t.flare (sand_reactions.c, "the flame licking up off it") roll
- * and place a handful of fresh MAT_FIRE cells above it, cells that were
- * never lava mass in the first place. Cell count is therefore checked
- * only as "did not go DOWN" below - a genuine deletion would still be
- * caught, a legitimate spread or an unrelated flare above the exposed
- * surface would not be mistaken for one. The row assertion first confirms
- * the scene actually exercises a sink (not "stayed on the surface because
- * the exclusion is still there," which would make the conservation
- * assertions vacuous).
- *
- * SPEED 255, NOT 0, SINCE RUNG 4 - this scene originally drove a speed-0
- * entry, harmless before SAND_IMPULSE_SINK_MIN_SPEED existed because the
- * gravity-drift was unconditional regardless of speed. It is not harmless
- * now: a spent entry (speed 0, below that floor) only continues into a
- * genuinely CELL_IS_EMPTY() cell (can_impulse_enter_gravity_ward(),
- * sand.c), and this scene's own pool has no empty cell anywhere for it to
- * find, so a speed-0 chunk here would settle at row 0 and never exercise
- * the sink this test measures at all. 255 keeps the chunk ENERGETIC for
- * the whole 8-row fall (the plain ramp only costs 2 speed a step), which
- * is what the swap-conservation claim below was always actually about -
- * see SAND_IMPULSE_SINK_MIN_SPEED's own comment (sand.h) for why an
- * energetic chunk still sinks into a liquid exactly as before. */
+/* Deleting the drift's liquid exclusion is safe: the move is a SWAP
+ * (move_to()), not an overwrite, so lava swapped into changes which cell it
+ * occupies, not whether it exists. MASS is the exact invariant (mass_of());
+ * cell count is only checked as "did not go down", since spread can split
+ * one cell and an exposed surface can flare. SPEED 255: a spent chunk needs
+ * an empty cell to continue (below SAND_IMPULSE_SINK_MIN_SPEED), and this
+ * pool has none, so it would settle without exercising the sink. */
 static void test_a_thrown_static_chunk_conserves_lava_mass_on_sink(void)
 {
     fixture();
@@ -1340,87 +1188,25 @@ static void test_an_ordinary_static_solid_still_does_not_sink_into_liquid_or_pow
 
 /* --- Rung 1: medium drag on a thrown KIND_STATIC chunk --------------------
  *
- * step_impulses() (sand.c) now charges extra `speed` loss at the move site,
- * per non-empty cell a KIND_STATIC mover displaces, proportional to that
- * cell's own `density` (impulse_drag_of(), sand_priv.h) - a thrown wall
- * chunk should cross a bank of dirt slower than it crosses open air, not
- * teleport through it at the same rate. KIND_STATIC only; see SAND_IMPULSE_
- * DRAG_POWDER_SHIFT's own comment (sand.h) for why liquid and powder
- * movers are out of scope for this rung.
- *
- * TWO SHAPES OF TEST, NOT ONE. The two below actually measure horizontal
- * distance travelled - the thing the feature exists to change, and the
- * thing a name like "travels less far" has to mean, following the
- * interfacial-drag idiom above (test_water_does_not_drill_into_oil_when_
- * tilted): averaged over PLOW_SEEDS seeds, because "a single run of a
- * chaotic scene is not evidence" is exactly as true here as it is there.
- * The two after that are single-step, single-displaced-cell pins on the
- * exact arithmetic (speed == 255 - SAND_IMPULSE_SPEED_RAMP - density) -
- * asserting on s.impulse_buf[0].speed directly
- * is honest ONLY there, because for that one test the formula itself IS
- * the claim, not a stand-in for it.
- *
- * A FIRST VERSION OF THE DISTANCE TESTS FLOORED THE FLIGHT ROW DIRECTLY
- * BENEATH ITSELF, which was wrong twice over. First: with no vertical
- * opening ever available, a single missed push roll - a roughly 1-in-256
- * event every step, `rolled_move`, step_impulses() - ended the flight
- * immediately instead of costing one step's worth of distance the way it
- * would in the open field sand_explode() actually throws into, turning
- * "distance travelled" into the stopping point of a race against a
- * shrinking success chance rather than a measurement of drag. Second, and
- * worse: a wide packed medium is not inert while it waits to be hit -
- * try_slide_impl() (sand_priv.h) draws one s->rng number for EVERY resting
- * powder cell EVERY step regardless of whether it moves, so a wide bank of
- * dirt measurably shifts which random numbers the impulse's own roll
- * consumes relative to open air. Confirmed by running that version against
- * the UNMODIFIED file: dirt already "won" against water there, averaged
- * over seeds and all, with no drag mechanism to explain it.
- *
- * THE FIX IS OPEN SPACE, NOT A FLOOR UNDER THE FLIGHT ROW. `medium` fills
- * ONLY row 0, the row the chunk is thrown along; every row below it is
- * empty, down to a single STONE floor at the very bottom of a grid tall
- * enough to give real room to fall. A missed push roll now finds a real
- * opening on the very next gravity-drift check (`has_opening`,
- * step_impulses()) and simply keeps falling instead of settling - exactly
- * the "still airborne" path the code already has for this. The medium
- * itself is not inert either: with nothing under IT, ordinary gravity
- * (the ordinary sweep, which runs before step_impulses() every step) pulls
- * unsupported dirt or water down into the open space below just as the
- * falling chunk arrives there, so the chunk keeps encountering displaceable
- * medium for several steps of its fall rather than only the one row it
- * started in - confirmed by tracing a single seed step by step: the chunk
- * left row 0 after its very first move, and the cell it swapped into on
- * EVERY later step was already the falling medium material, not open air.
- * That is a real, mechanism-driven difference between dirt and water
- * (materials that fall) and open air (nothing to fall), not an artefact of
- * scene geometry.
- *
- * PLOW_STEPS IS SHORT ON PURPOSE - long enough to cover the fall to the
- * floor (PLOW_H - 1 rows) plus a few, not long enough to let post-landing
- * wandering (still tracked, still rolling sideways through open ground with
- * nothing left to displace) dilute the signal. Measured both ways, back
- * when this rung first shipped at SAND_IMPULSE_DRAG_SHIFT 2: at 80 steps the
- * three averages over PLOW_SEEDS seeds sat at roughly 14.2 (air) / 8.9
- * (water) / 7.3 (dirt) cells and the unmodified file's own equivalent
- * numbers already clustered within a few percent of each other by chance,
- * which was the right shape pre-fix but left too little room for genuine
- * noise on either side of the assertions. At 15 steps the unmodified file's
- * three averages sat at 12.5 / 12.0 / 12.6 - indistinguishable, exactly as
- * they must be with no drag mechanism to tell dirt from water from air -
- * while the fixed file's separated out to 12.5 / 8.8 / 7.3, the same
- * mechanism-driven ordering, just measured where it was least diluted.
- *
- * RESHARPENED, NOT JUST RECONFIRMED, AT DRAG_SHIFT 0 - device feedback
- * (rung 4) said even that separation was not enough: a chunk still crossed
- * a real bank of dirt too far to read as an impact. At the new figure,
- * this same 15-step measurement now sits at 12.5 (air) / 3.6 (dirt) / 5.2
- * (water) - roughly the "first few layers" and "sink partway into a pool"
- * the device report asked for, not the old 7.3 / 8.8 that merely ordered
- * dirt behind water correctly. PLOW_STEPS itself did not need to change -
- * the separation only got sharper. */
+ * step_impulses() charges extra `speed` loss per non-empty cell a
+ * KIND_STATIC mover displaces, proportional to density (impulse_drag_of()) -
+ * KIND_STATIC only, powder/liquid out of scope (see SAND_IMPULSE_DRAG_
+ * POWDER_SHIFT, sand.h). Two test shapes: horizontal distance travelled,
+ * averaged over seeds (the claim), and single-step arithmetic pins on
+ * speed == 255 - SAND_IMPULSE_SPEED_RAMP - density (the formula itself). */
 #define PLOW_W 40
+/* Fills only row 0 with `medium`; every row below stays open to a single
+ * STONE floor. Flooring the flight row itself instead (an earlier scene
+ * shape) is wrong twice over: a missed push roll then ends the flight
+ * outright instead of costing one step, and a wide packed medium draws one
+ * RNG number per resting cell every step regardless of motion, shifting
+ * which numbers the impulse's own roll consumes. */
 #define PLOW_H 10
 #define PLOW_SEEDS 32
+/* Short enough to cover the fall without post-landing wandering diluting
+ * the signal. Measured over PLOW_SEEDS seeds: air/dirt/water average 12.5 /
+ * 3.6 / 5.2 cells - roughly "first few layers" and "sink partway into a
+ * pool", the separation device feedback asked for. */
 #define PLOW_STEPS 15
 
 /* `medium` fills row 0 (unless empty) for `mover`, thrown right from
@@ -2314,58 +2100,14 @@ static void test_a_chunk_bounces_off_the_grid_edge_instead_of_waiting_there_fore
     free(edge_cells);
 }
 
-/* ANTI-PINBALL, BEHAVIOURAL - a chunk thrown into a fully closed stone box
- * must come to rest (s.impulse_count reaches 0) within a BOUNDED number of
- * steps, not rattle around the box indefinitely - the exact failure mode
- * step_impulses()'s own roll comment's reverted-attempt history warns a
- * bounce mechanism can reopen if left undamped and unfloored.
- *
- * BOX_MAX_STEPS (50) is measured against the ACTUAL 16 seeds this test
- * runs (k = 1..BOX_SEEDS, throw direction k % 8), not a separate sample -
- * a throwaway host probe (same production sand.c/sand.h/sand_priv.h this
- * test links, gcc -O1, no test-only shortcuts) ran exactly this scene at
- * exactly these seeds and measured settle-step counts of 3 to 27, worst
- * case 27 (seed 12, throw direction 4 - straight up). 50 is under 2x that
- * measured worst case - real headroom, not an order of magnitude padding
- * it can never trip.
- *
- * A WIDER SWEEP WAS ALSO RUN TO CHECK THE TAIL BEHAVIOUR THIS FIXED SET
- * MIGHT BE HIDING: 300,000 seeds, same box-and-throw shape, found a slow-
- * growing worst case (44 at seed 76, 47 at 2,532, 48 at 11,316, 49 at
- * 34,412, 53 at 49,844, 54 at 57,300, nothing higher in the remaining
- * ~242,700 seeds) - a heavy but visibly converging tail, always the same
- * "thrown straight up" direction. This test does not chase that tail: it
- * runs the same fixed 16 seeds every time (deterministic, no run-to-run
- * variance to guard against), and 50 is chosen with real margin over
- * THOSE seeds' own worst case, not the wider distribution's.
- *
- * THIS BOUND DOES NOT RELIABLY CATCH A RESTITUTION REGRESSION, AND SAYING
- * SO IS MORE HONEST THAN PRETENDING OTHERWISE. In a fully enclosed box,
- * unlike the two open-scene tests below, the entry bounces many times
- * before it can possibly settle, so the PRE-EXISTING linear ramp
- * (SAND_IMPULSE_SPEED_RAMP, sand.h - not this rung's own code) ends up
- * the dominant thing bounding settle time here, not restitution. Deleting
- * restitution's speed charge entirely (a throwaway mutation, reverted
- * immediately) moved this test's OWN 16-seed worst case from 27 to only
- * 30 - both comfortably under 50, so no bound in the "real headroom, not
- * an order of magnitude" range this rung's other two tests use can split
- * the two. What THIS bound DOES catch, confirmed the same way: deleting
- * the RAMP decrement entirely - simulating the literal reverted-attempt
- * pathology step_impulses()'s own comment describes, "never settle" -
- * broke this exact test (seed 4, throw direction 4, still rattling past
- * 50 steps, and past the old 150 too) while every other test in this rung
- * stayed silent about it. So this bound is a genuine backstop against
- * that specific historical failure mode, not a restitution pin - the two
- * open-scene tests below cover restitution instead, where it is actually
- * the dominant mechanism.
- * REUSES THE 8x8 GLOBAL FIXTURE ARRAYS (cells[], impulse_buf[]) rather
- * than a heap allocation - the box is exactly W x H, so nothing bigger is
- * needed, unlike the wider drag-rung and wall-notch scenes elsewhere in
- * this file. Averaged in the sense of "checked against every seed", not
- * summed - "a single run of a chaotic scene is not evidence", same idiom
- * as test_water_does_not_drill_into_oil_when_tilted above, but this
- * property (bounded, not a distance) is a per-seed pass/fail rather than
- * something to sum. */
+/* Anti-pinball: a chunk in a closed stone box must settle within a
+ * bounded step count, not rattle indefinitely. BOX_MAX_STEPS=50 is under
+ * 2x the measured worst case (27, across these 16 seeds) - real headroom;
+ * a 300k-seed sweep found a converging tail up to 54, not chased here
+ * since these seeds are fixed. In a closed box the pre-existing speed
+ * ramp, not restitution, dominates settle time (open-scene tests below
+ * cover restitution); this bound instead catches a broken ramp
+ * decrement. */
 #define BOX_SEEDS 16
 #define BOX_MAX_STEPS 50
 
@@ -2654,45 +2396,13 @@ static void test_a_blast_in_a_packed_bed_opens_a_cavity_and_reaches_beyond_the_r
         "this is the exact scene that read as \"no holes\" on the panel");
 }
 
-/* THE SPECIFIC REGRESSION THAT JUST BIT US, pinned directly. A device
- * pass on the first real-radius detonation reported it as "barely
- * noticeable" with "solids barely move" - traced to sand_explode()'s
- * OLD scan order (dy-outer, dx-inner, top row to bottom row) handing an
- * undersized cap entirely to the disc's top nine or ten rows before the
- * scan ever reached the core or the lower half. Every test above this
- * line happens to detonate with a buffer at least as big as the disc
- * (impulse_buf[] is W*H, and an 8x8 grid's largest disc never comes
- * close), so none of them ever truncate at all - they would pass exactly
- * as they do now even with the old row-order scan restored, because
- * nothing was ever cut off for the order to be unfair ABOUT. This is the
- * one test in the file where the cap must actually bind for the fix to
- * be tested at all.
- *
- * axis_impulse_buf[8] is sized to exactly one full ring - see its own
- * comment above - so a radius-3 blast's immediate ring of 8 neighbours
- * fits with nothing to spare, and ring 2 and beyond never get a slot.
- * Under ring order that ring is EVERY direction at once - all four axes,
- * all four diagonals - so all four axis checks below must pass. Under
- * the old row order, the same cap of 8 is exhausted while still working
- * through the rows above the centre (dy = -3 contributes 1 candidate, dy
- * = -2 contributes 5, already 6 of the 8 slots, and dy = -1 supplies the
- * rest before the scan reaches dy = 0 at all) - so DOWN, LEFT and RIGHT
- * would all still be waiting for a slot that never comes, while UP alone
- * succeeds. A regression to row order would fail exactly three of these
- * four assertions, never all four and never zero - which is what makes
- * this a test of ORDER specifically, not merely of whether the cap
- * exists.
- *
- * Checked directly against the queue itself (s.impulse_count entries in
- * s.impulse_buf), not inferred from where anything ends up on the board -
- * inferring it from the board is what let the old bug ship in the first
- * place, since a test that only watches for "something moved" cannot
- * tell a fair ring from a lopsided crescent. ring_dir()'s own numbering
- * (sand_priv.h, not included here - this suite only sees the public dir
- * byte) is 0 down, 2 right, 4 up, 6 left; 1/3/5/7 are the diagonals
- * between them and are not checked here, since the four axes are the
- * ones whose presence or absence actually distinguishes ring order from
- * row order at this cap. */
+/* THE REGRESSION THIS PINS: sand_explode()'s old row-order scan handed
+ * the cap to the disc's top rows before reaching the core, undercutting a
+ * real detonation. This is the one test where the cap actually binds
+ * (others use buffers bigger than any disc). axis_impulse_buf[8] holds one
+ * ring; row order starves DOWN/LEFT/RIGHT while UP alone succeeds, so a
+ * regression fails exactly three of four - proving this tests ORDER,
+ * checked against the queue directly rather than board state. */
 static void test_a_blast_queues_impulses_on_every_side_of_the_centre(void)
 {
     fixture();
@@ -2818,99 +2528,27 @@ static void test_without_a_buffer_explode_does_nothing(void)
 
 /* --- Rung 3, Part A: the ricochet scene (measurement, not a new feature) --
  *
- * Two full-height MAT_STONE walls facing each other across a 42-cell gap, a
- * blast at the left wall, and a per-step count of how many times each
- * dislodged chunk's OWN `dir` changes before it finally settles - a
- * ricochet reads as more than one change, a single stop as zero or one.
- * This does not exercise anything new: rungs 1 and 2 (drag, reflection) are
- * already shipped. It exists to tell rung 3's tuning apart from a guess -
- * see the numbers below, and step_impulses()'s own "FLOORED AT SAND_
- * IMPULSE_BOUNCE_MIN_SPEED" comment for the mechanism being measured.
- *
- * RADIUS IS THE APP'S OWN FIGURE, CONVERTED TO CELLS - DETONATE_RADIUS_PX
- * is 50 (app_sand.c) and the default quality is NORMAL, 4 px/cell
- * (QUALITY_DEFAULT, qualities[], app_sand.c), so the app's own detonate
- * call computes (DETONATE_RADIUS_PX + cell / 2) / cell = (50 + 2) / 4 =
- * 13 - the exact arithmetic app_sand.c's DETONATE handler uses.
- *
- * THE BLAST CENTRE IS OFF-GRID, BEHIND THE WALL, NOT A TYPO. A queued
- * grain's direction is "away from the blast centre, through the grain's own
- * cell" (queue_outward_impulse(), sand.c) - so a wall standing to the RIGHT
- * of the centre gets thrown further right, into the gap, while a wall to
- * the LEFT of the centre gets thrown further left, away from the gap and
- * off the grid. Centring the blast IN the gap, next to the wall, throws the
- * wall the wrong way - straight into itself. Centring it AT x = -11 puts
- * the left wall (x = 0) 11 cells to its right, which is what "an explosion
- * AT the wall" has to mean for the wall's own rubble to end up flying
- * toward the far one: a charge set against/behind the wall's face, blowing
- * it into the room. This placement has a second, welcome effect: the
- * unconditional fire-filled core (radius / SAND_EXPLODE_CORE_DIVISOR = 13 /
- * 5 = 2 around the centre) sits entirely off-grid too (x in [-13, -9]), so
- * nothing here ever creates a MAT_FIRE entry - every tracked entry is
- * genuine dislodged wall stone, not core debris.
- *
- * IDENTITY IS TRACKED BY POSITION, NOT BY CELL BYTE, and that is a real
- * finding of its own, not a style choice: MAT_STONE's variant is a
- * TEMPERATURE nibble now (heat_ramp = 32, cools = 5, material.c, "Stone
- * carries a temperature exactly as glass does"), and it drifts toward
- * ambient every step even with no heat source anywhere on the board - an
- * early version of this test gave every wall row a distinct variant to use
- * as a per-entry id and measured MORE distinct bytes appearing over a run
- * than were ever actually dislodged at explode time, purely from that
- * drift. Position survives this cleanly, but RICOCHET_MATCH_RADIUS had to
- * grow well past the raw per-step bound to keep doing so once entries
- * started covering more ground per step (SAND_IMPULSE_CELLS_PER_STEP_
- * DIVISOR, sand.h): the INSTANTANEOUS bound is SAND_IMPULSE_CELLS_PER_
- * STEP_MAX + 1 cells in one step (5 at today's cap of 4 - a multi-cell
- * push-roll move plus, for a KIND_STATIC mover, one more unconditional
- * gravity-drift move, both in step_impulses(), sand.c), but this GREEDY,
- * array-order tracker is not immune to a single early ambiguous link: once
- * two candidates are plausibly close to the same lineage (far more likely
- * now that several concurrently-flying entries cover 4-5x the ground per
- * step they used to, closing the "several rows apart" gap this scene
- * relies on faster than before), one wrong pick compounds every step after
- * it, and recovering needs slack well beyond the instantaneous bound - a
- * radius of 6 (5 + 1 slack, the same margin convention the old radius-3
- * used over the old 2-cell bound) left 236 of the 100 seeds' candidates
- * unmatched; 15 leaves none. MEASURED, NOT GUESSED: swept 6/8/10/12/15,
- * unmatched counts of 236/156/60/28/0 - 15 is the smallest of those that
- * actually clears every seed, not a round number picked to be safe.
- * Checked, not merely assumed: the measurement below counts entries that
- * ever failed to find any match at all (would mean a genuinely new impulse
- * got queued mid-run, which nothing in this liquid/gas/fire-free scene
- * should ever do, OR that this tracker's own radius is still too tight) -
- * zero, every seed, at RICOCHET_MATCH_RADIUS 15.
- *
- * RE-MEASURED AFTER SAND_IMPULSE_CELLS_PER_STEP_DIVISOR (sand.h) LANDED -
- * the arithmetic walkthrough this comment used to carry (a 42-cell gap
- * costing 42 * SAND_IMPULSE_SPEED_RAMP speed to cross) assumed exactly one
- * cell of travel per step, which is no longer true: a fast entry now
- * crosses the same gap in roughly a quarter as many steps, so it arrives
- * having paid roughly a quarter as much ramp - THE RAMP SPENT CROSSING THE
- * GAP IS NO LONGER THE LIMITER IT WAS. SEEDS 1..100, this exact scene: 284
- * tracked stone entries total (unchanged - the blast's own dislodge count
- * has nothing to do with how far anything travels afterward), 160 (56.3%)
- * changed direction at least once, 45 (15.8%) at least twice, 3 (1.1%)
- * three times - see docs/sand/Sand-Simulation.md for the before/after
- * table this rung is judged against; a real shift in the >= 1 bucket (150
- * before, 160 now) from entries that used to run out of ramp mid-gap and
- * now cross with speed to spare.
- *
- * THE OLD "GENTLER RESTITUTION" ARITHMETIC (a speculative exploration of
- * lowering SAND_IMPULSE_BOUNCE_MIN_SPEED or equalising the head-on/glancing
- * split, never acted on) is dropped rather than reworked here - it was
- * built entirely on the now-stale one-cell-per-step gap-crossing cost
- * above, and rederiving it against multi-cell travel is a separate
- * exploration nobody has asked for. Nothing it discussed was ever changed
- * by this rung: SAND_IMPULSE_BOUNCE_MIN_SPEED and the head-on/glancing
- * split are exactly what they were. */
+ * Two stone walls across a 42-cell gap, blast at one wall, counting
+ * direction changes per dislodged chunk before it settles - not a new
+ * mechanism, exists to measure rung 3's tuning. See
+ * docs/sand/Sand-Simulation.md for the numbers this scene reports. */
 #define RICOCHET_W 44
 #define RICOCHET_H 40
+/* DETONATE_RADIUS_PX (50, app_sand.c) at NORMAL quality (4 px/cell):
+ * (50 + 2) / 4 - the app's own DETONATE arithmetic, not a round number. */
 #define RICOCHET_RADIUS 13
+/* Off-grid, behind the wall, on purpose: a queued grain's direction is
+ * away from the blast centre, so centring in the gap throws the wall into
+ * itself. Also keeps the unconditional fire core off-grid, so nothing here
+ * creates a stray MAT_FIRE entry. */
 #define RICOCHET_CX (-11)
 #define RICOCHET_CY (RICOCHET_H / 2)
 #define RICOCHET_SEEDS 100
 #define RICOCHET_MAX_STEPS 300
+/* Position-tracked, not byte-tracked: MAT_STONE's variant drifts as
+ * ambient temperature, so a byte id overcounts. Measured (swept 6/8/10/12/15
+ * across 100 seeds): 15 is the smallest radius leaving zero unmatched
+ * candidates. */
 #define RICOCHET_MATCH_RADIUS 15
 #define RICOCHET_MAX_TRACK 32
 
@@ -3081,46 +2719,12 @@ static void test_the_two_wall_explosion_scene_bounces_more_than_once_before_sett
 
 /* --- Rung 3, Part B: momentum transfer into a volume ----------------------
  *
- * Today a flying cell swaps with whatever it displaces and the volume
- * closes behind it - nothing else in it ever learns it was hit. This is
- * what lets a struck cell pick up impulse of its own instead (see the
- * TRANSFER site's own comment at the move site in step_impulses(), sand.c,
- * right after the swap and right where the drag charge already sits) -
- * including flying clean out of the volume it was sitting in.
- *
- * EJECTA IS MEASURED, NOT ASSUMED, and DIRT and WATER measure completely
- * differently - a real finding, not a shape mismatch between the two
- * scenes below. DIRT (KIND_POWDER) is inert once packed: an undisturbed
- * bank does not spread on its own, so "cells found outside the bank's own
- * original footprint" is a clean signal - transfer on, or transfer off via
- * a temporary mutation confirmed live (see below), the difference is
- * exactly zero vs a real number. WATER (KIND_LIQUID) is not inert: even a
- * perfectly flat, resting layer spreads sideways on its own, at a rate
- * (measured: exactly 1.0 mass-equivalent cell per seed per step, dead
- * linear, confirmed by running the SAME scene with no mover in it at all)
- * that is comparable to whatever transfer adds on top. "Zero with transfer
- * removed" is consequently the wrong bar for water and was checked, not
- * assumed: at 200 seeds, this exact scene measures 387 cells outside its
- * own original footprint with transfer's own gate hard-mutated to `false`,
- * not zero - that is water's own ordinary equalisation, present with or
- * without this rung's own change, and no geometry tried (a taller block, a
- * walled and fully-settled basin, a basin with a genuine overflow gap, an
- * upward throw) separated it from transfer's own contribution any better;
- * every one of those either reproduced the same baseline or, walled tightly
- * enough to suppress it, blocked transfer too (a transferred entry can
- * never breach a KIND_STATIC wall regardless - can_impulse_enter()'s own
- * rule, unconditional for a KIND_STATIC target). What the SAME hard-mutated
- * run does show is a real, reproducible MARGIN over that baseline - 454
- * with transfer against 387 without, both at the same 200 seeds - so the
- * water test below asserts against that margin (a threshold clearly above
- * 387, clearly below 454) rather than against zero.
- *
- * RECONFIRMED, RUNG 4: both numbers moved from the rung 3 measurement (260
- * baseline, 422 with transfer) once SAND_IMPULSE_DRAG_SHIFT dropped to 0 and
- * the transfer direction became a backward cone rather than the mover's own
- * heading (see the TRANSFER site's own comment, step_impulses(), sand.c) -
- * this is a different mechanism now, so it earned a fresh measurement rather
- * than trusting the old one to still be in the right place. */
+ * A struck cell can pick up impulse of its own (TRANSFER, step_impulses())
+ * and fly clean out of its volume. DIRT (packed, inert) gives a clean
+ * zero-vs-real ejecta signal; WATER spreads on its own even with no mover
+ * (measured ~1.0 cell/seed/step, linear), so its test asserts a MARGIN over
+ * that baseline, not zero - 200 seeds: 387 cells outside the footprint with
+ * transfer forced off, 454 with it on. */
 
 #define EJECTA_W 40
 #define EJECTA_H 20
@@ -3251,33 +2855,12 @@ static void test_a_thrown_powder_grain_flings_dirt_out_of_the_bank_it_hits(void)
 
 /* --- MATERIAL ACTUALLY FLIES, NOW - SAND_IMPULSE_CELLS_PER_STEP_DIVISOR ---
  *
- * A DIFFERENT SIGNAL FROM THE EJECTA TESTS ABOVE, on purpose: "outside the
- * bank's own footprint" (ejecta_count_outside(), above) counts a cell that
- * merely relocated, however it got there or however briefly it was ever
- * off the ground. AIRBORNE - every one of a cell's eight neighbours
- * genuinely CELL_IS_EMPTY() at the instant sampled - is the stricter claim
- * the maintainer actually asked for: material visibly FLYING, suspended in
- * open air, not just shuffled sideways within a settling pile. Before this
- * rung, every displacing move in step_impulses() advanced an entry exactly
- * one cell per successful roll - identical to how far the ordinary gravity
- * sweep moves a falling grain in the same step - so a thrown chunk could
- * never outrun gravity: ejecta could reposition but not visibly leave the
- * volume it came from.
- *
- * THE SCENE: an 8-cell-wide row of MAT_STONE, thrown together at a
- * diagonal (down-right, dir 1 - "at an angle", not straight down or
- * straight along the surface) into a settled MAT_SAND bed resting on a
- * solid floor. Airborne sand is counted every step for AIRBORNE_STEPS,
- * peak kept per seed, over AIRBORNE_SEEDS seeds.
- *
- * MEASURED, this exact scene, seeds 1..40: BEFORE this rung, 26 of 40
- * seeds ever showed any airborne sand at all, peaking at 3 simultaneously
- * airborne cells. AFTER, all 40 seeds show airborne sand, peaking at 8 -
- * both more often and more of it at once. Different numbers from the
- * maintainer's own hand-measured scene (12 of 40, peak 1, before) - a
- * different bed/chunk/angle, not a discrepancy - but the same shape: a
- * capped, modest peak before this rung existed no matter the scene, a
- * clearly higher one after. */
+ * AIRBORNE means every one of a cell's 8 neighbours is CELL_IS_EMPTY() -
+ * stricter than ejecta_count_outside()'s "relocated". Before this rung
+ * every displacing move advanced one cell per roll, same as gravity, so a
+ * thrown chunk could never outrun it: ejecta could reposition but never
+ * visibly fly. Measured, seeds 1..40: before, 26/40 seeds ever showed
+ * airborne sand (peak 3 at once); after, all 40 do (peak 8). */
 
 #define AIRBORNE_W 80
 #define AIRBORNE_H 40
@@ -3744,37 +3327,18 @@ static void test_a_thrown_powder_grain_travels_less_far_through_dirt_than_throug
 
 /* --- the budget guard: impulse_buf is shared, and it is finite ----------
  *
- * SAND_CASCADE_MAX_PER_STEP caps how many deferred entries (cascade
- * relays AND transfers alike, since rung 3 - see step_impulses()'s own
- * comment on that array) can be QUEUED in any one step, but impulse_buf
- * itself (APP_IMPULSE_MAX in app_sand.c on the device) is a separate,
- * FIXED-SIZE budget shared with whatever explosion or splash is already
- * using it - sand_impulse() refuses silently once it is full. A long plow
- * through a wide, low-density bank (most cells clear SAND_IMPULSE_
- * TRANSFER_MIN_SPEED easily) is exactly the shape that could queue one
- * transfer per cell touched if the per-step cap were not there; this test
- * is what proves the cap actually holds the line rather than merely
- * assuming it does. */
-/* SAME SHAPE AS plow_build() (a few hundred lines up) - dirt fills ONLY
- * row 0, everything below is OPEN except a single floor far at the
- * bottom, and the mover is thrown from (1, 0). NOT a full-width floor
- * directly under the mover's own row - an earlier version of this test
- * used exactly that, and the mover (KIND_STATIC) settled on literally the
- * SECOND step: fully supported with nowhere to fall, step_impulses()'s
- * own "SUPPORTED, NOT MERELY ROLLED" rule (sand.c) drops a KIND_STATIC
- * entry from tracking the instant one push-roll fails, and a floor
- * spanning the whole width guarantees that happens almost immediately at
- * this speed. plow_build()'s own open-below shape is what keeps the
- * mover - and the dirt feeding it from behind, which also falls once it
- * is unsupported, see that function's own comment - genuinely engaged for
- * many steps instead of freezing after one. Measured with this shape,
- * this exact scene (200-cell bank): activity (impulse_count > 0) for 27
- * steps, never above 3 entries concurrently even with the transfer cap
- * completely unbounded - BUDGET_IMPULSE_MAX is deliberately far below
- * what an ordinary run ever needs, so the assertion below is a real gate,
- * not a number this scene could never approach anyway. */
+ * SAND_CASCADE_MAX_PER_STEP caps deferred entries queued per step, but
+ * impulse_buf itself (APP_IMPULSE_MAX) is a separate fixed budget shared
+ * with whatever else is using it - sand_impulse() refuses silently once
+ * full. A long plow through a low-density bank could queue one transfer
+ * per cell without that cap; this test proves it holds. */
 #define BUDGET_W 200
 #define BUDGET_H 30
+/* Same open-below shape as plow_build(): a full floor under the mover's
+ * row would settle it within two steps (SUPPORTED, NOT MERELY ROLLED,
+ * sand.c). Measured: 27 active steps, never above 3 concurrent entries even
+ * with the transfer cap unbounded - real headroom, not a number this scene
+ * could ever approach. */
 #define BUDGET_IMPULSE_MAX 8
 #define BUDGET_STEPS 40
 
