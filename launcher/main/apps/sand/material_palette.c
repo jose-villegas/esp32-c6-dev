@@ -107,12 +107,10 @@
  * behaviors should look distinct. */
 
 /* CYAN, and only the cold END of the ramp - the shimmer keeps its own pale
- * target below. One constant did both jobs, which is why cooling was hard to
- * see: a chilling cell moved toward the very colour the per-cell shimmer
- * already blended toward.
- *
- * Cyan also holds saturation as it cools. The old ramp took red 46 -> 214, so
- * cold glass washed out to near-white; this leaves red near 95. */
+ * target below, kept separate so a chilling cell doesn't drift toward the
+ * very colour the per-cell shimmer already blends toward. Cyan holds
+ * saturation as it cools, keeping red near 95 rather than washing out
+ * toward white. */
 #define GLASS_FROST   0x5FE6F0
 
 /* Where a cell's per-cell shimmer blends TO. Was GLASS_FROST; kept at that
