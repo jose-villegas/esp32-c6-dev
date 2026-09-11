@@ -9,10 +9,9 @@
  * the same stream would race it for every byte.
  *
  * BOTH COMMANDS ONLY SET A FLAG. main.c's loop does the work, at a frame
- * boundary. There is no lock on the framebuffer, and a capture - or worse, a
+ * boundary. There is no lock on the framebuffer, so a capture - or worse, a
  * suite that draws and presents on its own - running on this task while the
- * render loop runs on the main one is two tasks driving one panel. That
- * shipped once and raced.
+ * render loop runs on the main one is two tasks driving one panel.
  *
  * USB-Serial/JTAG, not UART: this board's USB-C is the C6's own peripheral
  * and the console's primary channel, so this listener sees the bytes
