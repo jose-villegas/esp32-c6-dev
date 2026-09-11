@@ -109,27 +109,22 @@ static gfx_color_t lit_whitened(uint32_t rgb, uint8_t whiten, uint8_t alpha)
  *
  * boot_anim.h's projection family - a matrix-vector multiply by the frame's
  * composed space-then-camera transform, then a perspective divide - does
- * the real work; there is no local wrapper here any more, so every draw_*
- * call site below reads one of boot_anim.h's own functions directly.
- * Which one depends on what is being drawn, not a single shared choice:
- * a lone point (a zero marker, a pen head, an axis label anchor) reads
- * boot_anim_project_point(), which rejects outright rather than draw
- * somewhere nonsensical for a point behind the camera (see that
- * function's own comment); a LINE (a curve segment, a grid ring or
+ * the real work; every draw_* call site below reads one of its functions
+ * directly, never the raw, unclipped boot_anim_project() (see the three
+ * "Not boot_anim_project() directly" comments below). Which one depends on
+ * what is being drawn: a lone point (a zero marker, a pen head, an axis
+ * label anchor) reads boot_anim_project_point(), which rejects outright
+ * rather than draw somewhere nonsensical for a point behind the camera (see
+ * that function's own comment); a LINE (a curve segment, a grid ring or
  * spoke, an axis arm) reads boot_anim_project_segment()/boot_anim_
- * project_segment_cs() instead, which clips a segment straddling the
- * near plane to where it actually crosses it rather than rejecting the
- * whole thing - see that function's own comment for why a segment needs
- * the extra step a lone point does not. Nothing left here calls the raw,
- * unclipped boot_anim_project() at all - see the three "Not boot_anim_
- * project() directly" comments below for the class of bug that used to
- * risk.
+ * project_segment_cs() instead, which clips a segment straddling the near
+ * plane to where it actually crosses it rather than rejecting the whole
+ * thing - see that function's own comment for why a segment needs the
+ * extra step a lone point does not.
  *
- * There is no separate "shrunk" variant either - what used to be a post-
- * projection pixel-space shrink (boot_anim_motif_shrink_q8(), applied here
- * via csx()/csy()) is now the space transform's own SCALE channel, baked
- * into the matrix `view` already carries. Every draw_* call below reads
- * this, at full scale, always. */
+ * There is no separate "shrunk" variant: scale lives in the space
+ * transform's own SCALE channel, baked into the matrix `view` already
+ * carries. Every draw_* call below reads this, at full scale, always. */
 
 /* A whole number of grid units, as a Q12 value. */
 static int32_t units(int n)
