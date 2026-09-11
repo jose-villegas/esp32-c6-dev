@@ -371,6 +371,16 @@ capture, measured verdict - then one of three outcomes: ACCEPT (won, and
 behaviour byte-identical, committed to a branch), QUARANTINE (won, but
 behaviour changed - patch kept for review), REJECT.
 
+BUILD THE HOST PROBE AS PART OF THE GATE SET, not only when you need it.
+No gate compiles `tools/perf_probe/`, so a change to a suite file it shares
+can break it silently: adding the cache counters pulled `esp_cpu.h` into
+`suite_sand_perf.c` and left the probe unbuildable on `main` for two merges
+before anyone tried to run it. One line, and it fails loudly:
+
+```sh
+bash launcher/main/apps/sand/tools/perf_probe/build_probe.sh out/probe
+```
+
 The allowlist runs FIRST and matters most. The cheapest way to make a
 deliberately-failing budget pass is to raise the budget, and the next
 cheapest is to weaken the scene; both live in files a candidate may not
