@@ -1,8 +1,8 @@
 /*
  * intmath - small integer helpers used from more than one file.
  *
- * `static inline`: some of these run in an innermost per-cell loop, tens of
- * thousands of times a second, where a cross-file function call is not free.
+ * `static inline`: some of these are called tens of thousands of times a
+ * second from an innermost loop, where a cross-file call is not free.
  */
 #pragma once
 

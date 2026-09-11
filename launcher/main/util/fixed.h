@@ -1,8 +1,8 @@
 /*
  * fixed - shift-based fixed-point arithmetic, in one place.
  *
- * `static inline` because some of these run in innermost simulation loops
- * where a cross-file call is not free - the same reasoning as intmath.h.
+ * `static inline` because some of these run in innermost loops where a
+ * cross-file call is not free - the same reasoning as intmath.h.
  *
  * `shift` is a parameter rather than a constant because the tree works in
  * more than one fixed-point scale, and one vocabulary per scale is how this

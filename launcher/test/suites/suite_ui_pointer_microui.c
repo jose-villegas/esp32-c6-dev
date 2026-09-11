@@ -39,7 +39,7 @@
 
 /* Heap, not a file-scope object: a mu_Context is 10,744 bytes, and the
  * diagnostics build links every suite into firmware, where the
- * framebuffer plus one app's working grid still have to fit
+ * framebuffer plus an app's largest buffer still have to fit
      * (check_static_ram.py).
  * A second context in .bss fails that gate outright - which host tests,
  * with a laptop's memory behind them, cannot notice. Allocated once and
