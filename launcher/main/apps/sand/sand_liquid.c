@@ -440,8 +440,8 @@ static void equalise_liquids(sand_t *s, const xflow_t *f, int sight,
  * halving how often it runs halved that, and 0.5 rows a step is still a drift
  * - gas rises at about 0.7 and nobody calls that wrong.
  *
- * A block skip was tried first and measured worth nothing: the scenes that
- * regress are liquid-dense, so BLOCK_LIQUID_NEAR is set nearly everywhere. */
+ * A block skip buys nothing here: the scenes that regress are liquid-dense,
+ * so BLOCK_LIQUID_NEAR is set nearly everywhere in them. */
 #define LIQUID_SORT_PERIOD 2
 
 /*-----------------------------------------------------------------------------
