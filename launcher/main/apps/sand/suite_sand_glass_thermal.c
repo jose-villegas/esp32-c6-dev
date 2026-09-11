@@ -239,12 +239,10 @@ static void test_freshly_fused_glass_starts_cold(void)
 }
 
 /* Snow on a glowing pane cracks it, and it goes back to being sand.
- *
- * Thermal shock needs a gradient, and a gradient needs something the
- * player can SEE is cold. An earlier draft used water for the cold side,
- * which works as a rule and fails as a design: nothing in this simulation
- * says water is cold, so a pane cracking beside it reads as "glass breaks
- * near water" rather than as a temperature difference. */
+ * Thermal shock needs a gradient the player can SEE is cold - water
+ * works as a rule but fails as a design, since nothing in this
+ * simulation says water is cold, so a pane cracking beside it would read
+ * as "glass breaks near water" rather than a temperature difference. */
 static void test_snow_shatters_a_glowing_pane_into_sand(void)
 {
     fixture();
@@ -357,20 +355,12 @@ static void test_glass_looks_different_at_the_shock_threshold(void)
         "not look like one that snow will merely cool");
 }
 
-/* A resting pane beside snow gets COLDER, and shows it.
- *
- * The report that produced this: "I still don't see any colour change of
- * glass when near snow." There was none to see, and it was not a rendering
- * problem. Ambient used to be 0, the bottom of the variant range, so a
- * pane at rest had nothing to lose - chilling it changed no number, so it
- * changed no colour, and snow beside glass was indistinguishable from snow
- * beside nothing.
- *
- * Two things had to change for this to be observable, and both are
- * asserted here: room temperature had to move off the floor so cold has
- * somewhere to go, and chilling had to be driven from the SNOW, because a
- * pane at rest never gets a turn of its own and so never looked at what
- * was sitting on it. */
+/* A resting pane beside snow gets COLDER, and shows it - reported as "I
+ * still don't see any colour change of glass when near snow." Two things
+ * make this observable: room temperature has to sit off the bottom of
+ * the variant range so a resting pane has something to lose, and
+ * chilling has to be driven from the SNOW, since a pane at rest never
+ * gets a turn of its own and so never looks at what is sitting on it. */
 static void test_snow_frosts_a_resting_pane(void)
 {
     fixture();
@@ -730,17 +720,12 @@ static void test_lava_one_side_snow_the_other_cracks_the_wall(void)
 
 
 
-/* One shock takes the whole pane, not one cell of it.
- *
- * Shattering used to convert a single cell, so breaking a pane needed as
- * many separate successful shocks as it had cells - and each one needs
- * something cold touching glass that is still hot, at the moment it
- * touches. Getting that to happen once is the interesting part; needing it
- * sixty times in the same place is attrition, and on the board it read as
- * thermal shock barely working.
- *
- * It is also what glass does. A pane does not crumble cell by cell as each
- * part independently decides to - a crack starts somewhere and travels. */
+/* One shock takes the whole pane, not one cell of it: a crack starts
+ * somewhere and travels, the same way glass actually breaks - it does
+ * not crumble cell by cell as each part independently decides to. Every
+ * shock needs something cold touching glass that is still hot at the
+ * moment it touches, so needing one per cell would be attrition rather
+ * than a working mechanism. */
 static void test_one_shock_cracks_the_whole_pane(void)
 {
     fixture();
@@ -856,20 +841,12 @@ static void test_snow_melts_where_it_chills(void)
         "and what it turns into is water, not nothing");
 }
 
-/* A re-initialised simulation remembers nothing about the old board.
- *
- * The may_have_* flags are an optimisation - they let whole passes be
- * skipped - so a stale one is not a wrong answer, it is a pass running
- * when it need not. A stale FALSE is the dangerous direction, and that is
- * what a missing reset produces on a fresh board.
- *
- * This is here because the omission hid a second bug rather than causing
- * one directly. may_have_temperature was not reset, the suite reuses one
- * static sand_t, so the flag arrived already true from whichever test ran
- * before - and the two tests written to prove the brush latched it could
- * not fail, because the thing they checked was true either way. Both bugs
- * were mine, in the same change, and the second made the first
- * untestable. */
+/* A re-initialised simulation remembers nothing about the old board: the
+ * may_have_* flags are an optimisation that lets whole passes be
+ * skipped, so a stale one is not a wrong answer, it is a pass running
+ * when it need not - and a stale TRUE carried over from a previous
+ * test's board can silently make a later brush-latching test pass
+ * regardless of what the brush actually latched. */
 static void test_reinitialising_forgets_the_old_board(void)
 {
     fixture();
