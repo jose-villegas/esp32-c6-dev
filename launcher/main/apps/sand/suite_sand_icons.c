@@ -212,11 +212,9 @@ static void test_every_icon_matches_the_artwork_it_replaced(void)
     }
 }
 
-/* Successor to the old cap test, which checked artwork against
- * UI_DRAW_BITMAP_MAX_BLOCKS - gone now that ui_draw_icon() streams runs
- * instead of collecting them (gfx/icon.h). A run-length walk of the
- * UNPACKED rows, independent of gen_icons.py's count_runs(), proves each
- * baked `blocks` against the actual bytes, not the generator's own tally. */
+/* A run-length walk of the UNPACKED rows, independent of gen_icons.py's
+ * count_runs(), proves each baked `blocks` against the actual bytes, not
+ * the generator's own tally. */
 static void test_every_icon_blocks_matches_actual_run_length(void)
 {
     for (size_t i = 0; i < ICON_COUNT; i++) {
