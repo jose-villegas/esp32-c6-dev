@@ -144,18 +144,13 @@ static const __attribute__((unused)) struct { uint16_t upto; int8_t off; } gas_w
     { 256,  2 },   /* sideways, the other  */
 };
 
-/* DERIVED FROM THE WEIGHTS TABLE ABOVE, WHICH STAYS THE SOURCE OF TRUTH.
- * Every boundary in it is a multiple of 8, so roll >> 3 selects a bucket
- * exactly and thirty-two entries cover all 256 rolls - the linear search this
- * replaces cost up to seven iterations, each with its own load and branch.
- *
- * Const, so it costs no RAM: the loop was the expense, not the memory, and
- * this board has 322 KiB of its ~424 KiB under the framebuffer (a 256-entry
- * version of this table failed check_static_ram by 224 bytes). One cached
- * load replaces the walk.
- *
- * Hand-written, so it must agree with the weights: a single wrong entry moves
- * the behaviour fingerprint, which was confirmed by mutating one. */
+/* DERIVED FROM THE WEIGHTS TABLE ABOVE, the source of truth: every
+ * boundary is a multiple of 8, so roll >> 3 selects a bucket exactly,
+ * replacing a linear search that cost up to seven iterations. Const, so
+ * it costs no RAM - this board has 322 KiB of its ~424 KiB under the
+ * framebuffer, and a 256-entry version of this table failed
+ * check_static_ram by 224 bytes. Hand-written, so it must agree with the
+ * weights: a single wrong entry moves the behaviour fingerprint. */
 static const int8_t gas_walk_offset[32] = {
     0,  0,  0,  0,  0,  0,  0,  0,  0,     /* rolls   0.. 71 - stay on course */
     -1, -1, -1, -1, -1, -1, -1, -1, -1,    /* rolls  72..143 - one notch left */
