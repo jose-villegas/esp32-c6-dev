@@ -1610,15 +1610,14 @@ void sand_host_probe_run_gunpowder_basin(void)
  * a row, and the coverage test beside it proves the scene does that inside
  * the window timed here. */
 
-/* Placeholders until the first capture, scaled from each scene's host figure
- * by the host-to-device ratio the three comparable rows already have (the
- * growing plant bed 179x, wet earth 186x, the water slab 214x). A host
- * number cannot price a scene, only rank it - these exist so the rows
- * compile and report, and the capture replaces every one with measured x
- * 0.9 rounded down, the file-wide rule. */
-#define PLANT_RUIN_BUDGET_US    150000
-#define FILLING_BASIN_BUDGET_US  25000
-#define SNOWFALL_BUDGET_US       90000
+/* Measured 83,173 / 16,077 / 63,371 us per step, perf-scoped, pegged at that
+ * x 0.9 rounded DOWN - so all three ship RED, a reduction target rather than
+ * a guard, as every row here was first set. The host ranked all three right
+ * and priced none: 137x, 177x, 176x against the 179-214x its comparable rows
+ * predicted. */
+#define PLANT_RUIN_BUDGET_US     74800
+#define FILLING_BASIN_BUDGET_US  14400
+#define SNOWFALL_BUDGET_US       57000
 
 /* A grown plant bed with acid eating down to its roots on one side of a wall
  * and lava burning its canopy on the other (build_plant_ruin_scene(), shared
@@ -1678,16 +1677,13 @@ static void test_the_plant_ruin_scene_fits_in_the_frame_budget(void)
     free(big);
     free(blocks);
 
-    /* PROVISIONAL, not a measured peg: this row has never run on the device.
-     * The first capture replaces it with measured x 0.9 rounded down, the
-     * file-wide rule (see FULL_STEP_BUDGET_US's comment). Host timing puts
-     * this above the growing plant bed and above wet earth, the two dearest
-     * rows it is comparable with, so the placeholder is scaled from the
-     * plant bed's own device number rather than invented. */
+    /* THE INTERACTION IS THE FINDING: the same bed, grown the same way, is
+     * 68,076 us a step while it is merely drinking rain and 83,173 once acid
+     * and lava arrive - 22% for the pours alone. */
     TEST_ASSERT_LESS_THAN_MESSAGE(PLANT_RUIN_BUDGET_US, (int)per_step,
-        "PROVISIONAL ceiling - see this test's own comment. Once captured "
-        "this row becomes measured x 0.9, a reduction target, not a "
-        "loosened guard");
+        "the plant family meeting acid and lava is held to 10% below its "
+        "first measured number, as a reduction target - failing means the "
+        "work is not done, not that something broke");
 }
 
 #ifdef SAND_HOST_PROBE
@@ -1750,9 +1746,15 @@ static void test_the_filling_basin_scene_fits_in_the_frame_budget(void)
     free(big);
     free(blocks);
 
-    /* PROVISIONAL - see the plant ruin row above for what replaces it. */
+    /* WHAT THE PAIR SAYS, and it is the reason this row exists: the slab row
+     * above measured 12,060 us a step in the same capture, this one 16,077.
+     * A third more for the same board of water, purely for settling rather
+     * than dropping into vacuum - so the row the water work is tuned on is
+     * the cheaper of the two cases by 33%. */
     TEST_ASSERT_LESS_THAN_MESSAGE(FILLING_BASIN_BUDGET_US, (int)per_step,
-        "PROVISIONAL ceiling, not yet pegged from a device capture");
+        "water running into a pool is held to 10% below its first measured "
+        "number, as a reduction target - failing means the work is not "
+        "done, not that something broke");
 }
 
 #ifdef SAND_HOST_PROBE
@@ -1812,9 +1814,12 @@ static void test_the_snowfall_scene_fits_in_the_frame_budget(void)
     free(big);
     free(blocks);
 
-    /* PROVISIONAL - see the plant ruin row above for what replaces it. */
+    /* 63,371 us a step from a material that had no scene at all: about what
+     * a growing plant bed costs, and dearer than a campfire. */
     TEST_ASSERT_LESS_THAN_MESSAGE(SNOWFALL_BUDGET_US, (int)per_step,
-        "PROVISIONAL ceiling, not yet pegged from a device capture");
+        "snow on earth is held to 10% below its first measured number, as "
+        "a reduction target - failing means the work is not done, not that "
+        "something broke");
 }
 
 #ifdef SAND_HOST_PROBE
