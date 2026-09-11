@@ -1,13 +1,10 @@
 /*=============================================================================
  * Portable suite: ui_pointer driving REAL microui.
  *
- * WHY THIS EXISTS, AND WHY suite_ui_pointer.c WAS NOT ENOUGH
- *
- * That suite asserts the event LIST ui_pointer_step() produces. It was green
- * for a build in which no button in the shell could be pressed at all: every
- * app became unreachable from the launcher, because the events were fed to
- * microui in an order microui cannot resolve a click from. A list of events
- * is not a click; only microui decides that.
+ * suite_ui_pointer.c only asserts the event LIST ui_pointer_step()
+ * produces - a list of events matching does not mean microui can resolve
+ * a click from them; only microui itself decides that. This suite links
+ * real microui.c to prove it.
  *
  * The mechanism, so nobody re-derives it from scratch: mu_mouse_over() needs
  * in_hover_root(), and mu_begin() copies hover_root from the PREVIOUS frame's
