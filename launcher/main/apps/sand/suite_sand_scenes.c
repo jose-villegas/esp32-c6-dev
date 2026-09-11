@@ -1233,6 +1233,19 @@ void build_plant_pour_scene(sand_t *s)
     plant_bed_rain(s);
 }
 
+void build_dry_plant_heap_scene(sand_t *s)
+{
+    const int bed_top  = (REAL_H * 7) / 10;
+    const int dirt_top = REAL_H - (REAL_H - bed_top) / 2;
+
+    for (int y = bed_top; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            sand_set(s, x, y, y < dirt_top ? CELL_SOIL(MAT_DIRT, 1, 0)
+                                           : CELL_MAKE(MAT_SAND, 0));
+        }
+    }
+}
+
 void plant_pour_stamp(sand_t *s, int step)
 {
     const int span = REAL_W - 2 * PLANT_POUR_MARGIN;
@@ -2445,6 +2458,67 @@ static void test_the_plant_pour_scene_keeps_a_loose_heap_in_the_air(void)
     TEST_ASSERT_GREATER_THAN_INT_MESSAGE(poured_at, lowest, why);
 }
 
+/* The opposite guarantee to the pour above, and the settled row is worthless
+ * without it: a scene that has quietly lost its plants, or its dryness, would
+ * time an empty board and pass for the wrong reason. Both halves are load-
+ * bearing - damp earth arms the moisture stage, and the pass then runs
+ * whatever the plants are doing. */
+static void test_the_settled_plant_heap_is_dry_and_still_full_of_plants(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
+                              ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t s2;
+    sand_init(&s2, big, REAL_W, REAL_H, 11u);
+    sand_enable_sleeping(&s2, blocks);
+    sand_set_soak(&s2, SAND_SOAK_PER_MATERIAL);
+    build_dry_plant_heap_scene(&s2);
+
+    for (int i = 0; i < PLANT_POUR_MEASURED_STEPS; i++) {
+        plant_pour_stamp(&s2, i);
+        sand_step(&s2, 0, 1000, 0);
+    }
+    for (int i = 0; i < PLANT_IDLE_SETTLE_STEPS; i++) {
+        sand_step(&s2, 0, 1000, 0);
+    }
+
+    int plants = 0, airborne = 0;
+    for (int y = 0; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            if (sand_at(&s2, x, y) != MATX(MATX_PLANT)) {
+                continue;
+            }
+            plants++;
+            if (y + 1 < REAL_H && CELL_IS_EMPTY(sand_at(&s2, x, y + 1))) {
+                airborne++;
+            }
+        }
+    }
+    const bool wet = s2.may_have_moisture;
+    const bool mobile = s2.faller_may_move;
+
+    free(big);
+    free(blocks);
+
+    char why[220];
+    snprintf(why, sizeof why,
+             "the heap must still be on the board when the window opens, or "
+             "the row times bare earth - %d plants", plants);
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(1000, plants, why);
+
+    snprintf(why, sizeof why,
+             "and it must have come to rest, or this is the pour row again - "
+             "%d plants still have nothing under them", airborne);
+    TEST_ASSERT_FALSE_MESSAGE(mobile, why);
+
+    TEST_ASSERT_FALSE_MESSAGE(wet,
+        "the earth must stay dry: damp soil arms the moisture stage, which "
+        "runs the whole pass on its own and hides what this row measures");
+}
+
 void run_sand_scenes_suite(void)
 {
     RUN_TEST(test_the_mixed_scene_puts_every_material_pair_in_contact);
@@ -2460,6 +2534,7 @@ void run_sand_scenes_suite(void)
     RUN_TEST(test_the_filling_basin_scene_runs_from_the_lip_to_the_pool);
     RUN_TEST(test_the_snowfall_scene_holds_a_crusting_bank_and_a_live_fall);
     RUN_TEST(test_the_plant_pour_scene_keeps_a_loose_heap_in_the_air);
+    RUN_TEST(test_the_settled_plant_heap_is_dry_and_still_full_of_plants);
 }
 
 SUITE_REGISTER(run_sand_scenes_suite);

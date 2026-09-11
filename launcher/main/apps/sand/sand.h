@@ -118,6 +118,12 @@ typedef struct sand_s {
      * a seed falls from the screen to the floor - see reaction_t.falls. */
     bool     may_have_faller;
 
+    /* PRESENCE IS NOT MOBILITY, and this pair is the only gate where the
+     * difference is worth a byte: a grown garden is all faller cells and none
+     * of them can move, so presence alone would buy a board-wide scan every
+     * step forever. Both must hold for the pass to run on fallers alone. */
+    bool     faller_may_move;
+
     /* Checks if grid has heat-interactive elements (e.g., stone, glass, ice)
      * to gate convection in step_one_reacting_row(). Not a pass gate but a
      * branch gate within the pass. Needed to prevent scanning four neighbours

@@ -1212,6 +1212,13 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
     const uint8_t settled_bit = compute_settled_bit(s, jostle, dx, dy,
                                                     load_dx, load_dy);
 
+    /* A body held up under one gravity can be loose under the next, and a turn
+     * that moves no cell marks no row - so mark_rows() cannot be what re-arms
+     * the fall pass here. */
+    if (load_dx != s->last_load_dx || load_dy != s->last_load_dy) {
+        s->faller_may_move = true;
+    }
+
     /* Written AFTER compute_settled_bit() returns, and OUTSIDE it: this is
      * a fact about the board's settled direction, not about sleeping
      * bookkeeping, so it must not depend on block sleeping being on -

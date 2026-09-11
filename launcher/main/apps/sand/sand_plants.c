@@ -107,7 +107,7 @@ anchored(sand_t* s, int x, int y, int w, int h, cell_t self, const reaction_t* r
 }
 
 bool
-step_one_falling_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
+faller_can_move(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
     const int nx = x + s->last_load_dx;
     const int ny = y + s->last_load_dy;
     if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
@@ -118,9 +118,18 @@ step_one_falling_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
     if (!CELL_IS_EMPTY(s->cells[nat])) {
         return false; /* landed */
     }
-    if (anchored(s, x, y, w, h, s->cells[at], r)) {
+    return !anchored(s, x, y, w, h, s->cells[at], r);
+}
+
+bool
+step_one_falling_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
+    if (!faller_can_move(s, x, y, w, h, r)) {
         return false;
     }
+    const int nx = x + s->last_load_dx;
+    const int ny = y + s->last_load_dy;
+    const size_t at = (size_t)y * (size_t)w + (size_t)x;
+    const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
     if ((int)(rng_next(&s->rng) & 0xFF) >= r->falls) {
         return true; /* still falling, just not now */
     }

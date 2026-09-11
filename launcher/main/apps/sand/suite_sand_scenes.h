@@ -175,6 +175,14 @@ void plant_pour_stamp(sand_t *s, int step);
 #define PLANT_POUR_SETTLE_STEPS 60
 #define PLANT_POUR_MEASURED_STEPS 120
 
+/* Long enough after the last stamp that the heap has stopped moving. What a
+ * board LOOKS like most of the time - a player pours a garden and then leaves
+ * it there - and the one state no other row covers: every plant scene here is
+ * chosen for something still happening in it. */
+void build_dry_plant_heap_scene(sand_t *s);
+
+#define PLANT_IDLE_SETTLE_STEPS 200
+
 /* The schedule is chosen so every stage is still doing work in the timed
  * window. Measured over candidate 20-step windows: a bed settled 400 steps
  * produces ZERO leaves - its canopy has saturated, so the row times a
