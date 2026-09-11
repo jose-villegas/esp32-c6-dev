@@ -78,13 +78,25 @@ counts that are the only movable part of them:
   across five addresses on 2026-09-10 and moves that row by at most 1.4%
   (see [the layout lottery](#the-layout-lottery)). The guard is still not
   re-pegged tighter, on the older reasoning that a bus-bound row's cost
-  follows the scene's band count, which any behaviour change moves.
+  follows the scene's band count, which any behaviour change moves. It now
+  sits on the knife edge: two images of `c2c672e` measured 9,790 and 9,649
+  against a 9,650 budget, with identical 50/13/26 strip-sends, so the row
+  fails by 1 µs in one and passes by 1 µs in the other.
 - **A row that passes gets re-pegged; a row that fails does not.** The
   target is the demand, so resetting it on a row that has not met it
   erases the demand rather than restating it — which is why nine rows
   measured under their own anchor in this capture and none of them moved.
 - One standing coverage gap: no budgeted row runs a tilted gravity, and
   attempt 14's off-axis cost (+29–37%) is therefore measured by nothing.
+- **The gunpowder basin is the one row moving the wrong way, and the scope
+  excuse for it is now spent.** Its 28,200 target came from 31,399 measured
+  on 2026-09-06 in an *unscoped* image, which left open whether the later
+  33,000-odd readings were a scope artefact. An unscoped capture of
+  `c2c672e`, taken beside the perf-scoped one, reads **32,917** against that
+  capture's 33,114 — 0.6% apart. Same scope as the anchor, controls 9.4%
+  *faster* than the anchor capture's 6,166/6,260, and still 4.8% more time.
+  It is a real regression, unattributed to a commit, and the row stays red
+  as a target rather than being re-pegged around.
 - **Vent spam dropped from this table, not re-pegged.** The mechanism it
   measured (lava venting through a covering) was removed and replaced by
   a covered-lava burst (bd esp32c6-0f2/esp32c6-mqt); its scene was

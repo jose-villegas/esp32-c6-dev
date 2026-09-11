@@ -89,6 +89,17 @@ image are different layouts, so the within-capture rule below does not merely
 apply — it forbids the comparison outright. What each scope contains, and how
 selection works, is in [`../Testing-Guide.md`](../Testing-Guide.md).
 
+**How much that ban is actually worth, measured once (2026-09-11,
+`c2c672e`):** both scopes of the same tree, captured back to back, put the
+two controls at **5,585 / 5,684** and **5,584 / 5,684** — the same layout
+ticket, to the microsecond — and then disagreed by **at most 0.90%** on
+every one of the twenty-four budget rows. So the ban is a ban on an unknown,
+not on a known large offset: when the scopes happen to land the same
+layout, scope itself is worth less than the ±1% band. Keep scoping a round
+uniformly, because nothing makes them land together on purpose — but a
+cross-scope comparison whose *controls* match is worth reading rather than
+discarding.
+
 ### The instrument
 
 A `volatile bool` per thing you want to price:
