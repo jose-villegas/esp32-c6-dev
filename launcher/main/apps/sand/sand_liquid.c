@@ -264,27 +264,6 @@ static inline bool equalise_one_block(sand_t *s, uint8_t *row, int y,
     return any_liquid;
 }
 
-/* Whether every cell in [x0, x1) rejects a cross-flow ray landing in it.
- * neighbour_is_lower() reads a full cell, a foreign material and a wall all as
- * MASS_MAX, so only an empty cell or a partly-filled liquid can read as lower.
- * Breaks on the first of either, so a span that is still moving costs a
- * handful of loads rather than its length. */
-static inline bool span_blocks_flow(const uint8_t *row, int x0, int x1,
-                                    uint16_t is_liquid)
-{
-    for (int x = x0; x < x1; x++) {
-        const cell_t c = row[x];
-        if (CELL_IS_EMPTY(c)) {
-            return false;
-        }
-        if (((is_liquid >> CELL_MATERIAL(c)) & 1u) != 0 &&
-            CELL_VARIANT(c) < MASS_MAX) {
-            return false;
-        }
-    }
-    return true;
-}
-
 /* A block is SAND_BLOCK_H rows tall, so "liquid is near" holds for every row
  * of a band a pool merely touches, and half of those rows hold nothing at
  * all. Worth its own scan rather than the walk's: one induction variable and
@@ -321,7 +300,7 @@ static inline bool rays_blocked(const uint8_t *ax_row, const uint8_t *dg_row,
     const int sx0 = (x0 > 0) ? x0 - 1 : 0;
     const int sx1 = (x1 < w) ? x1 + 1 : w;
 
-    if (ax_row != NULL && !span_blocks_flow(ax_row, sx0, sx1, is_liquid)) {
+    if (ax_row != NULL && !span_has_no_liquid_room(ax_row, sx0, sx1, is_liquid)) {
         return false;
     }
     /* Equal covers both "one row, two rays" - which is every landscape and
@@ -330,7 +309,7 @@ static inline bool rays_blocked(const uint8_t *ax_row, const uint8_t *dg_row,
     if (dg_row == ax_row) {
         return true;
     }
-    return dg_row == NULL || span_blocks_flow(dg_row, sx0, sx1, is_liquid);
+    return dg_row == NULL || span_has_no_liquid_room(dg_row, sx0, sx1, is_liquid);
 }
 
 /* THE AXIS ROW WHERE THE DIAGONAL RAY IS UNREACHABLE: a cell takes that ray

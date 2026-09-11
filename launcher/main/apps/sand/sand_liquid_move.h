@@ -137,10 +137,14 @@ static inline bool liquid_may_move(sand_t *s, uint8_t id)
     return m >= 255 || (int)(rng_next(&s->rng) & 0xFF) < m;
 }
 
+/* `dest_full` says the caller has already established that nothing this grain
+ * can reach has room - see the sweep's own block loop. It sits AFTER the
+ * viscosity roll so the skip draws the same RNG the long way round would, and
+ * the store it skips would have written the grain back unchanged. */
 static inline bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
                        int x, int y, int dx, int dy,
                        const int *slide_a, const int *slide_b,
-                       cell_t grain, uint8_t mat_id)
+                       cell_t grain, uint8_t mat_id, bool dest_full)
 {
     const int w = s->w;
     int mass = CELL_VARIANT(grain);
@@ -158,6 +162,10 @@ static inline bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
      * is what a screen of liquid usually is. */
     if (s->may_have_viscous_liquid
         && __builtin_expect(!liquid_may_move(s, mat_id), 0)) {
+        return false;
+    }
+
+    if (dest_full) {
         return false;
     }
 

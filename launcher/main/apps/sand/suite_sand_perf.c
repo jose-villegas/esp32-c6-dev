@@ -1418,6 +1418,15 @@ static void test_the_boiler_scene_fits_in_the_frame_budget(void)
         "done, not that something broke");
 }
 
+#ifdef SAND_HOST_PROBE
+/* Host-only timing probe - the boiler (see the full-step control's own
+ * wrapper for the pattern). */
+void sand_host_probe_run_boiler(void)
+{
+    test_the_boiler_scene_fits_in_the_frame_budget();
+}
+#endif
+
 /* Sand and dirt poured in equal amounts, water dropped over both until
  * it settles (build_wet_earth_scene(), shared with test_the_wet_earth_
  * scene_keeps_percolating_across_the_window). First benchmark to put
