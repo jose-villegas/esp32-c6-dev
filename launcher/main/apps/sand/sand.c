@@ -1076,19 +1076,6 @@ static void build_xflow(xflow_t *f, int gx, int gy)
  * sand_step_gas() already use. */
 
 
-/* This array's own alignment, which is where sand_step()'s went when this
- * definition slid in under the attribute written for it. The function has its
- * own pin again below, at 16 rather than the 32 that measured too dear.
- *
- * Defined here once rather than per TU - see sand_priv.h. */
-__attribute__((aligned(32)))
-const int8_t reaction_dirs[4][2] = {
-    {0, -1},
-    {0, 1},
-    {-1, 0},
-    {1, 0},
-};
-
 /* PINNED at 16, and the 16 is the point.
  *
  * This was unpinned for nineteen commits: the attribute written for it bound
