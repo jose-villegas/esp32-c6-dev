@@ -142,9 +142,8 @@ test_exactly_one_up_comes_out_of_one_press(void) {
 }
 
 /*-----------------------------------------------------------------------------
- * A tap fast enough to resolve inside one poll - the old bridge could never
- * lose this because it released the same frame it pressed; the new held
- * policy can, so it has to be handled explicitly.
+ * A tap fast enough to resolve inside one poll: the held policy can lose
+ * it, so it has to be handled explicitly.
  *---------------------------------------------------------------------------*/
 
 static void
