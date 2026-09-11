@@ -1,7 +1,7 @@
 /*
  * Portable suite: the falling-sand automaton - shared benchmark scenes -
- * four-liquid, lava-stress, smoke-and-steam, thermal-shock, boiler, and wet-
- * earth.
+ * four-liquid, lava-stress, smoke-and-steam, thermal-shock, boiler, wet-
+ * earth, plant-ruin, filling-basin and snowfall.
  *
  * Split out of suite_sand.c (bd esp32c6 test-suite-refactor), which had grown
  * past 32,000 lines across 500+ tests. Shared fixtures and assertion helpers
@@ -1209,6 +1209,181 @@ void plant_bed_rain(sand_t *s)
     }
 }
 
+/* Measured on a 380-pairing arena, with each material's own habits
+ * subtracted, Root <- Acid, Plant <- Lava and Leaf <- Lava are three of the
+ * six dearest interactions in the simulation and nothing here reaches any of
+ * them. Root <- Water is the fourth, and the plant bed above already covers
+ * it, so neither pour is water.
+ *
+ * The wall is what keeps the halves honest: acid meeting lava is a quench
+ * between two liquids, and it would spend both pours before either reached
+ * anything green. */
+#define PLANT_RUIN_WALL_X (REAL_W / 2)
+#define PLANT_RUIN_WALL_W 3
+
+void build_plant_ruin_scene(sand_t *s)
+{
+    build_plant_bed_scene(s);
+
+    for (int y = 0; y < REAL_H; y++) {
+        for (int d = 0; d < PLANT_RUIN_WALL_W; d++) {
+            sand_set(s, PLANT_RUIN_WALL_X + d, y, STONE);
+        }
+    }
+}
+
+/* Four rows rather than one: a single row of acid is spent on the first cell
+ * it dissolves, and a single row of lava is quenched by the damp dirt before
+ * it reaches anything green. */
+#define PLANT_RUIN_POUR_ROWS 4
+
+static void plant_ruin_pour_side(sand_t *s, int x0, int x1, cell_t what)
+{
+    const int top = (REAL_H * 7) / 10 - 28;
+
+    for (int y = top; y < top + PLANT_RUIN_POUR_ROWS; y++) {
+        for (int x = x0; x < x1; x++) {
+            if (CELL_IS_EMPTY(sand_at(s, x, y))) {
+                sand_set(s, x, y, what);
+            }
+        }
+    }
+}
+
+void plant_ruin_acid_pour(sand_t *s)
+{
+    plant_ruin_pour_side(s, 0, PLANT_RUIN_WALL_X, CELL_MAKE(MAT_ACID, MASS_MAX));
+}
+
+void plant_ruin_lava_pour(sand_t *s)
+{
+    plant_ruin_pour_side(s, PLANT_RUIN_WALL_X + PLANT_RUIN_WALL_W, REAL_W,
+                          CELL_MAKE(MAT_LAVA, MASS_MAX));
+}
+
+/* Counted over a 20-step window, the perf suite's free-falling water slab
+ * calls move_liquid_grain() 221,118 times and finds the cell below occupied
+ * ZERO of them: the sideways half never runs, nor does the splash. A merely
+ * standing pool is no answer either - its blocks sleep, so it reaches that
+ * function not at all. Only water RUNNING exercises the half the slab
+ * cannot. */
+#define FILLING_BASIN_WALL      4
+#define FILLING_BASIN_RAMP_Y0  24
+#define FILLING_BASIN_RAMP_X1 150
+#define FILLING_BASIN_RAMP_H    4
+#define FILLING_BASIN_TOP     150
+#define FILLING_BASIN_POUR_W   32
+#define FILLING_BASIN_POUR_H   24
+
+/* How far above the ramp's stone the coverage test looks for its run, and
+ * how far along the ramp that run has to have got before the window opens. */
+#define FILLING_BASIN_RUN_DEPTH      6
+#define FILLING_BASIN_RUN_REACH_MIN 140
+
+/* ONE ROW OF DROP FOR EVERY TWO OF RUN, and the exact figure is what makes
+ * this a slope rather than a wall: on a 45-degree face every down-diagonal is
+ * stone too, so a grain resting on it cannot move in ANY of the three
+ * directions move_liquid_grain() offers and the ramp behaves as a dam. At one
+ * in two, every other column opens a step for it to take. */
+static int filling_basin_ramp_top(int x)
+{
+    return FILLING_BASIN_RAMP_Y0 + (x - FILLING_BASIN_WALL) / 2;
+}
+
+void build_filling_basin_scene(sand_t *s)
+{
+    for (int y = 0; y < REAL_H; y++) {
+        for (int d = 0; d < FILLING_BASIN_WALL; d++) {
+            sand_set(s, d, y, STONE);
+            sand_set(s, REAL_W - 1 - d, y, STONE);
+        }
+    }
+    for (int y = REAL_H - FILLING_BASIN_WALL; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            sand_set(s, x, y, STONE);
+        }
+    }
+    for (int x = FILLING_BASIN_WALL; x < FILLING_BASIN_RAMP_X1; x++) {
+        const int y0 = filling_basin_ramp_top(x);
+        for (int y = y0; y < y0 + FILLING_BASIN_RAMP_H; y++) {
+            sand_set(s, x, y, STONE);
+        }
+    }
+
+    /* HALF MASS, not MASS_MAX: a pool already at its ceiling has no room for
+     * an arriving grain in any direction, so give_mass() returns zero for
+     * every one of down and both slides, and the scene measures a reject.
+     * Counted: 426,880 slide attempts, none of which transferred. */
+    for (int y = FILLING_BASIN_TOP; y < REAL_H - FILLING_BASIN_WALL; y++) {
+        for (int x = FILLING_BASIN_WALL; x < REAL_W - FILLING_BASIN_WALL; x++) {
+            sand_set(s, x, y, CELL_MAKE(MAT_WATER, MASS_MAX / 2));
+        }
+    }
+
+    filling_basin_pour(s);
+}
+
+void filling_basin_pour(sand_t *s)
+{
+    for (int y = 0; y < FILLING_BASIN_POUR_H; y++) {
+        for (int x = FILLING_BASIN_WALL;
+             x < FILLING_BASIN_WALL + FILLING_BASIN_POUR_W; x++) {
+            if (CELL_IS_EMPTY(sand_at(s, x, y))) {
+                sand_set(s, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+            }
+        }
+    }
+}
+
+/* Snow is the second dearest material to have on the board at all - 24.8 us
+ * per thousand cells present against sand's 12.8 on the same arena - and
+ * Dirt <- Snow and Sand <- Snow close out that arena's top interactions. Its
+ * only other appearance here is sealed inside a glass ring, where it can
+ * neither fall nor meet earth.
+ *
+ * Stripes rather than a checkerboard: snow's scatter is 90, so a bank needs
+ * room to drift within one material instead of across a mixture. */
+#define SNOWFALL_BED_TOP    ((REAL_H * 2) / 5)
+#define SNOWFALL_STRIPE_W    8
+#define SNOWFALL_BANK_H     12
+#define SNOWFALL_DRIFT_ROWS 10
+
+void build_snowfall_scene(sand_t *s)
+{
+    for (int y = SNOWFALL_BED_TOP; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            const bool dirt = ((x / SNOWFALL_STRIPE_W) & 1) != 0;
+            sand_set(s, x, y, dirt ? CELL_MAKE(MAT_DIRT, 0)
+                                   : CELL_MAKE(MAT_SAND, 0));
+        }
+    }
+
+    /* A BANK ALREADY RESTING ON THE EARTH, as well as the fall above it.
+     * Crusting is gated on cell_settled(), so a scene whose snow is all still
+     * in the air ices nothing: measured, a board given only the fall reached
+     * its first ice cell somewhere past step 120, and a drift arriving every
+     * ten steps kept the bank awake and reached none at all. */
+    for (int y = SNOWFALL_BED_TOP - SNOWFALL_BANK_H; y < SNOWFALL_BED_TOP;
+         y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            sand_set(s, x, y, CELL_MAKE(MAT_SNOW, MASS_MAX));
+        }
+    }
+
+    snowfall_drift(s);
+}
+
+void snowfall_drift(sand_t *s)
+{
+    for (int y = 0; y < SNOWFALL_DRIFT_ROWS; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            if (CELL_IS_EMPTY(sand_at(s, x, y))) {
+                sand_set(s, x, y, CELL_MAKE(MAT_SNOW, MASS_MAX));
+            }
+        }
+    }
+}
+
 /* Sand and dirt in equal amounts under water, the one scene here that soaks.
  *
  * Damp dirt is what keeps the reactions pass alive: sand_step_reactions()
@@ -1854,6 +2029,323 @@ static void test_the_gunpowder_basin_scene_reaches_the_reactions_it_claims(void)
         "extended-static cell this scene paints on purpose)");
 }
 
+/* --- the three scenes added for the interaction round ------------------- */
+
+/* Summed fill level, not cell count: a pool taking water consolidates as
+ * often as it grows, so the count can sit still while the mass climbs. */
+static long filling_basin_pool_mass(const sand_t *s)
+{
+    long mass = 0;
+    for (int y = FILLING_BASIN_TOP; y < REAL_H - FILLING_BASIN_WALL; y++) {
+        for (int x = FILLING_BASIN_WALL; x < REAL_W - FILLING_BASIN_WALL; x++) {
+            const cell_t c = sand_at(s, x, y);
+            if (!CELL_IS_EMPTY(c) && !cell_is_extended(c) &&
+                CELL_MATERIAL(c) == MAT_WATER) {
+                mass += CELL_VARIANT(c);
+            }
+        }
+    }
+    return mass;
+}
+
+/* How far along the ramp the run has got: the rightmost column carrying water
+ * in the few rows directly above the stone, where a sheet crossing it has to
+ * be. */
+static int filling_basin_run_reach(const sand_t *s)
+{
+    int reach = FILLING_BASIN_WALL;
+
+    for (int x = FILLING_BASIN_WALL; x < FILLING_BASIN_RAMP_X1; x++) {
+        const int y0 = filling_basin_ramp_top(x);
+        for (int y = y0 - FILLING_BASIN_RUN_DEPTH; y < y0; y++) {
+            const cell_t c = sand_at(s, x, y);
+            if (!CELL_IS_EMPTY(c) && !cell_is_extended(c) &&
+                CELL_MATERIAL(c) == MAT_WATER) {
+                reach = x;
+                break;
+            }
+        }
+    }
+    return reach;
+}
+
+static void snowfall_census(const sand_t *s, int *snow, int *ice, int *sand,
+                             int *dirt)
+{
+    *snow = *ice = *sand = *dirt = 0;
+    for (int y = 0; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            const cell_t c = sand_at(s, x, y);
+            if (CELL_IS_EMPTY(c)) {
+                continue;
+            }
+            if (cell_is_extended(c)) {
+                if (CELL_VARIANT(c) == MATX_ICE) { (*ice)++; }
+            } else if (CELL_MATERIAL(c) == MAT_SNOW) { (*snow)++; }
+            else if (CELL_MATERIAL(c) == MAT_SAND)   { (*sand)++; }
+            else if (CELL_MATERIAL(c) == MAT_DIRT)   { (*dirt)++; }
+        }
+    }
+}
+
+typedef struct {
+    int plant, leaf, root, dirt;
+} greenery_t;
+
+static void count_greenery(const sand_t *s, int x0, int x1, greenery_t *g)
+{
+    g->plant = g->leaf = g->root = g->dirt = 0;
+    for (int y = 0; y < REAL_H; y++) {
+        for (int x = x0; x < x1; x++) {
+            const cell_t c = sand_at(s, x, y);
+            if (CELL_IS_EMPTY(c)) {
+                continue;
+            }
+            if (cell_is_extended(c)) {
+                if (CELL_VARIANT(c) == MATX_PLANT)     { g->plant++; }
+                else if (CELL_VARIANT(c) == MATX_LEAF) { g->leaf++; }
+                else if (CELL_VARIANT(c) == MATX_ROOT) { g->root++; }
+            } else if (CELL_MATERIAL(c) == MAT_DIRT) {
+                g->dirt++;
+            }
+        }
+    }
+}
+
+/* Steps the plant-ruin scene through exactly the schedule the frame-budget
+ * test beside it uses, and hands back the two sides either end of the window
+ * the budget is measured over. */
+static void plant_ruin_window(sand_t *s, greenery_t *acid_before,
+                               greenery_t *acid_after,
+                               greenery_t *lava_before,
+                               greenery_t *lava_after, int *fire)
+{
+    const int lava_x0 = PLANT_RUIN_WALL_X + PLANT_RUIN_WALL_W;
+
+    build_plant_ruin_scene(s);
+    for (int i = 0; i < PLANT_BED_SETTLE_STEPS; i++) {
+        if (i == PLANT_BED_RAIN_A || i == PLANT_BED_RAIN_B) {
+            plant_bed_rain(s);
+        }
+        sand_step(s, 0, 1000, 0);
+    }
+    for (int i = 0; i < PLANT_RUIN_ACID_LEAD_STEPS; i++) {
+        if (i % PLANT_RUIN_ACID_EVERY == 0) {
+            plant_ruin_acid_pour(s);
+        }
+        sand_step(s, 0, 1000, 0);
+    }
+    plant_ruin_lava_pour(s);
+
+    count_greenery(s, 0, PLANT_RUIN_WALL_X, acid_before);
+    count_greenery(s, lava_x0, REAL_W, lava_before);
+
+    for (int i = 0; i < PLANT_RUIN_MEASURED_STEPS; i++) {
+        if (i % PLANT_RUIN_ACID_EVERY == 0) {
+            plant_ruin_acid_pour(s);
+        }
+        sand_step(s, 0, 1000, 0);
+    }
+
+    count_greenery(s, 0, PLANT_RUIN_WALL_X, acid_after);
+    count_greenery(s, lava_x0, REAL_W, lava_after);
+
+    *fire = 0;
+    for (int y = 0; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            const cell_t c = sand_at(s, x, y);
+            if (!CELL_IS_EMPTY(c) && !cell_is_extended(c) &&
+                CELL_MATERIAL(c) == MAT_FIRE) {
+                (*fire)++;
+            }
+        }
+    }
+}
+
+/* The three interactions this scene exists for really do fire INSIDE the
+ * window the budget is measured over, not merely somewhere in the scene's
+ * history - which for the acid half took three attempts to arrange, since a
+ * single pour never reaches the roots at all. */
+static void test_the_plant_ruin_scene_eats_roots_and_burns_a_canopy(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
+                              ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t s2;
+    sand_init(&s2, big, REAL_W, REAL_H, 11u);
+    sand_enable_sleeping(&s2, blocks);
+    sand_set_scatter(&s2, SAND_SCATTER_PER_MATERIAL);
+    sand_set_decay(&s2, SAND_DECAY_PER_MATERIAL);
+    sand_set_soak(&s2, SAND_SOAK_PER_MATERIAL);
+    sand_set_mobility(&s2, SAND_MOBILITY_PER_MATERIAL);
+
+    greenery_t ab, aa, lb, la;
+    int fire = 0;
+    plant_ruin_window(&s2, &ab, &aa, &lb, &la, &fire);
+
+    free(big);
+    free(blocks);
+
+    char why[220];
+    snprintf(why, sizeof why,
+             "the bed must have grown roots for the acid to find - %d on "
+             "the acid side when the window opens", ab.root);
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, ab.root, why);
+
+    snprintf(why, sizeof why,
+             "Root <- Acid is the interaction this half of the scene "
+             "exists for, and it must fire inside the measured window - "
+             "%d roots when it opened, %d when it closed", ab.root, aa.root);
+    TEST_ASSERT_LESS_THAN_MESSAGE(ab.root, aa.root, why);
+
+    snprintf(why, sizeof why,
+             "acid must still be eating the soil cap during the window "
+             "too, not only what grew out of it - %d dirt cells against "
+             "%d", aa.dirt, ab.dirt);
+    TEST_ASSERT_LESS_THAN_MESSAGE(ab.dirt, aa.dirt, why);
+
+    snprintf(why, sizeof why,
+             "the lava half must still have a canopy to burn when the "
+             "window opens - %d plants, %d leaves", lb.plant, lb.leaf);
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, lb.plant, why);
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, lb.leaf, why);
+
+    snprintf(why, sizeof why,
+             "Plant <- Lava must fire inside the window - %d plants when "
+             "it opened, %d when it closed", lb.plant, la.plant);
+    TEST_ASSERT_LESS_THAN_MESSAGE(lb.plant, la.plant, why);
+
+    snprintf(why, sizeof why,
+             "Leaf <- Lava must fire inside the window too - %d leaves "
+             "when it opened, %d when it closed", lb.leaf, la.leaf);
+    TEST_ASSERT_LESS_THAN_MESSAGE(lb.leaf, la.leaf, why);
+
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, fire,
+        "burning greenery leaves fire behind it - none on the board means "
+        "the plants went some other way and this scene is not measuring "
+        "what it claims");
+}
+
+/* The cascade really does run end to end, so the frame-budget test beside
+ * this one is timing water that is falling, running along a shelf and
+ * landing in a pool all at once - the three states the free-falling slab in
+ * the perf suite reduces to one. */
+static void test_the_filling_basin_scene_runs_from_the_lip_to_the_pool(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
+                              ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t s2;
+    sand_init(&s2, big, REAL_W, REAL_H, 17u);
+    sand_enable_sleeping(&s2, blocks);
+    sand_set_scatter(&s2, SAND_SCATTER_PER_MATERIAL);
+    sand_set_decay(&s2, SAND_DECAY_PER_MATERIAL);
+    sand_set_mobility(&s2, SAND_MOBILITY_PER_MATERIAL);
+
+    build_filling_basin_scene(&s2);
+    for (int i = 0; i < FILLING_BASIN_SETTLE_STEPS; i++) {
+        if (i % FILLING_BASIN_POUR_EVERY == 0) {
+            filling_basin_pour(&s2);
+        }
+        sand_step(&s2, 0, 1000, 0);
+    }
+
+    const long pool_before = filling_basin_pool_mass(&s2);
+    const int reach = filling_basin_run_reach(&s2);
+
+    for (int i = 0; i < FILLING_BASIN_MEASURED_STEPS; i++) {
+        if (i % FILLING_BASIN_POUR_EVERY == 0) {
+            filling_basin_pour(&s2);
+        }
+        sand_step(&s2, 0, 1000, 0);
+    }
+    const long pool_after = filling_basin_pool_mass(&s2);
+
+    free(big);
+    free(blocks);
+
+    char why[220];
+    snprintf(why, sizeof why,
+             "the run must reach the far end of the ramp by the time the "
+             "window opens, or the scene is timing water banked up against "
+             "a slope it never got down - reached column %d of %d", reach,
+             FILLING_BASIN_RUN_REACH_MIN);
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(FILLING_BASIN_RUN_REACH_MIN,
+                                              reach, why);
+
+    snprintf(why, sizeof why,
+             "the pool at the bottom must still be taking water during the "
+             "window - %ld mass when it opened, %ld when it closed",
+             pool_before, pool_after);
+    TEST_ASSERT_GREATER_THAN_MESSAGE(pool_before, pool_after, why);
+}
+
+/* Snow's cost is attributed to what a settled bank does as much as to what a
+ * falling one does, so a scene holding only one of the two would measure
+ * half of it. Both must be true when the window opens. */
+static void test_the_snowfall_scene_holds_a_crusting_bank_and_a_live_fall(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
+                              ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t s2;
+    sand_init(&s2, big, REAL_W, REAL_H, 23u);
+    sand_enable_sleeping(&s2, blocks);
+    sand_set_scatter(&s2, SAND_SCATTER_PER_MATERIAL);
+    sand_set_decay(&s2, SAND_DECAY_PER_MATERIAL);
+    sand_set_mobility(&s2, SAND_MOBILITY_PER_MATERIAL);
+    sand_set_crust(&s2, CRUST_ROLL_MAX);
+
+    build_snowfall_scene(&s2);
+    for (int i = 0; i < SNOWFALL_SETTLE_STEPS; i++) {
+        sand_step(&s2, 0, 1000, 0);
+    }
+
+    int snow_before = 0, ice = 0, sand_left = 0, dirt_left = 0;
+    snowfall_census(&s2, &snow_before, &ice, &sand_left, &dirt_left);
+
+    int snow_after = 0, ice_after = 0, sand_after = 0, dirt_after = 0;
+    for (int i = 0; i < SNOWFALL_MEASURED_STEPS; i++) {
+        if (i % SNOWFALL_DRIFT_EVERY == 0) {
+            snowfall_drift(&s2);
+        }
+        sand_step(&s2, 0, 1000, 0);
+    }
+    snowfall_census(&s2, &snow_after, &ice_after, &sand_after, &dirt_after);
+
+    free(big);
+    free(blocks);
+
+    char why[220];
+    snprintf(why, sizeof why,
+             "the bank must have crusted before the window opens, or the "
+             "scene is snow on bare earth and not the mixture it claims - "
+             "%d ice against %d snow", ice, snow_before);
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, ice, why);
+
+    snprintf(why, sizeof why,
+             "and snow must still be arriving through the window, or it is "
+             "a settled bank and not a snowfall - %d cells when it opened, "
+             "%d when it closed", snow_before, snow_after);
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(snow_before, snow_after, why);
+
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, sand_after,
+        "the scene must still hold both of snow's measured partners at the "
+        "end - sand is gone");
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, dirt_after,
+        "the scene must still hold both of snow's measured partners at the "
+        "end - dirt is gone");
+}
+
 void run_sand_scenes_suite(void)
 {
     RUN_TEST(test_the_mixed_scene_puts_every_material_pair_in_contact);
@@ -1865,6 +2357,9 @@ void run_sand_scenes_suite(void)
     RUN_TEST(test_the_wet_earth_scene_keeps_percolating_across_the_window);
     RUN_TEST(test_the_water_over_lava_scene_reaches_the_quench_cooloff_and_burst_paths_it_claims);
     RUN_TEST(test_the_gunpowder_basin_scene_reaches_the_reactions_it_claims);
+    RUN_TEST(test_the_plant_ruin_scene_eats_roots_and_burns_a_canopy);
+    RUN_TEST(test_the_filling_basin_scene_runs_from_the_lip_to_the_pool);
+    RUN_TEST(test_the_snowfall_scene_holds_a_crusting_bank_and_a_live_fall);
 }
 
 SUITE_REGISTER(run_sand_scenes_suite);
