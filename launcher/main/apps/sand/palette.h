@@ -1,53 +1,26 @@
 /*
  * palette - grid arithmetic and hit-testing for the material picker overlay.
  *
- * Pure logic, no gfx and no touch state: a tile index in, a rectangle out,
- * or a screen point in and a tile index out. No ESP-IDF or hardware header
- * may be pulled in here (not even gfx.h, which drags in bsp/esp-bsp.h) - the
- * whole reason this lives in its own file instead of a couple of static
- * functions in app_sand.c is so it links on the host and the geometry can be
- * tested there. See row_runs.h beside it for the same pattern.
+ * Pure logic, no gfx and no touch state: a tile index in, a rectangle out, or
+ * a screen point in and a tile index out. No ESP-IDF or hardware header may
+ * be included here - not even gfx.h, which drags in bsp/esp-bsp.h - and that
+ * is what lets the geometry be tested on a host. See row_runs.h beside it for
+ * the same pattern.
  *
- * WHY FOUR COLUMNS
+ * The tile size is a touch target rather than a taste. At this panel's ~322
+ * ppi a fingertip's contact patch is about 89 px, so four columns give a
+ * 92 px (7.2 mm) tile and five would give 74 px (5.8 mm), under any guideline
+ * going. That is what PALETTE_TILE is for; palette_cols() derives the count
+ * from whichever width is actually being filled rather than fixing it at four.
  *
- * The panel is 368 px wide on a 1.8" 368x448 screen, which works out to about
- * 322 ppi - so 1 mm is roughly 12.7 px and a fingertip's contact patch is
- * roughly 89 px across. Four columns puts a tile at 368 / 4 = 92 px = 7.2 mm,
- * right at the accepted minimum touch target; five columns would be 368 / 5 =
- * 74 px = 5.8 mm, under any guideline going. Four is the most columns that
- * still keeps a tile at or above a fingertip - this reasoning is the entire
- * justification for PALETTE_TILE below and for palette_cols()'s floor(width /
- * PALETTE_TILE), and cannot be recovered from the numbers alone, which is why
- * it is written out here rather than left for the arithmetic to speak for
- * itself. Four is not hardcoded any more - palette_cols() derives it from
- * whichever width the panel is actually filling - but it is still the answer
- * this reasoning gives at both real widths this panel is ever drawn at (368
- * and, at a quarter turn, 448); see palette_cols()'s own comment.
+ * PALETTE_SCREEN_W/H duplicate gfx.h's dimensions under different names
+ * deliberately, since gfx.h cannot be included here. A panel of a different
+ * size needs both places changed.
  *
- * THE SCREEN SIZE IS DUPLICATED, NOT SHARED
- *
- * gfx.h has no business being included by a host-testable module, so its
- * GFX_WIDTH/GFX_HEIGHT cannot be reused here. PALETTE_SCREEN_W/H below are the
- * same 368x448 by a different name - if the panel is ever a different size,
- * both places need to agree, the same way app_sand.c already keeps its own
- * grid math in step with gfx.h's dimensions.
- *
- * THE LAST ROW IS CENTRED, NOT LEFT-ALIGNED
- *
- * When `count` does not fill a whole number of rows, the short last row sits
- * centred across the panel's width rather than flush against the left edge -
- * see palette_tile_rect()'s own comment for the arithmetic. Get this wrong
- * and the last few materials are either unreachable or answer to the wrong
- * index, which is why this module is host-tested rather than trusted by eye.
- *
- * TWO VIEWS OF ONE LAYOUT
- *
- * palette_tile_rect() and palette_hit() must never disagree: a point inside
- * tile i's rect has to hit i, and a point outside every tile's rect has to
- * hit -1. They are kept as two separate functions only because the caller
- * needs both a forward mapping (draw tile i where?) and a reverse one (what
- * did this touch land on?) - not because they are free to drift apart. A
- * change to one's arithmetic is a change to the other's.
+ * palette_tile_rect() and palette_hit() must never disagree - a point inside
+ * tile i's rect hits i, a point outside every rect hits -1. They are two
+ * functions because the caller needs both directions, not because they are
+ * free to drift; a change to one's arithmetic is a change to the other's.
  */
 #pragma once
 
