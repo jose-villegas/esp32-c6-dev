@@ -84,6 +84,11 @@ typedef struct sand_s {
      * once a step. */
     uint16_t may_have_materials;
 
+    /* Whether any liquid present can REFUSE to move this step. Viscosity is
+     * a property of the board, not of a cell: mobility 0 or 255 can only
+     * answer yes, and 255 is the default. Recomputed once a step. */
+    bool     may_have_viscous_liquid;
+
     /* Same idea as may_have_liquid, for gas - see sand_step_gas() in
      * sand_gas.c. */
     bool     may_have_gas;
