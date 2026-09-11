@@ -23,8 +23,8 @@ static const char *TAG = "post";
 /* Below this the board is starved and later contiguous allocations
  * start failing confusingly, worth catching here where the message is
  * clear. Checked against heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
- * not total free heap - see esp32c6-8h2. DELIBERATELY WELL BELOW what
- * the sand app's grid needs, and this is not the check that guards it:
+ * not total free heap - see esp32c6-8h2. DELIBERATELY WELL BELOW what a
+ * full simulation grid needs, and this is not the check that guards it:
  * pegging this at grid size would false-alarm a healthy diagnostics
  * image only a kilobyte or so above it - the grid's fit is checked
  * precisely elsewhere. */

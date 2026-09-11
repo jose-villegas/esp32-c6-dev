@@ -261,18 +261,18 @@ bool screenshot_take_runsuite_request(char *name_out, size_t name_out_size)
  * most of that budget on top of printf/ESP_LOG's own use. Not
  * permanently static either: malloc'd here and freed before returning,
  * so these 2,577 bytes are reserved only for the duration of a capture
- * - static here once competed directly with app_sand.c's grid for the
- * single largest contiguous heap block it needs, the exact failure a
- * --dev build hit opening the sand app. */
+ * - static here once competed directly with an app's own large runtime
+ * allocation for the single largest contiguous heap block it needs, the
+ * exact failure a --dev build hit opening that app. */
 static uint8_t *row;
 static char    *row_b64;   /* +1: NUL, for printf("%s") */
 
 /* How much room an app's diagnostic_json() fragment is given - see
  * app_t's own comment in app.h for what it may contain. Generous
- * relative to what either existing implementation (app_sand.c's)
- * actually uses, on the same reasoning DEVICE_STATE_JSON_MAX budgets
- * headroom rather than a tight fit - this is a diagnostic path, not
- * one worth re-deriving an exact bound for. */
+ * relative to what any existing implementation actually uses, on the
+ * same reasoning DEVICE_STATE_JSON_MAX budgets headroom rather than a
+ * tight fit - this is a diagnostic path, not one worth re-deriving an
+ * exact bound for. */
 #define APP_DIAGNOSTIC_JSON_MAX 256
 
 /* Prints one SCREENSHOT_STATE: line of plain-text JSON (no base64 -

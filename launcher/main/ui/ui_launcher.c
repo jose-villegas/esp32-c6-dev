@@ -14,9 +14,10 @@
 
 #define COL_BACKGROUND 0x0A0C14
 
-/* Sized to the longest current app name plus margin, the same way
- * MENU_BTN_W (app_sand.c) is sized to its longest label: "Falling Sand"
- * is the longest of the three registered names, 192 px at GFX_CHAR_W.
+/* Sized to the longest current app name plus margin, the same way an
+ * app's own in-app menu button width is sized to its longest label:
+ * "Falling Sand" is the longest of the three registered names, 192 px
+ * at GFX_CHAR_W.
  * mu_draw_control_text() centers a button's label and clips it to the
  * rect rather than wrapping or shrinking it, so a wider label is
  * chopped off at both ends with no warning. 240 leaves 64 px margins

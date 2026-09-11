@@ -195,12 +195,12 @@ static inline int ui_text_passes(ui_text_style_t style, ui_text_pass_t *out,
         if (max < UI_TEXT_MAX_PASSES) {
             return 0;
         }
-        /* One pixel each way, in screen space. This mirrors app_sand.c's
-         * palette label outline (see draw_palette() there) exactly,
-         * including the order - that code is the precedent this style
-         * generalises, and it is worth staying a recognisably identical
-         * list rather than an equivalent but different-looking one. All
-         * eight, not just the four cardinals: at GFX_GLYPH_SCALE 2 each
+        /* One pixel each way, in screen space. This mirrors an app's own
+         * hand-rolled label-outline code exactly, including the order -
+         * that code is the precedent this style generalises, and it is
+         * worth staying a recognisably identical list rather than an
+         * equivalent but different-looking one. All eight, not just the
+         * four cardinals: at GFX_GLYPH_SCALE 2 each
          * font pixel is a 2x2 block, so skipping the diagonals leaves a
          * notch at every block corner rather than a clean edge. */
         static const int offsets[8][2] = {
@@ -267,11 +267,11 @@ static inline int ui_panel_spans(mu_Rect r, mu_Color face, mu_Color border,
 /* The halo colour for a given ink, derived from the ink's luminance
  * rather than fixed - see UI_BEZEL_HIGHLIGHT/SHADOW above. A fixed halo
  * fails like a fixed button highlight: it vanishes against whichever
- * ink matches it. Same bug app_sand.c's palette spawn badge hit
- * deriving its ring from the swatch face (unreadable on Snow) - fixed
- * there to a max-contrast pair since it already had one. A general halo
- * has none, so it goes to the opposite extreme via ui_shade() - a
- * partial mix can still wash out. */
+ * ink matches it. Same bug a per-tile spawn-selection badge hit
+ * deriving its ring from the swatch colour it sits on (unreadable
+ * against a light swatch) - fixed there to a max-contrast pair since it
+ * already had one. A general halo has none, so it goes to the opposite
+ * extreme via ui_shade() - a partial mix can still wash out. */
 static inline mu_Color ui_text_halo(mu_Color ink)
 {
     /* Same weights as a standard perceptual luma (~0.30/0.59/0.11 scaled to

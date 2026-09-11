@@ -11,12 +11,13 @@
  * for; suite_icons_system.c checks facts a scan can pin down instead.
  *
  * The two sizes exercised throughout are the module's two real callers:
- *   - 18px, app_sand.c's PALETTE_BADGE_SIZE (scale 1 - see icon_walk_blocks'
- *     own comment on why a box smaller than the bitmap still gets scale 1);
+ *   - 18px, a per-tile palette badge's icon size (scale 1 - see
+ *     icon_walk_blocks' own comment on why a box smaller than the bitmap
+ *     still gets scale 1);
  *   - 64px, the icon rect mu_checkbox() draws at (scale 4). mu_checkbox() in
  *     components/microui/src/microui.c builds its box as
  *     mu_rect(r.x, r.y, r.h, r.h), and r.h is UI_ROW_HEIGHT (64 - see ui.h),
- *     the row height app_diagnostics.c's toggle screen lays its two
+ *     the row height a settings-style toggle screen lays its two
  *     mu_checkbox() rows out at.
  *===========================================================================*/
 
