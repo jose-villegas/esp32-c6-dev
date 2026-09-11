@@ -110,17 +110,10 @@ static void test_two_falling_seeds_do_not_hold_each_other_up(void)
 
 /* A whole BRUSHFUL of seeds falls, not just one or two.
  *
- * The brush paints a disc, and a disc is the shape that breaks a careless
- * attachment rule. Two seeds side by side were already covered - each is
- * an anchor for the other only if it is standing on something, and
- * neither is. Two seeds STACKED were not, and they are worse: the upper
- * one qualifies as an anchor because it has something under it, and the
- * something is the very cell asking whether it may fall. The pair holds
- * itself up, and so does everything painted around it.
- *
- * Reported as the plant only falling when water was poured over it, which
- * is the reactions pass being woken for another reason and finding the
- * pile exactly where the brush left it. */
+ * A disc is the shape that breaks a careless attachment rule: two STACKED
+ * seeds hold each other up if the upper one counts as an anchor for having
+ * something under it, and that something is the cell asking whether it may
+ * fall. Everything painted around the pair then hangs off it. */
 static void test_a_brushful_of_seeds_does_not_hang_in_the_air(void)
 {
     fixture();
@@ -192,21 +185,12 @@ static void test_a_seed_in_a_shaft_does_not_stick_to_the_walls(void)
 
 /* A settled faller keeps the pass armed.
  *
- * may_have_faller gates the whole reactions pass, and it was being set by
- * a cell MOVING rather than by one existing. So a board holding one
- * settled plant cleared the flag on the first step - and then nothing
- * could set it again, because latching happens when a cell is created and
- * a plant that is already there is not created twice.
- *
- * Everything downstream of that is quietly dead: dissolve the ground out
- * from under a plant with acid and it hangs in the air, since nothing
- * re-arms the flag that would let it fall. The cold pass documents the
- * same shape of bug for snow sitting on dry ground, and for the same
- * reason: a cell with nothing to do NOW is not a cell with nothing to do
- * EVER.
- *
- * Asserting on the flag rather than on a scene, deliberately - the flag
- * is the actual invariant. */
+ * may_have_faller gates the whole reactions pass, so a plant that sits
+ * still must still set it: dissolve the ground out from under one with
+ * acid and it would otherwise hang in the air, nothing left to re-arm the
+ * flag. A cell with nothing to do NOW is not a cell with nothing to do
+ * EVER. Asserted on the flag rather than a scene - the flag is the
+ * invariant. */
 static void test_a_settled_plant_keeps_the_reaction_pass_armed(void)
 {
     fixture();
@@ -292,17 +276,12 @@ static void test_a_growing_tree_does_not_shed_what_it_grows(void)
 }
 
 
-/* A BURIED seed comes up through the soil.
+/* A BURIED seed comes up through the soil - which is how you plant one.
  *
- * Which is how you plant one - drop a seed, cover it over, water it - and
- * it was the one arrangement guaranteed to do nothing at all. Growth put
- * its new cell in empty space, and a buried seed has none: the cell it
- * wanted was occupied, and occupied was the end of the matter.
- *
- * A shoot shoves instead. The run of loose material above it shifts up one
- * and the shoot takes the space, which is why the soil count is checked as
- * carefully as the emergence - a shoot that ATE its way out would pass the
- * first assert perfectly and quietly hollow out every bank on the board. */
+ * A shoot shoves: the run of loose material above it shifts up one and the
+ * shoot takes the space. The soil count is checked as carefully as the
+ * emergence because a shoot that ATE its way out would pass the first
+ * assert and quietly hollow out every bank on the board. */
 static void test_a_buried_seed_comes_up_through_the_soil(void)
 {
     fixture();
@@ -386,17 +365,10 @@ static void test_a_seed_under_stone_stays_put(void)
 /* A limb attached to a TRUNK stays on it.
  *
  * A branch grows out at an angle, so the cell it came from is diagonally
- * below it; orthogonally it is often touching nothing. Checking four
- * neighbours for an anchor therefore snapped off every limb whose trunk
- * did not happen to continue past it - and on a tilt, where the wood stays
- * put while gravity swings round underneath, whole crowns detached at once
- * and dropped a cell a step. Reported as the plant appearing to teleport,
- * and as the falling looking harsh: it was not the speed, it was how much
- * of the tree was falling.
- *
- * Hardening is what makes this bite, which is why the trunk here is wood:
- * a limb has to recognise what its own material turns into as something
- * to hold on to. */
+ * below it and orthogonally it often touches nothing - a four-neighbour
+ * anchor check sheds every limb whose trunk does not continue past it, and
+ * on a tilt whole crowns detach at once. The trunk here is wood because a
+ * limb must recognise what its own material hardens into as an anchor. */
 static void test_a_limb_hangs_on_to_a_wooden_trunk(void)
 {
     fixture();
@@ -466,19 +438,12 @@ static void test_a_tree_grows_wider_than_one_column(void)
 /* Water sitting on a plant goes into the ground.
  *
  * Every extended material shares one physics row, and that row is
- * `KIND_STATIC` at stone's density - so water cannot fall through foliage
- * and nothing about foliage can soak it up. Fill a bowl of leaves and the
- * water stays there for ever, which is exactly what it looked like.
- *
- * A plant conducts it instead: a unit of the liquid for a level of
- * moisture in the soil its roots reach. It cannot use the ordinary
- * `soaks` path to do it, because that raises the cell's own variant to
- * hold what it took, and a plant's variant is WHICH EXTENDED MATERIAL IT
- * IS - one soak would turn it into the next entry in the table.
- *
- * The scene walls the water in so the plant is the only way out. Water
- * that simply drained round the side would pass an assert about the water
- * going away while proving nothing at all. */
+ * `KIND_STATIC` at stone's density, so a bowl of leaves holds a pond for
+ * ever. A plant conducts the water down instead. Not via the ordinary
+ * `soaks` path: that raises the cell's own variant, and a plant's variant
+ * is WHICH EXTENDED MATERIAL IT IS, so one soak would turn it into the next
+ * entry in the table. The scene walls the water in so the plant is the only
+ * way out. */
 static void test_a_plant_drains_standing_water_into_the_soil(void)
 {
     fixture();
@@ -632,18 +597,10 @@ static void test_a_hardened_trunk_is_left_with_foliage(void)
 
 /* And a hardened run is WIDER at its foot than at its top.
  *
- * "Plant should also widen as it grows, so it is interesting that wood is
- * just a stick." It was: thickening happened during growth, gated on how
- * far the growing cell was from the ground, and after the first hardening
- * every green cell sits on a wood column - so its lift is at least that
- * column's height and the allowance is zero for the rest of the tree's
- * life. Thickening was structurally dead the moment a tree first became a
- * tree.
- *
- * The taper is the half that is easy to lose. A trunk of uniform width is
- * a pillar, passes any "is it thick" assert, and looks nothing like a
- * tree - so this measures both ends and compares them, rather than
- * measuring one and hoping. */
+ * The taper is the half that is easy to lose: a trunk of uniform width is a
+ * pillar, passes any "is it thick" assert, and looks nothing like a tree.
+ * So both ends are measured and compared, rather than one measured and
+ * hoped over. */
 static void test_a_hardened_trunk_is_thicker_at_the_foot(void)
 {
     fixture();
@@ -1082,13 +1039,10 @@ static void test_a_plant_on_dry_soil_stays_where_it_is(void)
 /* A tall enough plant becomes a trunk - and the trunk is not on fire.
  *
  * Wood's variant is its BURN PROGRESS, and the general placement helper
- * hands a new cell MATERIAL_VARIANTS - 1, which is right for a fill level
- * or a life counter and means "well alight" for wood. That is deliberate
- * where the reaction is fire making an ember of a log; it is catastrophic
- * here. Every tree that reached this height burned to nothing over the
- * next couple of hundred steps, on a board with no flame anywhere on it,
- * so the assert on the variant matters as much as the one on the
- * material. */
+ * hands a new cell MATERIAL_VARIANTS - 1: right for a fill level or a life
+ * counter, "well alight" for wood. So the assert on the variant matters as
+ * much as the one on the material - a tree placed that way burns to nothing
+ * on a board with no flame on it. */
 static void test_a_tall_plant_hardens_into_wood_that_is_not_alight(void)
 {
     fixture();
@@ -1125,17 +1079,11 @@ static void test_a_tall_plant_hardens_into_wood_that_is_not_alight(void)
 
 /* The grain hash must not stripe.
  *
- * Stone and wood take their speckle from this and nothing else, so if its
- * low bits do not vary they are not speckled - and for a long time they
- * were not. The low three bits came out very nearly constant along a row,
- * which drew both materials as flat horizontal bands, one shade each.
- * Nothing caught it because the hash lived in app_sand.c, which does not
- * compile on a host; moving it next to the tables that use it is half the
- * fix and this is the other half.
- *
- * Both halves of the assert matter. Even spread alone is satisfied by a
- * hash that stripes, as long as it stripes in equal proportions - it is
- * the ADJACENCY that says the variation is per cell rather than per row. */
+ * Stone and wood take their speckle from this and nothing else, so low bits
+ * near-constant along a row draw both materials as flat horizontal bands.
+ * Both halves of the assert matter: even spread alone is satisfied by a
+ * hash that stripes in equal proportions, and it is the ADJACENCY that says
+ * the variation is per cell rather than per row. */
 static void test_the_grain_hash_does_not_stripe(void)
 {
     enum { N = 64, BUCKETS = 8 };
@@ -1177,22 +1125,12 @@ static void test_the_grain_hash_does_not_stripe(void)
 
 /* The dithered direction is recorded, and it is not the nearest one.
  *
- * Two different questions about gravity, and the simulation has always
- * needed both. "Which way is down, near enough" has to be steady, or a
- * resting pool judged against a constantly-changing axis reads as
- * unbalanced when it is not. "Which way is down THIS step" has to wobble
- * between the two eighths a tilt falls between, in proportion, or
- * everything flows at one of eight fixed angles instead of at the angle
- * the board is really at.
- *
- * The sweep and the liquid pass have used the dithered one all along.
- * Growth was reading the steady one, which is what made a stem a rigid
- * straight line - reported as the vertical growth being "too strict or
- * rigid whereas we have smoothing in the way we map tilt/gravity", and
- * exactly right. This is the plumbing that fixes it.
- *
- * Both asserts are needed: a build that recorded the nearest direction in
- * both fields passes the second on its own. */
+ * The steady direction must not shift, or a resting pool judged against it
+ * reads as unbalanced. The dithered one must wobble in proportion between
+ * the two eighths a tilt falls between, or everything flows at one of eight
+ * fixed angles rather than the board's real one. Both asserts are needed: a
+ * build recording the nearest direction in both fields passes the second on
+ * its own. */
 static void test_a_tilt_between_two_directions_is_dithered_not_snapped(void)
 {
     fixture();
@@ -1239,16 +1177,10 @@ static void test_a_tilt_between_two_directions_is_dithered_not_snapped(void)
 
 /* A stem that WANDERS is still one stem.
  *
- * Growth points along the dithered gravity direction, which spends steps
- * on each of the two eighths a tilt falls between - so a trunk climbs with
- * a kink in it rather than in a dead straight line. Every walk over a
- * plant has to tolerate that: the walk to the tip, the walk back to a
- * branch site, and the run that decides whether it has grown tall enough
- * to be wood.
- *
- * A staircase is the cheapest way to say so. Six cells, each one up or up
- * and across from the last, standing on wet soil: a walk that insists on a
- * straight line sees a run of two and this never becomes a trunk. */
+ * Growth points along the dithered gravity direction, so a trunk climbs
+ * with a kink in it, and every walk over a plant has to tolerate that. A
+ * six-cell staircase is the cheapest way to say so: a walk that insists on
+ * a straight line sees a run of two and this never becomes a trunk. */
 static void test_a_stem_that_wanders_still_hardens(void)
 {
     fixture();
@@ -1292,18 +1224,13 @@ static void test_a_stem_that_wanders_still_hardens(void)
 }
 
 
-/* A bare trunk in wet ground buds again.
+/* A bare trunk in wet ground buds again - otherwise a tree that lost its
+ * foliage to fire, acid or a landslide is a bare post for ever, since
+ * hardening consumes the very cells that could grow.
  *
- * The loop this closes: growth hardens a plant into wood, and hardening
- * consumes the very cells that could grow. So a tree that reached its full
- * height was finished for good, and one that lost its foliage - to fire,
- * to acid, to a landslide - stayed a bare post for ever. The scene here is
- * the worst case on purpose: wood only, no plant anywhere on the board, so
- * nothing but the trunk itself can be responsible for what appears.
- *
- * The dry half of the test is the half that matters. Budding out of
- * nothing would mean a wooden wall sprouted a hedge, and it is the
- * moisture that has to be doing the work. */
+ * Wood only, no plant anywhere on the board, so nothing but the trunk can
+ * account for what appears. The dry half is the half that matters: budding
+ * out of nothing would mean a wooden wall sprouts a hedge. */
 static void test_a_bare_trunk_in_wet_ground_buds_again(void)
 {
     fixture();
@@ -1361,17 +1288,12 @@ static void test_a_bare_trunk_in_wet_ground_buds_again(void)
         "and on dry ground it must not - budding out of nothing is a "
         "wooden wall growing a hedge, and water is what pays for growth");
 
-    /* A trunk in barely damp ground stays a trunk.
-     *
-     * Deliberately NOT claimed as a test that budding spends the water it
-     * uses. It is not: budding puts its cell in an empty space beside the
-     * trunk, and on a grid this size those run out long before the
-     * moisture does, so a build that budded for free passes this
-     * unchanged - checked, by mutation. The moisture cost is real and
-     * bounds the total on a full board, and nothing here can see it.
-     *
-     * What this does pin is that one level of moisture is not a licence
-     * to keep budding, which is the failure that would be visible. */
+    /* A trunk in barely damp ground stays a trunk. This does NOT prove
+     * budding spends the water it uses: on a grid this size the empty
+     * spaces beside the trunk run out long before the moisture does, so a
+     * build that budded for free passes unchanged - checked by mutation.
+     * What it pins is that one level of moisture is not a licence to keep
+     * budding. */
     fixture();
     sand_clear(&s);
     sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
