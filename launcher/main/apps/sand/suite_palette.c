@@ -8,13 +8,12 @@
  * specifically, at BRUSH_COUNT's real value (15) and at a couple of others,
  * rather than trusting the arithmetic by eye.
  *
- * Columns are no longer a fixed constant: palette_cols(screen_w) derives them
- * from whatever width is actually available (see palette.h's "WHY THE COLUMN
- * COUNT IS DERIVED, NOT FIXED"), so every test below that used to read the
- * old PALETTE_COLS constant now calls palette_cols() itself and threads the
- * result through, the same way app_sand.c's draw_palette() does. That is
- * also what tests the derivation, rather than merely re-checking the same
- * fixed-4 arithmetic under a new name.
+ * Columns are derived at runtime: palette_cols(screen_w) computes them from
+ * whatever width is actually available (see palette.h's "WHY THE COLUMN
+ * COUNT IS DERIVED, NOT FIXED"), so every test below calls palette_cols()
+ * itself and threads the result through, the same way app_sand.c's
+ * draw_palette() does - which is what tests the derivation, rather than
+ * merely re-checking fixed-4 arithmetic under a new name.
  *===========================================================================*/
 
 #include <stdbool.h>
@@ -122,18 +121,13 @@ static void test_centre_of_every_tile_hits_its_own_index_at_brush_count(void)
     }
 }
 
-/* Every corner and the centre of every tile's rect must resolve back to
- * that same tile - not just the middle, which would miss an off-by-one in
- * the rect's edges. The bottom-right corner is exclusive (x+w, y+h lies in
- * the NEXT cell or off the grid), so only x+w-1, y+h-1 is tested there.
- *
- * Parameterised on screen_w/screen_h so the same check can run at the
- * upright canvas and at the turned one below - palette_tile_rect() and
- * palette_hit() must agree at BOTH, not just the orientation they were
- * originally written against (see palette.h's "two views of one layout"
- * comment). cols is derived from screen_w here too, exactly the way
- * app_sand.c's draw_palette() derives it once per frame from ui_width() and
- * uses it for every tile that frame, regardless of `count`. */
+/* Every corner and centre of a tile's rect must resolve back to that tile -
+ * not just the middle, which would miss an edge off-by-one. The
+ * bottom-right corner is exclusive (x+w, y+h falls in the next cell), so
+ * only x+w-1, y+h-1 is tested there. Parameterised on screen_w/screen_h so
+ * palette_tile_rect() and palette_hit() are checked to agree at both the
+ * upright and turned canvas (palette.h's "two views of one layout"). cols
+ * is derived from screen_w, matching draw_palette()'s per-frame usage. */
 static void check_hit_round_trips_against_tile_rect_for_every_tile(
     int screen_w, int screen_h)
 {
