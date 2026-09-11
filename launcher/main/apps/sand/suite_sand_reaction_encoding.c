@@ -1407,35 +1407,13 @@ static void test_water_freezes_lava_into_stone(void)
         "fire into steam");
 }
 
-/* Guards may_have_heat_holder's arm-only design (sand.h/sand_priv.h): the
- * flag is armed the moment a heat_ramp cell exists on the grid and is
- * deliberately never cleared, because a heat_ramp cell can be CREATED
- * mid-pass, behind step_one_reacting_row()'s own scan pointer, rather
- * than painted onto the board before the step runs. Lava quenching into
- * stone is exactly that: place_reacted() writes the new MAT_STONE cell
- * from inside the very row walk that is checking may_have_heat_holder's
- * sibling flags, so the row that already passed this cell never reports
- * it, and an end-of-pass clear - "tidy it up like the other five flags" -
- * would erase what latch_content_flags() had just armed one line
- * earlier. That is the regression this test exists to catch: anyone who
- * adds `if (!(found & FOUND_HEAT_HOLDER)) s->may_have_heat_holder =
- * false;` next to the other five in sand_step_reactions() will fail here,
- * because the very first quenched cell has no way left to ever re-arm it.
- *
- * Deliberately no stone or glass is painted anywhere in this scene - not
- * even as a floor or walls - specifically so may_have_heat_holder starts
- * false and the only heat_ramp cell that ever exists is the one born from
- * the quench itself. Lava and water sit on the bottom row instead of
- * needing a floor: dest_row() returns NULL past the last row, which is
- * enough to stop either of them falling out from under themselves without
- * painting a single cell that would pre-arm the flag.
- *
- * Also worth noting because it is the whole reason this flag has to be
- * independent of may_have_temperature: place_reacted() gives a freshly
- * created heat-ramp cell SAND_AMBIENT_HEAT, not a hot variant, so the new
- * stone does NOT arm may_have_temperature (see latch_content_flags()'s
- * ambient-exception). It must still arm may_have_heat_holder, because
- * that is exactly what a later convecting gas cell needs to find it. */
+/* Guards may_have_heat_holder's arm-only design (sand.h/sand_priv.h):
+ * place_reacted() creates the quenched stone's heat_ramp cell from inside
+ * the row walk that already checked this flag's siblings, so an
+ * end-of-pass clear mirroring the other five would erase what just got
+ * armed with no way left to re-arm it. No stone or glass is painted in
+ * this scene, so the flag starts false and the quench is the only
+ * heat_ramp cell born. */
 static void test_lava_quenched_into_stone_mid_pass_arms_the_heat_holder_flag(void)
 {
     fixture();
