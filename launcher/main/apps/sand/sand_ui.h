@@ -131,10 +131,10 @@ typedef struct {
 } sand_ui_t;
 
 /* One frame's input. Returns a sand_ui_action_t bitmask; this module draws
- * nothing and touches no hardware, and no longer hit-tests a tap itself -
+ * nothing and touches no hardware, and does not hit-test a tap itself -
  * see "WHO HIT-TESTS AND WHO DECIDES" above. PWR opens SAND_UI_BRUSH from
- * RUNNING and closes it from BRUSH, no longer cycling PAINT/ERASE/
- * DETONATE; BOOT and PWR never open both panels at once. */
+ * RUNNING and closes it from BRUSH; BOOT and PWR never open both panels
+ * at once. */
 unsigned sand_ui_step(sand_ui_t *ui, const input_t *input);
 
 /* What a click on palette tile `index` means, once the caller's hit-test
