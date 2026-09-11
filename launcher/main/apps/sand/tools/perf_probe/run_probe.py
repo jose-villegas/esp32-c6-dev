@@ -181,6 +181,17 @@ def main():
         # here rather than silently reporting a one-sided min later.
         only_a = set(known) - set(known_b)
         only_b = set(known_b) - set(known)
+        # Naming scenes explicitly says which comparison you want, so only
+        # THOSE have to exist in both. Requiring the whole lists to match
+        # made a bisect across time impossible: any commit that adds a scene
+        # splits the range in two, and this campaign adds scenes regularly.
+        if args.scenes:
+            missing = [s for s in args.scenes
+                       if s not in known or s not in known_b]
+            if missing:
+                parser.error("requested scenes missing from one binary: "
+                             + ", ".join(sorted(missing)))
+            only_a = only_b = set()
         if only_a or only_b:
             parser.error(
                 f"scene lists differ between binaries - only in A: "
