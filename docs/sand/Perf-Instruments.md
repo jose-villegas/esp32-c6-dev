@@ -207,9 +207,9 @@ not the row selection and address arithmetic the caller picked up. Counting a
 function's whole static size rather than the path a call actually walks is the
 other half — that alone over-weights by 1.8×.
 
-Done that way, the ray skip below was predicted at −69,000 instructions a step
+Done that way, PR #175's ray skip was predicted at −69,000 instructions a step
 against a measured −76,547 fetches — 10% out, the best any instrument in this
-campaign has managed before a build. The empty-span skip was predicted at
+campaign has managed before a build. Its empty-span skip was predicted at
 −107,000 against −173,742, 38% under, and the disassembly says why: the price
 of a *skipped cell* is not the reject loop's nine instructions alone but about
 twelve, once the block prologue and the two lines of the mask test it also
