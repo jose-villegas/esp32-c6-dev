@@ -29,24 +29,14 @@
 #include "util/intmath.h"
 #include "suite_sand_common.h"
 
-/* =========================================================================
- * BLAST SCENES - a settled dune and a detonation at its centre, following
- * the same builder / host-guard-test / device-log-lines shape as
- * build_lava_stress_scene(), build_thermal_shock_scene() and
- * build_boiler_scene() above.
+/* BLAST SCENES - a settled dune and a detonation at its centre.
  *
- * WHY THIS EXISTS. Every blast test above this line checks an internal
- * detail of the mechanism - a specific cell's material, an entry's queue
- * order, a count that must stay under some bound - and every one of them
- * passed for four straight rounds while a real detonation on a real
- * device only ever disturbed the top tenth of its own disc (see c0e01a1's
- * own commit message for the full account). None of that internal
- * correctness is proof that a blast LOOKS like a blast - an outcome a
- * player can actually watch happen. This is the first blast test in the
- * file that measures the outcome itself: does material end up outside
- * where it started, how far, and how much of it is gone rather than
- * moved.
- * ========================================================================= */
+ * Every blast test above this line checks an internal detail of the
+ * mechanism, and every one of them passed while a real detonation on a
+ * real device only disturbed the top tenth of its own disc. Internal
+ * correctness is not proof that a blast LOOKS like a blast, so these
+ * measure the outcome instead: does material end up outside where it
+ * started, how far, and how much of it is gone rather than moved. */
 
 /* How many steps make one "has anything changed" batch, and how many
  * batches settle_fully() below will spend looking for an unchanged one
@@ -58,35 +48,12 @@
 #define DUNE_SETTLE_BATCH_STEPS 20
 #define DUNE_SETTLE_MAX_BATCHES 300
 
-/* A 64-bit FNV-1a fold of the whole grid - settle_fully() below uses two of
- * these, one before a batch of steps and one after, to answer "did
- * anything change" without keeping a second copy of the grid around to
- * memcmp against.
- *
- * That second copy is exactly what this replaced, and the replacement is
- * not a nicety: `scratch`, a caller-owned REAL_W*REAL_H byte buffer, sat
- * alongside `big` for the whole settling phase of every one of this
- * section's five tests - 41,216 bytes each, 82,432 together, MORE than
- * the roughly 66,632 bytes this device has free once the display
- * framebuffer is carved out of the heap, before a single other buffer
- * (the block map, the impulse buffer, a footprint mask) is even in the
- * picture. No amount of shrinking those other buffers can fix that - two
- * full-grid buffers simply do not fit in a heap smaller than either one
- * doubled - so unlike the footprint mask below (still a mask, just a
- * bitset instead of a byte array), the fix here is to not keep a second
- * full-grid buffer at all.
- *
- * A hash cannot prove two DIFFERENT grids are different the way a byte
- * compare can - a collision is possible in principle, and this trades
- * that certainty for one that is merely overwhelming: FNV-1a's avalanche
- * behaviour means a single flipped cell changes most of the 64 output
- * bits, not one, so two genuinely different 41,216-byte grids landing on
- * the same 64-bit fold by chance is far less likely than an actual defect
- * turning up somewhere else in this file's other 500-plus tests. This
- * project already accepts probabilistic reasoning at exactly this scale
- * elsewhere (rng_next() itself, or the "1 in 2^32" a hash this size
- * implies); nothing about a settling check demands stronger proof than a
- * live simulation's own RNG already carries. */
+/* A 64-bit FNV-1a fold of the whole grid, folded before and after a batch
+ * of steps to answer "did anything change" without a second copy of the
+ * grid to memcmp against. That copy would be another 41,216 bytes beside
+ * `big`'s own, against the roughly 66,632 this device has free once the
+ * display framebuffer is carved out of the heap. A collision is possible
+ * in principle, and accepted. */
 static uint64_t grid_checksum(const uint8_t *cells, size_t len)
 {
     uint64_t h = 0xcbf29ce484222325ULL;    /* FNV-1a 64-bit offset basis */
@@ -97,18 +64,11 @@ static uint64_t grid_checksum(const uint8_t *cells, size_t len)
     return h;
 }
 
-/* Steps `s` until one whole batch of DUNE_SETTLE_BATCH_STEPS produces
- * literally no change to the grid, which is what "settled" has to mean
- * for a scene a blast is about to be measured against. A fixed step count
- * can only ever be a guess at how long a pile this size takes to stop
- * moving - a guess that undershoots would silently start measuring a pile
- * that was still falling, confusing the blast's own throw with gravity
- * still finishing its own job.
- *
- * Returns whether it actually converged within the budget above - a
- * caller measuring a scene against this dune must assert on that rather
- * than trust it silently, since a dune that never finished settling is
- * not the scene the rest of the test thinks it is. */
+/* A fixed step count could only guess how long a pile this size takes to
+ * stop moving, and a guess that undershoots confuses the blast's own
+ * throw with gravity still finishing its job. The caller must assert on
+ * the returned convergence: a dune still settling is not the scene the
+ * rest of the test thinks it is. */
 static bool settle_fully(sand_t *s, size_t cells_len)
 {
     for (int batch = 0; batch < DUNE_SETTLE_MAX_BATCHES; batch++) {
@@ -123,16 +83,10 @@ static bool settle_fully(sand_t *s, size_t cells_len)
     return false;
 }
 
-/* The settled-footprint mask, ONE BIT PER CELL rather than a bool[] - the
- * identical treatment 565f72e already gave the thermal shock scene's
- * ever_cullet mask, and for the identical reason: this is a byte-per-cell
- * flag that only ever holds 0 or 1, on the same REAL_W*REAL_H grid, on the
- * same device budget. A bool[] here would cost 41,216 bytes; the bitset
- * costs 5,152. See EVER_CULLET_BYTES's own comment above for the fuller
- * accounting - this is the same fix, applied to this section's own mask
- * rather than reusing that one, since the two masks answer unrelated
- * questions (settled footprint here, sticky cullet there) and have no
- * reason to share storage or a lifetime. */
+/* The settled-footprint mask, one bit per cell: a bool[] on this grid
+ * would cost 41,216 bytes, the bitset 5,152. It stays separate from the
+ * thermal shock scene's own mask, which answers an unrelated question and
+ * has no reason to share storage or a lifetime with it. */
 #define DUNE_FOOTPRINT_BYTES \
     (((size_t)REAL_W * (size_t)REAL_H + 7) / 8)
 
@@ -220,49 +174,25 @@ static int nearest_footprint_distance(const uint8_t *footprint, int w, int h,
  * actually has. */
 #define DUNE_IMPULSE_MAX  2048
 
-/* A settled dune, poured rather than painted - the same way app_sand.c's
- * own starting heap is: sand_spawn() dropped from height and left to find
- * its own angle of repose under ordinary gravity, exactly what a player's
- * finger produces. A painted rectangle would not be a dune - it has no
- * slope for a blast to disturb, and its own square corners would slide
- * under plain gravity before an explosion ever got a turn, which would
- * muddy "the blast displaced this" with "gravity was already going to".
- *
- * Settling is deliberately NOT done here - see settle_fully() above and
- * this file's other build_*_scene() functions, none of which step at
- * all: a builder places material, and whatever steps a caller needs
- * (rest, in this file's usual case; convergence, in this scene's) is the
- * caller's own job, so the builder stays reusable exactly as it is by a
- * caller that wants a MID-fall dune instead of a settled one. */
+/* Poured rather than painted: a painted rectangle is not a dune - no
+ * slope for a blast to disturb, and square corners that would slide under
+ * plain gravity before the explosion got a turn, muddying "the blast
+ * displaced this" with "gravity was already going to". Settling is the
+ * caller's job, as with every other builder here, so a caller wanting a
+ * MID-fall dune can still use this one. */
 static void build_sand_dune_scene(sand_t *s)
 {
     sand_spawn(s, REAL_W / 2, REAL_H / 4, REAL_W / 5, MAT_SAND);
 }
 
-/* THE OUTCOME THIS ROUND WAS MISSING - see this section's own top comment.
- * Three numbers, not a boolean, because a boolean cannot tell power from
- * reach from destruction apart, and conflating them is exactly how a
- * change that helps one and hurts another would go unnoticed:
- *
- *   grains outside footprint   did anything escape the dune AT ALL - the
- *                              user's own criterion, and the real
- *                              pass/fail test
- *   maximum throw distance     how FAR the furthest grain got, which a
- *                              plain yes/no on "outside" cannot
- *                              distinguish from "barely"
- *   material destroyed         how much was converted or lost rather
- *                              than thrown - the core's own fire cost,
- *                              not a mistake to chase out
- *
- * "Outside the footprint" is measured against the SETTLED footprint,
- * recorded once and only once, right after settle_fully() returns and
- * before sand_explode() is ever called - a cell counts as displaced only
- * if it holds MAT_SAND now and was NOT already occupied by the dune
- * before the blast touched anything. Checking material specifically
- * excludes the fire the core itself becomes (see SAND_EXPLODE_CORE_
- * DIVISOR's own comment in sand.h) from counting as an "escaped grain" -
- * fire landing outside the footprint is the fireball's own edge doing
- * exactly what it is supposed to, not sand flying off. */
+/* Three numbers - escaped grains, furthest throw, material destroyed -
+ * rather than a boolean, which cannot tell power from reach from
+ * destruction apart, and conflating them is how a change that helps one
+ * and hurts another goes unnoticed. "Outside" is measured against the
+ * settled footprint, recorded once before sand_explode() is called.
+ * Checking for MAT_SAND excludes the fire the core itself becomes: fire
+ * landing outside the footprint is the fireball's own edge, not a grain
+ * flying off. */
 static void test_the_sand_dune_scene_throws_grains_beyond_its_own_footprint(void)
 {
     const size_t cells_len = (size_t)REAL_W * REAL_H;
@@ -315,25 +245,13 @@ static void test_the_sand_dune_scene_throws_grains_beyond_its_own_footprint(void
     const int cx = (min_x + max_x) / 2;
     const int cy = (min_y + max_y) / 2;
 
-    /* AT THE 25-CELL RADIUS THIS BLASTS AT (DUNE_BLAST_RADIUS - a
-     * deliberate, user-chosen retune toward "small and dense" after a
-     * real device confirmed a bigger, thinned blast working, not a value
-     * forced down by a memory bug - see that constant's own comment for
-     * the full account and the tradeoff it was chosen over). A settled
-     * dune's own bounding-box centre sits only ~30 cells above the true
-     * floor (a wide, short pile with height well under a 48-cell radius,
-     * the value this scene used before), so unlike that larger radius
-     * this smaller one does not reliably reach REAL_H - the grid's own
-     * bottom edge - and does not need to: full-density seeding at this
-     * radius is what the scene is measuring, not edge contact. Verified
-     * this still measures something real rather than a degenerate scene:
-     * "outside"/"destroyed" stayed small fractions of `before` (an
-     * 800-seed sweep against the real, shipped sand_explode() - at full
-     * density, zero thinning, since this radius's true disc fits inside
-     * DUNE_IMPULSE_MAX entirely - averaged 2.63% and 1.94% at this
-     * radius and budget, not a plurality of the dune, still less all of
-     * it) - see this test's own assertions below, unchanged, for the
-     * actual bar. */
+    /* A settled dune's bounding-box centre sits only ~30 cells above the
+     * true floor, so at DUNE_BLAST_RADIUS the blast does not reliably
+     * reach the grid's bottom edge - and does not need to: full-density
+     * seeding at this radius is what the scene measures, not edge
+     * contact. An 800-seed sweep against the shipped sand_explode()
+     * averaged 2.63% of the dune outside and 1.94% destroyed, small
+     * fractions rather than a degenerate scene. */
     sand_explode(&real, cx, cy, DUNE_BLAST_RADIUS);
 
     /* Past the deterministic flight-time bound (see SAND_IMPULSE_SPEED_
@@ -350,15 +268,9 @@ static void test_the_sand_dune_scene_throws_grains_beyond_its_own_footprint(void
     }
 
     /* Distance to the NEAREST footprint cell, not to the detonation
-     * centre - see nearest_footprint_distance()'s own comment for why: a
-     * straight-line distance from one fixed interior point conflates a
-     * grain genuinely thrown clear with one that merely slid down the
-     * dune's own slope and stopped at its base, since both can end up
-     * geometrically far from the centre for reasons that have nothing
-     * to do with how hard the blast pushed. Computed per outside cell
-     * rather than once for the whole grid - see that function's own
-     * comment for why this scene's own footprint shape makes a
-     * precomputed distance field, bounded or not, the wrong tool here. */
+     * centre: from one fixed interior point, a grain genuinely thrown
+     * clear and one that merely slid down the dune's own slope both read
+     * as far. */
     int outside = 0;
     int max_throw = 0;
     for (int y = 0; y < REAL_H; y++) {
@@ -446,19 +358,14 @@ static void build_dune_beside_water_scene(sand_t *s)
     }
 }
 
-/* A cavity in a liquid is not a cavity in sand: nothing here needed the
- * ring-order fix or the cap sizing at all, but it is the one place in
- * this file that checks the claim from Impulse-Mechanics.md's own device
- * checklist - "detonate in water: the cavity should collapse and
- * slosh" - at more than a hand-wave. Detonating inside the pool, not the
- * dune, is deliberate: the dune already has its own scene above, and
- * mixing the two claims into one scene would leave neither checked
- * cleanly. */
-/* How much WATER, and how much EMPTY, sits within `r` of (cx, cy). The
- * refill claim below needs both, and needs them counted by material: the
- * cavity a disturbance opens in a pool gets filled by falling sand or by
- * impulse-thrown debris whether or not the liquid can flow at all, so
- * "something is there now" is not evidence of anything. */
+/* The one place in this file checking Impulse-Mechanics.md's device
+ * checklist claim - "detonate in water: the cavity should collapse and
+ * slosh" - at more than a hand-wave.
+ *
+ * The refill claim below needs the cavity counted BY MATERIAL: it gets
+ * filled by falling sand or by impulse-thrown debris whether or not the
+ * liquid can flow at all, so "something is there now" is not evidence of
+ * anything. */
 static int water_within(const sand_t *s, int cx, int cy, int r)
 {
     int n = 0;
@@ -534,15 +441,10 @@ static void test_the_water_pool_scene_refills_its_own_cavity(void)
         }
     }
 
-    /* Well inside the pool, away from its own edges - see this function's
-     * own top comment for why detonating in the dune instead would not
-     * exercise the claim this test exists for. */
-    /* FOUND, not hardcoded. A fixed row only lands inside the pool for one
-     * particular water level, so it silently becomes a precondition on
-     * where the pool happened to settle - and then any unrelated change to
-     * how water or sand comes to rest fails this test for a reason that has
-     * nothing to do with what it tests. Descending from the surface keeps
-     * the centre genuinely submerged whatever the level turns out to be. */
+    /* FOUND, not hardcoded. A fixed row only lands inside the pool for
+     * one particular water level, so it becomes a silent precondition on
+     * where the pool happened to settle, and any unrelated change to how
+     * water comes to rest then fails this test for an unrelated reason. */
     const int cx = (REAL_W * 5) / 6;
     int surface_y = -1;
     for (int y = 0; y < REAL_H; y++) {
@@ -577,27 +479,13 @@ static void test_the_water_pool_scene_refills_its_own_cavity(void)
         }
     }
 
-    /* THE CLAIM THIS TEST IS NAMED FOR, asserted at last.
-     *
-     * Until 2026-09-01 the only refill check was "the blast's own centre
-     * is not empty" - which cannot fail, for two compounding reasons. The
-     * blast never empties that centre (queue_outward_impulse() skips it by
-     * design, sand.c), and in a fully packed region an impulse SWAPS two
-     * occupied cells, so occupancy is conserved and no hole is opened
-     * anywhere. Measured: with move_liquid_grain() stubbed to return false,
-     * so liquids cannot move AT ALL, this test still passed.
-     *
-     * So the cavity is carved directly rather than hoped for from the
-     * blast, and the assertion asks for WATER back, not merely for
-     * something. Measured over 113 carved cells: 89 refill normally, 32
-     * with liquids immobile; half the carved count sits between them with
-     * roughly 50% margin either way. Disabling cross-flow levelling instead
-     * refills 113 and passes, correctly - water falling vertically is a
-     * different mechanism, and test_a_pool_settles_at_the_angle_it_is_
-     * tilted_to is the test that dies when cross-flow does.
-     *
-     * Carved AFTER water_after is counted, so the conservation assertion
-     * above still measures the blast alone. */
+    /* Asking only that the blast's own centre be non-empty cannot fail:
+     * an impulse SWAPS two occupied cells, so a packed region never opens
+     * a hole - with move_liquid_grain() stubbed to return false, that
+     * check still passed. Hence a directly carved cavity, and an
+     * assertion for WATER back: of 113 carved cells, 89 refill normally
+     * against 32 with liquids immobile, putting the half-count bar
+     * between them. */
     const int carve_r = 6;
     for (int y = cy - carve_r; y <= cy + carve_r; y++) {
         for (int x = cx - carve_r; x <= cx + carve_r; x++) {
@@ -646,26 +534,15 @@ static void test_the_water_pool_scene_refills_its_own_cavity(void)
         "pool away");
 }
 
-/* The base dune, walled inside a sealed stone vessel with real empty
- * space left OUTSIDE the vessel (not just the grid's own implicit
- * boundary, which is solid for free and would make "contained" trivially
- * true regardless of whether the vessel itself does anything). Detonating
- * inside must leave that outside margin exactly as empty as it started -
- * the inverse of the base scene's own claim, checked at the same real
- * scale rather than the tiny hand-built vessel the mechanism-level tests
- * above already cover.
+/* Real empty space is left OUTSIDE the vessel: the grid's own boundary is
+ * solid for free and would make "contained" trivially true whatever the
+ * vessel does.
  *
- * STILL THE "WEAK OR DISTANT" HALF of the two-part guarantee a wall's
- * density-scaled dislodge chance now leaves (see test_a_strong_close_
- * blast_can_breach_a_wall in the mechanism-level section above, and
- * queue_flying_grain()'s own comment in sand.c, for the other half) -
- * DUNE_BLAST_RADIUS against VESSEL_MARGIN's own distance is a genuinely
- * weak comparison at this real scale (a 25-cell blast against a wall
- * `VESSEL_MARGIN` cells away, VESSEL_MARGIN chosen well past that
- * radius), so the annulus here never actually reaches a wall cell to
- * roll against - this measures the common case, a built container
- * still working as a container against an ordinary detonation, not a
- * claim that no wall can ever be breached at any radius or distance. */
+ * The WEAK OR DISTANT half of the two-part guarantee a wall's
+ * density-scaled dislodge chance leaves - VESSEL_MARGIN sits well past
+ * DUNE_BLAST_RADIUS, so the annulus never reaches a wall cell to roll
+ * against. This is the common case, not a claim that no wall can ever be
+ * breached. */
 #define VESSEL_MARGIN 20
 #define VESSEL_WALL   3
 static void build_dune_in_a_vessel_scene(sand_t *s)
@@ -769,14 +646,11 @@ static void test_the_vessel_scene_lets_nothing_reach_outside_it(void)
         "longer the claim this project makes");
 }
 
-/* The base dune, with a strip of wood forming the floor it settles onto -
- * guaranteeing contact between the settled dune and the wood regardless
- * of the exact shape settling leaves, unlike wood planted mid-air before
- * the falling sand has even reached it. Checks the plan's own claim -
- * "no material explodes... [but the trigger is] easier to judge after
- * seeing it than before" - by proving the one direction that already
- * works today: a blast's own fire reaching nearby fuel, exactly as
- * painted fire already would. */
+/* The wood is the floor the dune settles onto, which guarantees contact
+ * whatever shape settling leaves - unlike wood planted mid-air before the
+ * falling sand has reached it. What is proved is the direction that works
+ * today: a blast's own fire reaching nearby fuel, exactly as painted fire
+ * already would. */
 static void build_dune_over_wood_scene(sand_t *s)
 {
     sand_spawn(s, REAL_W / 2, REAL_H / 4, REAL_W / 5, MAT_SAND);
@@ -876,25 +750,15 @@ static void test_the_wood_floor_scene_catches_fire(void)
         "blast needs of its own");
 }
 
-/* The base dune, poured in three bands of decreasing radius with real
- * settling time between each - not one uniform pour - so pour_phase (see
- * its own comment on sand_t in sand.h) has genuinely moved on between
- * bands and each one settles with a visibly different shade, the same
- * way two pours a few seconds apart on the real app would. A wedding-
- * cake dune with real, distinguishable layers, not a paint job.
+/* Three bands of decreasing radius with real settling time between them,
+ * so pour_phase moves on and each band lands on a visibly different
+ * shade.
  *
- * 40 steps between pours, not a much longer rest - measured, not
- * guessed: at 150 steps the dune had that much longer for scatter to
- * random-walk its base sideways between every pour, and by the time all
- * three had landed the footprint had spread across 86% of the grid's own
- * width - so wide that DUNE_BLAST_RADIUS's own disc around the centre
- * never reached any genuinely empty ground to throw material into, and
- * the guard test below measured zero grains outside the footprint,
- * every time. 40 steps is enough for pour_phase to still land each band
- * on a visibly different shade (5 distinct shades in the settled dune,
- * against 150 steps' own 7 - plenty either way) while keeping the dune
- * itself narrow enough for its own blast radius to still reach past its
- * edge. */
+ * 40 steps between pours rather than longer, measured: at 150 steps
+ * scatter random-walks the base sideways until the footprint spans 86% of
+ * the grid's width, and DUNE_BLAST_RADIUS's disc then never reaches empty
+ * ground - the guard test below measured zero grains outside it, every
+ * time. 40 steps still leaves 5 distinct shades against 150's 7. */
 static void build_layered_dune_scene(sand_t *s)
 {
     sand_spawn(s, REAL_W / 2, REAL_H / 4, REAL_W / 5, MAT_SAND);
@@ -908,17 +772,13 @@ static void build_layered_dune_scene(sand_t *s)
     sand_spawn(s, REAL_W / 2, REAL_H / 4, (REAL_W / 5) / 3, MAT_SAND);
 }
 
-/* Displaced layers, not just displaced sand - the base scene above
- * already proves grains escape the footprint at all; this proves the
- * blast reaches deep enough to mix bands that would otherwise never
- * meet, which is what "throw is visible as displaced layers" actually
- * means on the panel. Counted by distinct shade (CELL_VARIANT), not by
- * tracking any one band's own identity: three pours spaced by real
- * settling time land in different parts of MATERIAL_VARIANTS' shade
- * range (see random_cell()'s own use of pour_phase), so more than one
- * distinct shade appearing outside the original footprint is direct
- * evidence that more than one band contributed to what escaped, not
- * just the most recent, surface-most pour skimming off the top. */
+/* The base scene above already proves grains escape the footprint; this
+ * proves the blast reaches deep enough to mix bands that would otherwise
+ * never meet. Counted by distinct shade (CELL_VARIANT), since pours
+ * spaced by real settling time land in different parts of the shade
+ * range: more than one shade outside the footprint is evidence that more
+ * than one band contributed, not just the surface-most pour skimming
+ * off. */
 static void test_the_layered_dune_scene_throws_more_than_one_band(void)
 {
     const size_t cells_len = (size_t)REAL_W * REAL_H;
