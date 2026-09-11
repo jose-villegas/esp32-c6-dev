@@ -96,19 +96,13 @@ void build_plant_bed_scene(sand_t *s);
  * hundred steps and growth then stops - see the definition. */
 void plant_bed_rain(sand_t *s);
 
-/* THE SCHEDULE IS CHOSEN SO EVERY STAGE IS STILL DOING WORK IN THE TIMED
- * WINDOW, which is a stricter test than "the bed looks grown" and is what
- * settled these numbers. Measured leaf growth across candidate 20-step
- * windows: a bed settled 400 steps produces ZERO leaves during the window -
- * its canopy has saturated, so budding runs and rejects every time and the
- * row would be timing a reject rather than the stage. At 230 all three of
- * plants, leaves and roots are still being produced.
- *
- * Two pours, both BEFORE the window: one fall of rain is drunk dry within a
- * few hundred steps and growth then stops - left alone the plants collapse.
- * Pouring earlier than this is worse, not better (at 80 and 160 the canopy
- * stalls at 137 leaves and never moves again), so the timing was measured
- * too, not reasoned. */
+/* The schedule is chosen so every stage is still doing work in the timed
+ * window. Measured over candidate 20-step windows: a bed settled 400 steps
+ * produces ZERO leaves - its canopy has saturated, so the row times a
+ * reject rather than the stage. At 230 plants, leaves and roots are all
+ * still being produced. Both pours must precede the window, and pouring
+ * earlier is worse: at 80 and 160 the canopy stalls at 137 leaves and never
+ * moves again. */
 #define PLANT_BED_SETTLE_STEPS 230
 #define PLANT_BED_RAIN_A       100
 #define PLANT_BED_RAIN_B       170
@@ -120,17 +114,15 @@ void plant_bed_rain(sand_t *s);
 #define WATER_LAVA_IMPULSE_MAX 2048
 void build_water_over_lava_scene(sand_t *s);
 
-/* Same reasoning as WATER_LAVA_IMPULSE_MAX above and DUNE_IMPULSE_MAX
- * (suite_sand_dune_blast.c) - the app's own fixed, device-heap-sized
- * APP_IMPULSE_MAX, not a formula in this scene's own blast radius. */
-/* THE IGNITION IS A BLOCK, NOT A SINGLE CELL, and that is a consequence of the
- * gas random walk rather than a cosmetic choice. Fire is KIND_GAS, so under the
- * walk a lone spark drifts away on its own before it can light anything - the
- * pile then never detonates at all, not merely later (checked: still zero
- * bursts over a window 6.7x longer). A player lights gunpowder with a brush
- * stroke, so the scene now ignites it the same way. */
+/* A block, not a single cell: fire is KIND_GAS, so under the random walk a
+ * lone spark drifts away before it can light anything and the pile never
+ * detonates at all - checked, still zero bursts over a window 6.7x
+ * longer. */
 #define GUNPOWDER_BASIN_SPARK 2
 
+/* Same reasoning as WATER_LAVA_IMPULSE_MAX above - the app's own fixed,
+ * device-heap-sized APP_IMPULSE_MAX, not a formula in this scene's own
+ * blast radius. */
 #define GUNPOWDER_BASIN_IMPULSE_MAX 2048
 
 /* The coverage test's own measured window, reused by the frame-budget
