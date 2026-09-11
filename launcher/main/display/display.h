@@ -2,11 +2,8 @@
  * display - which way is "up", decided once for the whole shell.
  *
  * Orientation is a property of the physical device, not of any one app's
- * panel. Before this existed, app_sand.c derived a quarter turn from gravity
- * purely for its own palette (see its old gravity_quarter_turn()), so the
- * launcher and the boot menus never rotated - nobody told them to. This is
- * the one place that decision gets made, so main.c can apply it once and
- * every UI surface follows.
+ * panel - decided once, here, so main.c can apply it and every UI surface,
+ * launcher and boot menus included, follows.
  *
  * PURE, HOST-TESTABLE, IN THE MANNER OF gesture.c AND tilt.c
  *
@@ -19,12 +16,11 @@
  *
  * HYSTERESIS IS THE POINT, NOT AN EXTRA
  *
- * The obvious implementation snaps to whichever of gx/gy has the larger
- * magnitude - that is exactly what app_sand.c's old gravity_quarter_turn()
- * did. Its boundary sits at 45 degrees from "up", and a board held near that
- * angle flips the whole UI back and forth every single frame the tilt
- * wobbles across it. Tolerable for a palette panel nobody stares at edge-on;
- * intolerable once the whole shell - launcher included - rotates with it.
+ * The obvious implementation - snap to whichever of gx/gy has the larger
+ * magnitude - puts its boundary at 45 degrees from "up", where a board held
+ * near that angle flips the whole UI back and forth every single frame the
+ * tilt wobbles across it. Intolerable once the whole shell, launcher
+ * included, rotates with the reading.
  *
  * The fix is a Schmitt trigger, expressed directly in the gravity
  * components rather than in degrees (there is no trig here, and does not
