@@ -242,6 +242,45 @@ the step cost *more*, so something else absorbed it — gating the fall inside
 `move_liquid_grain` left its mass to the slides and read −18%. Gates partition
 between passes, not inside a function sharing a budget across its branches.
 
+**A phase can fail to partition with no shared budget at all, because the
+compiler duplicated the code between two gates.** Ten gates on the water scene
+(2026-09-11): the four pass-level ones summed to 15,735 µs against 15,733 for
+the same four flipped together, 0.01% apart. Three gates *inside*
+`move_liquid_grain` summed to 2,689 µs against 2,034 together — 24% apart, and
+repeatable to 1 µs, so not noise. The objdump said why: two gates in one inlined
+region made GCC tail-duplicate the remainder of that region, so flipping one
+gate does not skip its work, it moves execution onto a **second copy** of the
+code with the other gate's check arranged differently. Two phases measured in
+two different programs cannot be shares of one.
+
+**Count a gate's load sites before reading its number**, which is the cheap
+check that separates the two cases:
+
+```sh
+riscv32-esp-elf-objdump -d build.diag/launcher.elf | grep sand_step_gate_
+```
+
+One site per source call site means the gate isolates what it names. *More*
+sites than the source has call sites means the compiler restructured around it
+— in the round above, `move_splash` had three for one call, one of them in a
+path where the guarded work can never run, loading the gate only to discard it
+(`volatile`, so it could not be removed). That gate was pricing the
+restructuring as well as the work; the single-site gates in the same image
+partitioned perfectly. The fix is one gate per configuration, or a gate at a
+real call boundary.
+
+**Gate overhead is not a constant, and where it lands decides which figures are
+clean.** The five-percent figure earlier rounds recorded was for a handful of
+gates at pass boundaries. Ten gates, most of them per-cell in the liquid path,
+cost **25%** on the water row (18,116 µs gated against 14,481 stripped) while
+the two liquid-free controls moved 0.3% — the overhead follows the instrumented
+code, not the image. It cancels wherever a gate's own load is paid in both
+configurations, which is every gate measured alone; it does **not** cancel for a
+region with gates nested inside it, since turning that region off stops paying
+their loads too. So an outer figure (a whole pass, a whole call) is an upper
+bound carrying its inner instrument, and the innermost figures are the clean
+ones. Prefer few gates, and read an outer number as a ceiling.
+
 ### Four rules, each learned by getting it wrong
 
 **Only within-capture comparisons are trustworthy.** Two builds of *identical*
