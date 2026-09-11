@@ -197,6 +197,13 @@ never changed. Both "move it closer" experiments measured
 neutral-to-worse — IRAM for code (08), DRAM for the material table (10) —
 the 32 KB cache was never missing on either.
 
+**And it still is not missing.** The EXTMEM hit/miss counters, read in
+2026-09, put a water step at 89 instruction misses and zero data misses in
+2.3 million cycles. So wherever this page reads a benchmark as an i-cache
+effect, treat that as the era's assumption rather than a measurement, and
+suspect instruction *count* first — see
+[`Perf-Instruments.md`](Perf-Instruments.md)'s cache-counter section.
+
 ### The layout lottery
 
 Same code, **3.2 ms vs 3.9 ms** — two builds that never touched the hot

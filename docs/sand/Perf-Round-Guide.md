@@ -208,14 +208,23 @@ So the host understates the cost of executed instructions by 2-6.6x
 relative to the surrounding simulation work. It is not that the device is
 uniformly slower - a uniform slowdown cancels in that ratio.
 
-**Do not write "i-cache" as the cause.** That was assumed twice and is
-still unproven. This part is single-issue in-order while the host is wide
-superscalar out-of-order, so 32 extra ALU ops cost ~32 cycles here and far
-less there through instruction-level parallelism alone; fetch and IPC both
-fit these numbers and the experiment cannot separate them. A separate test
-- growing flash-resident const data read per cell from 4 KB to 32 KB -
-measured *exactly zero* on device, which is weak evidence against the
-cache half. What is established is the effect, not the mechanism.
+**The cause is not the i-cache, and that is now measured rather than
+argued.** The EXTMEM hit/miss counters read 89 instruction misses and zero
+data misses across a 2.3 million cycle water step, with the fetch unit
+active 0.89 cycles in every one - see [`Perf-Instruments.md`](Perf-Instruments.md)'s
+cache-counter section. The device is simply a single-issue in-order core
+against a wide superscalar out-of-order host, so 32 extra ALU ops cost ~32
+cycles here and far less there through instruction-level parallelism alone.
+Two earlier rounds assumed "i-cache" and one wrote it down; the growing-
+const-data test that measured *exactly zero* was right for the reason it
+could not confirm at the time.
+
+**What follows from that, and it is the useful half:** on this core a pass
+costs what it EXECUTES, near enough linearly. That is why removing
+instructions has paid every time the removal was real (PR #81, PR #88, this
+round's probe rows) and why adding them has lost every time, including the
+unroll of the cross-flow scan helpers (PR #167, water +2.14%) that was read
+as a footprint effect. There is no footprint effect to read.
 
 And the ratio is **scene-specific**, so it cannot be turned into one
 correction factor and applied. An earlier estimate did exactly that -
