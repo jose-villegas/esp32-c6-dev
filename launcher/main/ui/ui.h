@@ -74,7 +74,7 @@ mu_Context *ui_context(void);
  * everything else in an immediate-mode UI - a caller that wants a style
  * states it every frame. That matters here because the whole shell
  * shares one mu_Context: without the reset, the launcher opting into a
- * bezel would leave the sand app's overlay buttons bezelled too. */
+ * bezel would leave the running app's own overlay buttons bezelled too. */
 void ui_begin(const input_t *input);
 
 /* Choose how button frames are drawn for the rest of this frame.
@@ -133,8 +133,8 @@ void ui_set_transform(ui_transform_t t);
  * NOBODY SUBSCRIBES TO IT: a cheap number, nothing more - a caller reads
  * it, remembers it, compares a fresh read later. No listeners, no event
  * fired - resist a subscriber list; the value comes from being pulled
- * and diffed on a caller's own schedule, same as `palette_drawn_quarter`
- * in app_sand.c. */
+ * and diffed on a caller's own schedule, same as a cached last-seen
+ * generation number an app keeps beside its own redraw-skip check. */
 uint32_t ui_layout_generation(void);
 
 /* The logical canvas size: the physical viewport (GFX_WIDTH x GFX_HEIGHT)
@@ -167,8 +167,8 @@ int ui_begin_screen(mu_Context *ctx, const char *title, int opt);
  *
  * FIXED content - a small number of large tap targets sized to what they
  * need to say - should stay that width and centre in the canvas rather than
- * stretch to fill it. The sand app's boot menu is the model this
- * generalises: it already centres a hand-placed pair of buttons this way.
+ * stretch to fill it. A boot menu with a hand-placed pair of large tap
+ * targets is the model this generalises: it already centres them this way.
  *
  * ui_centered_rect() is the shared primitive for the fixed case. Pure
  * geometry, `canvas_w` taken as a parameter rather than read internally via

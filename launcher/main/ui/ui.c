@@ -607,10 +607,10 @@ static void draw_command(const mu_Command *cmd)
          * corner of the box - see ui_text_glyph0_origin()'s own comment
          * (ui_transform.h) for the full derivation. Extracted there, not
          * kept inline, so it's testable against a synthetic proportional
-         * font on a host - a port of app_sand/palette.c's
-         * palette_label_origin() solving the same problem, ported rather
-         * than called directly because ui/ sits below apps/, so pulling
-         * in apps/sand/ would be a backwards layering dependency. */
+         * font on a host - a port of the same origin math an app's own
+         * label-drawing code solves for itself, ported rather than called
+         * directly because ui/ sits below apps/, so reaching into an
+         * app's source would be a backwards layering dependency. */
         int mx, my;
         ui_text_glyph0_origin(font, box, quarter, scale, &mx, &my);
 
@@ -639,9 +639,9 @@ static void draw_command(const mu_Command *cmd)
     case MU_COMMAND_ICON: {
         /* microui's icons are close/check/collapsed/expanded. MU_ICON_CHECK
          * is real artwork (gfx/icons_system.h's baked ICON_SYSTEM_CHECK)
-         * because two callers need it: the diagnostics app's mu_checkbox()
-         * toggles, and app_sand.c's palette spawn badge. The other three
-         * stay a small centred-square placeholder - a deliberate gap, not
+         * because two callers need it: a checkbox toggle, and a per-tile
+         * spawn-selection badge. The other three stay a small
+         * centred-square placeholder - a deliberate gap, not
          * an oversight, because nothing in this shell closes a window or
          * collapses a tree yet to ask for them. */
         const mu_Color c = cmd->icon.color;

@@ -398,8 +398,8 @@ static bool run_is_leaf_eligible(int row, int col_first, int col_last)
 /* ORs the run's leaf-rows together, masked to the leaf-columns this run's
  * cells actually span - collapses the vertical dimension on purpose. v1
  * only refines x; the run's own tight cell_y0/cell_y1 union is already
- * exact for the sand app's real 2px-tall rows, which is the case this
- * exists for. */
+ * exact for a caller whose real rows are only a couple pixels tall, which
+ * is the case this exists for. */
 static uint16_t leaf_mask_for_run(int row, int col_first, int col_last)
 {
     const int lc0 = col_first * LEAF_SUB;
