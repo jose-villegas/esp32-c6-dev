@@ -89,14 +89,13 @@ static void test_two_separate_active_spots_in_the_same_block_row_do_not_wake_eac
         sand_step(&fx.loc, 0, 1000, 0);
     }
 
-    /* Heap, not a stack array: at the shipped SAND_BLOCK_W (16) this was a
+    /* Heap, not a stack array: at the shipped SAND_BLOCK_W (16) this is a
      * harmless 2 KB, but it scales with the tunable (see loc_fixture()'s
      * own comment on SAND_BLOCK_W being worth retuning) and the device's
-     * main task stack is only 3.5 KB total (CONFIG_ESP_MAIN_TASK_STACK_SIZE)
-     * - a wider block size alone was enough to blow it, with a real
+     * main task stack is only 3.5 KB total (CONFIG_ESP_MAIN_TASK_STACK_
+     * SIZE) - a wider block size alone is enough to blow it, with a real
      * stack-protection panic on device that a host run cannot reproduce
-     * (the host stack is megabytes). Found via exactly that: a block-size
-     * tuning sweep this session hit it at SAND_BLOCK_W=32. */
+     * (the host stack is megabytes). */
     uint8_t *left_before = malloc((size_t)SAND_BLOCK_W * LOC_H);
     TEST_ASSERT_NOT_NULL(left_before);
     for (int y = 0; y < LOC_H; y++) {
@@ -254,24 +253,14 @@ static void test_sideways_tilt_wakes_only_the_disturbed_column(void)
         "too, not only in y");
 }
 
-/* A basin wide enough to span several block-columns, so water poured in at
- * one end and the far wall it must reach are genuinely in different
- * blocks - the direct regression guard for equalise_one_row()'s touched-x
- * range accumulation (see the comment there): getting that range wrong by
- * under-waking would show up here as water that stops levelling partway
- * across.
- *
- * Both the pool and the water source it's fed from scale with SAND_BLOCK_W,
- * not just its width. A single 1-cell-wide column tall enough for the
- * default 16-wide block was tried first and does NOT generalise: at
- * SAND_BLOCK_W=32 (so a pool twice as wide) it still fails to reach the far
- * wall even with sleeping disabled entirely - that is insufficient water
- * mass to cross a wider floor within SAND_LIQUID_SIGHT's per-step reach
- * (see its comment), not a wake/sleep bug. So the source widens along with
- * the pool (POOL_WATER_COLS) as well as filling whatever vertical room the
- * pool has (POOL_WATER_H), instead of a fixed height. POOL_H itself grows
- * with POOL_W too, keeping the basin's proportions - and the vertical room
- * available to the source - the same at every block size. */
+/* A basin wide enough to span several block-columns, so the pour and far
+ * wall are genuinely in different blocks - the regression guard for
+ * equalise_one_row()'s touched-x range accumulation. Both the pool and
+ * its water source scale with SAND_BLOCK_W: a fixed-width source can't
+ * supply enough water mass to cross a wider floor within
+ * SAND_LIQUID_SIGHT's per-step reach. The source widens with the pool
+ * and fills its vertical room; POOL_H grows with POOL_W too, keeping
+ * proportions constant. */
 #define POOL_W (SAND_BLOCK_W * 2)
 #define POOL_H (POOL_W / 2)
 #define POOL_WALL_ROWS 3
@@ -456,21 +445,14 @@ static void test_water_falling_into_the_next_block_down_still_spreads(void)
         "the grid at all");
 }
 
-/* The cross-flow block skip proves a whole block cannot flow and then does not
- * walk it. Its rays reach ONE CELL PAST the block on each side, so the span it
- * checks has to be wider than the block it guards - check only [lo, hi) and a
- * block of full water reads as settled while the empty cell just outside it is
- * exactly where the water was about to go.
- *
- * A SEALED ONE-CELL CHANNEL is the fixture, and the shape is the whole point:
- * the main sweep's two slides are diagonal-DOWN, so an open-topped column
- * spreads sideways through the sweep whatever cross-flow does - an earlier
- * version of this test passed with the margin deleted for exactly that reason.
- * Stone directly above and below leaves no diagonal to take, so the only thing
- * that can move this water is the pass under test.
- *
- * Verified to fail before it was kept: with the margin dropped the water never
- * leaves the first block column and this reports 0. */
+/* The cross-flow block skip proves a block cannot flow and does not walk
+ * it. Rays reach one cell past the block each side, so the span checked
+ * is wider than the block - [lo, hi) alone reads a full block as settled
+ * while the cell just outside is where the water was about to go. A
+ * sealed one-cell channel is the fixture: the main sweep's diagonal-down
+ * slides would spread an open-topped column sideways regardless of
+ * cross-flow, but stone above/below leaves no diagonal, so only this
+ * pass can move it. */
 #define XSPAN_W (SAND_BLOCK_W * 2)
 #define XSPAN_H 80
 #define XSPAN_COLS ((XSPAN_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
