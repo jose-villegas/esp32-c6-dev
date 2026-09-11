@@ -1634,6 +1634,12 @@ void sand_host_probe_run_gunpowder_basin(void)
  * lava and a packed screen of gas. */
 #define PLANT_POUR_BUDGET_US     76200
 
+/* 60 us, pegged the same way, and the number worth writing down: the same
+ * board cost 28,362 before a landed plant stopped arming the reaction pass
+ * (see may_have_faller/faller_may_move in sand.h). What is left is the
+ * sweep's own block scan, which the settled-sand row measures too. */
+#define PLANT_IDLE_BUDGET_US     54
+
 /* A grown plant bed with acid eating down to its roots on one side of a wall
  * and lava burning its canopy on the other (build_plant_ruin_scene(), shared
  * with test_the_plant_ruin_scene_eats_roots_and_burns_a_canopy). The acid
@@ -1902,6 +1908,59 @@ static void test_pouring_the_plant_brush_fits_in_the_frame_budget(void)
 void sand_host_probe_run_plant_pour(void)
 {
     test_pouring_the_plant_brush_fits_in_the_frame_budget();
+}
+#endif
+
+/* The same heap once it has stopped: the state a poured garden spends almost
+ * all of its life in, and the one no other row measures. Every plant here is
+ * landed or anchored, so the reaction pass has nothing it can do and the
+ * number is whatever it costs to find that out. */
+static void test_a_settled_plant_garden_fits_in_the_frame_budget(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 11u);
+    sand_enable_sleeping(&real, blocks);
+    sand_set_soak(&real, SAND_SOAK_PER_MATERIAL);
+    build_dry_plant_heap_scene(&real);
+
+    for (int i = 0; i < PLANT_POUR_MEASURED_STEPS; i++) {
+        plant_pour_stamp(&real, i);
+        sand_step(&real, 0, 1000, 0);
+    }
+    for (int i = 0; i < PLANT_IDLE_SETTLE_STEPS; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+
+    const int steps = 200;
+    const int64_t start = esp_timer_get_time();
+    for (int i = 0; i < steps; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+    const int64_t per_step = (esp_timer_get_time() - start) / steps;
+
+    ESP_LOGI("device_tests", "settled plant garden, %dx%d: %lld us per step",
+             REAL_W, REAL_H, (long long)per_step);
+
+    free(big);
+    free(blocks);
+
+    TEST_ASSERT_LESS_THAN_MESSAGE(PLANT_IDLE_BUDGET_US, (int)per_step,
+        "a garden that has stopped moving is held to 10% below its measured "
+        "number, as a reduction target - failing means the work is not done, "
+        "not that something broke");
+}
+
+#ifdef SAND_HOST_PROBE
+/* Host-only timing probe - the settled garden (see the full-step control's
+ * own wrapper for the pattern). */
+void sand_host_probe_run_plant_idle(void)
+{
+    test_a_settled_plant_garden_fits_in_the_frame_budget();
 }
 #endif
 
@@ -2589,6 +2648,7 @@ void run_sand_perf_suite(void)
     RUN_TEST(test_the_filling_basin_scene_fits_in_the_frame_budget);
     RUN_TEST(test_the_snowfall_scene_fits_in_the_frame_budget);
     RUN_TEST(test_pouring_the_plant_brush_fits_in_the_frame_budget);
+    RUN_TEST(test_a_settled_plant_garden_fits_in_the_frame_budget);
 
     RUN_TEST(test_present_cost_against_a_falling_sand_scene);
     RUN_TEST(test_a_real_frame_is_sim_plus_present_on_a_falling_sand_scene);
