@@ -30,31 +30,6 @@
 #include "util/intmath.h"
 #include "suite_sand_common.h"
 
-/* A liquid's interior paints flat, whatever the comb underneath is doing.
- *
- * build_xflow()'s two-ray dither (sand.c) is what keeps a settled pool
- * reading the same slope at ten degrees of tilt as at forty five, and that
- * is worth keeping - the alternative, measured, is a pool that reads one
- * fixed slope at every angle, which is the bug the dither exists to fix.
- * Its price is that neighbouring INTERIOR columns of a moving pool settle
- * to different fill levels one cell apart while it works - the comb.
- * Measured two steps into a strong tilt: alternating fills a whole 81
- * luminance apart, cell to cell, which on the panel is a hard line through
- * the water.
- *
- * The fix does not reach into the simulation - it cannot, and this is
- * exactly why: the dither is doing its job and the comb is a side effect
- * of that job, not a mistake in it. It touches only what an INTERIOR cell
- * is PAINTED as: always the body colour, whatever its own fill level says,
- * because a fill below MASS_MAX in the middle of a body is not a true
- * amount of water - it is the levelling rule's own bookkeeping, caught
- * mid-step (see material_colours()'s own comment for the long version).
- *
- * This test builds exactly the shape the report measured - alternating
- * MASS_MAX and a low fill across a row - inside a full border of water so
- * every varied cell is genuinely interior (mask 0, checked explicitly
- * rather than assumed), and asserts the comb is invisible: every interior
- * cell paints the SAME colour, and that colour is the body's. */
 static void test_a_liquid_body_paints_flat_inside(void)
 {
     const gfx_color_t *pal = material_palette();
@@ -369,13 +344,6 @@ static void test_shine_direction_holds_the_old_diagonal_with_no_gravity(void)
     TEST_ASSERT_EQUAL_INT_MESSAGE(181, uy_q8, "same for the y half of it");
 }
 
-/* The shine sweeps AWAY from gravity - the same MINUS-gravity convention
- * liquid_spec's rim highlight uses (test_a_liquid_rim_catches_the_light_
- * from_above just above pins that one's sign) - and then a further
- * eighth of a turn to the LEFT as seen on the panel. Straight up gave
- * bands lying exactly across gravity; the turn is what makes them lean,
- * which is how they were wanted on the device. Screen y grows downward,
- * so "left" on the panel is (x, y) -> (x + y, y - x) / sqrt 2. */
 static void test_shine_direction_is_minus_gravity_turned_left(void)
 {
     int ux_q8 = 999, uy_q8 = 999;
@@ -397,11 +365,6 @@ static void test_shine_direction_is_minus_gravity_turned_left(void)
         "other way round would put -1/sqrt 2 here");
 }
 
-/* A genuine ANGLE, not a choice between a couple of fixed diagonals - the
- * one thing an earlier, abandoned attempt at gravity-linked shine never
- * had (see paint_row_n()'s own comment on why that version was dropped).
- * A gravity vector halfway between two axes must sweep the shine halfway
- * between them too, not snap to whichever axis is closer. */
 static void test_shine_direction_is_a_genuine_angle_not_a_snap(void)
 {
     int axis_ux_q8, axis_uy_q8, diag_ux_q8, diag_uy_q8;
@@ -425,11 +388,8 @@ static void test_shine_direction_is_a_genuine_angle_not_a_snap(void)
         "1/sqrt 2");
 }
 
-/* Whatever direction comes out must actually be a unit vector - im_len()'s
- * own ~4% approximation (material_set_gravity() trusts the same thing for
- * the same reason) is the only slack allowed, not an arbitrary scale that
- * would make the shine sweep faster or slower depending on which way the
- * board happens to be tilted. */
+/* Whatever direction comes out must be a unit vector - im_len()'s ~4%
+ * approximation is the only slack allowed. */
 static void test_shine_direction_is_unit_length(void)
 {
     static const int gxs[] = { 1000, 1000, 0, -700, 300 };
@@ -439,15 +399,8 @@ static void test_shine_direction_is_unit_length(void)
         int ux_q8, uy_q8;
         material_shine_direction(gxs[i], gys[i], &ux_q8, &uy_q8);
 
-        /* im_len()'s error swings both ways with angle - it UNDERSHOOTS
-         * the true length by about 1% on an exact diagonal and OVERSHOOTS
-         * it by close to 8% around a 2:1 ratio (r=0.4 is this shape's own
-         * worst case; see im_len()'s own comment in intmath.h for the
-         * formula). Dividing 256 by an over-long len under-shoots this
-         * vector's own magnitude and vice versa, so the honest tolerance
-         * this test can hold it to is [256/1.08, 256/0.99], not a tight
-         * band around 256 - anything outside THAT is a real bug (wrong
-         * scale, or gx/gy swapped for x/y). */
+        /* im_len() overshoots by 8% at 2:1 ratio, undershoots by 1% on
+         * diagonal. Tolerance: [256/1.08, 256/0.99]. */
         const long mag_sq = (long)ux_q8 * ux_q8 + (long)uy_q8 * uy_q8;
         char why[64];
         snprintf(why, sizeof why, "gravity (%d, %d)", gxs[i], gys[i]);
@@ -519,35 +472,11 @@ static void test_shine_direction_is_unit_length(void)
  * the same column (see the hold-then-commit's own two-consecutive-frames
  * rule) calls this again with the same state pointers. */
 
-/* The real local_depth_cur_row[]/local_depth_prev_row[] ceiling - see
- * app_sand.c's own LOCAL_DEPTH_COUNT_CEILING (same value: MATERIAL_LIQUID_
- * DEPTH_BAND itself, no raise - see that constant's own comment there for
- * why this walk's own scale needs none, unlike the two-walk design's own
- * 34); this suite cannot include app_sand.c (it is compile-checked only,
- * see this section's own top comment), so the constant is re-derived here
- * rather than shared directly - keep the two in sync by hand if either
- * ever changes. */
 #define SUITE_LOCAL_DEPTH_COUNT_CEILING MATERIAL_LIQUID_DEPTH_BAND
 
-/* GENERALISED to an arbitrary per-step INCREMENT and saturation CEILING, in
- * whatever unit the caller chooses - the real col_stable_depth[] climbs by
- * a flat `+1` cell, saturating at SUITE_LOCAL_DEPTH_COUNT_CEILING (30)
- * rather than at the plain MATERIAL_LIQUID_DEPTH_BAND (24) - see THE
- * SATURATING CLIMB's own "ATTEMPT FOUR" in app_sand.c for why the ceiling
- * was raised above the band itself. Passing `inc=1,
- * ceiling=MATERIAL_LIQUID_DEPTH_BAND` reproduces the pre-raise arithmetic
- * exactly - `x < ceiling-1 ? x+1 : ceiling` and `x < ceiling ? x+1 :
- * ceiling` agree at every x (verified: they can only possibly disagree at
- * x == ceiling-1, where both give `ceiling`) - which is why
- * test_local_depth_follows_the_puddles_own_shape and test_a_shallow_
- * puddle_still_shows_real_darkening below still pass the plain
- * MATERIAL_LIQUID_DEPTH_BAND unchanged: neither scenario's own pool is
- * anywhere near deep enough for the raised ceiling to matter, so the two
- * constants are interchangeable for their purposes and changing either
- * would be a no-op there. test_the_blend_has_no_jump_crossing_45_degrees
- * below is the one caller that needs the real, raised ceiling to mirror
- * the shipped mechanism precisely, since its own worst-case cell IS
- * saturated. */
+/* PASSING `inc=1, ceiling=MATERIAL_LIQUID_DEPTH_BAND` REPRODUCES OLD
+ * ARITHMETIC EXACTLY - TESTS STILL PASS UNCHANGED.
+ * TEST_THE_BLEND_HAS_NO_JUMP_CROSSING_45_DEGREES NEEDS RAISED CEILING. */
 static void mirror_local_depth_column(sand_t *g, int cx, int h,
                                       unsigned char *stable,
                                       unsigned char *top_row,
@@ -625,12 +554,6 @@ static void test_local_depth_follows_the_puddles_own_shape(void)
     enum { PW = OBST_POOL_W, PH = OBST_POOL_H };
     sand_init(&fx.obst_pool, obst_pool_cells, PW, PH, 4242u);
 
-    /* A plain rectangular pool. Off-grid reads as solid (sand_at()'s own
-     * convention), so the grid's own bottom and side edges already act as
-     * walls with no explicit border needed. The pool's own OUTLINE does not
-     * need to be irregular for this test - the irregularity that matters
-     * comes entirely from the rock plug below, not from the water's
-     * silhouette. */
     for (int y = 2; y < PH; y++) {
         for (int x = 0; x < PW; x++) {
             sand_set(&fx.obst_pool, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
@@ -698,27 +621,8 @@ static void test_local_depth_follows_the_puddles_own_shape(void)
                                        why);
     }
 
-    /* THE DIVERGENCE ITSELF: the row right below the plug is where the
-     * obstructed column's local depth must show a fresh, near-zero reading
-     * for its own body - its neighbour toward the surface is stone, not
-     * water - while the clear column keeps climbing from wherever it
-     * already was.
-     *
-     * NOT LITERALLY 0, and that is a genuinely verified property of the
-     * shipped mechanism, not a loosened assertion: this column has TWO
-     * persistent reset points sharing the single col_top_row[cx] slot - the
-     * pool's own surface at row 2, and this resume point at row 9 - and
-     * col_stable_depth[]'s own "KNOWN LIMITATION" comment in app_sand.c
-     * proves that when two such points both persist, NEITHER ever commits;
-     * both stay in the HOLD branch forever, oscillating for the tracked
-     * slot every pass. Traced by hand against this exact geometry: row 9's
-     * neighbour (the stone plug) resets col_stable_depth[cx] to a clean 0
-     * immediately beforehand regardless of hold or commit, so the permanent
-     * HOLD here climbs by exactly one from that 0 - depth 1, not depth 0,
-     * every single call, not only this first one. Asserting 0 would be
-     * asserting behaviour the real array never produces for this shape of
-     * column; asserting <= 1 pins the value it actually, provably settles
-     * to. */
+    /* NEITHER reset point commits; both oscillate indefinitely. Asserting <=
+     * 1 matches actual behaviour. */
     const int first_row_below_plug = OBST_Y1 + 1;
     TEST_ASSERT_TRUE_MESSAGE(depth_obstructed[first_row_below_plug] <= 1u,
         "the water cell right below the rock plug must show a freshly-reset "
@@ -746,15 +650,6 @@ static void test_local_depth_follows_the_puddles_own_shape(void)
         "would mean the walk stopped working after the first obstacle, "
         "not merely reset at it");
 
-    /* That material_colours() itself turns a `depth` value into a visibly
-     * different colour is already pinned directly, at controlled values, by
-     * test_a_liquid_interior_is_shaded_by_depth above - not repeated here
-     * with these particular (quite shallow) pool depths, which is the wrong
-     * place to prove it: DEPTH_RANGE's brightening is already close to
-     * maxed out within the first handful of cells of any pool, so two
-     * local depths this close together are not guaranteed to land on
-     * different quantised shades even though they are genuinely different
-     * NUMBERS - which is exactly the property this test exists to check. */
 }
 
 /*=============================================================================
@@ -780,14 +675,9 @@ static void test_local_depth_follows_the_puddles_own_shape(void)
  * larger than every one of them. */
 #define RAY_WALK_STATE_W 128
 
-/* `prev_cy` mirrors app_sand.c's own local_depth_prev_cy - which row
- * `prev_row[]` actually describes, so a cross-row read can tell a real
- * neighbour from whatever the previous sweep left behind. RAY_WALK_NO_ROW
- * is that file's LOCAL_DEPTH_NO_ROW: "nothing painted yet, or the chain was
- * deliberately broken" - -2 rather than -1 for the reason given there, that
- * -1 is a value `cy - vdir` can genuinely produce at the top row. See
- * local_depth_prev_cy's own comment there for the device artifact this
- * exists to close and the measured numbers. */
+/* prev_cy mirrors app_sand.c's local_depth_prev_cy for real neighbour
+ * detection. RAY_WALK_NO_ROW is LOCAL_DEPTH_NO_ROW: -2, not -1, because -1
+ * can be a genuine value. See local_depth_prev_cy's comment for details. */
 #define RAY_WALK_NO_ROW (-2)
 
 typedef struct {
@@ -795,15 +685,6 @@ typedef struct {
     uint8_t prev_row[RAY_WALK_STATE_W];
     uint8_t top_row[RAY_WALK_STATE_W];
     int     prev_cy;
-    /* SET TRUE TO REVERT THE CHAIN GUARD, and nothing else - the same
-     * `apply_fix` device flip_test_sweep_column() below already uses, put in
-     * the state rather than in the parameter list so that the several tests
-     * sharing this mirror need no new argument. A HOLD then climbs from
-     * prev_row[] whatever row that buffer actually describes, exactly as
-     * app_sand.c did before local_depth_prev_cy existed. Only test_turning_
-     * a_settled_pool_to_landscape_does_not_flash_the_whole_body sets it,
-     * so it can measure both sides in one run instead of asking a reader to
-     * take a red-before-green claim on trust. */
     bool    ignore_chain_break;
 } ray_walk_state_t;
 
@@ -816,20 +697,6 @@ static void ray_walk_state_reset(ray_walk_state_t *st)
     st->ignore_chain_break = false;
 }
 
-/* Mirrors paint_row_n()'s own "THE WALK ITSELF" in app_sand.c line for
- * line - both regimes, the shared debounce array with its per-regime
- * comparison, the projection and the clamp - for ONE row (`cy`) of a real
- * `sand_t` grid. `vertical_dominant`/`v_reverse`/`h_reverse`/`ax`/`ay`/
- * `scale_q8` are this FRAME's own facts (mirroring update_local_depth_
- * gravity()'s own outputs - the caller computes them once per sample, the
- * same "once a frame, not per cell/row" budget the real mechanism keeps).
- * `ceiling` is normally MATERIAL_LIQUID_DEPTH_BAND (LOCAL_DEPTH_COUNT_
- * CEILING's own real value now - see that constant's own comment in
- * app_sand.c for why this walk needs no raise) but left a parameter so a
- * caller checking an OLDER ceiling's own behaviour (there is none left to
- * check here, unlike mirror_local_depth_column()'s own inc/ceiling
- * parameters) is not blocked from doing so. Swaps `st->cur_row`/`st->
- * prev_row` itself, at the end, exactly where paint_row_n() does. */
 static void mirror_ray_walk_row(sand_t *g, int cy, int grid_w, int grid_h,
                                 bool vertical_dominant, bool v_reverse,
                                 bool h_reverse, unsigned ax, unsigned ay,
@@ -912,11 +779,6 @@ static void mirror_ray_walk_row(sand_t *g, int cy, int grid_w, int grid_h,
             ? depth_raw : MATERIAL_LIQUID_DEPTH_BAND;
     }
 
-    /* THE SWAP - element-by-element here (a test mirror, not the hot path
-     * paint_row_n() is), but the same semantic swap that function's own
-     * pointer exchange performs: st->cur_row just finished holding this
-     * row's own emerging values and becomes "the row painted before this
-     * one" for whichever row is processed next. */
     for (int i = 0; i < RAY_WALK_STATE_W; i++) {
         const uint8_t t = st->cur_row[i];
         st->cur_row[i] = st->prev_row[i];
@@ -1116,12 +978,8 @@ static void test_the_blend_has_no_jump_crossing_45_degrees(void)
  *     frames - because that is precisely the shape of call the previous
  *     unit test did not exercise. */
 
-/* Mirrors app_sand.c's col_stable_depth[]/col_top_row[] decision in
- * isolation, one already-known same_material/row pair per call - `stable`/
- * `top_row` are IN/OUT, the same way the real arrays persist across
- * frames. Does not touch the grid at all; test_the_debounce_survives_
- * open_air_above_the_pool below is what mirrors the FULL per-row walk,
- * including the kind gate this function does not need to know about. */
+/* Mirrors app_sand.c's decision; `stable`/`top_row` IN/OUT, does not touch
+ * the grid. */
 static unsigned mirror_debounce_decide(unsigned char *stable,
                                        unsigned char *top_row,
                                        bool same_material, int cy)
@@ -1183,13 +1041,8 @@ static void test_a_same_row_reset_commits_but_a_different_row_does_not(void)
         "the walk must resume climbing normally after a committed reset");
 }
 
-/* Mirrors app_sand.c's col_stable_depth[]/col_top_row[] debounce ON TOP OF
- * mirror_local_depth_column()'s raw walk above - one call per FRAME, state
- * persisting across calls, exactly the shape paint_row_n() actually drives
- * this logic in. col_local_depth[]'s own raw walk is untouched by any of
- * this and is not reproduced here - test_local_depth_follows_the_puddles_
- * own_shape above already covers it; this is purely the debounce layered
- * on top. */
+/* Mirrors app_sand.c's debounce logic on top of mirror_local_depth_column()'s
+ * walk; state persists across calls, driven by paint_row_n(). */
 static void mirror_debounced_depth_column(sand_t *g, int cx, int h,
                                           unsigned char *stable,
                                           unsigned char *top_row,
@@ -1220,21 +1073,10 @@ static void mirror_debounced_depth_column(sand_t *g, int cx, int h,
 #define DEBOUNCE_TEST_H 20
 static uint8_t debounce_test_cells[DEBOUNCE_TEST_W * DEBOUNCE_TEST_H];
 
-/* DIAGNOSTIC PROBE, NOT YET A CLAIM OF CORRECT BEHAVIOUR - checking a
- * hypothesis raised from a device report: unlike a one-frame BLINK (the
- * sibling test below), a boundary that genuinely moves to a NEW row on
- * several CONSECUTIVE frames - exactly what a real pool does while still
- * resettling after a tilt change, which is when the diagonal dead zone's
- * freeze can grab it - never lets col_top_row[cx] match twice in a row, so
- * it never COMMITS. If the HOLD branch's climb compounds across those
- * frames instead of tracking close to the raw walk each time, the column
- * would read increasingly deep (and therefore increasingly flat/saturated)
- * throughout the resettling, not just for the one frame HOLD is meant to
- * cover - and if the dead zone's freeze then grabs the column mid-drain,
- * it would freeze on that already-wrong, saturated value rather than a
- * clean one. Reproduced directly, without gravity or sand_step() - the
- * boundary is walked down the column by hand, one row per frame, several
- * frames running, exactly the shape a receding waterline produces. */
+/* DIAGNOSTIC PROBE checks if boundary moves NEW row consecutively, unlike
+ * BLINK. Ensures col_top_row[cx] never repeats, so never COMMITS. Prevents
+ * HOLD from reading deep, saturated values. Reproduced without gravity or
+ * sand_step(). */
 static void test_a_continuously_moving_boundary_does_not_run_away(void)
 {
     enum { CX = 1, START_TOP = 5, DRAIN_ROWS = 8 };
@@ -1361,18 +1203,6 @@ static void test_the_debounce_survives_open_air_above_the_pool(void)
         "frames, not be absorbed the way a one-frame blink is");
 }
 
-/* Mirrors app_sand.c's row_stable_depth[]/row_top_col[] debounce ON TOP OF
- * h_running_depth's own raw walk, exactly the way mirror_debounced_depth_
- * column() above mirrors the vertical case - one call per FRAME, state
- * persisting across calls, exactly the shape paint_row_n() actually drives
- * this logic in. Transposed, not merely renamed: the outer loop walks cx
- * (this function is one ROW, not one column), and the neighbour tested
- * "toward the surface" is the cell one column LEFT (cx - 1) rather than one
- * row above (cy - 1) - the same ascending-scan assumption paint_row_n()
- * itself makes whenever local_depth_h_reverse is false (gravity pointing
- * right or straight down), which is all this mirror needs to cover since
- * the debounce's own DECISION logic does not depend on which way the scan
- * runs, only on which neighbour counts as "already processed". */
 static void mirror_debounced_depth_row(sand_t *g, int cy, int w,
                                        unsigned char *stable,
                                        unsigned char *top_col,
@@ -1403,27 +1233,6 @@ static void mirror_debounced_depth_row(sand_t *g, int cy, int w,
 #define HDEBOUNCE_TEST_H 4
 static uint8_t hdebounce_test_cells[HDEBOUNCE_TEST_W * HDEBOUNCE_TEST_H];
 
-/* THE HORIZONTAL COUNTERPART of test_the_debounce_survives_open_air_above_
- * the_pool above - closing exactly the gap that test's own neighbouring
- * comments (and h_running_depth's, in app_sand.c) already flagged as
- * accepted-for-now: h_running_depth's raw horizontal walk had nothing
- * equivalent to col_stable_depth[]/col_top_row[] riding on it, so a
- * single-frame blink of a HORIZONTAL neighbour used to swing straight
- * through into the blended depth wherever horizontal carried real blend
- * weight - significant well before 45 degrees of tilt and growing toward
- * 90. That swing is exactly what read on the device as "flickering
- * artifacts at the diagonals" once the diagonal dead zone that used to mask
- * it was removed - the dead zone froze the WHOLE blend near 45 degrees, so
- * an undebounced horizontal reading never used to reach the screen at an
- * angle where it mattered.
- *
- * Same scene, same phases, transposed: open air BESIDE the pool instead of
- * above it, walked left to right one row at a time instead of top to bottom
- * one column at a time. Water starts at column 5 of a 20-wide row (columns
- * 0-4 are open air), the same 5-cell offset and total width the vertical
- * test uses (rows 0-4 empty, 20 rows total) - same numbers, transposed
- * axis, so anyone comparing the two tests side by side sees the same shape
- * rather than having to reconcile different constants for no reason. */
 static void test_the_horizontal_debounce_survives_open_air_beside_the_pool(void)
 {
     enum { CY = 1, WATER_LEFT = 5 };
@@ -1463,18 +1272,6 @@ static void test_the_horizontal_debounce_survives_open_air_beside_the_pool(void)
             why);
     }
 
-    /* THE BLINK, AND THE LOAD-BEARING ASSERTION THIS TEST EXISTS FOR: the
-     * leftmost water cell (the boundary itself) vanishes for exactly one
-     * frame, then comes back - the reported flicker's own shape, transposed
-     * onto a row instead of a column. Every column past it must be
-     * unaffected. Without row_top_col[]'s HOLD branch (committing the reset
-     * immediately instead of holding it for a second confirming frame),
-     * this one-frame blink resets row_stable_depth[] to 0 and every column
-     * past it climbs from that reset instead of holding its settled value -
-     * this assertion is what turns red if that HOLD branch is removed, and
-     * green once it is restored (verified by hand while writing this test,
-     * per the brief's own instruction to prove it load-bearing rather than
-     * merely assert it). */
     unsigned settled[HDEBOUNCE_TEST_W];
     memcpy(settled, depth, sizeof depth);
 
@@ -1596,21 +1393,6 @@ static void test_pouring_onto_a_settled_pool_redirties_a_bounded_band_below(void
         "setup: the pour must raise the surface above where it started, "
         "or there is nothing here for mark_depth_band() to catch");
 
-    /* near_row sits inside the band below the new surface, AND inside the
-     * ORIGINAL reservoir - exactly the case the bug report was about: an
-     * already-settled cell whose render went stale.
-     *
-     * far_row is the control, and its distance is measured from fill_top
-     * (the ORIGINAL surface), not new_surface: mark_depth_band() fires on
-     * every intermediate empty-to-liquid transition while the pour is
-     * still falling and levelling, not only at the FINAL settled surface,
-     * and the deepest any such transition can ever land is fill_top - 1 -
-     * a cell at or below fill_top was already water at MASS_MAX before the
-     * pour and (per the mass-conservation check below) never changes
-     * content, so it can never BE an empty-to-liquid transition. Measuring
-     * from new_surface instead - the first version of this test did - lets
-     * far_row sit inside the true reach whenever the pour raises the
-     * surface by more than a few rows, which is exactly what happened. */
     const int near_row = new_surface + MATERIAL_LIQUID_DEPTH_BAND - 2;
     const int far_row  = fill_top + MATERIAL_LIQUID_DEPTH_BAND + 8;
     TEST_ASSERT_TRUE_MESSAGE(far_row < DEPTH_TEST_H,
@@ -1650,25 +1432,6 @@ static void test_pouring_onto_a_settled_pool_redirties_a_bounded_band_below(void
         "deeper than any shading could possibly need to change");
 }
 
-/* test_wave_bands_are_sized_in_cells_not_in_grid_fractions and its
- * wave_band_transitions() helper used to live here - a regression guard for
- * the "wave bands are sized in cells, not in grid fractions" fix, walking
- * paint_row_n()'s then-screen-position accumulator
- * (material_depth_row_start()/material_wave_row_start(), material.h) at two
- * different grid heights and asserting the band count agreed.
- *
- * REMOVED, not merely updated, because the mechanism it guarded no longer
- * exists: local depth (see LOCAL DEPTH's own comment in app_sand.c) never
- * touches grid_w/grid_h at all - it counts cells from each puddle's own
- * boundary, full stop - so "the wave's period comes from the grid's extent
- * instead of a fixed cell count" is not a regression this design can
- * reintroduce short of literally bringing the screen-position walk back.
- * The property this test protected is now a structural guarantee rather
- * than a tuning outcome to keep re-checking. What replaced it as the live
- * regression guard for THIS change is
- * test_local_depth_follows_the_puddles_own_shape below, which is a strictly
- * stronger claim: not just "grid-size-independent" but "follows the actual
- * shape of the puddle, obstacles included". */
 
 /* test_water_interior_hazes_toward_fog_colour, test_only_water_hazes_its_
  * interior, test_the_wave_table_matches_its_formula, test_wave_bands_vary_
@@ -1700,15 +1463,6 @@ static void test_pouring_onto_a_settled_pool_redirties_a_bounded_band_below(void
  * interior_is_shaded_by_depth, which is now the shared mechanism it
  * belongs beside rather than a water-only fog boundary. */
 
-/* THE SATURATION BOUNDARY, and now a claim about EVERY liquid rather than
- * a water-only fog boundary: since water dropped its own fog/wave mechanism
- * and rejoined the plain shade-index shift oil, lava and acid already used
- * (see material_colours()'s own comment on the liquid interior branch),
- * "the deepest interior cell is exactly the body colour" is a structural
- * property of the one mechanism every liquid now shares, not a boundary
- * water alone needs pinned. Depth 255 is comfortably past
- * DEPTH_SATURATE_CELLS (material.c), so every one of these must paint
- * EXACTLY palette[CELL_MAKE(id, MASS_MAX)], with no shift left at all. */
 static void test_every_liquid_interior_is_exactly_the_body_colour_when_saturated(void)
 {
     static const uint8_t liquids[] = { MAT_WATER, MAT_OIL, MAT_LAVA,
@@ -1784,12 +1538,6 @@ static void test_a_shallow_puddle_still_shows_real_darkening(void)
 
     enum { NEAR_SURFACE_Y = 3, NEAR_BOTTOM_Y = PH - 1 };
     unsigned depth[PH];
-    /* Fresh state (matching the real arrays' BSS-zero start), a single
-     * call: this column has exactly ONE boundary (its own surface), so
-     * whether that boundary HOLDS or COMMITS on this first pass shifts
-     * every row's depth by the same constant amount and cannot affect the
-     * DIFFERENCE this test actually checks - see mirror_local_depth_
-     * column()'s own comment for the hold-then-commit mechanism. */
     unsigned char stable = 0, top_row = 255;
     mirror_local_depth_column(&fx.shallow_pool, 0, PH, &stable, &top_row, depth,
                               1u, MATERIAL_LIQUID_DEPTH_BAND);
@@ -1905,16 +1653,6 @@ static uint8_t wake_test_blocks[
     ((WAKE_TEST_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
     ((WAKE_TEST_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)];
 
-/* Mirrored per-frame state - one shared ray_walk_state_t now, not five
- * separate arrays (col_local_depth[]/col_stable_depth[]/col_top_row[]/
- * row_stable_depth[]/row_top_col[]) - see ray_walk_state_t's own comment
- * above (this file) for the mechanism this replaces. File-static rather
- * than stack-local purely for size - this scene is too large to want
- * repeatedly stack-allocated - and persists across the frame loop exactly
- * like the real local_depth_row_a[]/local_depth_row_b[]/local_depth_
- * top_row[] persist across paint_row_n() calls. */
-/* Same reasoning as fx above (see its comment) - these three
- * ray_walk_state_t fixtures are never live at the same time either. */
 static union {
     ray_walk_state_t wake_ray_state, band_ray_state, flash_ray_state;
 } fx_ray;
@@ -1923,11 +1661,6 @@ static union {
  * below ever touches them - malloc'd there instead, fresh per call, freed
  * before it returns (this test's own reproduction owns the only call). */
 
-/* paint_row_n()'s own cardinal mask test, transposed onto sand_at() rather
- * than the row/above/below pointers paint_row_n() reads directly - off-grid
- * reads as MAT_STONE (sand_at()'s own convention, sand.c), which is exactly
- * "not empty" the same way paint_row_n()'s explicit bounds checks treat the
- * grid edge, so no separate bounds-check is needed here either. */
 static unsigned wake_test_edge_mask(sand_t *g, int x, int y)
 {
     unsigned m = 0;
@@ -1948,28 +1681,13 @@ static double fabs_double(double x)
     return x < 0.0 ? -x : x;
 }
 
-/* row_has_liquid[]'s own population condition (app_sand.c) - THE ONE LINE
- * THIS WHOLE TEST EXISTS TO PIN. `true` is the shipped fix: ANY liquid cell
- * marks its row, rim included. See this section's own top comment for what
- * temporarily hard-coding the reverted `(mask & MATERIAL_EDGE_CARDINAL) ==
- * 0` condition here does to this test (RED, ~21.71) versus this line
- * (GREEN, ~1.87) - that is the load-bearing proof, and this function is the
- * one place to flip to redo it. */
 static bool wake_test_row_has_liquid(unsigned mask)
 {
     (void)mask;
     return true;
 }
 
-/* Runs the full reproduction for `steps` frames and returns the worst
- * single-frame swing in the mean DISPLAYED interior depth - the empirical
- * signature of the bug this test exists to catch. Mirrors, in order every
- * frame: sand_step() itself; ray_walk_frame_facts() (update_local_depth_
- * gravity()'s own per-frame outputs); advance_local_depth_wake()'s tick;
- * ordinary dirty-row marking from real cell occupancy changes (mark_rows()/
- * mark_depth_band(), sand_priv.h); the wake tick's own row gate
- * (wake_test_row_has_liquid() above); and, for every row that ends up dirty
- * either way, mirror_ray_walk_row()'s full per-cell walk. */
+/* Returns worst single-frame swing in mean DISPLAYED interior depth. */
 static double wake_test_run(int steps)
 {
     uint8_t *wake_test_cells = malloc((size_t)WAKE_TEST_W * WAKE_TEST_H);
@@ -2028,15 +1746,8 @@ static double wake_test_run(int steps)
     double prev_mean = -1.0;
 
     for (int f = 0; f < steps; f++) {
-        /* Near-perfect PORTRAIT: gy dominant and stable, gx small and
-         * wobbling under an ordinary hand tremor - a slow triangle-wave
-         * drift (period 90 frames, no trigonometry needed for it) plus
-         * per-frame jitter from wobble, both small next to gy. This is the
-         * shape of gravity a hand actually produces holding the board
-         * close to upright: never perfectly still, never anywhere close to
-         * a landscape tilt either - so the regime stays vertical-dominant
-         * throughout, by construction, the same way v_reverse never fires
-         * in this scenario either (gy stays positive throughout). */
+        /* Near-perfect PORTRAIT: regime stays vertical-dominant, v_reverse
+         * never fires. */
         const int phase = f % 90;
         const int tri = (phase < 45) ? (-40 + (phase * 80) / 45)
                                       : (40 - ((phase - 45) * 80) / 45);
@@ -2058,11 +1769,6 @@ static double wake_test_run(int steps)
             wake_fired = true;
         }
 
-        /* Ordinary dirty-row marking, from the real grid: any cell whose
-         * EMPTY/occupied state changed this step marks its row - the same
-         * event mark_rows()/mark_depth_band() (sand_priv.h) exist to
-         * report, approximated here from the grid's own before/after state
-         * rather than by instrumenting the simulation's internals. */
         bool row_dirty[WAKE_TEST_H] = { 0 };
         for (int y = 0; y < WAKE_TEST_H; y++) {
             for (int x = 0; x < WAKE_TEST_W; x++) {
@@ -2165,11 +1871,6 @@ static double wake_test_run(int steps)
     return worst_jump;
 }
 
-/* THE BOUND: comfortably above the ~1.87 measured with the real fix (an
- * ordinary settling shift, not a collapse), comfortably below the ~21.71
- * measured with the reverted gate (see this section's own top comment for
- * both numbers) - a third of the full 24-cell saturating range, nowhere
- * close to the near-total collapse the bug produces. */
 #define WAKE_TEST_MAX_SWING 8.0
 
 static void test_a_settled_edge_does_not_flicker_stale_to_fresh(void)
@@ -2331,10 +2032,7 @@ static void flip_test_sweep_column(int top, int bottom,
         const bool same = neighbour_cy >= top && neighbour_cy <= bottom;
 
         /* MATERIAL_LIQUID_DEPTH_BAND, not 255 - mirroring THE SATURATING
-         * CLIMB (app_sand.c). Mirroring the OLD 255 ceiling here would let
-         * this test go on passing against a file that no longer works that
-         * way, which is exactly the drift MATERIAL_LIQUID_DEPTH_BAND's own
-         * comment (material.h) warns two same-shaped constants fall into. */
+         * CLIMB (app_sand.c). Drift risk as warned in material.h. */
         unsigned depth;
         if (same) {
             depth = *stable < MATERIAL_LIQUID_DEPTH_BAND
@@ -2351,22 +2049,10 @@ static void flip_test_sweep_column(int top, int bottom,
     }
 }
 
-/* EVERY FRAME, on purpose - not a smoothed sine, not an RNG. A real hand
- * near landscape lock crosses zero irregularly (829 times over 6000 frames
- * in the model that found this bug, an average distance of ~7 frames), but
- * the failure this test pins does not need that average: it needs the SAME
- * boundary row to never ask twice in a row, and alternating every single
- * frame is the simplest, fully deterministic sequence that guarantees
- * that - a harsher case than the real average, which is exactly what makes
- * it a durable regression pin rather than a flaky one. */
+/* SAME boundary row never asked twice in a row; alternating every frame
+ * guarantees this. */
 #define FLIP_TEST_FRAMES 40
 
-/* Returns the MEAN debounced depth across the column, over the frames after
- * the first few (which are the fill-in of the very first walk, not the
- * steady state either branch settles into). "Does this column still have a
- * depth gradient" - see this section's own top comment for why the old
- * worst-swing statistic stopped being able to answer that once the climb
- * started saturating at MATERIAL_LIQUID_DEPTH_BAND. */
 static double flip_test_run(bool apply_fix)
 {
     unsigned char stable = 0, top_row = 255;
@@ -2395,14 +2081,9 @@ static double flip_test_run(bool apply_fix)
     return n > 0 ? (double)sum / n : 0.0;
 }
 
-/* Comfortably above the 7.00 measured WITH the fix (the honest average of
- * this column's own 0..12 gradient), comfortably below the 24.00 measured
- * WITHOUT it (every cell pinned at MATERIAL_LIQUID_DEPTH_BAND, the whole
- * gradient collapsed - see this section's own top comment for both numbers)
- * - the same shape of bound WAKE_TEST_MAX_SWING above uses for its own two
- * measured numbers. Expressed against the band rather than as a bare
- * literal, since "the mean must stay well clear of the saturation point" is
- * the actual claim. */
+/* Comfortably above the 7.00 measured WITH the fix, comfortably below the
+ * 24.00 measured WITHOUT it - same shape as WAKE_TEST_MAX_SWING. Expressed
+ * against the band to stay clear of saturation. */
 #define FLIP_TEST_MAX_MEAN_DEPTH ((double)MATERIAL_LIQUID_DEPTH_BAND / 2.0)
 
 static void test_a_direction_flip_does_not_corrupt_the_boundary_debounce(void)
@@ -2514,25 +2195,13 @@ static uint8_t band_test_blocks[
  * reproduction owns the only call), for the same reason as wake_test_run()
  * above. */
 
-/* THE ONE LINE THIS WHOLE TEST EXISTS TO PIN - where the debounced climb
- * stops. Equal to MATERIAL_LIQUID_DEPTH_BAND now, not raised above it - see
- * this section's own top comment, and LOCAL_DEPTH_COUNT_CEILING's own
- * comment in app_sand.c, for why this walk needs no raise. This function is
- * the one place to flip to redo the RED/GREEN measurement (e.g. back to 255,
- * no clamp at all, to reproduce the pre-fix baseline this walk inherited). */
+/* Do NOT raise above MATERIAL_LIQUID_DEPTH_BAND. LOCAL_DEPTH_COUNT_CEILING's
+ * comment in app_sand.c explains why no raise is needed. */
 static unsigned band_test_ceiling(void)
 {
     return MATERIAL_LIQUID_DEPTH_BAND;
 }
 
-/* Runs the reproduction and returns the WORST single frame's count of
- * vertically adjacent interior pairs disagreeing by more than half the
- * saturating range. Mirrors, in order every frame: the trickle; sand_step()
- * itself; ray_walk_frame_facts() (update_local_depth_gravity()'s own
- * per-frame outputs); ordinary dirty-row marking from real cell occupancy
- * changes; the wake tick's own row_has_liquid[] gate; draw_dirty_rows()'s
- * row-order reversal; and, for every dirty row, mirror_ray_walk_row()'s
- * full per-cell walk. */
 static int band_test_run(void)
 {
     uint8_t *band_test_cells = malloc((size_t)BAND_TEST_W * BAND_TEST_H);
@@ -2590,21 +2259,6 @@ static int band_test_run(void)
     int worst = 0;
 
     for (int f = 0; f < BAND_TEST_FRAMES; f++) {
-        /* A trickle into the pool. Real water on this device is never
-         * perfectly asleep, and a pool that IS asleep takes every one of its
-         * repaints from the wake tick, which walks them in order.
-         *
-         * THAT IS NOT THE SAME AS "THE CHAIN CANNOT BREAK", and this comment
-         * used to say it was - corrected here rather than left standing,
-         * because a later device report turned out to be exactly the case it
-         * ruled out. The wake tick walks only the rows holding a LIQUID cell
-         * (row_has_liquid[], app_sand.c), so the sweep's FIRST row still
-         * reads a buffer belonging to the last row of the PREVIOUS sweep -
-         * the deepest, saturated one. See local_depth_prev_cy's own comment
-         * there, and test_turning_a_settled_pool_to_landscape_does_not_flash_
-         * the_whole_body below, for what that cost. The trickle stays for its
-         * own reason: it is what makes this test's repaints SPARSE and
-         * simulation-driven rather than whole-body. */
         if ((f % 7) == 0) {
             sand_set(&fx.band_test_grid, BAND_TEST_W - 22, 2,
                       CELL_MAKE(MAT_WATER, MASS_MAX));
@@ -2612,13 +2266,6 @@ static int band_test_run(void)
                       CELL_MAKE(MAT_WATER, MASS_MAX));
         }
 
-        /* LANDSCAPE LOCK, from the device's own capture sidecars: gx large
-         * and steady (tilt_x 3650-3932 there), gy small and crossing zero
-         * (tilt_y -204, 147, -175, 183, -115, 29, -135, -131). Two
-         * components, both triangle waves so this needs no trigonometry: a
-         * slow few-degree SWAY (period 250 frames, about 8 s) for the hand
-         * that is holding rather than clamping the board, and a fast TREMOR
-         * (period 17 frames) on top of it. */
         const int sway_phase = f % 250;
         const int sway = (sway_phase < 125)
             ? (-115 + (sway_phase * 230) / 125)
@@ -2855,31 +2502,8 @@ enum {
 /* The device's own steady tilt magnitude, from the capture sidecars quoted
  * above (tilt_y 3342 in portrait). */
 #define FLASH_TEST_G       3342
-/* ONE WHOLE STEP OF RENDERED COLOUR. material_colours() spreads the depth
- * band across DEPTH_RANGE (4, material.c - private there, so the 4 is spelled
- * out here rather than reached for) whole steps of the fill ramp, so
- * 24 / 4 = 6 cells of depth is exactly one step of colour and any difference
- * below it cannot reach the screen at all. Not a chosen sensitivity: it is
- * the quantisation the panel actually applies. */
 #define FLASH_TEST_SHADE_STEP (MATERIAL_LIQUID_DEPTH_BAND / 4)
 
-/* flash_test_cells/flash_displayed/flash_displayed_prev used to be file
- * statics sized FLASH_TEST_W * FLASH_TEST_H - the biggest single .bss cost
- * in this suite (24 KiB apiece for the two `int` arrays, 78 KiB total
- * against flash_test_cells and flash_test_cells's own dirty/liquid arrays).
- * Now plain pointers, malloc'd by flash_test_alloc() below and freed by
- * flash_test_free() once the caller (flash_test_run() or tremor_test_run(),
- * both of which reach these only through flash_test_settle()) is done with
- * them. Narrowed to int8_t, same as wake_displayed_depth/band_displayed_
- * depth above: a displayed depth is -1 (never painted) or 0..MATERIAL_
- * LIQUID_DEPTH_BAND (24), comfortably inside int8_t's range, and the on-
- * device working set (three of these plus flash_test_cells) does not fit
- * the heap left over once the framebuffer is allocated at the wider `int`
- * width (79,872 B against ~59 KiB free) but does at 1 byte per cell
- * (24,576 B). tremor_test_run()'s own `before[]` snapshot (also heap, same
- * change) memcpy()s straight out of this buffer using `sizeof *before`/
- * `sizeof *flash_displayed` throughout rather than a hardcoded width, so it
- * automatically keeps matching this array's element size. */
 static uint8_t *flash_test_cells;
 static uint8_t  flash_test_blocks[
     ((FLASH_TEST_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
@@ -2888,27 +2512,12 @@ static uint8_t  flash_test_dirty[FLASH_TEST_H];
 static int8_t  *flash_displayed;       /* -1 = never painted */
 static int8_t  *flash_displayed_prev;
 static uint8_t  flash_row_has_liquid[FLASH_TEST_H];
-/* update_local_depth_gravity()'s own three `*_prev` flags, file-static here
- * for the same reason they are file-static there: they persist past the end
- * of one run, so test_axis_lock_tremor_does_not_wipe_the_depth_debounce can
- * pick up where the turn left off instead of pretending the board was
- * suddenly back in portrait. */
 static bool flash_vdom_prev, flash_vrev_prev, flash_hrev_prev;
 
-/* Mallocs the three buffers above, fresh, every call - flash_test_free()
- * below must be called once the caller is done reading them, or the next
- * call here leaks the previous allocation (same convention as loc_fixture()/
- * loc_free() earlier in this file). Split out of flash_test_settle() only so
- * a future caller that does not want a fresh settle can still get fresh
- * buffers the same way; today flash_test_settle() is the only caller.
- *
- * Returns false, having freed whatever of the three DID succeed, if any one
- * of them didn't - asserting straight after each malloc in turn would
- * longjmp out on the first failure (Unity's assert never returns) and leak
- * every allocation that came before it, permanently, for the rest of the
- * run; that is exactly what starved the unrelated test_block_indices_stay_
- * in_range_* tests below when this function still asserted per-buffer. The
- * caller (flash_test_settle()) turns this into the one assertion. */
+/* flash_test_free() must be called after reading buffers to avoid leaks.
+ * Split from flash_test_settle() to allow future callers fresh buffers
+ * without re-settingtle. Returns false and frees successful allocations if
+ * any malloc fails. */
 static bool flash_test_alloc(void)
 {
     flash_test_cells = malloc((size_t)FLASH_TEST_W * FLASH_TEST_H);
@@ -2935,13 +2544,6 @@ static void flash_test_free(void)
     free(flash_displayed_prev);
 }
 
-/* update_local_depth_gravity()'s own reset, mirrored - including the
- * relevance gate that keeps hand tremor at axis lock from firing it (see
- * that function's own comment in app_sand.c for the exact arithmetic and
- * why it is arithmetic rather than a deadband). `gate` exists so test_axis_
- * lock_tremor_does_not_wipe_the_depth_debounce below can measure both sides;
- * the three `*_prev` flags are IN/OUT, persisting across calls exactly like
- * the real file statics. */
 static void flash_test_frame_reset(int gx, int gy, int grid_w, int grid_h,
                                    bool gate, ray_walk_state_t *st,
                                    bool *vdom_prev, bool *vrev_prev,
@@ -2962,13 +2564,8 @@ static void flash_test_frame_reset(int gx, int gy, int grid_w, int grid_h,
 
     *fired = (vdom != *vdom_prev) || vrev_matters || hrev_matters;
     if (*fired) {
-        /* `ignore_chain_break` is a knob this suite sets, not walk state, so
-         * it has to survive the wipe - carrying it across by hand rather
-         * than teaching ray_walk_state_reset() about it, since that function
-         * is also what INITIALISES a fresh state and must leave the knob off
-         * there. Found by measurement: without this the "reverted" run
-         * silently re-acquired the guard at the first regime flip and
-         * measured a healthy 42 instead of the real 841. */
+        /* Carry `ignore_chain_break` across by hand, as
+         * `ray_walk_state_reset()` must leave it off for new states. */
         const bool knob = st->ignore_chain_break;
         ray_walk_state_reset(st);
         st->ignore_chain_break = knob;
@@ -2978,11 +2575,7 @@ static void flash_test_frame_reset(int gx, int gy, int grid_w, int grid_h,
     }
 }
 
-/* One frame of draw_dirty_rows(): the wake tick's own row gate
- * (row_has_liquid[], ANY liquid cell), the row-order reversal keyed on
- * v_reverse, and the ray walk for every row that ends up dirty. Leaves
- * flash_displayed[] holding the LAST-PAINTED depth of every cell, which is
- * what the panel is actually showing. */
+/* Leaves flash_displayed[] with LAST-PAINTED depth of every cell. */
 static void flash_test_paint(int gx, int gy, bool wake_fired)
 {
     bool vdom, vrev, hrev;
@@ -3143,11 +2736,7 @@ static int flash_test_run(bool guard_chain, bool gate_reset)
     return worst;
 }
 
-/* Measured 31 with the guard and 522 without, on this exact scene - see this
- * section's own comment. 200 is six times the green figure and less than
- * half the red one, so it separates the two without being tuned to either:
- * it is not a "some flash is acceptable" budget but the point between "the
- * wall's shadow moved" and "the body inverted". */
+/* 200 separates "the wall's shadow moved" and "the body inverted". */
 #define FLASH_TEST_MAX_CELLS 200
 
 static void test_turning_a_settled_pool_to_landscape_does_not_flash_the_whole_body(void)
@@ -3226,13 +2815,6 @@ static void tremor_test_run(bool gate_reset, int *resets, int *changed)
      * vary between its two runs. */
     flash_test_settle(true, gate_reset);
 
-    /* Used to be a file static - malloc'd here instead, freed below once
-     * this function is done comparing against it, for the same .bss reason
-     * as flash_test_cells/flash_displayed/flash_displayed_prev above.
-     * int8_t, not int - see wake_test_run()'s own comment on the same
-     * narrowing; matches flash_displayed's own width so this memcpy's
-     * `sizeof *before` copies neither more nor less than flash_displayed
-     * actually holds. */
     int8_t *before = malloc((size_t)FLASH_TEST_W * FLASH_TEST_H *
                              sizeof *before);
     if (!before) {
@@ -3374,18 +2956,8 @@ static void test_axis_lock_tremor_does_not_wipe_the_depth_debounce(void)
  * design's own tilt-sized error (17-38 degrees across this same six
  * tilts). */
 
-/* LARGE ENOUGH TO SATURATE IN EVERY DIRECTION, at every tilt in the sweep
- * below - NOT a size picked for this test's own runtime convenience. A
- * first draft used a much smaller grid (48x60) and measured wildly wrong
- * bearings (140+ degrees off) at every tilt: with only ~46 usable columns,
- * the walk's own raw count could not reach LOCAL_DEPTH_COUNT_CEILING before
- * running into a wall at the shallower angles, so nearly the WHOLE
- * measurement window showed "deficit" from the pool's own wall-distance
- * gradient rather than from the obstacle - the exact confound this
- * section's own top comment already names for the real side walls. 92x112
- * (this app's own finest-quality grid dimensions, GRID_W_MAX/GRID_H_MAX)
- * gives every one of the six tilts below comfortable saturation headroom
- * on every side of the obstacle. */
+/* NOT a size picked for this test's own runtime convenience. 92x112 gives
+ * every one of the six tilts comfortable saturation headroom on every side. */
 enum { SHADOW_TEST_W = 92, SHADOW_TEST_H = 112 };
 /* shadow_test_cells used to be a file static here (10304 bytes, resident for
  * the whole suite even though only the one test below ever touches it) -
@@ -3414,11 +2986,9 @@ static const struct { int gx, gy; } SHADOW_SWEEP[] = {
 };
 #define SHADOW_SWEEP_N (sizeof SHADOW_SWEEP / sizeof SHADOW_SWEEP[0])
 
-/* A single coherent full-grid pass (every row painted once, in the correct
- * surface-first order) at gravity (gx, gy) - isolating the WALK's own
- * steady-state shape from sparse-repaint staleness, the same isolation
- * test_the_blend_has_no_jump_crossing_45_degrees uses. Writes depth into
- * `depth_out`, sized SHADOW_TEST_W * SHADOW_TEST_H. */
+/* isolates WALK's steady-state shape, uses
+ * test_the_blend_has_no_jump_crossing_45_degrees logic, writes depth to
+ * `depth_out` */
 static void shadow_test_coherent_pass(int gx, int gy, unsigned depth_out[])
 {
     bool vdom, vrev, hrev;
@@ -3440,29 +3010,7 @@ static void shadow_test_coherent_pass(int gx, int gy, unsigned depth_out[])
     }
 }
 
-/* Deficit-weighted centroid bearing of the shadow around (sx, sy), against
- * true gravity's own bearing - the exact measurement this section's own top
- * comment reports, reimplemented here (not linked from a throwaway host
- * probe) so the assertion below is checked by the suite itself, not merely
- * quoted from one session's own investigation. A 16-cell radius window,
- * matching the probe this was modelled with; `depth` is this tilt's own
- * `shadow_test_coherent_pass()` output. Returns false ("no shadow at all")
- * if nothing in the window has any deficit - which the assertion below
- * treats as a failure in its own right, not merely "nothing to check": the
- * whole point of this walk over the two-walk design is that the shadow no
- * longer disappears at the 45-degree tie point.
- *
- * FLOATING POINT, DELIBERATELY, for the bearing itself - fabs_double()'s own
- * comment above states this file's usual preference for integer-only
- * determinism, and it still holds for the SWEEP's own gravity samples
- * (precomputed *1000 integers, same as every other sweep in this file). The
- * bearing comparison alone is the exception: an all-integer equivalent
- * (comparing (mx, my) against (gx, gy) via a squared cross-product) risks
- * overflowing a 64-bit accumulator once squared twice over this window's own
- * cell count, and buys determinism this test does not need in return - the
- * SAME six fixed integer gravity samples and the SAME real grid, on any
- * platform this suite runs on, drive atan2() through the exact same inputs
- * every time. */
+/* FLOATING POINT, DELIBERATELY, for bearing comparison to avoid overflow. */
 static bool shadow_test_bearing(const unsigned depth[], int sx, int sy,
                                 int gx, int gy, double *bearing_off_by)
 {
@@ -3562,11 +3110,6 @@ static void test_a_submerged_obstacle_casts_a_gravity_aligned_shadow(void)
             "this test is not exercising a genuinely submerged obstacle");
     }
 
-    /* Heap, not stack: PW * PH unsigneds is 41,216 bytes, eleven times the
-     * device's 3,584-byte main task stack. As a local this was a Stack
-     * protection fault waiting for the next device run - the third fixture
-     * to make exactly that mistake, and the first caught by the host stack
-     * gate instead of by a panic loop. */
     unsigned *depth = malloc(sizeof *depth * (size_t)SHADOW_TEST_W * SHADOW_TEST_H);
     if (depth == NULL) {
         free(shadow_test_cells);
@@ -3659,16 +3202,6 @@ static const struct { int gx, gy; } DEFECT2_SWEEP[] = {
 #define DEFECT2_SWEEP_N (sizeof DEFECT2_SWEEP / sizeof DEFECT2_SWEEP[0])
 #define DEFECT2_TRUE_DEPTH 10u
 
-/* The raw STEP COUNT this walk's own dominant axis would settle to for a
- * planar surface at true perpendicular depth DEFECT2_TRUE_DEPTH, when that
- * axis's own gravity component is `component` and the gravity vector's own
- * approximate length is `len` (both in the same *1000-scale units the
- * DEFECT2_SWEEP table uses): `D * component / len` steps - see this
- * section's own top comment for the direction of this ratio and why it is
- * the reciprocal of the OLD design's own formula, not the same one reused.
- * Capped at SUITE_LOCAL_DEPTH_COUNT_CEILING, matching LOCAL_DEPTH_COUNT_
- * CEILING's own real value now (MATERIAL_LIQUID_DEPTH_BAND, no raise - see
- * that constant's own comment in app_sand.c). */
 static unsigned defect2_raw_count(unsigned component, int len)
 {
     if (len <= 0) {
@@ -3679,28 +3212,13 @@ static unsigned defect2_raw_count(unsigned component, int len)
         ? raw : SUITE_LOCAL_DEPTH_COUNT_CEILING;
 }
 
-/* Half of DEPTH_RANGE's own step size in raw units would be the tightest
- * defensible bound (MATERIAL_LIQUID_DEPTH_BAND / DEPTH_RANGE / 2 == 3); 2 is
- * used instead, tighter than that, because the measured GREEN deviation at
- * this sweep's own resolution is only 0-1 (see this test's own comment for
- * the exact numbers) and RED (the old two-walk blend, sample 2, 30 degrees)
- * reads a deviation of 4, a full shade step - a threshold this test can
- * still fail well before it would ever become visible on the panel. */
+/* Tighter than the loosest defensible bound (half a shade step, 3) - the
+ * fixed walk measures 0-1 deviation across this sweep, while the old
+ * two-walk blend read 4 (a full shade step) at 30 degrees. */
 #define DEFECT2_MAX_DEVIATION 2
 
 static void test_a_fixed_depth_reads_the_same_at_every_tilt_angle(void)
 {
-    /* Measured against this exact code, one row per gravity sample -
-     * count/scale_q8/depth for the ray walk, whichever axis is dominant:
-     *   (   0,1000)  count=10  scale=256  depth=10  (vert)
-     *   ( 259, 966)  count= 9  scale=283  depth= 9  (vert)
-     *   ( 500, 866)  count= 8  scale=315  depth= 9  (vert)
-     *   ( 707, 707)  count= 7  scale=358  depth= 9  (vert)
-     *   ( 866, 500)  count= 8  scale=315  depth= 9  (horiz)
-     *   ( 966, 259)  count= 9  scale=283  depth= 9  (horiz)
-     *   (1000,   0)  count=10  scale=256  depth=10  (horiz)
-     * Deviation from the true depth of 10: 0,1,1,1,1,1,0 - never more than
-     * 1, comfortably under this test's own bound of 2. */
     int worst_deviation = 0;
     int worst_i = -1;
 
@@ -3785,12 +3303,6 @@ static const struct { int gx, gy; } SATURATED_SWEEP[] = {
 
 static void test_a_saturated_liquid_body_reads_the_same_shade_at_every_tilt_angle(void)
 {
-    /* Measured against this exact code: depth clamps to a flat
-     * MATERIAL_LIQUID_DEPTH_BAND (24) at every sample in the sweep, with
-     * SUITE_LOCAL_DEPTH_COUNT_CEILING equal to the band itself and no raise
-     * at all - the same flatness the two-walk design's own raised ceiling
-     * needed to buy back, bought here for free by this walk's own scale
-     * direction (see this section's own top comment). */
     int lum[SATURATED_SWEEP_N];
     for (size_t i = 0; i < SATURATED_SWEEP_N; i++) {
         const int gx = SATURATED_SWEEP[i].gx, gy = SATURATED_SWEEP[i].gy;

@@ -71,17 +71,9 @@ static void assert_reaction_row_never_mints_bare_extended(const reaction_t *r,
     assert_reaction_field_never_bare_extended(r->shatters_to, "shatters_to", owner);
 }
 
-/* Every "_to"-shaped field, across every reaction row, ordinary and
- * extended alike, must never hold the bare value 15 - gunpowder's own row
- * legitimately points ignites_to/heats_to at GUNPOWDER_LIT_CELL (0xFF, a
- * full resolved spec >= 0xF0, never confusable with a bare id), and
- * nothing else on the board has any business naming MAT_EXTENDED as a
- * destination at all - that would silently mint plain ice from a reaction
- * that never meant to touch the extended range, or (in the other
- * direction) a gunpowder-shaped byte from an ordinary one that never
- * meant gunpowder either. See place_reacted()'s own `spec >= 0xF0`
- * convention (sand_reactions.c) for the two valid shapes this pins the
- * boundary between. */
+/* Every "_to"-shaped field must never hold 15. GUNPOWDER_LIT_CELL (0xFF) is
+ * the only valid destination. Avoid MAT_EXTENDED to prevent incorrect
+ * reactions. See place_reacted()'s `spec >= 0xF0` convention. */
 static void test_a_reaction_never_mints_a_static_from_gunpowder_or_the_reverse(void)
 {
     for (int m = 1; m < MAT_COUNT; m++) {
@@ -222,12 +214,6 @@ static void test_dropping_the_acid_rain_identity_flag_dispatches_late(void)
 }
 
 
-/* Ice does what it exists for: it cracks hot glass, and it stays put.
- *
- * Snow already chills, but snow is a powder - it drifts as it falls,
- * floats on water, and melts in any liquid, so aiming it at one face of a
- * hot vessel is most of the difficulty of using it. Ice is the same cold
- * in a form that can be BUILT with. */
 static void test_ice_cracks_hot_glass_and_stays_where_it_is_put(void)
 {
     fixture();
@@ -283,11 +269,6 @@ static void test_snow_floats_on_water(void)
         sand_set(&s, x, 0, SNOW);
     }
 
-    /* Twenty steps: long enough for the drift to fall and settle, short
-     * enough that it has not melted yet. Snow in water is on a clock now
-     * (see test_snow_melts_in_any_liquid), so a longer run would measure
-     * an empty board and pass for the wrong reason - which is exactly
-     * what it did when thawing was added under it. */
     for (int i = 0; i < 20; i++) {
         sand_step(&s, 0, 1000, 0);
     }
@@ -313,21 +294,10 @@ static void test_snow_floats_on_water(void)
         "lighter than water and can_enter() is what makes that true");
 }
 
-/* Glass conducts heat, the same as stone.
- *
- * It did not, and the omission was invisible: glass had no reactions[] row
- * at all, so `conducts` defaulted to 0 and heat stopped dead at it. A
- * stone vessel over a flame boiled its contents and a glass one did
- * not - backwards, given glass is the vessel you have to MAKE and the only
- * one acid cannot eat.
- *
- * An absent row reads as "this material has no reactions", which is
- * correct for most materials and was wrong for this one. Nothing warns
- * about it, which is what this test is for.
- *
- * Asserted against stone rather than as an absolute figure: the two are
- * meant to be interchangeable thermally, so that choosing between them is
- * a decision about acid and nothing else. */
+/* Nothing warns about it, which is what this test is for. Asserted against
+ * stone rather than as an absolute figure: the two are meant to be
+ * interchangeable thermally, so that choosing between them is a decision
+ * about acid and nothing else. */
 static void test_glass_conducts_heat_like_stone(void)
 {
     TEST_ASSERT_EQUAL_INT_MESSAGE(reactions[MAT_STONE].conducts,
@@ -400,17 +370,6 @@ static void test_sand_turns_to_glass_under_sustained_heat(void)
         "rather than something a stray spark does to a dune");
 }
 
-/* Dissolving is a TRANSFER, like quenching a fire or soaking a grain: the
- * acid is consumed by the work it does. No longer an exact one-unit-per-
- * cell ratio - SAND_ACID_EAT_DEATH_CHANCE (sand.h) gives every bite a
- * chance to cost the acid its WHOLE remaining mass instead of just one
- * unit, so mass spent can only ever be >= cells eaten now, not always
- * equal to it. Checked both ways: the floor still holds (a bite can
- * never cost less than one unit - dissolving still is not free), and
- * over 400 steps against 8 sand cells and 8 separate acid cells, the
- * death roll landing at least once is close enough to certain that
- * spending MORE than one unit on at least one of those bites is the
- * real assertion here, not just the floor. */
 static void test_acid_spends_at_least_a_unit_of_itself_per_cell_dissolved(void)
 {
     const long acid_before = acid_tank(2, 2);
@@ -434,13 +393,6 @@ static void test_acid_spends_at_least_a_unit_of_itself_per_cell_dissolved(void)
         "roll never landed at all across 8 acid cells and 400 steps");
 }
 
-/* Cullet is glass milled back to grains (cell_is_cullet(), material.h), and
- * MAT_GLASS itself has no .dissolvable - acid cannot touch a pane whole. It
- * shares MAT_SAND's reaction row, though, so without an explicit reject it
- * inherited dune sand's dissolvable=200 and dissolved as if milling had
- * made it MORE soluble, not immune. Dune sand is the control: it must
- * still go, which is what proves the reject is variant-specific rather
- * than a change to MAT_SAND's own dissolvable figure. */
 static void test_acid_dissolves_dune_sand_but_not_cullet(void)
 {
     fixture();
@@ -562,11 +514,6 @@ static void test_acid_fizzes_while_it_eats(void)
         "it is the only sign on screen that the acid is working");
 }
 
-/* And the fizz has to be able to get OUT of the acid, which it does for
- * free: smoke is lighter than every liquid, so try_bubble() (sand_gas.c)
- * swaps it up through the pool. Worth asserting, because a byproduct that
- * cannot leave the liquid that made it would just accumulate at the
- * bottom, invisible under the acid. */
 static void test_the_fizz_rises_out_of_the_acid(void)
 {
     const int surface = 0;      /* acid_fizz_fixture() fills from row 0 */
@@ -603,25 +550,6 @@ static void test_the_fizz_rises_out_of_the_acid(void)
         "is what lets it climb out instead of being trapped underneath");
 }
 
-/* A dedicated, wide fixture for the two dilution tests below - one row of
- * water directly above one row of acid, water on top because that is
- * ALREADY the stable density ordering (acid's density is 38, water's is
- * 30 - acid sinks through water on its own, see MAT_ACID's own comment in
- * material.c), so nothing moves due to gravity/density before reactions
- * runs and every column's water/acid pair stays put for a clean single-
- * step measurement. Wide rather than deep: each column is an INDEPENDENT
- * trial of the same roll (reaction_dirs tries "up" first, see
- * sand_reactions.c, so an acid cell's water neighbour is always the first
- * candidate checked, never skipped over), so width is what buys sample
- * size here, not steps.
- *
- * 4000, not the original 400 - SAND_ACID_DILUTE_TO_WATER_CHANCE (sand.h)
- * was tightened from a 3-in-4 split down to 55/45, and the fixed seed
- * below is deterministic, not flaky, but a narrow bias needs a
- * proportionally wider sample for the water/acid gap to clear the
- * count's own statistical noise reliably - 400 columns at 55/45 leaves
- * the two counts within roughly one standard deviation of each other,
- * which is not a safe margin for a fixed-seed assertion to depend on. */
 #define DILUTE_W 4000
 #define DILUTE_H 2
 
@@ -650,13 +578,6 @@ static void test_acid_and_water_dilute_each_other(void)
         "acid/water dilution grid must fit in what the framebuffer leaves");
     acid_water_dilute_fixture(dilute_cells);
 
-    /* Either direction counts: a diluted column either turned its acid
-     * cell to water, or turned its water cell to acid - see
-     * SAND_ACID_DILUTE_TO_WATER_CHANCE's own comment (sand.h) for why
-     * both are a valid outcome of the same roll. 4000 independent columns
-     * at roughly 20% chance each per step makes waiting past one step
-     * essentially unnecessary, but a small loop keeps this from being
-     * sensitive to exactly which seed sand_init() above happens to use. */
     bool diluted = false;
     for (int i = 0; i < 10 && !diluted; i++) {
         sand_step(&fx.dilute_sim, 0, 1000, 0);
@@ -678,24 +599,6 @@ static void test_acid_and_water_dilute_each_other(void)
         "reaction is not firing at all");
 }
 
-/* No longer a bias to measure - SAND_ACID_DILUTE_TO_WATER_CHANCE (sand.h)
- * is 118, genuinely half of the 236-wide range left over once
- * SAND_ACID_DILUTE_EVAPORATE_CHANCE's 20-in-256 has already been taken
- * off the top of the ladder (see that constant's own comment for why
- * 128 - half of the FULL 256 - was a bug, not just a rounder number),
- * so SAND_ACID_DILUTE_MASS_BIAS's own local backing is the only thing
- * that is supposed to tip a bite one way or the other (see the ladder's
- * own comment, sand_reactions.c). This fixture's packed, symmetric
- * layout gives every interior column a net backing of zero (see
- * acid_water_dilute_fixture's own comment), so the base rate is exactly
- * what this measures. Checked in a single step so the two outcome
- * counts are independent per-column samples, same reasoning this test
- * always used, just no longer expecting one side to win the count -
- * only that neither side is left out entirely, and that the two stay in
- * the same neighbourhood rather than one swamping the other the way a
- * real bias would produce. The tolerance below is ordinary sampling
- * noise now, not a structural asymmetry to absorb - the split itself is
- * genuinely even. */
 static void test_the_dilution_split_favours_neither_side(void)
 {
     uint8_t *dilute_cells = malloc((size_t)DILUTE_W * DILUTE_H);
@@ -801,13 +704,6 @@ static void acid_water_separated_fixture(uint8_t *cells)
     }
 }
 
-/* Both outcomes of the win/lose split now change BOTH cells, not just
- * one - see step_one_dissolver_cell()'s own comment (sand_reactions.c).
- * The winning side is not left untouched any more, it boils into its own
- * vapour (MAT_STEAM for water, MAT_GAS for acid) at the same moment the
- * losing side converts into the winner's material - a deterministic
- * PAIR, not two independent coin flips, so wherever one half of a pair
- * is seen the other must be too, every single time. */
 static void test_water_winning_the_dilution_boils_the_water_cell_to_steam(void)
 {
     uint8_t *cells = malloc((size_t)SEPARATED_W * SEPARATED_H);
@@ -868,27 +764,6 @@ static void test_acid_winning_the_dilution_boils_the_acid_cell_to_gas(void)
         "outcome of the same roll, not independent");
 }
 
-/* A dedicated fixture for oil's own dilution - oil directly above acid,
- * oil on top because that is ALREADY the stable density ordering (oil's
- * density is 22, acid's is 38 - oil floats on acid on its own, see
- * MAT_OIL's own comment in material.c), so nothing moves due to
- * gravity/density before reactions runs. Oil's dissolvable (16 - retuned
- * more than once, see its own comment in material.c for the earlier 40
- * and 1) is much lower than water's (220) - "slowly dilutes", not
- * readily - so a single step is not a safe bet the way the water fixture
- * is; the tests below step this fixture repeatedly instead (300 steps,
- * same budget as before).
- *
- * They do NOT read the final state after all 300 steps, though - a
- * column's oil cell does react with the acid below it at most once ever
- * (once it stops being MAT_OIL there is nothing left to dissolve in a
- * two-material fixture), but MAT_GAS is buoyant and this fixture is only
- * two rows tall with nowhere "up" to rise to, so a gas cell born in one
- * column can drift sideways into a neighbour's over the remaining steps.
- * Each test below classifies a column the instant it stops holding
- * MAT_OIL instead, before any later step's drift has a chance to touch
- * it - see either test's own comment for why that specific instant is
- * safe. */
 #define OIL_DILUTE_W 400
 #define OIL_DILUTE_H 2
 
@@ -904,23 +779,11 @@ static void acid_oil_dilute_fixture(uint8_t *cells)
     }
 }
 
-/* SAND_ACID_OIL_TO_GAS_CHANCE (sand.h): a bitten oil cell mostly boils
- * into gas now, acid is the minority outcome that survives from the old
- * "always becomes acid" rule.
- *
- * Classifies each column the instant its own oil cell disappears, not
- * from a final-state read taken after the fixture has run to completion.
- * MAT_GAS is buoyant (see try_bubble(), sand_gas.c) and this fixture is
- * only two rows tall with nowhere "up" left to rise to, so over 300 steps
- * a gas cell born in one column has plenty of opportunity to drift
- * sideways into a neighbour's - at which point "MAT_GAS appears
- * somewhere in this column" stops meaning "this column's own oil boiled
- * off" and a final read cannot tell the two apart. Sampling the column
- * the moment it stops holding MAT_OIL sidesteps that: at that instant the
- * only step that has touched it is the one that just ran the reaction
- * itself, so what is sitting in the two cells is still that step's own
- * output. Each column is then marked done and never resampled, so a
- * later step's drift cannot re-classify it. */
+/* Classifies each column the instant it stops holding MAT_OIL, not from a
+ * final-state read: MAT_GAS is buoyant, and over 300 steps in this
+ * two-row-tall fixture a gas cell can drift sideways into a neighbour's
+ * column, which a final read could not tell apart from that column's own
+ * boil-off. */
 static void test_oil_mostly_boils_off_into_gas_not_acid(void)
 {
     uint8_t *oil_dilute_cells = malloc((size_t)OIL_DILUTE_W * OIL_DILUTE_H);
@@ -967,25 +830,9 @@ static void test_oil_mostly_boils_off_into_gas_not_acid(void)
         "into more acid");
 }
 
-/* SAND_ACID_OIL_DEATH_CHANCE (sand.h): the acid that ate an oil cell
- * separately rolls a much higher chance to die outright - its whole
- * remaining mass gone in this one bite - instead of pay_quench_cost()'s
- * ordinary one-unit chip. Both are reachable, neither is a certainty.
- *
- * Same instant-of-transition sampling as the test above, and for the
- * same reason: MAT_GAS drifting between columns over 300 steps would
- * make a final-state read unreliable, and here it is worse than merely
- * unreliable - a gas cell that later drifts back OUT of a column it
- * passed through leaves an empty cell behind, which is exactly what a
- * genuine died-outright column also looks like, so a final read could
- * mistake ordinary gas traffic for a death that never happened. Sampled
- * the instant a column stops holding MAT_OIL, before any step but its
- * own reaction has touched it, that ambiguity cannot arise: an empty
- * cell can only be the original acid cell gone in one bite (the
- * oil-derived cell is always gas or acid, never empty), and an acid
- * cell at exactly MASS_MAX - 1 can only be the ordinary one-unit chip
- * (MASS_MAX itself is a fresh acid cell born from the oil-becomes-acid
- * branch, not the one that did the eating). */
+/* Same instant-of-transition sampling as
+ * test_oil_mostly_boils_off_into_gas_not_acid above, and for the same
+ * reason. */
 static void test_the_acid_that_ate_oil_can_die_in_a_single_bite(void)
 {
     uint8_t *oil_dilute_cells = malloc((size_t)OIL_DILUTE_W * OIL_DILUTE_H);
@@ -1208,14 +1055,6 @@ static void acid_water_contest(int water_pct, int *water_left, int *acid_left)
     *acid_left = an;
 }
 
-/* POUR MORE, WIN MORE - and an even pour is an even fight.
- *
- * Replaced an A/B on SAND_ACID_DILUTE_MASS_BIAS reading ONE fixture seed,
- * where the gap was 11 parts in 3250 - too thin to tell a mechanic from an
- * artifact, and it duly reversed when liquids stopped teleporting.
- *
- * Measured, water left / acid left: 0/920 at 10%, 117/130 at 50%, 809/0 at
- * 90%. The middle is sharp, so the monotonic claim carries this one. */
 static void
 test_pouring_more_of_a_liquid_wins_the_contest_against_the_other(void)
 {
@@ -1344,33 +1183,8 @@ static void test_every_liquid_declares_a_mobility(void)
     }
 }
 
-/* Interfacial drag: a liquid pushing into another gets less willing the
- * further in it already is.
- *
- * Two liquids exchange by swapping whole cells gravity-ward, and under tilt
- * that direction is DITHERED between two octants step by step. Ungated,
- * every water cell with oil below it swaps every step, so water drills into
- * the oil along alternating diagonals and the boundary becomes a mixed
- * band - which on screen reads as straight lines running through what
- * should be a smooth surface.
- *
- * What the drag actually buys is not a smaller number, it is a BOUNDED one.
- * Measured across grid widths 24 to 40, eight seeds each, counting water
- * cells left sitting inside the oil after a tilt:
- *
- *     width      24    26    28    30    32    34    36    40
- *     ungated  17.4  18.9  20.5  21.4  14.3  16.9  22.4  29.8
- *     drag      8.1  12.5  12.1   8.9  12.5  12.1  12.0  12.3
- *
- * Ungated it grows with the length of the interface; with drag it sits flat
- * near twelve however wide the board gets. That is the property worth
- * having and the one worth testing, so this uses a deliberately WIDE grid -
- * on the 32-wide shared fixture the two are 14.3 against 12.5, close enough
- * that the test passed either way and proved nothing. It did, for one
- * round, before the sweep above was run.
- *
- * Averaged over seeds for the same reason: a single run of a chaotic scene
- * is not evidence. */
+/* Interfacial drag bounds water cells in oil, measured 8.1 to 12.3 across 24
+ * to 40 width grids, compared to ungated 17.4 to 29.8. */
 #define DRAG_W 40
 #define DRAG_H 20
 
@@ -1466,13 +1280,6 @@ static void test_oil_flows_more_slowly_than_water(void)
     int steps[2];
     const material_id_t liquids[2] = { MAT_WATER, MAT_OIL };
 
-    /* On `wide` (32 cells across), not the 8-wide default fixture. Over
-     * six cells of travel both liquids arrive in the same four steps and
-     * the difference is pure quantisation; the ratio only means anything
-     * across a real distance. One malloc reused across both liquids via
-     * a fresh sand_init() each iteration, freed once after the loop - see
-     * drop_impulse_buf's own comment above for why this file's static
-     * test fixtures cannot share the framebuffer's memory budget. */
     wide_cells = malloc((size_t)WIDE_W * WIDE_H);
     TEST_ASSERT_NOT_NULL_MESSAGE(wide_cells,
         "oil-vs-water flow-rate grid must fit in what the framebuffer "
@@ -1539,22 +1346,8 @@ static void test_oil_trapped_under_water_floats_to_the_surface(void)
         sand_step(&s, 0, 1000, 0);
     }
 
-    /* Asserted as an ORDERING rather than "oil is at row 2", because
-     * these cells are half full (see the shorthand macros at the top of
-     * this file) so the column does not reach the brim and the surface
-     * is not where counting rows would suggest. What matters is that
-     * every oil cell ends up above every water cell. */
-    /* Asserted as "which liquid is on top", not as a strict row
-     * ordering of every cell, and not as "oil is at row 2".
-     *
-     * Two things make the tempting stronger assertions wrong. These
-     * cells are half full (see the shorthand macros at the top of this
-     * file), so the column never reaches the brim and the surface is not
-     * where counting rows would put it. And the two liquids cannot mix
-     * within a cell, so the interface between them is ragged - one row
-     * genuinely holds some oil and some water at the same time, which
-     * makes "every oil cell is above every water cell" false even when
-     * the separation is perfect. */
+    /* Oil must be above water, not strictly by row, due to half-full cells
+     * and non-mixing liquids. */
     int top = -1, bottom = -1;
     for (int y = 0; y < H && top < 0; y++) {
         for (int x = 0; x < W; x++) {
@@ -1586,12 +1379,7 @@ static void test_oil_trapped_under_water_floats_to_the_surface(void)
         "from the other end");
 }
 
-/* The one exception to "denser sinks": sand is 60 against oil's 22, and by
- * can_enter()'s ordinary rule that sinks straight through, the same way it
- * sinks through water (test_sand_sinks_through_water above). can_enter()
- * carries a named exception for exactly this pairing instead - see its own
- * comment in sand_priv.h for why oil's density cannot simply be raised to
- * fix this the way every other material pairing is resolved. */
+/* can_enter() exception for sand/oil pairing - see sand_priv.h for details. */
 static void test_sand_floats_on_oil(void)
 {
     fixture();
@@ -1643,27 +1431,10 @@ static void test_dirt_still_sinks_through_oil(void)
 static void test_lava_does_not_decay_away(void)
 {
     fixture();
-    /* Deliberately NO sand_set_decay() here, and that is the point of
-     * the test rather than an omission.
-     *
-     * The obvious version of this forces sand_set_decay(&s, 255) to make
-     * any decay show up immediately - but that override replaces the
-     * per-material figure for EVERY material at once (see tick_decay()),
-     * lava included, so it forces lava to decay no matter what its own
-     * row says and destroys the cell every time. It tests the override,
-     * not the table.
-     *
-     * Running on the per-material defaults instead is what actually pins
-     * the thing worth pinning: lava's own decay must be 0, so that
-     * tick_decay() never reads its variant nibble - which for a liquid
-     * is FILL LEVEL, not life - and never eats the cell's mass. Set
-     * lava's decay to anything nonzero and this fails.
-     *
-     * A one-cell-wide well. Lava is a liquid, so a lone cell on an open
-     * floor does not stay put - equalise_liquids() spreads it sideways
-     * and thins it to nothing worth measuring. Penning it in is what
-     * makes "is it still here, and still full" a question about DECAY
-     * rather than about flow. */
+    /* Deliberately NO sand_set_decay() here. Tests lava's own decay must be
+     * 0, so tick_decay() never reads its variant nibble and never eats the
+     * cell's mass. A one-cell-wide well. Penning lava in tests DECAY, not
+     * flow. */
     for (int x = 0; x < W; x++) {
         sand_set(&s, x, H - 1, STONE);
     }
@@ -1781,13 +1552,6 @@ static void test_lava_quenched_into_stone_mid_pass_arms_the_heat_holder_flag(voi
         "it exists to guard");
 }
 
-/* A single-file shaft of lava, walled on both sides so the only cell a
- * lava neighbour can ever be is the one straight down - which is what
- * makes cool_off_chain()'s own walk (sand_reactions.c) deterministic here
- * rather than wandering sideways through a wide pool. Water sits directly
- * on top of the shaft's first cell; everything below it is stone, so the
- * whole column can only ever be read as: the crust cool_off_chain() has
- * reached so far, contiguous from the top. */
 #define LAVA_SHAFT_W    3
 #define LAVA_SHAFT_H    32
 #define LAVA_SHAFT_X    1
@@ -1796,31 +1560,16 @@ static void test_lava_quenched_into_stone_mid_pass_arms_the_heat_holder_flag(voi
 
 static void build_lava_shaft(sand_t *p, uint8_t *cells)
 {
-    /* 0u, not the 71u used elsewhere in this file as a generic fixed
-     * seed: with cool-off pinned to its own max (255/256 per link), seed
-     * 71 happens to roll a failure after only ~12 links regardless of how
-     * deep the shaft is - verified by brute-forcing seeds against this
-     * exact scene, where 0 (like most seeds) instead runs the walk all
-     * the way to the shaft's floor when nothing caps it. That makes 0 the
-     * one that actually exercises SAND_LAVA_COOLOFF_MAX_CHAIN in
-     * test_the_cool_off_chain_is_bounded below - 71 would leave that
-     * test passing for the wrong reason, bounded by luck rather than by
-     * the cap, for any cap above ~12. */
+    /* 0u, not 71u: seed 0 exercises SAND_LAVA_COOLOFF_MAX_CHAIN, 71 does not. */
     sand_init(p, cells, LAVA_SHAFT_W, LAVA_SHAFT_H, 0u);
     for (int y = 0; y < LAVA_SHAFT_H; y++) {
         sand_set(p, LAVA_SHAFT_X - 1, y, STONE);
         sand_set(p, LAVA_SHAFT_X + 1, y, STONE);
     }
     sand_set(p, LAVA_SHAFT_X, LAVA_SHAFT_H - 1, STONE); /* floor */
-    /* MASS_MAX, not the LAVA macro's mass of 8 - every cell in the shaft
-     * is full, so move_liquid_grain() finds no room in the cell below and
-     * the column sits motionless from the first step. A column of
-     * UNDER-full liquid cells is not at rest: each has room to take more,
-     * so ordinary liquid movement pours mass downward through it every
-     * step regardless of anything this test cares about, scrambling
-     * which cell holds how much lava before the reactions pass ever gets
-     * a turn - caught by this test itself, which saw its water vanish
-     * and its crust depth read 0 before this was full mass. */
+    /* MASS_MAX, not LAVA's mass of 8 - each cell is full, move_liquid_grain()
+     * finds no room, column sits motionless. Under-full cells pour mass
+     * downward, scrambling lava distribution before reactions. */
     for (int y = LAVA_SHAFT_TOP; y <= LAVA_SHAFT_BOT; y++) {
         sand_set(p, LAVA_SHAFT_X, y, CELL_MAKE(MAT_LAVA, MASS_MAX));
     }
@@ -1840,14 +1589,6 @@ static int lava_shaft_crust_depth(sand_t *p)
     return depth;
 }
 
-/* A sustained pour reaches past the one cell water can physically touch.
- * Water is re-sand_set() every step - the pour, sustained - directly onto
- * whatever now sits at the shaft's top; with the cool-off chain pinned
- * on, the first quench's own cool_off_chain() carries the freeze several
- * cells deeper in that same event. Pinned OFF, the exact same scene must
- * freeze only the one cell water ever actually touches - which is what
- * proves the extra depth in the first half came from cool_off_chain()
- * and not some other route lava has to cool. */
 static void test_a_water_pour_freezes_a_lava_pool_below_its_crust(void)
 {
     uint8_t *cells = malloc((size_t)LAVA_SHAFT_W * LAVA_SHAFT_H);
@@ -1891,21 +1632,6 @@ static void test_a_water_pour_freezes_a_lava_pool_below_its_crust(void)
         "ever disabled");
 }
 
-/* The ALWAYS-ON-DRAIN GUARD. A single lava cell walled in by stone on all
- * four sides, no water anywhere on the board, cool-off pinned to its
- * maximum - the same scene test_lava_buried_in_stone_is_not_deleted uses
- * to prove burial does not delete lava, with the one addition that
- * matters here.
- *
- * Stone's own heat_ramp climb (banking one more level, same material, no
- * melt - stone's heats_to is 0, see test_stone_never_melts_however_hot)
- * returns TRUE from try_heat_transform_given() on nearly every step it
- * still has room to climb. Gating cool_off_chain() on that return value
- * ALONE, rather than on CELL_MATERIAL actually changing, would rack up a
- * roll on almost every one of those climbs - an always-on drain that
- * needs no pour and no fuel anywhere in the scene, which would empty this
- * lava cell within the first handful of steps even though nothing here
- * ever touches water. */
 static void test_a_lava_pool_in_a_dry_stone_bowl_does_not_freeze_itself(void)
 {
     fixture();
@@ -1935,20 +1661,6 @@ static void test_a_lava_pool_in_a_dry_stone_bowl_does_not_freeze_itself(void)
         "is doing the WORK of a genuine melt, and nothing here ever melts");
 }
 
-/* THE POSITIVE HALF of the guard above - which only ever proves trigger A
- * did NOT fire, and would pass just as well if it were dead code. Sand's
- * own melt to glass is the MEMORYLESS heats_to/heat_chance form
- * (material.c - sand carries no heat_ramp of its own, unlike stone or
- * glass), so a single successful roll flips CELL_MATERIAL straight from
- * sand to glass with no "banks heat forever, never actually melts"
- * escape hatch to hide behind - the exact, unambiguous kind of WORK
- * trigger A is meant to charge lava for.
- *
- * Same scene, twice, cool-off pinned to the two extremes: pinning it does
- * not gate whether the melt itself happens - conversion is sand's own
- * heat_chance roll, untouched by any of this - only whether that melt
- * then costs lava anything. Pinned high, the lava cell must become
- * stone; pinned off, the identical melt must leave lava as lava. */
 static void test_lava_that_melts_sand_into_glass_sometimes_freezes_itself(void)
 {
     fire_room(3, 4);
@@ -1993,19 +1705,6 @@ static void test_lava_that_melts_sand_into_glass_sometimes_freezes_itself(void)
         "must cost lava nothing - it must still be lava, not stone");
 }
 
-/* THE CHAIN IS BOUNDED. Pinned fully on, against a shaft deep enough that
- * a chain running unbounded would eat the whole thing -
- * SAND_LAVA_COOLOFF_MAX_CHAIN (sand.h) is well under the shaft's 30 lava
- * cells, so retuning the cap leaves a wide, unambiguous margin either way. One quench event only: a single step
- * is enough for cool_off_chain() to run its entire walk, since the chain
- * itself is not spread across steps the way the sustained pour above is.
- *
- * SAND_LAVA_COOLOFF_MAX_CHAIN + 1, not the chain's own cap alone, because
- * the cap only bounds the CHAIN cool_off_chain() itself walks - the one
- * cell neighbor_quenches() converts before ever calling it is not part
- * of that walk, and this test has to count it too. Asserted against the
- * real constant, not a hand-copied literal, so raising the cap cannot
- * leave this silently stale the way a bare `9` would have. */
 static void test_the_cool_off_chain_is_bounded(void)
 {
     uint8_t *cells = malloc((size_t)LAVA_SHAFT_W * LAVA_SHAFT_H);
@@ -2047,16 +1746,10 @@ static void test_lava_does_not_put_fire_out(void)
         "fuel nor burning itself");
 }
 
-/* reaction_t.flare (material.h) exists to look like a heat source licking
- * a flame upward while staying PUT itself - see try_flare()'s own comment
- * (sand_reactions.c) for the mechanic's original, ember-shaped case and
- * why it does the wrong thing, over and over, for a material that
- * actually moves: a poured stream of lava lands as many single-cell
- * grains each free-falling for several steps before settling, and every
- * one of those falling steps used to roll flare exactly as if the grain
- * were a settled pool. Two halves in one test, same grain: it must never
- * flare while genuinely airborne, and must still flare normally once it
- * lands - the falling check is a temporary skip, not a permanent one. */
+/* reaction_t.flare exists to mimic a heat source while staying in place. See
+ * try_flare() for the original ember case and why it fails for moving
+ * materials. Must not flare while airborne, must flare after landing. Falling
+ * check is temporary. */
 static void test_falling_lava_does_not_flare(void)
 {
     fixture();
@@ -2129,11 +1822,8 @@ static void test_steam_bubbles_up_through_standing_water(void)
         "time");
 }
 
-/* A bubble swaps two whole cells, so the liquid it shoves aside has to
- * arrive intact - same material, same amount. Nothing here splits mass,
- * which is what makes that guarantee exact rather than approximate, and
- * this pins it: a bubble that quietly rounded a partial cell away would
- * drain a boiler every time one rose. */
+/* Bubble swaps cells intact, ensuring mass is preserved. Partial cell
+ * rounding would drain a boiler. */
 static void test_bubbling_conserves_the_water_it_displaces(void)
 {
     water_column();
@@ -2291,28 +1981,10 @@ static void test_stone_does_not_conduct_fire_into_empty_space(void)
         "sealed");
 }
 
-/* Wide enough for an eleven-cell-thick stone wall (matching
- * app_sand.c's own pour brush, POUR_RADIUS 5 with no size control - see
- * conduct_heat()'s own top-of-file comment for why that thickness
- * specifically) plus fire, water and margin, all in one row of `wide`
- * (WIDE_W/WIDE_H, declared above). Builds fire at column 1, a stone
- * wall `wall_len` cells thick starting at column 2, and one water cell
- * just past it - boxes the water (floor plus both down-diagonals, see
- * test_creating_steam_arms_the_gas_pass) so it cannot drain away before
- * conduction gets a look at it, and pins fire with mobility rather than
- * physically boxing it in, since a physical box dense enough to also
- * stop the diagonal slides would make every side of fire denser than
- * fire itself and smother it outright (confirmed: this is what the
- * first version of this helper, walled on every side, actually did).
- * Returns the column the water cell sits at. */
 static int build_boiler_room(int wall_len)
 {
-    /* Mallocs wide_cells fresh on every call and does NOT free it -
-     * ownership passes to whichever caller reads `wide` afterward: see
-     * each call site below (test_a_thick_wall_still_conducts frees it
-     * directly once done; steps_to_boil() frees it itself, since it is
-     * the one that wraps a whole call here in a self-contained round
-     * trip). */
+    /* Ownership passes to caller of `wide`: see call sites
+     * (test_a_thick_wall_still_conducts, steps_to_boil). */
     wide_cells = malloc((size_t)WIDE_W * WIDE_H);
     TEST_ASSERT_NOT_NULL_MESSAGE(wide_cells,
         "boiler-room grid must fit in what the framebuffer leaves");
@@ -2368,23 +2040,10 @@ static void test_a_thick_wall_still_conducts(void)
 
 static void test_conduction_stops_at_the_reach_cap(void)
 {
-    /* Its own grid, not the shared `wide` one: this test needs a
-     * conductor run longer than CONDUCT_REACH, and the cap is now 32,
-     * which does not fit across WIDE_W (32). Widening the shared grid
-     * instead would have changed the cell count every other test using
-     * it draws random numbers over, so this one test gets its own.
-     *
-     * The wall length here tracks CONDUCT_REACH and has to stay ahead
-     * of it: this test asserts the cap EXISTS, not that it sits at any
-     * particular depth, so raising the cap means raising this too.
-     *
-     * Forcing conduction to 255 (AFTER sand_init(), which would
-     * otherwise wipe the override) makes every ROLL along the walk
-     * succeed, so the only thing left that can stop it is the reach cap
-     * itself, which is exactly what this pins down. */
-    /* HEAP, not static file scope - see drop_impulse_buf's own comment
-     * above for why this file's static test fixtures cannot share the
-     * framebuffer's memory budget. */
+    /* Its own grid: test needs conductor run longer than CONDUCT_REACH, which
+     * is now 32, not fitting WIDE_W (32). Wall length tracks CONDUCT_REACH.
+     * Forces conduction to 255 after sand_init(). HEAP, not static - see
+     * drop_impulse_buf. */
     uint8_t *cap_cells = malloc((size_t)CAP_W * CAP_H);
     TEST_ASSERT_NOT_NULL_MESSAGE(cap_cells,
         "conduction-reach-cap grid must fit in what the framebuffer "
@@ -2450,13 +2109,6 @@ static int steps_to_boil(int wall_len, int budget)
 
 static void test_a_thick_wall_conducts_more_slowly_than_a_thin_one(void)
 {
-    /* At the real figure (176 in 256, ~0.69/step), a thin wall's
-     * cumulative miss probability is negligible within a handful of
-     * steps (0.31^10 =~ 9e-6); a thick eleven-cell one needs roughly 41
-     * steps on average (0.69^11 =~ 0.024/step) and has real spread
-     * around that - so this compares actual step counts rather than
-     * asserting a fixed pass/fail line either wall would sometimes
-     * cross the wrong way on an unlucky seed. */
     const int budget = 200;
     const int thin  = steps_to_boil(1, budget);
     const int thick = steps_to_boil(11, budget);
@@ -2468,28 +2120,6 @@ static void test_a_thick_wall_conducts_more_slowly_than_a_thin_one(void)
         "attenuating walk itself, not a second constant");
 }
 
-/* Boiling happens where the HEAT is, not where the steam wants to end up.
- *
- * This test asserted the exact opposite until bubbling existed, and the
- * reversal is worth keeping visible rather than quietly rewriting.
- * conduct_heat() reaches the bottom cell of the column - the one touching
- * the hot stone - and used to hand it to a boil_surface() walk that
- * climbed against gravity to convert the TOP cell instead. That walk was
- * not decoration: steam made at the bottom of a pool was permanently
- * stuck there (can_enter() only lets a denser mover displace a lighter
- * target, and room_in() will not let water fall into a steam cell
- * either), so boiling anywhere but the surface produced nothing anyone
- * could see.
- *
- * try_bubble() (sand_gas.c) removed that constraint, and with it the
- * only reason to boil anywhere other than the heat source. Boiling the
- * bottom cell now reads the way a real pot does - a column of bubbles
- * climbing from the hot base - instead of steam appearing at the surface
- * from nowhere.
- *
- * sand_set_mobility(&wide, 0) keeps the newly made steam still for the
- * duration, so this measures WHERE the boil happened rather than where
- * the bubble had got to by the time it was inspected. */
 static void test_boiling_converts_the_cell_nearest_the_heat(void)
 {
     wide_cells = malloc((size_t)WIDE_W * WIDE_H);
@@ -2540,15 +2170,9 @@ static void test_boiling_converts_the_cell_nearest_the_heat(void)
         "old against-gravity walk had come back");
 }
 
-/* reaction_t.boils gates conduct_heat()'s conversion above behind a
- * second roll, so a liquid can resist conducted-heat boiling instead of
- * flashing to steam the instant heat reaches it - see this field's own
- * comment in material.h. sand_set_boils(0) must be able to disable that
- * conversion completely, the same override discipline every other
- * chance field in this file already gives (sand_set_conduction(0) seals
- * a wall shut, sand_set_lava_burst(0) keeps a covered pool as lava
- * forever, ...) - proof this is a real second condition and not
- * decoration. */
+/* reaction_t.boils gates conduct_heat()'s conversion above behind a second
+ * roll - see material.h. sand_set_boils(0) disables that conversion, same as
+ * other chance fields. */
 static void test_sand_set_boils_zero_disables_conducted_heat_boiling(void)
 {
     wide_cells = malloc((size_t)WIDE_W * WIDE_H);
@@ -2586,14 +2210,6 @@ static void test_sand_set_boils_zero_disables_conducted_heat_boiling(void)
         "steps to try");
 }
 
-/* And boiling a liquid that DOES pass its `boils` roll must hand the new
- * steam a FULL cell's own worth of life, the same place_reacted() default
- * any other fresh, non-ramping material gets - see conduct_heat()'s own
- * comment (sand_reactions.c) for the account. This used to assert the
- * opposite (a deliberately shortened life, so a boiler visibly made less
- * steam to look at); asked to make steam last LONGER instead, the cut was
- * removed rather than tuned, so this test now checks the plain
- * place_reacted() guarantee holds for boiling too. */
 static void test_boiled_steam_starts_at_full_life(void)
 {
     wide_cells = malloc((size_t)WIDE_W * WIDE_H);
@@ -2633,13 +2249,6 @@ static void test_boiled_steam_starts_at_full_life(void)
         "asked to make steam last longer, not shorter");
 }
 
-/* conduct_heat()'s boiling branch used to hand every liquid MAT_STEAM
- * regardless of which one was actually boiling - acid conducted through
- * a wall came out as the same white kettle-steam water does, instead of
- * the MAT_GAS acid produces everywhere else it evaporates (`evaporates`,
- * `fizz` - see reaction_t.boils_to's own comment in material.h). Same
- * scene as test_boiled_steam_starts_at_full_life just above, water
- * swapped for acid, MAT_STEAM swapped for MAT_GAS. */
 static void test_boiling_acid_produces_gas_not_steam(void)
 {
     wide_cells = malloc((size_t)WIDE_W * WIDE_H);
@@ -2710,30 +2319,6 @@ static void test_the_boiler_end_to_end(void)
 
     const long water_before = mass_of(&wide, WIDE_W, WIDE_H, MAT_WATER);
 
-    /* Light it: a forced-certain spark, pinned in place just long
-     * enough to catch - mirrors wood_ignition_room()'s reasoning above,
-     * except the fuel here is KIND_STATIC and never drifts itself, only
-     * the spark that lights it could.
-     *
-     * sand_set_mobility(&s, 0) alone is NOT enough here, and it is worth
-     * knowing why: it only blocks sub-pass 1 of sand_step_gas() (the
-     * rise/diagonal-slide attempt), not sub-pass 2 (equalise_gas()'s
-     * sideways spread), which is gated on has_room_above() - "is
-     * there room to rise" - not on mobility at all. The spark's own row
-     * sits one below the stone slab's bottom, so the cell directly
-     * above it is real stone, not open sky: has_room_above() correctly
-     * reports false, so equalise_gas() does NOT defer to sub-pass 1 the
-     * way it would with open sky above (see
-     * test_creating_steam_arms_the_gas_pass, where that deferral is
-     * exactly what pins fire) - it goes ahead and looks sideways
-     * instead, and an open cell beside the spark is exactly what it
-     * would use to drift away before ever touching the wood (confirmed:
-     * this is what the first version of this test, without the block
-     * below, actually did). Blocking that one remaining open side is
-     * what actually pins it: every neighbour is then either denser
-     * stone, wood, or off the grid (which never counts, win or lose -
-     * see neighbor_smothers()), so neither sub-pass has anywhere left
-     * to send it. */
     sand_set(&wide, x - 2, wood_y, STONE);
     sand_set_flammability(&wide, 255);
     sand_set_mobility(&wide, 0);
