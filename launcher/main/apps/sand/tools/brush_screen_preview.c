@@ -1,59 +1,30 @@
 /*=============================================================================
- * brush_screen_preview - render the sand app's brush screen through the REAL
- * firmware drawing code (gfx.c, ui_style.h, ui_slider.h, gfx/icon.h,
- * brush_screen.h) on a host, at both real canvas sizes, so its composition
- * can be judged without a device build or a flash. Same precedent as
+ * brush_screen_preview - render the sand app's brush screen through the real
+ * firmware drawing code on a host, at both canvas sizes, so its composition
+ * can be judged without a device build or a flash. Same shape as
  * launcher/tools/boot_anim_render_host.c: real drawing code, a malloc'd
  * framebuffer, no device.
  *
  *     main/apps/sand/tools/report_brush_screen_preview.sh
  *
- * writes brush_screen_portrait.png (368x448) and brush_screen_landscape.png
- * (448x368) into this tool's own build/ directory. Not built by idf.py, not
- * part of test/run_tests.sh.
+ * writes brush_screen_portrait.png and brush_screen_landscape.png into this
+ * tool's own build/. Not built by idf.py, not part of run_tests.sh.
  *
- * WHAT IS REAL, WHAT IS APPROXIMATED
+ * EVERY RECT COMES FROM brush_screen_layout() - nothing here hardcodes a
+ * position. A preview that disagrees with the screen it previews is worse
+ * than no preview.
  *
- * Every rect this file draws comes from brush_screen_layout()
- * (brush_screen.h) via draw_screen() below - nothing here hardcodes a
- * position. Panels, bezels, the slider track/fill/knob and the icon runs
- * are ui_style.h/ui_slider.h/gfx/icon.h's own pure geometry, drawn with the
- * same gfx_fill_rect()/gfx_text_font() (gfx.c) the real screen uses, at
- * gfx_font_ui() - the same font atlas.
+ * Approximated, since this stays out of ui.c and microui.c: nothing is
+ * pressed or focused; the slider draws in microui's default colours (so does
+ * the real screen, making that a value to know rather than a gap); a
+ * segment's icon/label sub-layout is mirrored from draw_brush_screen()'s own
+ * inline arithmetic; and a flat fill stands in for the frozen sandbox.
  *
- * What is NOT real, because this deliberately stays out of ui.c and
- * microui.c (no mu_Context, no command list, no hash-skipped repaint):
- *
- *   - Hit state. Nothing is pressed or focused; every bezel renders as if
- *     no finger is on screen (ui_bezel_spans()'s `sunken` is always false).
- *   - The slider's face/border/fill/knob colours are microui's own DEFAULT
- *     style (MU_COLOR_BASE/BORDER/BUTTONFOCUS/BUTTON,
- *     components/microui/src/microui.c) - draw_brush_screen() never
- *     overrides them for this control either, so this is a value this tool
- *     has to know, not a gap against the real screen.
- *   - A mode segment's icon/label sub-layout (SEG_PAD, SEG_LABEL_GAP,
- *     SWATCH_CELLS, INFO_ICON_PAD below) is app_sand.c's own inline
- *     arithmetic inside draw_brush_screen(), not a brush_screen_layout()
- *     rect - mirrored here rather than shared, since the real screen
- *     computes it inline too.
- *   - No simulated sand behind the panels: a flat fill stands in for the
- *     frozen sandbox draw_brush_screen() leaves showing through.
- *
- * HOW LANDSCAPE GETS DRAWN AT ALL
- *
- * gfx.c's framebuffer is fixed at GFX_WIDTH x GFX_HEIGHT (368x448) at
- * compile time (gfx.h) - there is no way to gfx_init() a 448x368 one. So the
- * landscape render draws through the SAME quarter-turn transform ui.c
- * itself applies for a physically rotated device (ui_transform.h,
- * ui_transform_quarter_turn() - pure geometry, not ui.c or microui.c) into
- * that fixed physical buffer. landscape_pixel() below then reads the result
- * back out through that same turn's inverse, derived once by mapping a
- * single logical pixel's rect through the transform and reading its
- * physical corner off (a raw per-pixel inverse of a rect-based transform is
- * off by one at the edge; the rect-corner derivation is not) - so the file
- * this tool writes is a normal 448-wide x 368-tall image, right way up,
- * rather than a 368x448 image that only reads correctly if you turn your
- * head the way the real device does.
+ * Landscape: gfx.c's framebuffer is fixed at 368x448 at compile time, so the
+ * landscape render goes through the same quarter-turn transform ui.c applies
+ * for a rotated device, and landscape_pixel() reads it back through that
+ * turn's inverse - derived by mapping a rect's corner, because a raw
+ * per-pixel inverse of a rect-based transform is off by one at the edge.
  *===========================================================================*/
 
 #include <stdbool.h>
