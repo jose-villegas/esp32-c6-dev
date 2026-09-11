@@ -35,12 +35,30 @@ is_kin(cell_t a, cell_t self, const reaction_t* r) {
  * cells. */
 #define SUPPORT_MAX 48
 
+/* Membership index over body[], which stays a queue because the walk order is
+ * its job. A power of two over SUPPORT_MAX leaves a full body a quarter of the
+ * slots free.
+ *
+ * Asking body[] itself was quadratic: 829,000 comparisons a step on a poured
+ * heap. A scene with plants but nothing falling cannot see it. */
+#define SUPPORT_SLOTS 64
+
+static inline unsigned
+support_slot(uint16_t at) {
+    return (((unsigned)at * 2654435761u) >> 26) & (SUPPORT_SLOTS - 1u);
+}
+
 static bool
 anchored(sand_t* s, int x, int y, int w, int h, cell_t self, const reaction_t* r) {
     uint16_t body[SUPPORT_MAX];
+    uint16_t slot[SUPPORT_SLOTS];
+    uint64_t filled = 0;
     int n = 0, head = 0;
 
-    body[n++] = (uint16_t)((size_t)y * (size_t)w + (size_t)x);
+    const uint16_t seed = (uint16_t)((size_t)y * (size_t)w + (size_t)x);
+    slot[support_slot(seed)] = seed;
+    filled |= (uint64_t)1u << support_slot(seed);
+    body[n++] = seed;
 
     const int down = ring_of(s->last_load_dx, s->last_load_dy);
 
@@ -69,11 +87,18 @@ anchored(sand_t* s, int x, int y, int w, int h, cell_t self, const reaction_t* r
             if (n >= SUPPORT_MAX) {
                 continue; /* too big to finish; treat as loose */
             }
+            unsigned k = support_slot((uint16_t)nat);
             bool known = false;
-            for (int i = 0; i < n && !known; i++) {
-                known = (body[i] == (uint16_t)nat);
+            while (((filled >> k) & 1u) != 0u) {
+                if (slot[k] == (uint16_t)nat) {
+                    known = true;
+                    break;
+                }
+                k = (k + 1u) & (SUPPORT_SLOTS - 1u);
             }
             if (!known) {
+                slot[k] = (uint16_t)nat;
+                filled |= (uint64_t)1u << k;
                 body[n++] = (uint16_t)nat;
             }
         }
