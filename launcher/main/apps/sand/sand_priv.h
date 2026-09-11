@@ -17,31 +17,20 @@
  * frame-budget tests in suite_sand_perf.c, which is exactly what would catch it if
  * this ever stopped being true.
  *
- * THE REAL CRITERION FOR WHAT ELSE LIVES HERE, STATED HONESTLY: not every
- * `static` helper in sand.c or sand_impulse.c that could sit here (this
- * header is app-internal and portable either way, so there is no layering
- * reason it could not) does. blocker_normal(), reflect_off_normal() and
- * impulse_drag_of() are here because a test needed to call them directly -
- * the sand test suite (split across suite_sand_*.c) cannot reach a
- * function `static` inside a .c file at all, only ones declared where it can
- * include them, and this header is that place. can_impulse_enter(),
- * can_impulse_enter_gravity_ward() and impulse_gravity_candidates() stay
- * `static` in sand_impulse.c, right next to step_impulses(), because
- * nothing has yet needed to drive one of them in isolation - every existing
- * test reaches them through step_impulses()'s own observable behaviour
- * instead. All six are equally pure - none touches anything this header's
- * own functions do not already touch - so "pure enough to live here" was
- * never the actual test being applied, whatever an earlier version of this
- * comment implied. An adversarial architecture review (bd esp32c6-w2h)
- * named this directly: the three left beside step_impulses() are also the
- * three with a documented history of their own two call sites quietly
- * disagreeing about what they compute (see impulse_gravity_candidates()'s
- * own comment in sand_impulse.c for that history) -
- * exactly the kind of bug a direct test would have caught sooner. Moving
- * them is not this fix: stating the true rule is, so the next helper this
- * file's own history repeats on is moved (or not) on purpose, by whoever
- * next needs to test it directly, rather than by a guess about purity that
- * was never really what decided the first six.
+ * THE CRITERION FOR WHAT ELSE LIVES HERE: not purity (this header is
+ * app-internal and portable either way, so nothing structurally stops a
+ * `static` helper from moving here) but whether a test needs to call it
+ * directly. blocker_normal(), reflect_off_normal() and impulse_drag_of() are
+ * here because the sand test suite (suite_sand_*.c) cannot reach a function
+ * `static` inside a .c file, only one declared where it can include it.
+ * can_impulse_enter(), can_impulse_enter_gravity_ward() and
+ * impulse_gravity_candidates() stay `static` in sand_impulse.c, next to
+ * step_impulses(), because nothing has yet needed to drive one in isolation
+ * - despite being equally pure, and despite a documented history of their
+ * own two call sites disagreeing about what they compute (see
+ * impulse_gravity_candidates()'s own comment in sand_impulse.c; bd
+ * esp32c6-w2h), exactly what a direct test would have caught sooner. Move a
+ * helper here when something actually needs to test it directly.
  *===========================================================================*/
 #pragma once
 
