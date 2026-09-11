@@ -83,6 +83,15 @@ explanation into several adjacent blocks doesn't dodge it either. File and
 section header banners (`/*====`) are exempt — asked to fit, a model deletes
 the rule rather than the prose. The rule is aimed at comments beside code.
 
+**A header answers to height instead: 30 lines the aim, 50 the hard
+limit — and 50 is already too long, not a comfortable allowance.** It says
+what the module IS and what was deliberately rejected; prose that belongs
+beside the code it describes should live there, where the character rule
+applies to it. Without this, the character exemption is an escape hatch:
+nothing stopped an explanation migrating into a banner to get out of the
+limit. Enforced by the same hook, which also refuses to let an edit grow a
+header already past 30 lines.
+
 ```sh
 scripts/check-comment-length.sh                 # whole repo, 20 worst listed
 scripts/check-comment-length.sh --changed main  # only comments a change touches

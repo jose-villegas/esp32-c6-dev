@@ -75,6 +75,14 @@ class Comment:
         return len(self.text)
 
     @property
+    def lines(self):
+        """How tall the comment is. A header is judged on this rather than on
+        character count: it is exempt from the character rule (so a model
+        cannot delete the drawn rule to fit), which left prose free to migrate
+        into a banner to escape the limit entirely."""
+        return len(self.raw_lines)
+
+    @property
     def line_range(self):
         return range(self.line, self.line + len(self.raw_lines))
 
@@ -369,6 +377,14 @@ def main(argv):
               f"  (median offender {lengths[len(lengths) // 2]})")
         print(f"  of those       {banners} file/section header banners,"
               f" {len(over) - banners} beside code")
+        # Headers answer to height, not characters - see Comment.lines.
+        heads = [c for c in comments if c.has_rule]
+        if heads:
+            tall = sum(1 for c in heads if c.lines > 50)
+            aim = sum(1 for c in heads if c.lines > 30)
+            tallest = max(c.lines for c in heads)
+            print(f"headers         {len(heads)}  ({aim} over 30 lines,"
+                  f" {tall} over 50, tallest {tallest})")
         print()
         print("were the limit instead:")
         for alt in (200, 300, 400, 600, 800, 1200):

@@ -28,6 +28,11 @@ import os
 import sys
 
 TARGET = 300  # aim for this
+# A header is exempt from the character rule and judged on height
+# instead. 30 lines says what a module is and what was rejected; 50 is
+# already too long, not a comfortable allowance.
+BANNER_TARGET = 30
+BANNER_LIMIT = 50
 LIMIT = 500  # hard ceiling - only a comment that truly needs the room stays here
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -58,6 +63,15 @@ def written_text(payload):
     return None, None, path
 
 
+def over_aim_banner_lines(path, text):
+    """Lines of header sitting above BANNER_TARGET. The ratchet's second jaw,
+    applied to the one kind of comment the character rule cannot see."""
+    if not text:
+        return 0
+    return sum(c.lines for c in scan(path, text)
+               if c.has_rule and c.lines > BANNER_TARGET)
+
+
 def over_aim_total(path, text):
     """Characters of comment sitting above TARGET, banners excluded. Summed
     rather than compared comment-by-comment because an edit may split one
@@ -86,6 +100,37 @@ def main():
     # is wherever the fragment happens to start.
     over = [c for c in scan(path, text)
             if c.length > LIMIT and not c.has_rule]
+
+    tall = [c for c in scan(path, text)
+            if c.has_rule and c.lines > BANNER_LIMIT]
+    if tall:
+        print(f"Header height rule: {len(tall)} header"
+              f"{'' if len(tall) == 1 else 's'} you just wrote to "
+              f"{os.path.basename(path)} "
+              f"{'is' if len(tall) == 1 else 'are'} over {BANNER_LIMIT} lines.",
+              file=sys.stderr)
+        for c in sorted(tall, key=lambda c: -c.lines):
+            print(f"  {c.lines} lines: {c.text[:70]}...", file=sys.stderr)
+        print("", file=sys.stderr)
+        print(f"A header says what the module IS and what was deliberately "
+              f"rejected. {BANNER_TARGET} lines is the aim and {BANNER_LIMIT} "
+              "is already too long rather than a comfortable allowance. Prose "
+              "that belongs beside the code it describes should move there, "
+              "where the character rule applies to it.", file=sys.stderr)
+        return 2
+
+    was_banner = over_aim_banner_lines(path, replaced)
+    now_banner = over_aim_banner_lines(path, text)
+    if was_banner and now_banner > was_banner:
+        print(f"Header height ratchet: this edit grows a header in "
+              f"{os.path.basename(path)} that was already past the "
+              f"{BANNER_TARGET}-line aim - {was_banner} lines went in, "
+              f"{now_banner} came back.", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("Leaving it alone is fine; shortening it is better. A header "
+              "that keeps growing is where prose goes to escape the character "
+              "rule.", file=sys.stderr)
+        return 2
 
     # Rule 2. Only bites when the edit found an over-aim comment there
     # already: a brand-new comment between TARGET and LIMIT is allowed, since
