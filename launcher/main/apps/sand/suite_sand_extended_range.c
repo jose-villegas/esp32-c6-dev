@@ -124,34 +124,14 @@ static void test_a_powder_lands_on_a_powder_but_sinks_in_a_liquid(void)
             }
         }
         for (int x = 2; x < W - 2; x++) {
-            /* BONE DRY (variant 0), not the 4 this used to carry. Variant
-             * IS moisture for a soil material (CELL_MOISTURE(),
-             * material.h) - so a dropped DIRT grain here used to start
-             * able to soak and percolate into the bed underneath it,
-             * which has nothing to do with the displacement rule this
-             * test exists to check and everything to do with
-             * reaction_t.soaks and SOIL_PERCOLATE_CHANCE
-             * (sand_reactions.c). A wet grain COULD, over the run, turn a
-             * few deep bed cells into MAT_DIRT of their own by soaking
-             * alone - not by falling through anything - and this test's
-             * own measurement (lowest cell of `dropped`'s material)
-             * cannot tell that apart from the grain having actually
-             * sunk. Reported after PART 2 of the roots-and-percolation
-             * change slowed the downward soaking rate: the change
-             * shifted the shared RNG stream from that point on (this
-             * file's own repeated warning - see try_ignite() and
-             * step_one_soaking_cell()'s own top comments), and the new
-             * roll sequence happened to soak far enough to reach the
-             * bed's own floor within this test's 300 steps where the old
-             * one had not. The dropped grain itself was never displaced
-             * either way - confirmed by inspecting the grid directly -
-             * this test was only ever passing by an accident of which
-             * rolls the RNG happened to produce, not because it was
-             * pinning the rule it names. Starting bone dry removes the
-             * soaking side channel entirely, on both SAND and DIRT
-             * (SAND's variant is a shade and was never affected either
-             * way), so this test is only ever sensitive to displacement
-             * again, whatever the soaking rates are tuned to next. */
+            /* BONE DRY (variant 0): variant IS moisture for a soil material
+             * (CELL_MOISTURE()), so a wet DIRT grain here could soak/
+             * percolate into the bed below by itself - unrelated to the
+             * displacement rule this test checks, and indistinguishable
+             * from real sinking in this test's own measurement (lowest cell
+             * of dropped's material). Starting bone dry removes that
+             * soaking side channel entirely on both SAND and DIRT, so this
+             * test is only ever sensitive to displacement. */
             sand_set(&s, x, 1, CELL_MAKE(dropped, 0));
         }
 
