@@ -1514,15 +1514,18 @@ spend_lit_two_by_two(sand_t* s, int x, int y, int w, int dx, int dy) {
 /* BOUNDS BURST COST PER FRAME; CADENCE OF DETONATIONS. BOARD-WIDE. */
 #define SAND_GUNPOWDER_BLAST_COOLDOWN 8
 
+/* grain/rx/row_at are the caller's: the dispatch loop already loaded row[x]
+ * and decoded reaction_of() to pick the stage, and row is s->cells + y*w.
+ * Re-deriving them here cost a reload, the MAT_EXTENDED branch with its
+ * table-base materialisation, and a multiply, per burning cell. */
 static bool
-step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
-    cell_t grain = row[x];
+step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cell_t grain, const reaction_t* rx,
+                      size_t row_at) {
     const material_t* mat = material_of(grain);
     const uint8_t mat_id = CELL_MATERIAL(grain);
-    const size_t at = (size_t)y * (size_t)w + (size_t)x;
+    const size_t at = row_at + (size_t)x;
 
     /* Material burns own rate, decay stays 0, not transient. */
-    const reaction_t* rx = reaction_of(grain);
     const bool lit_state = rx->burn_decay != 0;
     const int burn_rate = (s->decay >= 0) ? s->decay : rx->burn_decay;
 
@@ -1843,7 +1846,8 @@ static uint8_t extended_first_stage[MATERIAL_EXTENDED_CODES];
 
 static unsigned
 step_one_reacting_row(sand_t* s, int y, int w, int h) {
-    uint8_t* row = s->cells + (size_t)y * (size_t)w;
+    const size_t row_at = (size_t)y * (size_t)w;
+    uint8_t* row = s->cells + row_at;
 
     static void* const stage_labels[RSTAGE_COUNT] = {
         &&stage_burn_any, &&stage_burn_always, &&stage_burn_check, &&stage_dissolve, &&stage_acid_rain,
@@ -1875,13 +1879,13 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
 
     stage_burn_always:
         found |= FOUND_BURNING;
-        step_one_burning_cell(s, row, x, y, w, h);
+        step_one_burning_cell(s, row, x, y, w, h, c, r, row_at);
         continue;
 
     stage_burn_check:
         if (cell_code(c) >= r->lit_from) {
             found |= FOUND_BURNING;
-            step_one_burning_cell(s, row, x, y, w, h);
+            step_one_burning_cell(s, row, x, y, w, h, c, r, row_at);
             continue;
         }
         goto stage_dissolve;
@@ -1889,7 +1893,7 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
     stage_burn_any:
         if (cell_is_burning(c)) {
             found |= FOUND_BURNING;
-            step_one_burning_cell(s, row, x, y, w, h);
+            step_one_burning_cell(s, row, x, y, w, h, c, r, row_at);
             continue;
         }
 
