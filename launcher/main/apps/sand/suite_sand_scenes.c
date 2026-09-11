@@ -1209,6 +1209,48 @@ void plant_bed_rain(sand_t *s)
     }
 }
 
+/* The player's own brush, at the app's radius, dragged the way a hand drags
+ * it - not a block dropped in, because a block has no loose face and it is
+ * the loose cells that ask whether they are held up. */
+#define PLANT_POUR_RADIUS 5
+#define PLANT_POUR_MARGIN (PLANT_POUR_RADIUS + 2)
+#define PLANT_POUR_ROWS   2
+
+void build_plant_pour_scene(sand_t *s)
+{
+    const int bed_top  = (REAL_H * 7) / 10;
+    const int dirt_top = REAL_H - (REAL_H - bed_top) / 2;
+
+    for (int y = bed_top; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            sand_set(s, x, y, y < dirt_top ? CELL_SOIL(MAT_DIRT, 1, 0)
+                                           : CELL_MAKE(MAT_SAND, 0));
+        }
+    }
+
+    /* Damp earth, so the growth stages are armed as they are in play. A dry
+     * board disarms them all and measures a different game. */
+    plant_bed_rain(s);
+}
+
+void plant_pour_stamp(sand_t *s, int step)
+{
+    const int span = REAL_W - 2 * PLANT_POUR_MARGIN;
+    const int cycle = step % (2 * span);
+    const int x = PLANT_POUR_MARGIN
+                + ((cycle < span) ? cycle : (2 * span - cycle - 1));
+
+    /* Poured close over the earth, not from the ceiling: a plant falls one
+     * cell in about three steps, so a brush held at the top spends the whole
+     * window in free air and the heap never meets the ground it piles on. */
+    const int top = (REAL_H * 7) / 10 - 24;
+
+    for (int r = 0; r < PLANT_POUR_ROWS; r++) {
+        sand_spawn_cell(s, x, top + 8 * r, PLANT_POUR_RADIUS,
+                        MATX(MATX_PLANT));
+    }
+}
+
 /* Measured on a 380-pairing arena, with each material's own habits
  * subtracted, Root <- Acid, Plant <- Lava and Leaf <- Lava are three of the
  * six dearest interactions in the simulation and nothing here reaches any of
@@ -2346,6 +2388,63 @@ static void test_the_snowfall_scene_holds_a_crusting_bank_and_a_live_fall(void)
         "end - dirt is gone");
 }
 
+/* What the pour row prices is a heap still IN MOTION: a plant only asks
+ * whether it is held up when the cell below it is empty, so a scene whose
+ * plants have all landed measures the plant bed over again. Read as the share
+ * of the heap that is airborne, which is what the brush keeps replenishing. */
+static void test_the_plant_pour_scene_keeps_a_loose_heap_in_the_air(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
+                              ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t s2;
+    sand_init(&s2, big, REAL_W, REAL_H, 11u);
+    sand_enable_sleeping(&s2, blocks);
+    sand_set_soak(&s2, SAND_SOAK_PER_MATERIAL);
+    build_plant_pour_scene(&s2);
+
+    for (int i = 0; i < PLANT_POUR_SETTLE_STEPS; i++) {
+        sand_step(&s2, 0, 1000, 0);
+    }
+    for (int i = 0; i < PLANT_POUR_MEASURED_STEPS; i++) {
+        plant_pour_stamp(&s2, i);
+        sand_step(&s2, 0, 1000, 0);
+    }
+
+    const int poured_at = (REAL_H * 7) / 10 - 24 + PLANT_POUR_RADIUS;
+    int airborne = 0, lowest = -1;
+    for (int y = 0; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            if (sand_at(&s2, x, y) != MATX(MATX_PLANT)) {
+                continue;
+            }
+            if (y + 1 < REAL_H && CELL_IS_EMPTY(sand_at(&s2, x, y + 1))) {
+                airborne++;
+            }
+            lowest = y;
+        }
+    }
+
+    free(big);
+    free(blocks);
+
+    char why[220];
+    snprintf(why, sizeof why,
+             "the brush must leave plants with nothing under them when the "
+             "window closes, or nothing here asks what holds it up - %d "
+             "airborne, lowest at row %d", airborne, lowest);
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(50, airborne, why);
+
+    snprintf(why, sizeof why,
+             "and the heap must have come down onto the earth rather than "
+             "hanging where the brush left it - poured at row %d, lowest "
+             "plant now at row %d", poured_at, lowest);
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(poured_at, lowest, why);
+}
+
 void run_sand_scenes_suite(void)
 {
     RUN_TEST(test_the_mixed_scene_puts_every_material_pair_in_contact);
@@ -2360,6 +2459,7 @@ void run_sand_scenes_suite(void)
     RUN_TEST(test_the_plant_ruin_scene_eats_roots_and_burns_a_canopy);
     RUN_TEST(test_the_filling_basin_scene_runs_from_the_lip_to_the_pool);
     RUN_TEST(test_the_snowfall_scene_holds_a_crusting_bank_and_a_live_fall);
+    RUN_TEST(test_the_plant_pour_scene_keeps_a_loose_heap_in_the_air);
 }
 
 SUITE_REGISTER(run_sand_scenes_suite);

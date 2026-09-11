@@ -160,6 +160,21 @@ void plant_ruin_lava_pour(sand_t *s);
  * hundred steps and growth then stops - see the definition. */
 void plant_bed_rain(sand_t *s);
 
+/* The plant brush being POURED, which is a different scene from a bed that
+ * grows: a loose heap in motion rather than a standing garden. Every other
+ * plant scene reaches step_one_falling_cell()'s support walk a handful of
+ * times a step, because a grown tree is anchored and never asks. */
+void build_plant_pour_scene(sand_t *s);
+
+/* One stamp of the brush, dragged. Separate from the builder for the reason
+ * plant_bed_rain() is; `step` sweeps it across the board. */
+void plant_pour_stamp(sand_t *s, int step);
+
+/* Enough to settle the earth and no more - the heap is the scene, and it is
+ * built inside the timed window by the stamps themselves. */
+#define PLANT_POUR_SETTLE_STEPS 60
+#define PLANT_POUR_MEASURED_STEPS 120
+
 /* The schedule is chosen so every stage is still doing work in the timed
  * window. Measured over candidate 20-step windows: a bed settled 400 steps
  * produces ZERO leaves - its canopy has saturated, so the row times a

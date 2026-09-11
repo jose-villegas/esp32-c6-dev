@@ -1629,6 +1629,11 @@ void sand_host_probe_run_gunpowder_basin(void)
 #define FILLING_BASIN_BUDGET_US  14400
 #define SNOWFALL_BUDGET_US       57000
 
+/* 84,706 us a step, perf-scoped, pegged at that x 0.9 rounded down like the
+ * three above - the third dearest scene in the suite, behind water over
+ * lava and a packed screen of gas. */
+#define PLANT_POUR_BUDGET_US     76200
+
 /* A grown plant bed with acid eating down to its roots on one side of a wall
  * and lava burning its canopy on the other (build_plant_ruin_scene(), shared
  * with test_the_plant_ruin_scene_eats_roots_and_burns_a_canopy). The acid
@@ -1838,6 +1843,65 @@ static void test_the_snowfall_scene_fits_in_the_frame_budget(void)
 void sand_host_probe_run_snowfall(void)
 {
     test_the_snowfall_scene_fits_in_the_frame_budget();
+}
+#endif
+
+/* The plant brush poured onto damp earth (build_plant_pour_scene()), which no
+ * other row reaches: every plant scene here grows a garden, and a grown tree
+ * is anchored, so its support walk returns on the first neighbour.
+ *
+ * Timed from the first stamp rather than after a settle - a settled heap is
+ * the plant bed row over again. */
+static void test_pouring_the_plant_brush_fits_in_the_frame_budget(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 11u);
+    sand_enable_sleeping(&real, blocks);
+    sand_set_soak(&real, SAND_SOAK_PER_MATERIAL);
+    build_plant_pour_scene(&real);
+
+    for (int i = 0; i < PLANT_POUR_SETTLE_STEPS; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+
+    const int steps = PLANT_POUR_MEASURED_STEPS;
+    int64_t worst = 0;
+    const int64_t start = esp_timer_get_time();
+    for (int i = 0; i < steps; i++) {
+        plant_pour_stamp(&real, i);
+        const int64_t t0 = esp_timer_get_time();
+        sand_step(&real, 0, 1000, 0);
+        const int64_t took = esp_timer_get_time() - t0;
+        if (took > worst) {
+            worst = took;
+        }
+    }
+    const int64_t per_step = (esp_timer_get_time() - start) / steps;
+
+    ESP_LOGI("device_tests", "plant pour, %dx%d: %lld us per step, "
+                             "worst single step %lld us",
+             REAL_W, REAL_H, (long long)per_step, (long long)worst);
+
+    free(big);
+    free(blocks);
+
+    TEST_ASSERT_LESS_THAN_MESSAGE(PLANT_POUR_BUDGET_US, (int)per_step,
+        "pouring plants is held to 10% below its first measured number, as "
+        "a reduction target - failing means the work is not done, not that "
+        "something broke");
+}
+
+#ifdef SAND_HOST_PROBE
+/* Host-only timing probe - the plant pour (see the full-step control's own
+ * wrapper for the pattern). */
+void sand_host_probe_run_plant_pour(void)
+{
+    test_pouring_the_plant_brush_fits_in_the_frame_budget();
 }
 #endif
 
@@ -2524,6 +2588,7 @@ void run_sand_perf_suite(void)
     RUN_TEST(test_the_plant_ruin_scene_fits_in_the_frame_budget);
     RUN_TEST(test_the_filling_basin_scene_fits_in_the_frame_budget);
     RUN_TEST(test_the_snowfall_scene_fits_in_the_frame_budget);
+    RUN_TEST(test_pouring_the_plant_brush_fits_in_the_frame_budget);
 
     RUN_TEST(test_present_cost_against_a_falling_sand_scene);
     RUN_TEST(test_a_real_frame_is_sim_plus_present_on_a_falling_sand_scene);
