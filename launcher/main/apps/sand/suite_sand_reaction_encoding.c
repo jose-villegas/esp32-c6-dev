@@ -1033,32 +1033,13 @@ test_pouring_more_of_a_liquid_wins_the_contest_against_the_other(void)
         "nor may water rout acid from an even pour");
 }
 
-/* NOT an A/B bias comparison, unlike the sibling test above - measured
- * directly, and it goes the WRONG way here: forcing bias to 0 converted
- * MORE of the acid pool than the real default did (3623 vs 3451 at 150
- * steps, one fixed seed). SAND_ACID_DILUTE_MASS_BIAS is not neutral in
- * this direction, it is actively counterproductive, and the reason is
- * density, not a bug in the bias arithmetic itself: acid (density 38)
- * sinks and disperses through water when poured on top of it, so a
- * poured acid grain is usually an isolated cell surrounded by water -
- * exactly the case SAND_ACID_DILUTE_MASS_BIAS's own comment (sand.h)
- * already covers ("an isolated drop in a big lake gets pushed even
- * further toward diluting"). Water (density 30) does the opposite when
- * poured onto acid: being LESS dense, it sits on top rather than
- * penetrating, so the acid cells actually doing the biting - only acid
- * ever rolls this reaction - stay backed by the deep, undisturbed pool
- * beneath them the whole time, and the bias tips every one of those
- * bites further toward "acid wins" instead of helping water win faster.
- * A real, structural asymmetry between the two pour directions, not
- * something this test should paper over by asserting a relationship
- * that does not hold - flagged for a design decision, not silently
- * fixed here, since the working direction above was tuned deliberately
- * and changing the bias formula to help this direction too risks
- * breaking that one.
- *
- * What IS still true, and worth pinning: water overwhelms a sustained
- * acid pool by sheer volume alone even with bias doing nothing useful
- * for it - the tap ends up the clear majority of the basin regardless. */
+/* SAND_ACID_DILUTE_MASS_BIAS is counterproductive in THIS pour direction:
+ * forcing it to 0 converted more of the acid pool than the default did
+ * (3623 vs 3451 at 150 steps, one fixed seed). Density, not arithmetic -
+ * water (30) poured on acid (38) sits on top instead of penetrating, so the
+ * biting cells stay backed by the deep pool and the bias tips each bite
+ * toward "acid wins". Left as a design decision rather than fixed here; what
+ * still holds is that water overwhelms the pool by volume alone. */
 static void
 test_a_relentless_pour_of_water_overwhelms_a_pool_of_acid(void)
 {

@@ -213,16 +213,11 @@ void test_dither_at_alpha_zero_draws_nothing(void)
         "alpha 0 should draw nothing at all - not even one dither cell");
 }
 
-/* The one alpha value everything else in this file already relies on being
- * exact: BOOT_ANIM_TITLE_SHADOW_ALPHA's own backward-compatible default is
- * 255, and boot_anim.c's own comment on that default promises it is
- * byte-for-byte identical to the plain gfx_fill_rect() every OTHER caller
- * in this tree still uses. Checked by full coverage (every pixel in the
- * area, not merely the right COUNT of them) plus corner spot checks, the
- * same idiom test_fill_rect_writes_exactly_its_own_area() above already
- * uses - not a whole-framebuffer snapshot compare, which would need a
- * second copy of the 322 KiB framebuffer just to hold: real DRAM this
- * board does not have to spare (see docs/notes/Board-and-Memory.md). */
+/* BOOT_ANIM_TITLE_SHADOW_ALPHA defaults to 255, so alpha 255 must stay
+ * byte-for-byte the plain gfx_fill_rect() every other caller draws. Full
+ * coverage plus corner spot checks rather than a framebuffer snapshot
+ * compare: a second copy of the 322 KiB framebuffer does not fit (see
+ * docs/notes/Board-and-Memory.md). */
 void test_dither_at_alpha_255_matches_a_solid_fill_exactly(void)
 {
     fixture();
@@ -264,18 +259,11 @@ void test_dither_coverage_is_monotonic_and_graduated(void)
         "the sweep's own last step (255) should reach full coverage");
 }
 
-/* The property the whole "fake transparency" trick depends on: the dither
- * is keyed to each pixel's own ABSOLUTE panel position, not a position
- * local to whichever call drew it - so two abutting dithered rects read as
- * one continuous stippled texture rather than each restarting the pattern
- * at its own corner and leaving a visible seam where they meet.
- *
- * Checked at the seam itself (x=46..53, spanning the seam at x=50) across
- * all four dither phase-rows (y=10..13 - the Bayer table's own period),
- * which is where a local-instead-of-absolute indexing bug would actually
- * show up. A handful of named pixels, not a snapshot of the drawn area -
- * see test_dither_at_alpha_255_matches_a_solid_fill_exactly()'s own
- * comment on why this file avoids a second framebuffer-sized buffer. */
+/* The dither is keyed to each pixel's ABSOLUTE panel position, not one
+ * local to whichever call drew it, so two abutting dithered rects read as
+ * one continuous texture instead of each restarting the pattern at its own
+ * corner. Sampled at the seam across all four dither phase-rows - the Bayer
+ * table's own period. */
 void test_dither_stays_in_phase_across_separate_calls(void)
 {
     fixture();
@@ -312,11 +300,9 @@ void test_dither_stays_in_phase_across_separate_calls(void)
 
 /* One synthetic source pixel per index - every value distinct from its
  * neighbours and never equal to the black background (the | 1), so a blit
- * writing the WRONG source pixel (stride bug, fringe misalignment) reads as
- * a value mismatch, not a coincidental pass. Heap, not stack (this suite
- * runs on the 3584-byte main-task stack - see the dithered-text test's own
- * comment below) and not static (permanent .bss on this board is what the
- * selftest OOM incident was made of - see suite_cube_perf.c). */
+ * writing the WRONG source pixel reads as a value mismatch, not a
+ * coincidental pass. Heap, not the 3584-byte main-task stack, and not
+ * static: permanent .bss is the scarcest budget on this board. */
 #define BLIT_SRC_STRIDE 70
 #define BLIT_SRC_ROWS   40
 
@@ -412,17 +398,11 @@ void test_blit_dither_matches_per_pixel_covers_reference(void)
     free(src);
 }
 
-/* "A" at scale 5 fits a single 8x8 font cell scaled up - a 40x40 box, the
- * only region either draw call could possibly have touched. Compared one
- * ROW at a time (re-rendering both the solid and dithered glyph for each
- * row) rather than snapshotting the whole box into a stack array: this
- * suite is device-only (see this file's own top comment), so it runs on
- * the ESP-IDF main task's 3584-byte stack (CONFIG_ESP_MAIN_TASK_STACK_SIZE
- * - see the sand test suite's own comments on that same budget, e.g.
- * suite_sand_locality.c or suite_sand_materials.c), several frames
- * deep into selftest_run()/suites_run_all() by the time this test's own
- * locals are live. A 40x40 gfx_color_t buffer is 3.2 KB - most of that
- * budget in one local; a 40-wide row is 80 bytes. */
+/* Compared one ROW at a time, re-rendering both glyphs per row, rather than
+ * snapshotting the whole 40x40 box into a stack array: these tests run on
+ * the ESP-IDF main task's 3584-byte stack (CONFIG_ESP_MAIN_TASK_STACK_SIZE)
+ * and already several frames deep. The box would be 3.2 KB of that in one
+ * local; a 40-wide row is 80 bytes. */
 void test_dithered_text_at_alpha_255_matches_solid_text_exactly(void)
 {
     fixture();
@@ -764,20 +744,11 @@ void test_present_completes(void)
         "present returned implausibly fast - did it actually wait for the DMA?");
     TEST_ASSERT_LESS_THAN_INT(500000, (int)elapsed_us);
 
-    /* The 500,000 us bound above is a sanity check, not a budget - loose
-     * enough to only catch a hang or a near-hang. A real full-frame present
-     * has a far tighter, measured price: two readings logged per capture
-     * (this test and test_full_present_cost_splits_into_bus_time_and_-
-     * overhead's own present_us both send the whole seven-band frame) come
-     * to 18,180/18,444, 18,363/18,094, 18,364/18,094 and 18,363/18,095 us
-     * across four captures - everything between 18,094 and 18,444 us, under
-     * 2% apart. 19,500 us leaves about 5.7% over the observed maximum:
-     * enough that ordinary scheduling jitter on a seven-band send does not
-     * trip this, while still catching the bus clock regressing, or the
-     * seven bands drifting back towards the un-pipelined per-band price -
-     * see the block comment further down this file, above
-     * test_an_unchanged_frame_costs_almost_nothing, for the two prices a
-     * band can have. */
+    /* A full seven-band frame measured between 18,094 and 18,444 us across
+     * four device captures, under 2% apart. 19,500 leaves about 5.7% over
+     * the observed maximum - past scheduling jitter, still tight enough to
+     * catch the bus clock regressing or the bands dropping out of
+     * pipelining. */
     TEST_ASSERT_LESS_THAN_MESSAGE(19500, (int)elapsed_us,
         "a full-frame present cost more than its observed price - the bus "
         "clock may have regressed, or the seven bands stopped pipelining");
@@ -799,31 +770,13 @@ void test_repeated_presents_stay_in_sync(void)
 /* --- partial presents --------------------------------------------------- */
 
 /* The panel refreshes from its own GRAM, so a band that is not sent keeps
- * showing what it last received. These verify the saving is real and measured
- * on the bus, not merely assumed from the flag bookkeeping.
+ * showing what it last received.
  *
- * Every timing assertion below is a RATIO against a reference measured in
- * the same run - "under a tenth of a full frame", "cheaper than a whole
- * band" - which is what makes them immune to the flash-layout lottery
- * suite_sand_perf.c's simulation tests ride (measured there at ~4%, and now
- * suspected to be quantised into two states rather than continuous - see
- * docs/sand/Performance-Tuning-Attempts.md's "the layout lottery is
- * quantised"). But a ratio is structurally blind to a uniform slowdown: if
- * the panel clock dropped or the bus degraded, every figure here would
- * shrink or grow together and every one of these ratios would still pass.
- * An absolute budget catches exactly that, so most of the tests below carry
- * BOTH - the ratio asserts the mechanism (gathering beats a band, a partial
- * band beats a whole one), the absolute asserts the cost has not drifted.
- *
- * Absolute budgets are affordable here in a way they are not for
- * suite_sand_perf.c: these tests are BUS-BOUND, not layout-bound. Four device
- * captures of four different builds put the full-band reference at 3,405 /
- * 3,405 / 3,404 / 3,406 us - a 0.06% spread - so a number pegged here is
- * pegged to the QSPI clock, not to wherever the linker happened to put a
- * function this build. Each budget below is set above its OWN test's
- * observed maximum across those four captures, with a margin sized to that
- * test's own spread rather than one blanket percentage - see each
- * assertion's comment for its own captures and margin. */
+ * Most tests below assert a ratio against a reference measured in the same
+ * run AND an absolute budget: the ratio proves the mechanism but is blind
+ * to a uniform slowdown. Absolutes are affordable because these tests are
+ * bus-bound - the full-band reference measured 3,405/3,405/3,404/3,406 us
+ * across four captures, a 0.06% spread. */
 
 static int64_t time_present(void)
 {
@@ -848,38 +801,23 @@ static void test_an_unchanged_frame_costs_almost_nothing(void)
         "a frame in which nothing changed must skip the bus entirely, not "
         "resend 322 KiB of identical pixels");
 
-    /* Measures 3-4 us across four device captures - checking dirty_row_-
-     * is_dirty() for seven rows and finding all seven clean. A ratio
-     * against `full` cannot usefully tighten past that: the interesting
-     * regression here is not "10% slower" but "an unchanged frame started
-     * sending pixels again", which would jump this into the thousands, not
-     * nudge it. 50 us is generous on purpose - it is still two orders of
-     * magnitude below a single band - because the point of this assertion
-     * is that gap, not a tight peg on a number too small to peg tightly. */
+    /* 3-4 us across four device captures: seven dirty_row_is_dirty() checks,
+     * all clean. 50 us is generous on purpose - the regression it guards
+     * against, an unchanged frame sending pixels again, lands in the
+     * thousands rather than 10% over. */
     TEST_ASSERT_LESS_THAN_MESSAGE(50, (int)unchanged,
         "an unchanged frame's cost grew past what a clean dirty-check should "
         "ever take - did it start touching the bus?");
 }
 
-/* Decomposes a full-screen gfx_present() into raw QSPI bus time versus
- * everything gfx_present() itself adds on top of it - the question a
- * documented figure in suite_sand_perf.c (the comment above FULL_STEP_BUDGET_US)
- * has stood on without ever having measured it directly: a "~9.6 ms
- * bus-time ceiling", stated there as a principle rather than a capture,
- * that this frame's budget was historically set to stay under. The
- * synthetic test above measures a full gfx_present() at ~17,900 us -
- * nearly double that figure - and nothing before this test isolated how
- * much of the gap is genuinely the bus versus gfx_present()'s own
- * bookkeeping - the seven-strip loop, dirty_row_is_dirty() checks,
- * collect_dirty_runs(), leaf refinement and the gather-vs-full-band
- * choice, all of which still run even when the whole screen is one
- * full-band send.
- *
+/* Splits a full-screen gfx_present() into raw QSPI bus time versus
+ * everything gfx_present() adds on top: the seven-strip loop,
+ * dirty_row_is_dirty() checks, collect_dirty_runs(), leaf refinement and
+ * the gather-vs-full-band choice, all of which run even when the whole
+ * screen goes out as full-band sends.
  * gfx_present_raw_full_frame_for_test() (gfx.c, CONFIG_LAUNCHER_DEVELOPMENT
- * only) is the bus-time side of the comparison: one esp_lcd_panel_draw_-
- * bitmap() call over the whole framebuffer, none of the above involved at
- * all - see its own comment for why waiting on exactly one completion is
- * still correct despite the SPI driver chunking the transfer internally. */
+ * only) is the bus-time side: one draw-bitmap call over the whole
+ * framebuffer, with none of that involved. */
 static void test_full_present_cost_splits_into_bus_time_and_overhead(void)
 {
     fixture();
@@ -897,15 +835,9 @@ static void test_full_present_cost_splits_into_bus_time_and_overhead(void)
                   "%lld us, overhead %lld us",
              (long long)present_us, (long long)raw_us, (long long)overhead_us);
 
-    /* Sanity bounds only, the same shape test_present_completes uses above -
-     * a full frame over QSPI cannot be instant and should not take anywhere
-     * near a second. The interesting numbers are the two logged above and
-     * their difference; this test exists to produce and log them, not to
-     * hold either to a tuned ceiling. PROVISIONAL: no device capture of
-     * this split exists yet, so nothing tighter is asserted - re-peg (or
-     * replace with a real ceiling on the overhead specifically) from the
-     * first device capture, the same convention suite_sand_perf.c's
-     * FULL_STEP_BUDGET_US comment documents for a newly-added measurement. */
+    /* Sanity bounds only: this test exists to log the split, not to hold it
+     * to a ceiling. PROVISIONAL - no device capture of the split exists yet;
+     * peg a real budget on the overhead from the first one. */
     TEST_ASSERT_GREATER_THAN_INT_MESSAGE(1000, (int)raw_us,
         "the raw blit returned implausibly fast - did it actually wait for "
         "the DMA?");
@@ -943,22 +875,12 @@ static void test_a_partial_change_costs_less_than_a_full_frame(void)
         "clock or the QSPI setup may have regressed");
 }
 
-/* Every ratio test from here through test_two_far_corners_cost_less_than_
- * a_full_band measures a full band - one gfx_fill_rect() over the whole
- * 368x64 strip, presented alone via time_present() with nothing else
- * queued - as its reference cost. Because nothing else is in flight, that
- * reference is the UN-PIPELINED price: measured in isolation, a band
- * costs 3,405 us.
- *
- * That is not what a band costs inside a real frame. send_full_row()
- * (gfx.c) queues its draw_bitmap without waiting, and gfx_present()
- * drains every queued band together at the end, so later bands' DMA
- * overlaps earlier bands' CPU-side setup. Seven bands sent in a real
- * frame come to 18,147 us, not 7 x 3,405 = 23,835 - that pipelined price
- * is what run_present_against_scene() in suite_sand_perf.c measures, with its
- * three present-cost tests. Sanity-checking one of those numbers against
- * the other by multiplying is not valid; the two measure different
- * things, and both are correct for what they measure. */
+/* The ratio tests below take a band presented alone as their reference,
+ * which is the UN-PIPELINED price: 3,405 us. Inside a real frame
+ * send_full_row() (gfx.c) queues without waiting and gfx_present() drains
+ * every band at the end, so seven bands come to 18,147 us, not 7 x 3,405.
+ * Sanity-checking one figure against the other by multiplying is not
+ * valid. */
 
 /* PROTOTYPE: measures the gather-copy path in gfx_present() - a strip whose
  * real dirty width is only a fraction of the band, written directly (not
@@ -1057,33 +979,13 @@ static void test_a_short_wide_change_costs_less_than_a_full_band(void)
         "the gather-copy path may have regressed");
 }
 
-/* Full width, most of a band's height: 368x48 is many times
- * GATHER_MAX_PIXELS, far too big to gather - and yet a box at the full
- * panel width is already contiguous in the framebuffer, row-major,
- * GFX_WIDTH stride, so it needs no gather buffer at all. This is the
- * case send_partial_band() exists for (see gfx.c): the same one
- * transaction as a whole band, just not rounded up to the band's own 64
- * rows.
+/* Full width, most of a band's height: 368x48 is far over GATHER_MAX_PIXELS,
+ * yet a full-width box is already contiguous in the framebuffer and needs no
+ * gather buffer at all - the case send_partial_band() (gfx.c) exists for.
  *
- * 90% is the threshold, not 75%, on purpose. 48 of a band's 64 rows is
- * 75% of the band's pixels, and a present against this panel is ~94% bus
- * time (see gfx.h and test_full_present_cost_splits_into_bus_time_and_
- * overhead), so the honest floor - once the fixed per-transaction cost
- * that does not shrink with the row count is counted - is around 78%.
- * 90% sits comfortably inside that margin without being loose enough to
- * pass by accident.
- *
- * And it really cannot pass by accident: before send_partial_band()
- * existed, a full-width box took the identical code path as a whole
- * band - the same single esp_lcd_panel_draw_bitmap() of the same
- * 368x64 pixels out of fb - so `partial` and `full_band` were the same
- * transaction and no ratio under 1.0 was reachable at all, let alone one
- * under 0.9.
- *
- * Both halves are measured in this same run, like every other test in
- * this file, so this is a ratio rather than an absolute number - it does
- * not need re-pegging when the panel clock or the build's layout
- * moves. */
+ * 90% is the threshold, not 75%, on purpose: 48 of a band's 64 rows is 75%
+ * of its pixels, and a present is ~94% bus time (gfx.h), so once the fixed
+ * per-transaction cost is counted the honest floor is around 78%. */
 static void test_a_full_width_partial_height_change_costs_less_than_a_band(void)
 {
     fixture();
@@ -1174,33 +1076,12 @@ static void test_two_far_corners_cost_less_than_a_full_band(void)
         "two independent gathers may have regressed");
 }
 
-/* Three separated marks, not two - one more than ROW_MAX_RUNS/
- * LEAF_REFINE_MAX_RUNS (row_runs.h, gfx_dirty.h) currently track - placed
- * to actually exercise that cap, which test_two_far_corners_cost_less_
- * than_a_full_band does not: collect_dirty_runs() finds cell-level runs
- * with a cap of its own (GRID_COLS, effectively unlimited at 4 cells - see
- * its own comment), not ROW_MAX_RUNS/LEAF_REFINE_MAX_RUNS at all. A mark
- * in a genuinely separate, non-adjacent cell - like the two-far-corners
- * test's opposite corners - is handled entirely at that cell level and
- * never touches this cap, no matter how many marks there are. Cells 0-2
- * are adjacent, though, so collect_dirty_runs() merges them into ONE
- * coarse run before leaf refinement (refine_run()/plan_run()) ever gets
- * involved - splitting THAT merged run into its three real gaps is what
- * LEAF_REFINE_MAX_RUNS caps.
- *
- * At the shipped cap of 2, refine_run() gives up (three isolated leaf
- * bits, cap 2 - see collect_runs_from_mask()'s own "too fragmented" case)
- * and plan_run() falls back to run_box()'s coarse union instead - NOT the
- * whole band, and not even the whole 3-cell span: run_box() unions each
- * cell's own already-tight cell_x0/x1 box, so the fallback here is one
- * ~240x64 send spanning just the marks' own extent, still skipping the
- * untouched cell to its right entirely. That single wider transaction
- * measured cheaper than the full band by a wide margin even at cap 2 -
- * given the ~118us fixed cost of a QSPI transaction (see "The blit is
- * bus-bound" in Display-and-Rendering.md), three separate small sends
- * under a raised cap are not guaranteed to beat one merged fallback send;
- * that is exactly the open question a sweep of this cap is for, not
- * something to assume going in. */
+/* Three separated marks, one more than LEAF_REFINE_MAX_RUNS (gfx_dirty.h)
+ * tracks. Cells 0-2 are adjacent, so collect_dirty_runs() merges them into
+ * one coarse run, and splitting that run into its three gaps is what the cap
+ * governs - marks in non-adjacent cells never reach it. At the shipped cap
+ * of 2 plan_run() falls back to run_box()'s coarse union, one ~240x64 send
+ * that a raised cap's three small sends are not guaranteed to beat. */
 static void test_three_far_apart_marks_falls_back_at_the_current_cap(void)
 {
     fixture();
@@ -1234,44 +1115,22 @@ static void test_three_far_apart_marks_falls_back_at_the_current_cap(void)
     ESP_LOGI(TAG, "present: full band %lld us, three %dx%d marks %lld us",
              (long long)full_band, size, size, (long long)three_marks);
 
-    /* No ratio assertion against full_band, on purpose - see the comment
-     * above this test: at the shipped cap this falls back to run_box()'s
-     * coarse union, and whether that fallback beats the full band is an
-     * open question this test exists to measure, not assume. But an
-     * absolute budget is still safe to peg: 869 / 882 / 875 / 877 us across
-     * four captures, a 1.5% spread. 980 us leaves about 11% over the
-     * observed maximum, wide enough that a future cap change landing on a
-     * different, still-cheaper fallback shape does not trip it, while still
-     * catching the bus itself slowing down. */
+    /* No ratio against full_band on purpose: whether the fallback beats a
+     * full band is the open question this test measures. The absolute is
+     * safe to peg - 869/882/875/877 us across four captures, a 1.5% spread;
+     * 980 leaves about 11% over, room for a different fallback shape. */
     TEST_ASSERT_LESS_THAN_MESSAGE(980, (int)three_marks,
         "three far-apart marks' fallback send cost more than its observed "
         "price");
 }
 
-/* A small mark plus a wide one, in the same coarse run, sized to put the
- * wide mark's own leaf-refined piece right where GATHER_MAX_PIXELS
- * (gfx_dirty.h, 8192 shipped) decides whether it gets gathered at all -
- * not near-zero like every other gathered-piece test here, and not so
- * far over that it stays rejected everywhere a sweep of this budget would
- * plausibly try. This file cannot reference GATHER_MAX_PIXELS directly:
- * gfx_dirty.h is header-only, static, deliberately included only by
- * gfx.c in the real firmware (see its own top comment) - a second real-
- * firmware include here would silently duplicate its dirty-tracking
- * state into a second, disconnected copy this test never touches, not
- * just pull in a constant. Literal numbers instead, chosen for the
- * candidates this project has actually swept (4096, 6144, 8192, 9216):
- *
- * The wide mark spans x=[48,158) - inside leaf columns 2 through 6
- * (LEAF_W=23, COL_WIDTH=92, so leaf 1 ends at 46 and leaf 7 starts at
- * 161 - clear of both). refine_run() reports leaf-refined pieces at
- * whole leaf-column granularity, so this becomes a 5-leaf, 115px-wide
- * piece regardless of the mark's own exact width - 115 * STRIP_HEIGHT
- * (64) = 7360px. That is over budget at 4096 and 6144 (falls back to
- * the coarse box, same fallback test_three_far_apart_marks_falls_back_
- * at_the_current_cap already measured), and under budget at 8192 (the
- * shipped default) and 9216 (gathers as two pieces instead). Whether
- * that crossing actually helps or hurts is exactly what a sweep of this
- * budget is for - not assumed here. */
+/* A small mark plus a wide one in the same coarse run, sized to land the
+ * wide mark's leaf-refined piece right where GATHER_MAX_PIXELS decides
+ * whether it gets gathered. Literal numbers because gfx_dirty.h is
+ * header-only and static - a second include would duplicate its
+ * dirty-tracking state. The wide mark covers leaf columns 2-6, so
+ * refine_run() reports a 5-leaf 115px piece: 115 * 64 = 7360 px - over
+ * budget at 4096 and 6144, under it at the shipped 8192. */
 static void test_a_near_budget_split_crosses_the_gather_threshold(void)
 {
     fixture();
@@ -1305,15 +1164,10 @@ static void test_a_near_budget_split_crosses_the_gather_threshold(void)
     ESP_LOGI(TAG, "present: full band %lld us, near-budget split %lld us",
              (long long)full_band, (long long)near_budget);
 
-    /* No ratio assertion, on purpose - see the comment above this test:
-     * whether gathering at this size actually helps is exactly the open
-     * question a sweep of GATHER_MAX_PIXELS is for, so nothing here should
-     * assume the answer. An absolute budget is still safe: 1,671 / 1,800 /
-     * 1,715 / 1,754 us across four captures, a 7.7% spread - wider than the
-     * single-piece gathers above because this is two independent sends (the
-     * small mark plus the wide one) whose relative timing depends on which
-     * side of GATHER_MAX_PIXELS the wide piece lands on. 2,050 us leaves
-     * about 14% over the observed maximum, sized to that wider spread. */
+    /* No ratio on purpose: whether gathering at this size helps is the open
+     * question a sweep of GATHER_MAX_PIXELS is for. 1,671/1,800/1,715/1,754
+     * us across four captures, a 7.7% spread - two independent sends, so
+     * wider than the single-piece gathers above; 2,050 leaves ~14% over. */
     TEST_ASSERT_LESS_THAN_MESSAGE(2050, (int)near_budget,
         "the near-budget split cost more than its observed price");
 }

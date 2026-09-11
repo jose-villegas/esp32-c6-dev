@@ -131,19 +131,13 @@ cell_settled(const sand_t* s, int x, int y) {
 
 /* Is there liquid in this cell's own block or any block touching it?
  *
- * WHY THIS AND NOT s->may_have_liquid: that flag is board-wide, so one water
- * cell anywhere arms every liquid-adjacent behaviour on the whole grid - which
- * is why a pour is felt the instant it spawns, before it has touched anything.
- * BLOCK_LIQUID_NEAR is the same question asked locally, and it is already
- * recomputed each step by mark_liquid_neighbourhoods() before the reaction
- * pass runs.
+ * NOT s->may_have_liquid, which is board-wide: one water cell anywhere arms
+ * every liquid-adjacent behaviour on the whole grid. BLOCK_LIQUID_NEAR asks
+ * the same question locally.
  *
- * SOUND FOR ANY FOUR-NEIGHBOUR TEST: a neighbour is one cell away, so it lies
- * in this block or one touching it, and NEAR covers exactly that. A cell this
- * answers false for provably had no liquid neighbour to find.
- *
- * Falls back to the flag when block state is off, which is the same answer,
- * only board-wide. */
+ * SOUND FOR ANY FOUR-NEIGHBOUR TEST: a neighbour is one cell away, so it
+ * lies in this block or one touching it, and NEAR covers exactly that.
+ * Falls back to the flag when block state is off. */
 static inline bool
 liquid_near(const sand_t* s, int x, int y) {
     if (!s->may_have_liquid) {

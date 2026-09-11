@@ -299,15 +299,10 @@ static void seal_water_beside(int wx, int wy)
                                              * wet with */
 }
 
-/* Pour water on a hot wall and its banked heat drains back to room
- * temperature far faster than ambient `cools` alone manages -
- * SAND_WET_COOLING_FACTOR (sand.h), applied in step_one_tempered_cell()'s
- * neighbour walk (sand_reactions.c). Proven by DERIVING the step budget
- * from the wet cell's own run rather than guessing a constant: however
- * SAND_WET_COOLING_FACTOR or stone's own `cools` are ever retuned, a dry
- * twin given the exact same number of steps the wet cell needed to reach
- * ambient must still be short of it - if it were not, the multiplier
- * would not actually be doing anything. */
+/* Water drains banked heat faster than ambient `cools` alone manages -
+ * SAND_WET_COOLING_FACTOR (sand.h). The step budget is DERIVED from the wet
+ * cell's own run rather than pinned to a constant, so the claim survives
+ * any retune of that factor or of stone's `cools`. */
 static void test_water_cools_hot_stone_back_to_room_temperature(void)
 {
     fixture();
@@ -341,14 +336,10 @@ static void test_water_cools_hot_stone_back_to_room_temperature(void)
         "cooling, not merely the passage of time");
 }
 
-/* Water is a coolant, not a chiller - it can knock banked heat back down
- * to SAND_AMBIENT_HEAT, but never past it. Going below ambient is
- * snow/ice's job (`chills`) alone; letting water do it too would let a
- * splash thermally shock glass, which step_one_tempered_cell()'s own
- * comment on the ABOVE-ambient gate explains is exactly what this design
- * avoids. Run far longer than test_water_cools_hot_stone_back_to_room_
- * temperature's own budget needs, on purpose - this is a floor, and it
- * has to hold forever, not just until the cell first reaches ambient. */
+/* Water is a coolant, not a chiller: it reaches SAND_AMBIENT_HEAT and
+ * never passes it. Below ambient is snow/ice's job (`chills`) alone -
+ * letting a splash do it would thermally shock glass. Run far longer than
+ * reaching ambient needs, because this is a floor that has to hold. */
 static void test_water_never_chills_stone_below_room_temperature(void)
 {
     fixture();
@@ -402,17 +393,10 @@ static void test_stone_never_melts_however_hot(void)
         "after 800 steps");
 }
 
-/* A hot stone wall does NOT crack when it is chilled. Glass, right beside
- * it in the same scene, does.
- *
- * Stone reads the temperature and does nothing else with it. Rock quenched
- * from hot spalls and cracks; it does not turn into sand, and there is no
- * honest byproduct to name for it - so `shatters_to` is left off, and the
- * absence is the decision.
- *
- * Both halves in one test on one board, because the claim is a CONTRAST.
- * "Stone survives" passes just as well on a board where nothing shocks at
- * all, which would hide the feature breaking rather than show it. */
+/* Quenched rock spalls; it does not turn into anything nameable, so stone
+ * carries no `shatters_to` and the absence is the decision. Both halves sit
+ * on one board because the claim is a CONTRAST - "stone survives" passes
+ * just as well where nothing shocks at all. */
 static void test_snow_cracks_glass_but_not_stone(void)
 {
     fixture();
@@ -646,25 +630,15 @@ static void test_stone_speckles_by_position_at_every_temperature(void)
  * need the same unpacking math. */
 
 /*
- * CULLET'S COLOUR CYCLE - each of the four reserved shades (SAND_CULLET_BASE
- * .. MATERIAL_VARIANTS - 1) is a STARTING POINT on a shared, slowly-advancing
- * 16-step colour cycle rather than a fixed colour of its own - see
- * material_set_cullet_phase() and material_colours()'s own MAT_SAND case,
- * both material.c, and the rewritten comment on SAND_CULLET_BASE in
- * material.h.
- *
- * material_set_cullet_phase() is file-static state in material.c, exactly
- * like foam_phase - every test below sets whatever phase it needs and resets
- * it to 0 before returning, so none of them can depend on run order, and a
- * test run after this file finishes sees the same phase-0 rest look it would
- * have seen if none of these had run at all.
+ * Each of the four reserved cullet shades (SAND_CULLET_BASE ..
+ * MATERIAL_VARIANTS - 1) is a starting point on a shared 16-step colour
+ * cycle, not a fixed colour of its own. The phase is file-static state in
+ * material.c, so every test below resets it to 0 before returning.
  */
 
-/* At rest (phase 0), the four cullet shades are four distinct tints, not one
- * colour repeated - the same claim test_each_material_is_painted_the_way_it_
- * should_be already makes about every OTHER material's variants, made
- * explicit here because cullet is the one place a shade's colour depends on
- * more than the cell byte alone. */
+/* At rest the four shades are four distinct tints, not one colour repeated
+ * - made explicit because cullet is the one place a shade's colour depends
+ * on more than the cell byte alone. */
 static void test_cullet_shades_are_four_distinct_tints(void)
 {
     material_set_cullet_phase(0u);
@@ -807,14 +781,11 @@ static void test_cullet_never_dresses_as_beach(void)
     material_set_cullet_phase(0u);
 }
 
-/* Pale is the whole design constraint on the cycle's four anchors (see their
- * own comment in material.c) - a retune that let the cycle wander toward
- * anything saturated or dark would still pass every test above (a
- * saturated colour is still a distinct, non-dune colour) while no longer
- * reading as ground glass. Floored against the darkest DUNE shade's own
- * luminance, with real headroom, rather than a fixed number: what matters
- * is that cullet stays clearly paler than sand ever gets, not any one
- * absolute brightness. */
+/* Pale is the whole design constraint on the cycle's four anchors (see
+ * material.c) - a retune wandering toward anything saturated or dark would
+ * still pass every test above while no longer reading as ground glass.
+ * Floored against the darkest DUNE shade's own luminance rather than a
+ * fixed number: what matters is staying paler than sand ever gets. */
 static void test_cullet_stays_pale_at_every_phase(void)
 {
     const gfx_color_t *pal = material_palette();

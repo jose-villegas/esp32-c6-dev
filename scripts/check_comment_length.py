@@ -19,6 +19,7 @@ Options:
   --files       list per-file counts instead of individual comments
   --all         include vendored and generated sources (excluded by default)
   --no-banners  ignore each file's header comment
+  --header-limit N  also fail if any file header is taller than N lines
   --changed REF check only files that differ from REF (the enforcement gate)
   --staged      check only files staged for commit
   --exit-zero   always exit 0, even with violations
@@ -278,7 +279,7 @@ def relative_to_root(path):
 
 def main(argv):
     limit, top, per_file, include_all, exit_zero = 300, 20, False, False, False
-    no_banners = False
+    no_banners, header_limit = False, None
     changed_ref, staged, comments_only_ref = None, False, None
     paths = []
     it = iter(argv)
@@ -295,6 +296,8 @@ def main(argv):
             exit_zero = True
         elif arg == "--no-banners":
             no_banners = True
+        elif arg == "--header-limit":
+            header_limit = int(next(it))
         elif arg == "--changed":
             changed_ref = next(it)
         elif arg == "--staged":
@@ -343,6 +346,14 @@ def main(argv):
             touched = added_lines(changed_ref or "", path)
             found = [c for c in found if touched & set(c.line_range)]
         comments += found
+
+    tall_heads = []
+    if header_limit is not None:
+        tall_heads = sorted([c for c in comments
+                             if c.is_banner and c.lines > header_limit],
+                            key=lambda c: -c.lines)
+        for c in tall_heads:
+            print(f"{c.path}:{c.line}: header is {c.lines} lines")
 
     if no_banners:
         comments = [c for c in comments if not c.is_banner]
@@ -394,7 +405,7 @@ def main(argv):
             n = sum(1 for c in comments if c.length > alt)
             print(f"  {alt:5d}  {n:5d} over  ({100.0 * n / total:5.1f}%)")
 
-    return 0 if (exit_zero or not over) else 1
+    return 0 if (exit_zero or not (over or tall_heads)) else 1
 
 
 if __name__ == "__main__":

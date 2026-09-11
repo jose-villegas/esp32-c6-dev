@@ -30,13 +30,10 @@
 
 /* --- 2D block locality -----------------------------------------------------
  *
- * Sleeping was row-shaped: one settled bit per whole row, so an entire
- * row had to be quiet before any of it slept. These tests exercise genuine
- * 2D locality instead, regardless of which way gravity points - the
- * specific case measured on real hardware (a pour keeping a whole row
- * awake, most of it long settled) that a row-shaped scheme can't fix even
- * in principle (wake propagation only ever reached vertically). A
- * 3x3-block grid gives "far apart" room to mean something. */
+ * A row-shaped settled bit cannot fix a pour keeping a long-settled row
+ * awake, even in principle: wake propagation only ever reached vertically.
+ * These exercise 2D locality whichever way gravity points, on a 3x3-block
+ * grid, which is the smallest that gives "far apart" a meaning. */
 #define LOC_W_CAP (((SAND_BLOCK_W + 2) > 128) ? (SAND_BLOCK_W + 2) : 128)
 /* Capped, and malloc'd per test rather than `static`: this file also
  * compiles into the device build, where a `static` array is permanent BSS
@@ -381,21 +378,12 @@ static void test_sand_pushing_water_up_wakes_the_dry_row_it_lands_in(void)
 }
 
 
-/* Block-shaped skipping in the cross-flow pass (BLOCK_LIQUID_NEAR, see
- * sand_priv.h) rests on one claim: every liquid cell sits in a block whose
- * NEAR bit is set. The interesting way for that to be false is liquid ARRIVING
- * in a block the sweep has already walked and found dry - which is why the bit
- * is expanded to a block's 8 neighbours rather than used raw.
- *
- * This is the fixture that makes the un-expanded version fail, and it was
- * verified to fail before it was kept: with the expansion removed it reports
- * exactly 1 water cell, frozen, against several when correct. Two block-ROWS
- * are the point - the sweep walks the lower one first, so a cell falling
- * across the boundary lands behind it - and a single cell of water is the
- * point too: it empties its source block completely as it goes, so the source
- * block's own bit does not accidentally cover the destination. Without the
- * expansion the pass then finds no liquid anywhere, concludes may_have_liquid
- * is false, and switches itself off for good with the water still on screen.
+/* BLOCK_LIQUID_NEAR (sand_priv.h) is expanded to a block's 8 neighbours
+ * because liquid can ARRIVE in a block the sweep already walked and found
+ * dry. Two block-ROWS and a single cell of water are both the point: the
+ * sweep walks the lower row first, and one cell empties its source block,
+ * so nothing else covers the destination. Un-expanded, the pass finds no
+ * liquid and switches itself off with the water still on screen.
  */
 #define CROSS_BLOCK_W 40
 #define CROSS_BLOCK_H 80
@@ -503,16 +491,12 @@ static void test_water_crosses_a_block_boundary_sideways(void)
 }
 
 /* At the real screen size, SAND_BLOCK_W/H (16x64) do NOT evenly divide
- * 184x224 - the last block-column is 8 cells wide instead of 16, and the
- * last block-row is 32 cells tall instead of 64. No other test in this
- * file uses a grid shaped like that - every other sleeping/locality test
- * picks dimensions that are exact multiples of the block size, on
- * purpose, to keep the ASCII fixtures small. That gap is real: it is
- * exactly what let a division-free block-index rewrite pass every other
- * test in this file while still producing bad indices (and a real-
- * device crash) once grains actually reached the screen's true edges.
- * This drives grains into every block edge - including the two partial
- * ones - under every gravity direction the dithering can produce. */
+ * 184x224: the last block-column is 8 cells wide and the last block-row 32
+ * tall. Every other test here picks exact multiples to keep its ASCII
+ * fixtures small, and that gap let a division-free block-index rewrite pass
+ * all of them while still producing bad indices at the screen's true edges.
+ * This drives grains into every block edge, the two partial ones included,
+ * under every gravity direction the dithering can produce. */
 #define STRESS_W 184
 #define STRESS_H 224
 #define STRESS_BLOCK_COLS ((STRESS_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
@@ -541,20 +525,12 @@ static void test_block_indices_stay_in_range_at_the_real_screens_partial_edge_bl
     }
     const int grains = sand_count(&stress);
 
-    /* Every axis-aligned and diagonal direction in turn, a handful of
-     * steps each - straight down first (settles against the real bottom
-     * edge, y=223, the partial last block-row), then every other ring
-     * direction, so both slide directions and the fall direction all
-     * get to touch x=183 and y=223 (and 0/0) from every angle, not just
-     * straight down. Gravity's own dithering already mixes two ring
-     * directions per call; cycling the requested direction across all
-     * eight on top of that is what reaches the corners specifically.
-     * Kept short deliberately: a full checkerboard fill is the single
-     * most expensive occupancy shape there is (see the frame-budget
-     * tests), and this ran long enough at 30 steps/direction to trip the
-     * device's 5s task watchdog - the point here is edge coverage, not
-     * a long-running soak, so a handful of steps per direction is
-     * plenty to touch every edge at least once. */
+    /* Cycling all eight ring directions is what reaches the corners: the
+     * dithering already mixes two per call, but only a requested direction
+     * brings both slide directions and the fall direction to x=183 and
+     * y=223. Kept short deliberately - a full checkerboard is the most
+     * expensive occupancy shape there is, and 30 steps per direction
+     * tripped the device's 5s task watchdog. */
     const int gx[] = { 0, 100, 100, 100, 0, -100, -100, -100 };
     const int gy[] = { 100, 100, 0, -100, -100, -100, 0, 100 };
     for (int dir = 0; dir < 8; dir++) {

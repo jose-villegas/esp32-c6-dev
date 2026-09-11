@@ -856,18 +856,11 @@ void gfx_text_turned(int x, int y, const char *text, gfx_color_t color,
 }
 
 /*
- * Dithered text
- *
- * A second, complete copy of draw_rotated_font_pixel()/draw_glyph_font()/
- * gfx_text_font() rather than one shared core threaded with an alpha
- * parameter - on purpose: gfx_text_font() is the single font-aware path
- * every other text call in this file, and every caller of it in the whole
- * tree, already goes through, and it is worth that path staying exactly
- * the code it was before dithering existed, provably unable to regress
- * from this addition, rather than trusting a compiler to fold an
- * `alpha == 255` check back out of it at every call site forever. The
- * duplication is small (three short functions) and it buys that
- * guarantee outright instead of by inspection.
+ * A second copy of the three glyph functions rather than one core threaded
+ * with an alpha parameter, deliberately: gfx_text_font() is the single
+ * font-aware path every text call in the tree goes through, and keeping it
+ * provably unchanged beats trusting a compiler to fold an `alpha == 255`
+ * check back out of it at every call site forever.
  */
 
 static void draw_rotated_font_pixel_dither(const gfx_font_t *font, int x,

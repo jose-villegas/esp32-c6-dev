@@ -615,22 +615,13 @@ static void test_a_large_body_of_water_levels(void)
 
 static void test_a_settled_pool_does_not_flicker(void)
 {
-    /* The reported bug: water that looked finished settling kept visibly
-     * flashing between shades and back - which is exactly what it looks
-     * like when a large amount of mass swings from one cell to another and
-     * back, since colour is read straight off fill level.
-     *
-     * Reproduced with gravity held slightly OFF axis, not straight down.
-     * Exactly (0, 1000) never dithers at all - see
-     * sand_gravity_direction_dithered() - so a test using it could never
-     * catch a bug that only shows up once dithering is active, which real
-     * handling almost always has: a hand is never perfectly level either.
-     *
-     * The cause was equalise_liquids()'s cross-flow axis being taken from
-     * the DITHERED direction, which by design changes between two octants
-     * almost every step once off axis - so the axis a "is this level"
-     * search runs along changed out from under it constantly, and a pool
-     * level along one axis can read as wildly unbalanced along the other. */
+    /* Gravity is held slightly OFF axis on purpose: exactly (0, 1000) never
+     * dithers at all (sand_gravity_direction_dithered()), so an on-axis
+     * test cannot catch anything that only appears once the cross-flow axis
+     * swings between two octants - which real handling always produces,
+     * since a hand is never perfectly level. A pool level along one axis
+     * can read as wildly unbalanced along the other, and colour comes
+     * straight off fill level, so the swing is visible as flicker. */
     const int gx = 60, gy = 1000;
 
     wide_cells = malloc((size_t)WIDE_W * WIDE_H);
@@ -958,30 +949,15 @@ static void test_a_cascading_impulse_moves_more_than_one_cell(void)
 
     sand_impulse(&fx.cascade_test_sim, COL, TOP, DIR_UP, 255);
 
-    /* NOT "is any cell below TOP empty", any more - that check's own
-     * premise ("nothing else in this scene ever touches those cells") was
-     * simply wrong, caught by SAND_SPLASH_SPEED_DECAY_SHIFT's arrival
-     * (sand.h): the mover's own vacancy at TOP is exactly the open cell
-     * ordinary gravity needs to pull the column's next grain DOWN into,
-     * every step, before step_impulses() even runs - so the front of the
-     * chain spends most of its life oscillating between TOP and TOP+1
-     * (impulse pushes up, gravity pulls back down) rather than cleanly
-     * escaping upward, and every swap behind that oscillation trades
-     * water for water rather than ever leaving a cell empty long enough
-     * for this loop to catch it. Confirmed by direct trace, not merely
-     * reasoned about: SAND_CASCADE_MIN_SPEED's own comment (sand.h)
-     * covers the gate half of that discovery.
+    /* SIMULTANEOUS FLIGHT, NOT A GAP. Watching for an empty cell cannot
+     * work here: gravity pulls the column's next grain down into the
+     * mover's own vacancy before step_impulses() runs, so every swap trades
+     * water for water and no cell is ever empty long enough to see.
      *
-     * SIMULTANEOUS FLIGHT, NOT A GAP, is what actually proves "more than
-     * one cell moved" without depending on gravity ever losing that
-     * race: a single, non-cascading impulse can only ever be ONE entry in
-     * s->impulse_buf at a time - see sand_impulse()'s own comment. Seeing
-     * impulse_count climb above 1 during this run is only possible if a
-     * successful move actually triggered CASCADE's relay (step_impulses(),
-     * sand.c) and queued a second, independent entry for the SAME
-     * material one step behind the first - exactly the claim this test
-     * exists to pin down, observed directly rather than inferred from a
-     * side effect gravity can erase. */
+     * A single non-cascading impulse is only ever ONE entry in
+     * s->impulse_buf, so impulse_count above 1 can only mean CASCADE's
+     * relay (step_impulses(), sand.c) queued a second entry for the same
+     * material one step behind the first. */
     bool cascade_confirmed = false;
     for (int i = 0; i < 10 && !cascade_confirmed; i++) {
         sand_step(&fx.cascade_test_sim, 0, 1000, 0);
@@ -1120,27 +1096,13 @@ static void test_a_flying_water_grain_does_not_swap_into_dirt_in_its_path(void)
         "whole pour scene");
 }
 
-/* THE OTHER HALF OF THE SAME RULE: the new gate is about foreign, NON-
- * liquid occupants specifically, not a blanket ban on a flying liquid
- * displacing anything at all - a flying grain of water must still be able
- * to shoulder its way into another liquid, exactly as it always could, or
- * splashing into oil, acid or lava (see splash_displace()'s own comment,
- * sand_liquid.c) would have quietly stopped working alongside the fix.
- * PINNED HORIZONTALLY, with a floor beneath both cells, for the same
- * gravity-confound reason the test above goes straight down - here the
- * push direction ITSELF is sideways, so a floor is what keeps ordinary
- * gravity from pulling either cell out of the row before the impulse gets
- * to try its own move.
- *
- * A WALL ONE CELL PAST OX, new alongside SAND_IMPULSE_CELLS_PER_STEP_
- * DIVISOR (sand.h) - a full-speed push now covers several cells in one
- * step (that constant's own comment), so without something to stop it
- * there water swaps into the oil cell and immediately keeps going through
- * the open air beyond, and this test's own poll (once per whole step, not
- * per cell) never catches it AT rest on OX. The wall caps the push at
- * exactly the one cell this test cares about - whether the swap into
- * another liquid happens at all - without touching how far an unobstructed
- * throw travels anywhere else. */
+/* The other half of the same rule: can_impulse_enter() narrows a liquid
+ * mover against NON-liquid occupants only, so splashing into oil, acid or
+ * lava must still work. A floor under both cells keeps gravity from pulling
+ * either out of the row before the sideways push runs, and a wall one cell
+ * past OX caps it there - a full-speed push covers several cells per step
+ * (SAND_IMPULSE_CELLS_PER_STEP_DIVISOR, sand.h), and this test polls once
+ * per step, so an unstopped grain is never seen AT rest on OX. */
 static void test_a_flying_water_grain_still_displaces_another_liquid(void)
 {
     fixture();
@@ -1175,16 +1137,10 @@ static void test_a_flying_water_grain_still_displaces_another_liquid(void)
 #define LIQ_CASCADE_H 16
 static uint8_t liq_cascade_cells[LIQ_CASCADE_W * LIQ_CASCADE_H];
 
-/* SAME SCENE SHAPE AND SAME impulse_count > 1 SIGNAL AS
- * test_a_cascading_impulse_moves_more_than_one_cell ABOVE - see that
- * test's own comment for why a vertical column pushed UP (against
- * gravity, in a grid exactly as wide as the column) is what isolates a
- * genuine multi-hop CASCADE relay from ordinary gravity or cross-flow.
- * Run again here specifically against the new can_impulse_enter()
- * liquid-vs-non-liquid gate: water relaying into water is the SAME kind
- * on both sides of every hop in this chain, so the gate - which only
- * narrows a KIND_LIQUID mover's swap into a target that is NOT liquid -
- * must never fire once in this whole run. */
+/* The same scene and the same impulse_count > 1 signal as
+ * test_a_cascading_impulse_moves_more_than_one_cell above, run against
+ * can_impulse_enter()'s liquid gate: water relaying into water is the same
+ * kind on both sides of every hop, so the gate must never fire here. */
 static void test_a_water_into_water_cascade_is_untouched_by_the_liquid_fix(void)
 {
     enum { COL = 0, TOP = 8, COL_LEN = 8, DIR_UP = 4 };

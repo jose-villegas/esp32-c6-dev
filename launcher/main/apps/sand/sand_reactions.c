@@ -1,58 +1,24 @@
 /*
  * sand_reactions - fire chemistry: ignites fuel, spreads, is extinguished,
- * burns out.
+ * burns out. docs/sand/Sand-Simulation.md's "Fire chemistry" section carries
+ * the design - why a lit log stays put instead of becoming fire, why steam and
+ * smoke are separate materials, and why burying a log in sand will not put it
+ * out.
  *
- * Two materials burn: fire itself, and the ember a log of wood chars into,
- * both dispatched by reaction_t.burns (material.h) rather than a
- * CELL_MATERIAL(c) == MAT_FIRE check, which would silently ignore ember.
+ * Both burning materials are dispatched by reaction_t.burns rather than a
+ * CELL_MATERIAL(c) == MAT_FIRE test, which would silently ignore ember.
  *
- * WHY WOOD CHARS INTO AN EMBER RATHER THAN IGNITING STRAIGHT TO FIRE: fire
- * is KIND_GAS, so a wood cell that became fire would float away on the
- * very next sand_step_gas() pass, leaving a hole where the log was - the
- * burn would stall or race depending on nothing the player can see.
- * MAT_EMBER splits the job instead: the ember (KIND_STATIC) stays exactly
- * where the log was, igniting neighbours and decaying in place, while an
- * ordinary, separate MAT_FIRE (reaction_t.flare) licks up off it purely
- * for looks and to reach fuel stacked above, rising through its own
- * unrelated sand_step_gas() pass.
+ * The scan reads row[x] fresh at every index, so a cell ignited ahead of the
+ * pointer within one pass spreads further in that same step while one ignited
+ * behind it waits for the next. Deliberate - explosion-like spread through a
+ * connected pocket of fuel rather than a slow creep - and true only for
+ * pockets laid out ahead of the scan's fixed row-major direction.
  *
- * Nothing here ever relocates a cell - every mutation is in place - so
- * this pass needs none of sand_step_gas()'s reversed-sweep machinery,
- * just a fixed scan order. That scan reads row[x] fresh at every index,
- * so a cell ignited earlier in THIS SAME pass (ahead of the scan pointer)
- * gets its own turn to spread further within the same step, while one
- * ignited behind the pointer waits for the next sand_step() - a
- * deliberate choice (explosion-like spread through a connected pocket of
- * fuel, not a slow creep), not an oversight, and true only for pockets
- * laid out ahead of the scan's own fixed row-major direction.
- *
- * Ember, at density 150, is essentially never smothered - smothered()
- * needs all four neighbours STRICTLY denser, and only stone (200)
- * qualifies, so burying a log in sand will not put it out. That is an
- * accepted limitation, not a bug to chase: only decay or water ends an
- * ember.
- *
- * Quenching (water touching a burning cell) produces MAT_STEAM at a cost
- * to the quenching liquid's own mass (pay_quench_cost()); simply running
- * out of life produces MAT_SMOKE instead. Kept as two materials because a
- * fire burning out in mid-air, nowhere near water, puffing bright
- * kettle-steam reads as a bug to anyone who can see there was nothing there
- * to boil. The split is mostly a palette difference (cool/bright for steam,
- * warm/dim for smoke).
- *
- * THE BOILER: fire never crosses stone directly - conduct_heat() conducts
- * heat through it instead, boiling a liquid or igniting fuel on the far
- * side, never creating fire in empty space, which is what keeps a sealed
- * box sealed. Not a can_enter() special case letting fire pass through:
- * that would leak fire through every sealed stone container. Boiling
- * happens at the heat source; the steam bubbles out on its own through
- * try_bubble() (sand_gas.c). conduct_heat()'s own reach has to attenuate
- * with thickness rather than stop at one conductor cell: the pour brush
- * cannot draw a wall one cell thick, so a reach-of-one boiler is
- * unbuildable on the device despite reading as a clean rule in isolation.
- * CONDUCT_REACH bounds the walk's cost but must stay generous enough that
- * attenuation, not the cap, is what limits depth in any scene the brush can
- * actually draw.
+ * conduct_heat()'s reach attenuates with thickness rather than stopping at one
+ * conductor cell: the pour brush cannot draw a wall one cell thick, so a
+ * reach-of-one boiler is unbuildable on the device however clean it reads in
+ * isolation. CONDUCT_REACH bounds the walk's cost, and must stay generous
+ * enough that attenuation rather than the cap is what limits depth.
  */
 
 #include "reaction_doc.h"
@@ -1655,16 +1621,13 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cell_
                                  ? ((s->lava_cooloff >= 0) ? s->lava_cooloff : SAND_LAVA_COOLOFF_CHANCE)
                                  : 0;
     /* SKIPPED WHOLE when nothing on the board can be paired WITH. On a full
-     * screen of fire this is every cell, every step: measured 41216 walks and
-     * 41216 of them finding nothing, four bounds-checked probes each.
+     * screen of fire that is every cell, every step: measured 41216 walks
+     * all finding nothing, four bounds-checked probes each.
      *
-     * A NEIGHBOUR PROPERTY, which is what makes one flag enough:
-     * pair_bits[mine][theirs] does not depend on mine - the table is sixteen
-     * identical rows - so "can anything here be acted on" is the same
-     * question for every cell doing the looking.
-     *
-     * RNG-NEUTRAL: both draws inside this walk sit behind a non-zero pair
-     * byte, so a board with none draws nothing and the stream is untouched. */
+     * One flag is enough because pair_bits[mine][theirs] does not depend on
+     * mine - sixteen identical rows - so the question is the same for every
+     * cell doing the looking. RNG-neutral: both draws inside the walk sit
+     * behind a non-zero pair byte. */
     if ((present_pair_bits & (PAIR_IGNITABLE | PAIR_HEAT_RESPONSIVE)) == 0) {
         goto pair_done;
     }
@@ -2032,15 +1995,11 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
 }
 
 /* BUILT ONCE, NOT PER STEP. Every one of these is a pure function of
- * reactions[], extended_reactions[] and materials[] - all const, all
- * flash-resident, none of them reachable by anything at runtime - yet the
- * whole lot was rebuilt on every step that got past the seven-flag early
- * out. reaction_first_stage() alone is a seventeen-field ladder run
- * thirty-two times, and pair_bits is 256 stores.
- *
- * A step's own cost is unchanged by this on a busy board; what it removes is
- * a fixed toll on every step of every scene that has anything reacting at
- * all. */
+ * reactions[], extended_reactions[] and materials[] - all const and
+ * flash-resident, unreachable at runtime. reaction_first_stage() alone is a
+ * seventeen-field ladder run thirty-two times, and pair_bits is 256 stores,
+ * so rebuilding them was a fixed toll on every step of every reacting
+ * scene. */
 static bool reaction_tables_ready;
 
 static void build_reaction_tables(void)

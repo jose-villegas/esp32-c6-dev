@@ -1,57 +1,24 @@
 /*
  * fixed - shift-based fixed-point arithmetic, in one place.
  *
- * `static inline`: some of these run in the sand simulation's innermost
- * loops, tens of thousands of times a second, where a cross-file function
- * call is not free - same reasoning as intmath.h.
+ * `static inline` because some of these run in innermost simulation loops
+ * where a cross-file call is not free - the same reasoning as intmath.h.
  *
- * THE SHIFT IS A PARAMETER, NOT A CONSTANT
+ * `shift` is a parameter rather than a constant because the tree works in
+ * more than one fixed-point scale, and one vocabulary per scale is how this
+ * arithmetic ended up hand-rolled five times over.
  *
- * The tree uses more than one fixed-point scale - Q8 in sand and tilt, Q16.16
- * in the UI transform - and both need the same underlying operation. Rather
- * than one vocabulary per scale (which is exactly how this arithmetic ended
- * up hand-rolled five times over), `shift` says which fixed-point format a
- * caller is working in and the same three functions serve all of them.
+ * The `(int64_t)` in `((int64_t)a * b) >> shift` is load-bearing: two 32-bit
+ * fixed-point numbers multiplied in 32 bits overflow silently, well before
+ * the shift can bring the result back into range. It lives here, once, so no
+ * caller can forget it.
  *
- * THE WIDENING CAST IS THE WHOLE POINT
- *
- * Every one of these is, at heart, `((int64_t)a * b) >> shift`. The
- * `(int64_t)` is load-bearing: two 32-bit fixed-point numbers multiplied in
- * 32 bits overflow silently, long before the shift ever gets a chance to
- * bring the result back into range. Putting the cast here, once, means a
- * caller cannot forget it.
- *
- * FLOOR VS ROUND - READ THIS BEFORE PICKING ONE
- *
- * `>> shift` on a signed value is an ARITHMETIC shift: for a negative value
- * it floors toward negative infinity, it does NOT truncate toward zero.
- * -1 >> 1 is -1, not 0. fx_mul_floor() is exactly that shift, done on a
- * 64-bit product so it cannot overflow; fx_mul_round() instead rounds the
- * product to the nearest representable value (ties away from zero) before
- * bringing it down.
- *
- * These are NOT interchangeable, and picking the one that "sounds more
- * correct" is exactly the mistake this comment exists to head off: on a
- * signed, routinely-negative accumulator, fx_mul_round() nudges every
- * negative step upward relative to fx_mul_floor() and changes the
- * simulation's output over many steps.
- *
- *   - boot_anim.c's phase-span interpolation uses fx_mul_floor() on an
- *     operand already guarded non-negative by its own caller - floor and
- *     round agree there, so the choice is only for consistency with the
- *     rest of that file's math, not because it matters numerically.
- *   - ui_transform.h's ui_fp_mul()/ui_fp_div() use rounding (via
- *     fx_mul_round()/fx_div_round()), because a UI transform is a geometry
- *     computation where round-trip accuracy - a rect mapped and mapped back
- *     lands where it started - matters more than which way a fraction
- *     happens to break, and there is no accumulating simulation state for a
- *     rounding bias to compound in.
- *
- * When in doubt: if the value is a running accumulator that gets multiplied
- * against itself step after step (a decay, a momentum, anything simulated),
- * match whatever operation it already used - do not switch it to "round"
- * because that sounds more accurate. If the value is a one-shot geometric
- * computation, round is usually what you want.
+ * fx_mul_floor() and fx_mul_round() are NOT interchangeable, and picking the
+ * one that sounds more correct is the mistake this exists to head off: on a
+ * signed, routinely-negative accumulator, rounding nudges every negative step
+ * upward relative to the arithmetic shift and moves the output over many
+ * steps. Match whatever an accumulator already used; rounding is for one-shot
+ * geometry, where round-trip accuracy matters and nothing compounds.
  */
 #pragma once
 

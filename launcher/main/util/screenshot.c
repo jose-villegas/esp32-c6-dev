@@ -191,14 +191,11 @@ bool screenshot_take_runsuite_request(char *name_out, size_t name_out_size)
 }
 #endif
 
-/* Not stack-local: screenshot_dump() runs on main.c's shell task
- * (3584-byte stack); a 1104-byte row plus 1472-byte base64 would be
- * most of that budget on top of printf/ESP_LOG's own use. Not
- * permanently static either: malloc'd here and freed before returning,
- * so these 2,577 bytes are reserved only for the duration of a capture
- * - static here once competed directly with an app's own large runtime
- * allocation for the single largest contiguous heap block it needs, the
- * exact failure a --dev build hit opening that app. */
+/* Not stack-local: screenshot_dump() runs on the shell task (3584-byte
+ * stack), and a 1104-byte row plus 1472-byte base64 would be most of that
+ * budget on top of printf/ESP_LOG's own use. Not permanently static either -
+ * held only for the duration of a capture, because static here competes for
+ * the largest contiguous heap block an app may need at runtime. */
 static uint8_t *row;
 static char    *row_b64;   /* +1: NUL, for printf("%s") */
 

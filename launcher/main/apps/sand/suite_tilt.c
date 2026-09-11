@@ -288,13 +288,9 @@ static void test_free_fall_stops_the_flow_even_on_a_stale_estimate(void)
 
 static void test_turning_the_board_does_not_read_as_shaking(void)
 {
-    /* The reported bug. Rotating the device threw the sand at the walls,
-     * because "shaken" was read off the gyroscope - so every deliberate turn
-     * unlocked friction and made every grain prefer to slide sideways.
-     *
-     * A turn keeps the magnitude at one g however fast it is, so the sample
-     * says plainly that nothing is being shaken. The gyro is pinned at maximum
-     * here to make the point. */
+    /* Reading "shaken" off the gyroscope makes every deliberate turn unlock
+     * friction. A turn keeps the magnitude at one g however fast it is, so
+     * the gyro is pinned at maximum here to make the point. */
     /* A REAL rotation, which keeps the magnitude at exactly one g. Built from
      * the 3-4-5 triangle so the components are exact in integers - a naive
      * sweep like (k, ONE_G - k) is not a rotation at all, it shrinks the vector

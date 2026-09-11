@@ -262,14 +262,11 @@ static inline int ui_panel_spans(mu_Rect r, mu_Color face, mu_Color border,
     return UI_PANEL_MAX_SPANS;
 }
 
-/* The halo colour for a given ink, derived from the ink's luminance
- * rather than fixed - see UI_BEZEL_HIGHLIGHT/SHADOW above. A fixed halo
- * fails like a fixed button highlight: it vanishes against whichever
- * ink matches it. Same bug a per-tile spawn-selection badge hit
- * deriving its ring from the swatch colour it sits on (unreadable
- * against a light swatch) - fixed there to a max-contrast pair since it
- * already had one. A general halo has none, so it goes to the opposite
- * extreme via ui_shade() - a partial mix can still wash out. */
+/* The halo colour for a given ink, derived from the ink's luminance rather
+ * than fixed - see UI_BEZEL_HIGHLIGHT/SHADOW above. A fixed halo vanishes
+ * against whichever ink matches it. A badge sitting on a known pair can pick
+ * the contrasting one; a general halo has no such pair, so it goes to the
+ * opposite extreme via ui_shade() - a partial mix can still wash out. */
 static inline mu_Color ui_text_halo(mu_Color ink)
 {
     /* Same weights as a standard perceptual luma (~0.30/0.59/0.11 scaled to

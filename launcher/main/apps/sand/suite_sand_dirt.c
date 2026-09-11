@@ -170,17 +170,13 @@ static void test_new_dirt_starts_dry_in_a_random_tone(void)
         "fill is exactly the flatness this many tones exist to avoid");
 }
 
-/* And a SECOND pour, once the pour clock has moved on, must land on a
- * different band - a bank built from several pours shows its layers, the
- * same way build_layered_dune_scene()'s sand does.
+/* A SECOND pour, once the pour clock has moved on, must land on a
+ * different band - that is what gives a bank built from several pours its
+ * layers.
  *
- * The pour clock is jumped directly (sand_t's own `pour_phase` field,
- * reached the same way this file already reaches into sand_priv.h for
- * ring_dir()/cover_mask() - see this file's own top comment) rather than
- * run forward through 64 real steps of physics: what is under test is the
- * band bookkeeping in random_cell() (sand.c), not whether a pile settles
- * in a grid this small, and running real steps would let scatter carry
- * grains sideways across the very columns this test tells apart. */
+ * `pour_phase` is jumped directly rather than run forward through 64 real
+ * steps: scatter would carry grains sideways across the very columns this
+ * test tells apart. */
 static void test_consecutive_dirt_pours_land_on_different_bands(void)
 {
     fixture();
@@ -242,15 +238,10 @@ static void test_a_dry_dirt_grain_keeps_its_tone_as_it_falls(void)
 
 /* WETTING DISCARDS THE TONE, AND DRYING PICKS A FRESH ONE.
  *
- * A wet cell carries no tone of its own (material.h's own comment on
- * soil's state split), so there is nothing of an old tone left to come
- * back once a cell dries out again - it is reassigned from scratch by
- * soil_dry_out() (sand_reactions.c), biased by whatever is still wet
- * nearby. Painted at tone 5, then wetted, then dried back out again with
- * nothing else on the board to bias from (stone on every side but the
- * top, which stays empty), it must land back on tone 0 - landing on tone
- * 5 again would mean the original tone had survived a round trip through
- * being wet that it has no way to survive honestly. */
+ * A wet cell carries no tone of its own (material.h), so soil_dry_out()
+ * reassigns one from scratch, biased by whatever is still wet nearby.
+ * With stone on every side but the top there is nothing to bias from, so
+ * a cell painted at tone 5 must come back at tone 0. */
 static void test_soil_loses_its_tone_across_a_wetting_and_gets_a_fresh_one_drying(void)
 {
     fixture();
@@ -278,21 +269,13 @@ static void test_soil_loses_its_tone_across_a_wetting_and_gets_a_fresh_one_dryin
 
 /* THE DRYING-FRONT IMPRINT: a donor cell that empties itself by handing
  * its very last unit of moisture to a drier neighbour dries out biased by
- * THAT neighbour, not bone pale - see soil_dry_out()'s own comment
- * (sand_reactions.c). This is what makes a pile that dried top-down
- * legible as having dried top-down: pale where nothing was left to give
- * to, darker wherever a cell was still watering something the moment it
- * ran out.
+ * THAT neighbour, not bone pale - see soil_dry_out() (sand_reactions.c).
+ * It is what makes a pile that dried top-down legible as having dried
+ * top-down.
  *
- * Four independent columns, spaced two apart so a diagonal percolation
- * attempt from one never reaches another (the gap between them is left
- * EMPTY, and step_one_soaking_cell()'s percolation scan skips an empty
- * candidate outright) - not because the mechanism is unreliable, but
- * because WHICH of percolation or plain ambient decay fires first on any
- * one column is still a roll (percolation is by far the likelier of the
- * two here, but this only needs to see the hand-off happen once to prove
- * it is wired in at all, and four independent rolls make that as close
- * to certain as a test should ask for). */
+ * The four columns sit two apart so a diagonal percolation attempt from
+ * one never reaches another, and there are four because which of
+ * percolation or ambient decay fires first on any one column is a roll. */
 static void test_soil_dries_biased_by_the_neighbour_it_just_watered(void)
 {
     fixture();
@@ -342,16 +325,9 @@ static void test_soil_dries_biased_by_the_neighbour_it_just_watered(void)
 
 /* A WHOLE BANK, watered and then left to dry, must not come back flat.
  *
- * The narrow test above proves the imprint is wired into one hand-off.
- * This one asks the question the feature actually exists to answer, on
- * the scene that produced the complaint: pour a bank, soak it, take the
- * water away, wait until the last cell is bone dry, and see whether what
- * is left has any structure in it at all.
- *
- * It starts every cell at the SAME tone deliberately. Any spread at the
- * end is therefore the drying itself talking, not the pour band it was
- * laid down with - the two are separate sources of tone and this test is
- * only about the second. */
+ * Every cell starts at the SAME tone deliberately: any spread at the end
+ * is the drying itself talking, not the pour band it was laid down
+ * with. */
 #define DRY_BANK_W 16
 #define DRY_BANK_H 14
 
@@ -431,22 +407,12 @@ static void test_a_watered_bank_does_not_dry_back_to_one_flat_tone(void)
              "(%d/%d/%d/%d/%d/%d/%d/%d)",
              total, distinct, commonest, hist[0], hist[1], hist[2],
              hist[3], hist[4], hist[5], hist[6], hist[7]);
-    /* THREE tones and no tone holding half the bank. Measured on this
-     * scene it comes out 27/25/24/3/1/0/0/0 across 80 cells - the top of
-     * the bank dries first with nothing wet left beside it and lands
-     * pale, while the cells under it dry while still passing water down
-     * and carry that with them.
-     *
-     * The top of the range stays empty here and that is not a fault: a
-     * cell only ever empties from a single level, handing it to a
-     * neighbour that then holds one more than it did, so reaching tone 6
-     * or 7 needs soil that was ALREADY damp to hand to - deep in a much
-     * bigger pile, or a root pulling through wet ground. Asserting the
-     * whole range would be asserting a scene this test does not build.
-     *
-     * The floor is set where a regression would actually land: lose the
-     * imprint and every cell dries through the unbiased path onto tone 0,
-     * which is one distinct tone holding all eighty. */
+    /* THREE tones and no tone holding half the bank: measured on this
+     * scene it comes out 27/25/24/3/1/0/0/0 across 80 cells. Tone 6 or 7
+     * needs soil that was ALREADY damp to hand to - a far bigger pile
+     * than this - so asserting the whole range would be asserting a scene
+     * this test does not build. The floor is where a regression lands:
+     * lose the imprint and all eighty dry onto tone 0. */
     TEST_ASSERT_TRUE_MESSAGE(distinct >= 3 && commonest * 2 < total, why);
 }
 
@@ -480,20 +446,13 @@ static void test_soil_is_one_monotone_luminance_ramp(void)
 }
 
 
-/* Only WATER wets what it touches.
- *
- * `soaks` belongs to sand and soil, and the obvious way to write it - take
- * a unit of any adjacent KIND_LIQUID - reads perfectly and is wrong for
- * three of the four liquids on this board. Measured before the fix, a bank
- * of sand under oil turned entirely into saturated soil; so did one under
- * LAVA. Reported as oil soaking, which it was, along with everything else.
- *
- * Wetness is not the same question as fluidity, and only the liquid knows
- * the answer, so it is the liquid that carries the flag.
+/* Only WATER wets what it touches: wetness is not the same question as
+ * fluidity, so the flag belongs to the liquid rather than to KIND_LIQUID,
+ * which is wrong for three of the four liquids on this board.
  *
  * Oil is the liquid to test with. Acid dissolves sand and lava fuses it,
  * so with either of those "the sand is gone" proves nothing about
- * soaking; oil leaves it alone entirely, which is the point. */
+ * soaking; oil leaves it alone entirely. */
 static void test_only_water_wets_what_it_touches(void)
 {
     fixture();
@@ -672,18 +631,12 @@ static void test_soil_a_wetting_front_converts_is_handed_a_real_share(void)
 
 /* A shattered pane comes back as CULLET, not as beach.
  *
- * Sand's variant is a shade, so recording that a grain used to be glass
- * costs nothing but four of the sixteen shades it could have had. What it
- * buys is that the wreckage of a window stays visibly the wreckage of a
- * window - sand's shade never changes, so a heap of it keeps the memory
- * indefinitely and mixes into an ordinary dune without becoming it.
+ * Sand's variant is a shade, so recording a grain's glass origin costs
+ * four of the sixteen shades it could have had, and buys wreckage that
+ * mixes into an ordinary dune without becoming it.
  *
- * The second assert is the one that matters for how it LOOKS. Shattered
- * glass was already landing at the top of sand's ramp, because that is
- * what the general placement helper hands a new cell - so it was already
- * the brightest sand there is, in one flat value across the whole pane. A
- * band that is not varied inside itself is a slab of colour, which is the
- * thing this is meant to stop being. */
+ * The second assert is the one that matters for how it LOOKS: a band that
+ * is not varied inside itself is a slab of colour. */
 static void test_a_shattered_pane_comes_back_as_cullet(void)
 {
     fixture();
@@ -848,16 +801,12 @@ static void test_cullet_does_not_look_like_sand(void)
 
 /* Water reaches the BOTTOM of a submerged pile.
  *
- * Diffusion alone cannot do this and the shape of its failure is
- * distinctive: half-the-difference settles into a gradient of one level
- * per cell and then stops, because half of a gap of one is zero. So a pile
- * held under water wet its top few rows into a perfect ramp and froze,
- * with dry sand underneath it for ever, and the depth it reached was set
- * by the size of the moisture range rather than by how much water there
- * was. Reported as dirt not wetting a whole pile "even fully submerged".
- *
- * What fixes it is gravity: percolation needs no gradient, only room in
- * the cell it is going to, so it does not stall. */
+ * Diffusion alone cannot: half-the-difference settles into a gradient of
+ * one level per cell and stops there, because half of a gap of one is
+ * zero, so the depth reached is set by the size of the moisture range
+ * rather than by how much water is standing on the pile. Gravity is what
+ * carries it down - percolation needs no gradient, only room in the cell
+ * it is going to. */
 static void test_water_percolates_to_the_bottom_of_a_submerged_pile(void)
 {
     fixture();
@@ -906,18 +855,13 @@ static void test_water_percolates_to_the_bottom_of_a_submerged_pile(void)
 }
 
 
-/* Percolation goes down and SIDEWAYS-down, not straight down.
+/* Percolation goes down and SIDEWAYS-down, not straight down: fingers
+ * that wander, split and join, rather than a flat sheet of damp
+ * descending one row at a time, and the difference between water getting
+ * past an obstacle and water stopping at one.
  *
- * That is what makes it look like water finding its way into sand -
- * fingers that wander, split where a wet cell sends half one way and half
- * the other, and join where two meet - rather than a flat sheet of damp
- * descending one row at a time. It is also the difference between water
- * getting past an obstacle and water stopping at one.
- *
- * The scene is built so that nothing else can be responsible. The wet cell
- * is walled in on both sides, so the sideways diffusion cannot reach the
- * grains below; and it is walled in directly beneath, so straight-down
- * percolation cannot either. The only way out is diagonal. */
+ * The wet cell is walled in on both sides and directly beneath, so the
+ * only way out is diagonal. */
 static void test_water_percolates_diagonally_as_well_as_straight_down(void)
 {
     fixture();

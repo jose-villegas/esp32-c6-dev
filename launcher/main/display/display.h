@@ -1,61 +1,18 @@
 /*
  * display - which way is "up", decided once for the whole shell.
  *
- * Orientation is a property of the physical device, not of any one app's
- * panel - decided once, here, so main.c can apply it and every UI surface,
- * launcher and boot menus included, follows.
+ * Orientation belongs to the physical device, not to any one app's panel, so
+ * it is decided here and main.c applies it; every UI surface follows. No IMU,
+ * no gfx, no ui - the gravity vector arrives already read, which is what lets
+ * this link and run on a host.
  *
- * PURE, HOST-TESTABLE, IN THE MANNER OF gesture.c AND tilt.c
- *
- * No IMU, no gfx, no ui: the gravity vector is fed in already read (and, in
- * practice, already smoothed - see input/imu.h and apps/sand/tilt.h for what
- * that looks like) and this module only decides. Applying the decision -
- * calling ui_set_transform() - is main.c's job. Keeping "decide" and "apply"
- * apart is what lets this link and run on a host; see
- * test/suites/suite_display.c.
- *
- * HYSTERESIS IS THE POINT, NOT AN EXTRA
- *
- * The obvious implementation - snap to whichever of gx/gy has the larger
- * magnitude - puts its boundary at 45 degrees from "up", where a board held
- * near that angle flips the whole UI back and forth every single frame the
- * tilt wobbles across it. Intolerable once the whole shell, launcher
- * included, rotates with the reading.
- *
- * The fix is a Schmitt trigger, expressed directly in the gravity
- * components rather than in degrees (there is no trig here, and does not
- * need to be - see the arithmetic below). For whichever quarter is
- * CURRENTLY committed, split (gx, gy) into two parts:
- *
- *   aligned        the component along that quarter's own "down" direction -
- *                   positive and large while the board is still held roughly
- *                   the way this quarter expects.
- *   perpendicular   the other component - how far off to the side gravity
- *                   has drifted.
- *
- * A switch away from the current quarter fires once
- *
- *   |perpendicular| * DISPLAY_HYST_DEN  >  aligned * DISPLAY_HYST_NUM
- *
- * DISPLAY_HYST_NUM/DEN = 7/4 = 1.75, a small-integer stand-in for
- * tan(60 degrees) = 1.732 - so leaving a quarter needs the tilt to have
- * drifted about 60 degrees from where that quarter calls "down". (A negative
- * `aligned` - tilt past 90 degrees - satisfies the inequality on its own,
- * since the right side goes negative while the left stays non-negative, so a
- * hard flip clears the threshold in one step rather than getting stuck.)
- *
- * That single ratio, applied relative to whichever quarter is current, is
- * what produces the asymmetric "60 out, 30 back" the task calls for, with no
- * second constant needed: aligned and perpendicular are the same two gravity
- * axes, just relabelled after a switch, because the quarter that was
- * "perpendicular" a moment ago is now the aligned one. So returning to the
- * ORIGINAL quarter needs the tilt back within 30 degrees of it (the
- * complement of 60) even though the code runs the identical comparison
- * against the identical ratio on both sides of the switch - it is just
- * asking the question of whichever quarter happens to be current at the
- * time. A vector parked exactly on the old 45-degree boundary (|gx| == |gy|)
- * satisfies neither the outbound nor the inbound test at either quarter, so
- * it never oscillates.
+ * The hysteresis is the module, not a refinement of it. Snapping to whichever
+ * of gx/gy is larger puts the boundary at 45 degrees, where a board held near
+ * that angle flips the whole shell every frame the tilt wobbles across it. A
+ * Schmitt trigger expressed directly in the gravity components replaces it:
+ * DISPLAY_HYST_NUM/DEN is 7/4, a small-integer stand-in for tan(60 degrees),
+ * and applying that one ratio against whichever quarter is current is what
+ * yields "60 degrees out, 30 back" without needing a second constant.
  */
 #pragma once
 

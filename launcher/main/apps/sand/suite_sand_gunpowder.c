@@ -30,22 +30,11 @@
 #include "util/intmath.h"
 #include "suite_sand_common.h"
 
-/* ===================================================================
- * Gunpowder: REVISION 2, the fuse model.
- *
- * Ignition (fire contact, damped by moisture) and the heat path (lava
- * beside it, heat conducted through stone, once any wet stage has
- * steamed the moisture off) both write GUNPOWDER_LIT_CELL - a burning
- * STATE like wood's, not an immediate blast. A lit cell is a heat
- * source: it ignites flammable neighbours, and counts down on its own
- * burn_decay roll. Only at BURN-OUT does step_one_burning_cell() ask
- * find_lit_two_by_two() (sand_reactions.c) whether this cell is one
- * corner of a still-lit 2x2 - if impulses are enabled and it is, that is
- * a blast (sand_explode(), SAND_GUNPOWDER_BLAST_RADIUS); otherwise it is
- * plain fire, the ordinary way a flame guts out. See material.h's own
- * comment on reaction_t.explodes and material.c's GUNPOWDER_REACTION for
- * the full account this section tests against.
- * =================================================================== */
+/* Gunpowder is a fuse, not a bomb: ignition writes GUNPOWDER_LIT, a
+ * burning STATE like wood's. Only at burn-out does the cell ask
+ * find_lit_two_by_two() whether it is one corner of a still-lit 2x2 - if
+ * so, and if impulses are enabled, that is a blast; otherwise the flame
+ * guts out as plain fire. */
 
 /* Cells whose CELL_MATERIAL reads MAT_EXTENDED are either a static or
  * gunpowder - count_cells_of() (this file, above) cannot tell the two
@@ -101,15 +90,9 @@ static void test_material_name_says_gunpowder_for_every_code(void)
     }
 }
 
-/* Three dry tones, distinct from one another, and moisture 1..moist_max
- * strictly DARKENING with level, never landing back on a dry tone's
- * exact colour - see material.c's own comment on the GUNPOWDER palette
- * block for the rule this pins. Code 7 (GUNPOWDER_LIT) is deliberately
- * left out of the ramp: it is a burning STATE, not a wetness level - see
- * reaction_t.lit_from's own comment (material.h) for why moisture_of()
- * reads it as dry (0), not saturated, and material.c's own comment on
- * why this suite's final report flags that entry's colour and comment as
- * stale rather than asserting anything about it here. */
+/* Code 7 (GUNPOWDER_LIT) is deliberately outside the moisture ramp: it
+ * is a burning STATE, not a wetness level, and moisture_of() reads it as
+ * dry rather than saturated. */
 static void test_gunpowder_palette_tones_are_distinct_and_moisture_darkens(void)
 {
     const gfx_color_t *pal = material_palette();
@@ -148,14 +131,9 @@ static void test_gunpowder_palette_tones_are_distinct_and_moisture_darkens(void)
     }
 }
 
-/* The whole codec, pinned by its documented shape (material.h's moisture
- * codec comment, REVISION 2's codes table): codes 0-2 are the three dry
- * tones (moisture 0), 3-6 are moisture 1-4, and 7 is GUNPOWDER_LIT, a
- * burning STATE that reads as dry (moisture 0), never as saturated - see
- * reaction_t.lit_from's own comment for why. with_moisture() must round
- * -trip every level moisture_of() can report, including 0 (a no-op call
- * that lands on a dry tone, not a real wet state, but must not crash or
- * mis-decode either). */
+/* Codes 0-2 are the dry tones, 3-6 moisture 1-4, and 7 is GUNPOWDER_LIT,
+ * which reads as moisture 0 rather than as saturated. with_moisture()
+ * must round-trip level 0 too, a no-op landing on a dry tone. */
 static void test_gunpowder_codes_decode_to_the_documented_moisture(void)
 {
     const reaction_t *r = reaction_of(GUNPOWDER_BASE);
@@ -228,21 +206,11 @@ static void test_gunpowder_falls_and_piles_like_a_powder(void)
         "stall short of it");
 }
 
-/* Density only settles a contest between a POWDER and a LIQUID - a grain
- * displaces a liquid cell whenever it is denser, the ordinary sinking
- * every powder already does. Between two POWDERS AT REST, density never
- * decides anything at all: this simulation deliberately never lets one
- * powder sink through another sitting still (see sand.c's own comment,
- * around the try_fall_or_scatter() family, on why a grain has "no
- * business sinking through another powder" - weight is carried through
- * contact, not resolved by density, unless an IMPULSE is involved). So
- * gunpowder sinks through every liquid it is denser than, but a powder
- * poured onto a bed of gunpowder (or gunpowder poured onto a bed of a
- * powder) simply rests on top of it, whichever way around the pour
- * happened - acid is left out of the liquid half deliberately, since it
- * also DISSOLVES gunpowder (dissolvable 200,
- * test_acid_dissolves_gunpowder already covers that reaction) and would
- * confound a plain sinking check. */
+/* Density only settles a contest between a POWDER and a LIQUID. Between
+ * two powders at rest it decides nothing: weight is carried through
+ * contact, not resolved by density, unless an impulse is involved. Acid
+ * is left out of the liquid half deliberately - it also dissolves
+ * gunpowder, which would confound a plain sinking check. */
 static void test_gunpowder_sinks_through_liquids_and_rests_on_and_under_sand(void)
 {
     fixture();
@@ -345,20 +313,11 @@ static void test_gunpowder_is_conserved_under_every_gravity(void)
 
 /* --- ignition and the heat path -------------------------------------- */
 
-/* NOT fire_room() - that boxes fire in on all four cardinal sides, which
- * works for the GAS neighbour test_fire_ignites_an_adjacent_flammable_
- * neighbour uses (density 10, lighter than fire's own 15, so at least
- * one neighbour always fails smothered()'s "denser" test) but not for
- * gunpowder (density 50): stone on three sides plus gunpowder on the
- * fourth makes every one of fire's cardinal neighbours denser than
- * fire, and smothered() reads that as buried - fire is extinguished on
- * the very first step, before its own ignite walk ever runs, which is
- * exactly what a fully-boxed room measured (confirmed by direct
- * instrumentation while writing this test: the fire cell read back
- * empty at step 0 in every run). Left open on three sides instead, with
- * sand_set_mobility(&s, 0) holding it in place without needing walls
- * to do it - smothered() needs an occupied AND denser neighbour on
- * every side, and an empty one fails that trivially. */
+/* NOT fire_room(): boxing fire in on all four cardinals leaves every one
+ * of its neighbours denser than fire itself (gunpowder 50, fire 15), and
+ * smothered() reads that as buried - the flame dies at step 0, before
+ * its own ignite walk runs. Open on three sides instead, with
+ * sand_set_mobility(&s, 0) holding the fire in place rather than walls. */
 static void test_fire_beside_dry_gunpowder_lights_it(void)
 {
     fixture();
@@ -520,27 +479,15 @@ static void test_a_lit_gunpowder_trail_burns_along_itself(void)
         "so it must never detonate while it burns along");
 }
 
-/* The positive case REVISION 2 exists for: four cells, all lit at once,
- * is the smallest lit body where whichever corner burns out FIRST is
- * GUARANTEED to still find its other three corners lit (the rejected
- * first draft asked for a fully-lit 3x3, where eight of nine cells are
- * on the PERIMETER and structurally can never satisfy that - see
- * find_lit_two_by_two()'s own comment, sand_reactions.c, for the device
- * measurement that forced the narrowing). Folded into one test with the
- * lone-cell comparison, the same pairing
- * test_a_confined_gas_pocket_bursts_instead_of_just_catching draws
- * against test_an_open_gas_pocket_still_just_catches_fire. */
+/* Four cells, all lit at once, is the smallest lit body where whichever
+ * corner burns out FIRST is guaranteed to still find its other three
+ * corners lit - what find_lit_two_by_two() asks for. */
 static void test_a_lit_two_by_two_of_gunpowder_detonates(void)
 {
-    /* Scene A: the 2x2, boxed in stone - two rows of fire_room()'s own
-     * shape stacked - so nothing so much as slides before the reactions
-     * pass gets a turn at it. sand_set_decay(&s, SAND_DECAY_PER_MATERIAL)
-     * is not decoration: sand_init()'s own default is decay == 0
-     * (immortal - see sand_set_decay()'s own comment, sand.h), exactly
-     * what test_a_buried_lit_gunpowder_cell_is_not_smothered and
-     * test_water_quenches_lit_gunpowder_to_soaked both WANT, but this
-     * test needs the real per-material burn_decay figure so burn-out
-     * actually happens at all. */
+    /* Scene A: the 2x2, boxed in stone, so nothing so much as slides
+     * before the reactions pass gets a turn at it. sand_init()'s default
+     * is decay == 0, immortal; this test needs the real per-material
+     * burn_decay for burn-out to happen at all. */
     fixture();
     sand_set_decay(&s, SAND_DECAY_PER_MATERIAL);
     for (int x = 1; x <= 6; x++) {
@@ -677,19 +624,11 @@ static void test_a_detonating_two_by_two_leaves_no_lit_gunpowder_behind(void)
         "the blast step anywhere on the board");
 }
 
-/* SAND_GUNPOWDER_BLAST_COOLDOWN (sand_reactions.c) caps detonations at
- * one per step at its shipped value of 1, board-wide - a big pile goes off one blast at a time
- * rather than however many of its 2x2s happen to qualify together. Two
- * lit 2x2s, more than SAND_GUNPOWDER_BLAST_RADIUS apart (so neither
- * blast can physically reach the other's room - the only thing linking
- * them is the shared s->fuse_blast_wait cooldown), forced to burn
- * out on the SAME step (decay 255 - a near-certain single-step burn-out
- * for every one of the eight lit cells). Scan order (top-to-bottom,
- * left-to-right - this file's own top comment) reaches the first
- * group's qualifying corner before the second's, so the first one
- * detonates and the second, even though it structurally qualifies just
- * as much, finds the cap already spent and falls through to plain fire
- * instead. */
+/* SAND_GUNPOWDER_BLAST_COOLDOWN caps detonations at one per step
+ * board-wide at its shipped value of 1. The two lit 2x2s sit further
+ * apart than SAND_GUNPOWDER_BLAST_RADIUS, so neither blast can reach the
+ * other's room and the shared s->fuse_blast_wait is the only thing
+ * linking them; decay 255 forces all eight cells out on the same step. */
 static void test_fuse_blasts_are_capped_at_one_per_step(void)
 {
     wide_cells = malloc((size_t)WIDE_W * WIDE_H);
@@ -763,18 +702,11 @@ static void test_fuse_blasts_are_capped_at_one_per_step(void)
         "through this step, not both and not neither");
 }
 
-/* And the cooldown is a WAIT, not merely a per-step cap: with
- * sand_set_fuse_cooldown() raised to 3, the second of two independent
- * lit 2x2s must still be waiting a step later, where at the shipped
- * value of 1 it would already have gone off. Same two-room scene as
- * above (24 cells apart, so neither blast can reach the other's room);
- * the only difference is the wait, which is the whole claim.
- *
- * Group B is left UNLIT for the first step and lit afterwards, so its
- * burn-out cannot race group A's inside the same pass - what is under
- * test is whether the board is still refusing on a LATER step, not the
- * within-step ordering test_fuse_blasts_are_capped_at_one_per_step
- * already pins. */
+/* The cooldown is a WAIT, not merely a per-step cap: at
+ * sand_set_fuse_cooldown() 3 the second of two independent lit 2x2s must
+ * still be waiting a step later, where the shipped value of 1 would
+ * already have let it go. Group B is lit only after the first step, so
+ * its burn-out cannot race group A's inside one pass. */
 static void test_a_longer_fuse_cooldown_delays_the_next_blast(void)
 {
     wide_cells = malloc((size_t)WIDE_W * WIDE_H);
@@ -897,18 +829,11 @@ static void test_a_buried_lit_gunpowder_cell_is_not_smothered(void)
     sand_clear(&s);
     sand_set_decay(&s, 0);
 
-    /* The full 3x3 ring, all eight neighbours - not just the four
-     * cardinals smothered() itself reads. Walling only the cardinals
-     * left the two open diagonals as a slide route: a powder blocked
-     * straight down but open diagonally still slides that way (the same
-     * scatter behaviour any pile uses to find its angle of repose), and
-     * confirmed by direct instrumentation while writing this test, the
-     * grain walked diagonally for several steps and off this board
-     * entirely rather than staying put to prove anything about
-     * smothered() at all. The diagonals play no part in smothered()'s
-     * own four-neighbour test - they are here only to pin the grain in
-     * place so the four cardinals are the only thing left that could
-     * move it. */
+    /* The full 3x3 ring, not just the four cardinals smothered() itself
+     * reads: a powder blocked straight down but open diagonally still
+     * scatters that way and walks off the scene. The diagonals are here
+     * only to pin the grain, so the cardinals are the only thing left
+     * that could move it. */
     const int x = W / 2, y = H / 2;
     for (int dy = -1; dy <= 1; dy++) {
         for (int dx = -1; dx <= 1; dx++) {
@@ -991,14 +916,11 @@ static void test_gunpowder_without_impulses_burns_to_fire(void)
     /* No sand_enable_impulses() - s->impulse_buf stays NULL, the default. */
 
     /* WHAT EACH CORNER BECOMES AT THE MOMENT IT BURNS OUT, not what sits
-     * there once all four have. The four burn-outs are four independent
-     * geometric waits (reaction_t.burn_decay), so they are spread over
-     * many steps, and the fire the first one leaves is itself a transient
-     * that decays - at a long enough fuse it is gone before the last
-     * corner resolves, which read as "the corner left nothing" and made
-     * this test fail on a pure tuning change. Sampling each cell the step
-     * it stops being gunpowder pins the claim the fallback actually makes
-     * and is indifferent to how long the fuse burns. */
+     * there once all four have: the four burn-outs are independent
+     * geometric waits (reaction_t.burn_decay), and the fire the first one
+     * leaves is a transient that can decay before the last resolves.
+     * Sampling at the step a cell stops being gunpowder keeps the claim
+     * indifferent to how long the fuse burns. */
     uint8_t became[4] = {0xFFu, 0xFFu, 0xFFu, 0xFFu};
     const int cx[4] = {3, 4, 3, 4};
     const int cy[4] = {H - 3, H - 3, H - 2, H - 2};
@@ -1034,15 +956,11 @@ static void test_gunpowder_without_impulses_burns_to_fire(void)
 
 /* --- moisture chemistry ------------------------------------------------ */
 
-/* moist_max (SOAKED) beside lava: the one moisture level where
- * reaction_t.soaked_to's own saturated-to-oil roll can fire
- * (step_one_soaking_cell(), sand_reactions.c) and the one level where
- * SAND_DAMP_IGNITION_SHIFT's damping (f >>= 2*m) actually reaches zero -
- * moisture 2 still lights at 12 in 256 a step by design, so only moist_max
- * is safe to assert "never" at. A soaked fuse must never reach the LIT
- * code while it is still soaked; if it stops being gunpowder before
- * drying below moist_max, oil is the only accepted exit (soaked_to), not
- * fire or anything else. */
+/* moist_max is the one level where SAND_DAMP_IGNITION_SHIFT's damping
+ * (f >>= 2*m) reaches zero - moisture 2 still lights at 12 in 256 a step
+ * by design - so it is the only level safe to assert "never" at. If the
+ * cell stops being gunpowder before drying, oil (reaction_t.soaked_to) is
+ * the only accepted exit. */
 static void test_soaked_gunpowder_never_lights_beside_lava(void)
 {
     fixture();
@@ -1351,14 +1269,10 @@ static void test_water_wets_gunpowder_and_it_dries_out_slowly(void)
     TEST_ASSERT_GREATER_THAN_INT_MESSAGE(dirt_wet, gp_wet, why);
 }
 
-/* Total moisture across every gunpowder cell can only fall or move, never
- * rise - an upper bound, not full conservation (a lit cell reads
- * moisture_of() == 0, reaction_t.lit_from's own comment, which pulls the
- * total down without moving it anywhere) - adapted from the same claim
- * test_moisture_is_conserved_as_it_spreads makes for dirt, to gunpowder's
- * own same-species diffusion (soaks_to == 0, so there is no sand-like
- * neighbour for it to convert - spreading can only ever be gunpowder
- * handing a share to more gunpowder). */
+/* An upper bound, not full conservation: a lit cell reads moisture_of()
+ * == 0, which pulls the total down without moving it anywhere. Gunpowder
+ * has soaks_to == 0, so spreading is only ever gunpowder handing a share
+ * to more gunpowder. */
 static void test_gunpowder_moisture_never_multiplies_as_it_spreads(void)
 {
     fixture();
@@ -1510,28 +1424,13 @@ static void test_a_wet_neighbour_does_not_put_out_a_lit_fuse(void)
     }
 }
 
-/* D1: a rooted tree beside wet gunpowder must never convert it into more
- * root - mirrors test_a_root_never_eats_dry_dirt_sand_or_empty_space's
- * own pattern, with a moist candidate this time rather than a dry one,
- * since gunpowder is excluded by MATERIAL (reaction_t.soil == 0), not by
- * moisture level - step_one_rooting_cell()'s own candidate scan rejects
- * it before the eligibility roll is ever drawn, let alone spend_soil_
- * moisture() called. Moisture 2, not moist_max: at moist_max reaction_t.
- * soaked_to's own saturated-to-oil roll (step_one_soaking_cell()) can
- * fire all on its own over a budget this long, which is a real,
- * independent exit this test has nothing to do with - see test_soaked_
- * gunpowder_can_turn_into_oil_and_dry_never_does.
- *
- * DELIBERATELY NOT ASSERTED: that the gunpowder's moisture stays exactly
- * where it started. reaction_t.dries's own ambient-drying roll
- * (step_one_soaking_cell(), the ~1/256-a-step branch with nothing to
- * hand off to) is real, independent of any root, and fires on its own
- * over a budget this long regardless - dirt ambient-dries with nobody
- * watching it too. What D1 actually guarantees, and the only thing
- * checked below, is that gunpowder is never CONVERTED - the root's own
- * candidate scan never reaching it at all, so spend_soil_moisture() is
- * never even called on it, whatever ambient drying does to it in the
- * meantime. */
+/* Gunpowder is excluded from step_one_rooting_cell()'s candidate scan by
+ * MATERIAL (reaction_t.soil == 0), not by moisture level, so the scan
+ * rejects it before any eligibility roll. Moisture 2 rather than
+ * moist_max: at moist_max reaction_t.soaked_to's saturated-to-oil roll is
+ * an independent exit that can fire on its own over a budget this long.
+ * Ambient drying (reaction_t.dries) is independent of any root too, so
+ * the only thing asserted below is that the cell is never CONVERTED. */
 static void test_a_root_does_not_drink_from_or_eat_gunpowder(void)
 {
     fixture();

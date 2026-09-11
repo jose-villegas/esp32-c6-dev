@@ -132,17 +132,11 @@ static void test_invalidate_forces_a_repaint(void)
 }
 
 /*
- * ui_layout_generation()
- *
  * Device-only for the same reason the rest of this suite is: the counter
- * lives inside ui_set_transform(), in ui.c, which pulls in gfx.h and cannot
- * link on a host - see ui.h's own comment above ui_layout_generation() and
- * this task's report on why suite_ui_transform.c (host, pure ui_transform_t
- * math) is not where this belongs. fixture() above already gives each test
- * a freshly ui_init()'d context, transform reset to identity and the
- * generation reset to its defined starting value - these tests read deltas
- * off that rather than hard-coding the starting value itself, so they do
- * not need to know or care what it is.
+ * lives inside ui_set_transform(), which pulls in gfx.h and cannot link on a
+ * host. fixture() above gives each test a freshly ui_init()'d context with
+ * the transform at identity, and these tests read deltas off that rather
+ * than hard-coding the generation's starting value.
  */
 
 static void test_layout_generation_unchanged_by_a_repeated_equal_transform(void)
