@@ -1006,10 +1006,10 @@ static void test_a_cascading_impulse_moves_more_than_one_cell(void)
 static uint8_t stir_cells[STIR_W * STIR_H];
 
 /* Pouring water over a dirt bed must never move a dirt cell out of
- * position - can_impulse_enter() (sand.c) failed to gate a flying water
- * grain's swap into non-liquid targets, so splash-kicked grains
- * tunnelled through dirt in their path. A settled dirt bed and pool, with
- * a continuous stream poured on top. Tracks whether MAT_DIRT leaves its
+ * position - can_impulse_enter() (sand.c) gates a flying water grain's
+ * swap to liquid targets only, so a splash-kicked grain cannot tunnel
+ * through dirt in its path. A settled dirt bed and pool, with a
+ * continuous stream poured on top. Tracks whether MAT_DIRT leaves its
  * starting cell, not whether any byte changed - moisture legitimately
  * shifts near standing water (wicking), which must never fail this
  * test. */
