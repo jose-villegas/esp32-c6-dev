@@ -233,12 +233,11 @@ static void test_identity_transform_leaves_the_origin_at_screen_centre(void)
         "identity transform");
 }
 
-/* The one property that actually distinguishes perspective from the old
- * axonometric projection: a point further from the camera has to project
- * SMALLER (closer to screen centre) than the same point nearer the camera,
- * for a real focal length. re/im map to X/Z (see boot_anim_project()'s own
- * comment on the axis mapping) - im is depth here, re is the offset being
- * compared at two different depths. */
+/* The property that distinguishes a real perspective projection: a point
+ * further from the camera must project SMALLER (closer to screen centre)
+ * than the same point nearer the camera, for a real focal length. re/im
+ * map to X/Z (see boot_anim_project()'s axis-mapping comment) - im is
+ * depth, re is the offset compared at two depths. */
 static void test_a_point_further_from_the_camera_projects_smaller(void)
 {
     const boot_anim_view_t view = identity_view(S3L_F);
@@ -306,15 +305,13 @@ static void test_project_segment_cs_rejects_a_segment_entirely_behind(void)
 }
 
 /* boot_anim_project_segment_cs()'s near-plane clip at asymmetric,
- * non-clean-fraction-of-512 coordinates: the Q16 rewrite (boot_anim.h)
- * targets exactly this case, where the old precision rounded worst.
- * Verified against an independent double-precision reference, not the
- * function under test.
+ * non-clean-fraction-of-512 coordinates, precision-sensitive at Q16
+ * (boot_anim.h). Verified against an independent double-precision
+ * reference, not the function under test.
  *
  *   clip fraction = 86/496 = 0.17338...
- *   tolerance (20px) contains the Q16 error (7px, 0px) while still
- *   rejecting the OLD S3L_F(512) result for the same inputs (3831px,
- *   2352px off). */
+ *   tolerance (20px) contains the Q16 error (7px, 0px) while rejecting
+ *   S3L_F(512)'s result for the same inputs (3831px, 2352px off). */
 static void test_project_segment_cs_clips_asymmetric_coordinates(void)
 {
     const boot_anim_view_t view = identity_view(S3L_F);
@@ -463,15 +460,11 @@ static void test_an_untouched_keyframes_scale_reads_back_as_identity(void)
 /*---------------------------------------------------------------------------
  * The seed keyframes
  *
- * Unlike the old fixed axonometric projection - three compile-time screen
- * directions, provably fitting the panel for any camera angle - a real,
- * freely keyframed 3D camera has no such blanket guarantee: point it the
- * wrong way and the scene is off-panel, which is a legitimate thing a
- * creative edit can do, not a bug in the projection. What is still worth
- * protecting is the SEED this repo ships - a sanity sweep against the
- * actual committed boot_anim_keyframes[], not a property of the projection
- * in general. A generous margin, not a tight fit: this catches "the seed
- * is now wildly broken", not "the seed could be tuned tighter".
+ * A freely keyframed camera has no blanket off-panel guarantee - a wrong
+ * angle can put the scene off-panel, a legitimate edit, not a bug. Worth
+ * protecting: the SEED this repo ships, a sanity sweep against
+ * boot_anim_keyframes[]. A generous margin, not a tight fit - catches the
+ * seed going wildly broken, not tunable tighter.
  *-------------------------------------------------------------------------*/
 
 #define BOOT_ANIM_TEST_MAX_PANEL_MULTIPLE 3
