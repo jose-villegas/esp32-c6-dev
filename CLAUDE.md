@@ -64,17 +64,26 @@ scripts/check-format.sh <file.c> [<file.h> ...]         # format in place
 scripts/check-format.sh --check <file.c> [<file.h> ...]  # verify only
 ```
 
-**A comment states the constraint that holds now; it never narrates how the
-code got here.** A reader needs what it is, why it exists, how it works —
-short. Keep a measured number where it is the evidence, and a rejected
-alternative only where someone would otherwise retry it, as a clause. Cut
-the journey: git log owns it. `scripts/find_narrative_comments.py` lists
-candidates.
+**A comment is the exception. Most code needs none.** Follow OpenBSD's
+balance: sparse comments, verbose code. The fix for a comment explaining a
+mechanism is nearly always a better name or an extracted function, not
+shorter prose.
 
-**Comment style follows OpenBSD `style(9)`:** a one-line `/* ... */`, a
-`VERY important` one-liner in a three-line block, or a multi-line comment
-written as real sentences and filled like a paragraph. No headings inside
-a comment — one that needs sections is a document, and belongs in `docs/`.
+- **Never the HOW.** The code is the how. Linux's `coding-style` puts it
+  best: needing to comment parts of a function separately means the function
+  is the problem.
+- **The WHAT is usually already in the names.** Drop it.
+- **The WHY only where it is genuinely needed** - a constraint, an external
+  fact, a measured number that is the evidence, a decision someone would
+  otherwise undo. Most of the time it is not needed.
+- **Never the journey.** git log owns "a first attempt...", "an earlier
+  version...", "was reverted". `scripts/find_narrative_comments.py` lists
+  existing cases.
+
+Shape follows OpenBSD `style(9)`: a one-line `/* ... */`, a `VERY important`
+one-liner in a three-line block, or real sentences filled like a paragraph.
+No headings inside a comment - one needing sections is a document, so put it
+in `docs/`.
 
 **Comment the WHY, not the WHAT — and only when the code doesn't already say
 it.** Clean, well-named code mostly speaks for itself; a comment exists for
