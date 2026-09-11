@@ -1655,16 +1655,13 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cell_
                                  ? ((s->lava_cooloff >= 0) ? s->lava_cooloff : SAND_LAVA_COOLOFF_CHANCE)
                                  : 0;
     /* SKIPPED WHOLE when nothing on the board can be paired WITH. On a full
-     * screen of fire this is every cell, every step: measured 41216 walks and
-     * 41216 of them finding nothing, four bounds-checked probes each.
+     * screen of fire that is every cell, every step: measured 41216 walks
+     * all finding nothing, four bounds-checked probes each.
      *
-     * A NEIGHBOUR PROPERTY, which is what makes one flag enough:
-     * pair_bits[mine][theirs] does not depend on mine - the table is sixteen
-     * identical rows - so "can anything here be acted on" is the same
-     * question for every cell doing the looking.
-     *
-     * RNG-NEUTRAL: both draws inside this walk sit behind a non-zero pair
-     * byte, so a board with none draws nothing and the stream is untouched. */
+     * One flag is enough because pair_bits[mine][theirs] does not depend on
+     * mine - sixteen identical rows - so the question is the same for every
+     * cell doing the looking. RNG-neutral: both draws inside the walk sit
+     * behind a non-zero pair byte. */
     if ((present_pair_bits & (PAIR_IGNITABLE | PAIR_HEAT_RESPONSIVE)) == 0) {
         goto pair_done;
     }
@@ -2032,15 +2029,11 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
 }
 
 /* BUILT ONCE, NOT PER STEP. Every one of these is a pure function of
- * reactions[], extended_reactions[] and materials[] - all const, all
- * flash-resident, none of them reachable by anything at runtime - yet the
- * whole lot was rebuilt on every step that got past the seven-flag early
- * out. reaction_first_stage() alone is a seventeen-field ladder run
- * thirty-two times, and pair_bits is 256 stores.
- *
- * A step's own cost is unchanged by this on a busy board; what it removes is
- * a fixed toll on every step of every scene that has anything reacting at
- * all. */
+ * reactions[], extended_reactions[] and materials[] - all const and
+ * flash-resident, unreachable at runtime. reaction_first_stage() alone is a
+ * seventeen-field ladder run thirty-two times, and pair_bits is 256 stores,
+ * so rebuilding them was a fixed toll on every step of every reacting
+ * scene. */
 static bool reaction_tables_ready;
 
 static void build_reaction_tables(void)

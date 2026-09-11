@@ -346,17 +346,11 @@ static void test_count_of_one_lands_sensibly(void)
 
 /* --- the panel never overflows the canvas it was derived from ---------- */
 
-/* Every multiple of PALETTE_TILE from one tile up to a generous bound - one
- * that crosses PALETTE_COLS_MAX's own clamp (16 * 92 = 1472), so the sweep
- * exercises the clamp too, not just ordinary widths a real screen could be.
- *
- * screen_h is held fixed, generously - large enough for the worst case in
- * this sweep (cols == 1, a 16-tile panel, so 16 rows) - so a failure here
- * can only mean palette_panel_rect() itself put the panel somewhere wrong,
- * never that the real 368x448 hardware panel lacks room for BRUSH_COUNT
- * brushes at its own two real widths - that is a separate property, already
- * covered above (the overlap/on-screen checks at PALETTE_SCREEN_W/H) and at
- * build time (PALETTE_FITS's _Static_assert in app_sand.c). */
+/* The sweep runs past PALETTE_COLS_MAX's clamp (16 * 92 = 1472) so the clamp
+ * is exercised too, and screen_h is held generously above the worst case
+ * here (cols == 1, so 16 rows). A failure can then only mean
+ * palette_panel_rect() put the panel somewhere wrong, never that the real
+ * panel lacks room - which PALETTE_FITS already asserts at build time. */
 static void test_panel_never_overflows_the_canvas_across_a_width_sweep(void)
 {
     const int screen_h = 16 * PALETTE_TILE;
@@ -384,19 +378,11 @@ static void test_panel_never_overflows_the_canvas_across_a_width_sweep(void)
 /* --- palette_label_origin(): the label lands centred at every quarter turn
  * --------------------------------------------------------------------------
  *
- * gfx_text_turned()'s origin is the FIRST GLYPH's cell, not any corner of
- * the string as it appears once drawn, so the origin VALUE is not itself
- * the meaningful thing to check - it differs by turn even when the text
- * ends up in the same place (see the turn-0-vs-turn-2 test below). What has
- * to be true is the box the string actually occupies once drawn: centred in
- * the tile at every turn, and swapped in shape at turns 1/3 versus 0/2.
- *
- * label_bbox() below walks the origin the same way gfx_text_turned() does -
- * PALETTE_CHAR_W per glyph, in the direction each turn implies (see
- * palette_label_origin()'s own comment in palette.h for the four
- * corner/direction pairs) - to reconstruct that box from an origin, so the
- * tests can assert on the box rather than have to re-derive gfx_text_turned's
- * walk inline in every test. */
+ * gfx_text_turned()'s origin is the FIRST GLYPH's cell, not a corner of the
+ * drawn string, so the origin VALUE differs by turn even when the text lands
+ * in the same place. What has to be true is the box the string occupies, so
+ * label_bbox() below reconstructs it by walking the origin the way
+ * gfx_text_turned() does. */
 
 static void label_bbox(int ox, int oy, int len, int turn,
                        int *bx, int *by, int *bw, int *bh)
