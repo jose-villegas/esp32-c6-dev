@@ -11,21 +11,14 @@
  *
  * WHY THIS MODULE EXISTS
  *
- * Four bugs have shipped to hardware out of this exact logic, all the same
- * shape: an input edge consumed by the state that should not own it.
- *
- *   - a BOOT hold also cycled the brush, because cycling sat on `.pressed`
- *   - closing the palette on `.pressed` let the matching release advance the
- *     brush afterwards (commit faad9bb)
- *   - a touch release from a pour in progress selected a palette tile
- *   - the swallow-release guard armed unconditionally, so it ate the
- *     player's first real tap (commit eef97e4)
- *
- * Every one is a pure state-machine bug - a sequence of edges producing the
- * wrong state - and every one reached the device because this logic used to
- * live in app_sand.c, the one file in the app the host test runner cannot
- * compile (see run_tests.sh's SOURCES comment on the app_*.c convention).
- * Moving it here is what lets suite_sand_ui.c pin all four down for good.
+ * Every bug this logic has shipped to hardware has the same shape: an input
+ * edge consumed by the state that should not own it (a BOOT hold also
+ * cycling the brush, a palette close whose matching release advanced the
+ * brush, a pour's release selecting a palette tile). All of them reached
+ * the device because this logic used to live in app_sand.c, the one file in
+ * the app the host test runner cannot compile (see run_tests.sh's SOURCES
+ * comment on the app_*.c convention). Moving it here is what lets
+ * suite_sand_ui.c pin bugs of this shape down for good.
  *
  * WHAT STAYS BEHIND
  *
@@ -37,17 +30,15 @@
  *
  * WHO HIT-TESTS AND WHO DECIDES
  *
- * Which tile a tap landed on used to be this module's own job too, via
- * palette_hit() on raw screen coordinates - and that split (drawn as
- * microui commands, hit-tested by hand) was the one thing standing between
- * this panel and rotation, since a transform would move the drawing without
- * moving where palette_hit() looked. Hit-testing now belongs to microui
- * itself: app_sand.c's draw_palette() lays each tile out as a real
- * mu_button(), and the caller tells this module the RESULT - which tile, if
- * any, microui says was clicked - through sand_ui_tile_clicked() below.
- * What a click on that tile MEANS - select it, or toggle its mode - is
- * still exactly this module's call, for the same testability reason
- * everything else here is: see suite_sand_ui.c.
+ * Hit-testing belongs to microui, not this module: app_sand.c's
+ * draw_palette() lays each tile out as a real mu_button(), and the caller
+ * tells this module the RESULT - which tile, if any, microui says was
+ * clicked - through sand_ui_tile_clicked() below. Not hit-tested by hand
+ * against raw screen coordinates: a transform moves the drawing without
+ * moving what a hand-rolled hit test looks at, so that would silently break
+ * under UI rotation. What a click on that tile MEANS - select it, or toggle
+ * its mode - is still exactly this module's call, for the same testability
+ * reason everything else here is: see suite_sand_ui.c.
  *===========================================================================*/
 #pragma once
 
