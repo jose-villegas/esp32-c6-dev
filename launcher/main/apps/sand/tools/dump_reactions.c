@@ -1,61 +1,34 @@
 /*
  * dump_reactions - compile material.c's reaction tables into markdown.
  *
- * See docs/plans/Reaction-Doc-Generator-Plan.md for the design this follows.
- * This file started as that plan's phase 1 (raw ladder output, no by-feel
- * tuning) and now carries phase 2's by-feel pass as well: the rate ladder's
- * silent middle, the chance ladders' 0/255 endpoints, the one checked
- * ADVERB_EXCEPTIONS override, contrast-legible colour via
- * LEGIBILITY_OVERRIDES, and colour/typography reaching the default
- * per-material section rather than only the anatomy examples. Run through
- * report_reactions.sh, which builds this, captures its stdout, and splices
- * it into the BEGIN/END GENERATED region of docs/sand/Reaction-Table.md
- * (see this file's own main(), and report_reactions.sh's top comment, for
- * why it is a splice and not a whole-file overwrite: some real mechanics -
- * lava's cool-off chaining, the covered-lava burst, water/acid's faster
- * drain on stone and glass - live entirely at a read site in
- * sand_reactions.c with no reaction_t field to walk, so a human documents
- * them by hand outside the markers, and a whole-file overwrite would
- * silently delete that documentation on every regenerate - see bd
- * esp32c6-3mu).
+ * Run through report_reactions.sh, which builds this, captures its stdout and
+ * splices it into the BEGIN/END GENERATED region of
+ * docs/sand/Reaction-Table.md. A splice and not a whole-file overwrite because
+ * some real mechanics - lava's cool-off chaining, the covered-lava burst,
+ * water and acid draining faster on stone and glass - live entirely at a read
+ * site in sand_reactions.c with no reaction_t field to walk, so a human
+ * documents those by hand outside the markers and an overwrite would delete
+ * them on every regenerate (bd esp32c6-3mu). See
+ * docs/plans/Reaction-Doc-Generator-Plan.md for the design.
  *
- * WHY A PROGRAM AND NOT A SCRIPT OVER THE TEXT
+ * A program and not a script over the text because material.c's tables are
+ * constant expressions - MATX(MATX_LEAF), MATX()'s bit-shift, SAND_SHOCK_HEAT
+ * - and regexing those back into values means reimplementing the preprocessor.
+ * Linking material.c and reading reactions[] at runtime resolves every one of
+ * them for free, the way the simulation itself does.
  *
- * material.c's tables use constant expressions - MATX(MATX_LEAF), MATX()'s
- * bit-shift, SAND_SHOCK_HEAT (itself SAND_AMBIENT_HEAT + 2) - and regexing
- * those back into values means reimplementing the preprocessor. Linking
- * material.c and reading the resulting reactions[]/extended_reactions[]
- * arrays at runtime resolves every one of them for free, the same way the
- * simulation itself does.
+ * A `_to` field's kind is decided by its VALUE, not by its name: a byte
+ * >= (MAT_EXTENDED << 4) is a whole cell spec, anything below is a plain
+ * material id, which is what place_reacted() itself does. to_name() checks the
+ * value rather than consulting a per-field list, since MAT_GLASS.shatters_to
+ * holds an ordinary material id while MAT_DIRT.heats_to holds an extended
+ * spec, and a fixed list would confidently print "empty" for glass shattering
+ * into sand.
  *
- * WHAT STILL DELIBERATELY DOES NOT HAPPEN
- *
- * No hand-written PER-REACTION prose or guessed triggers: every rate/
- * frequency word is still the ladder's computed bucket (bar the one
- * checked exception), and every field whose real trigger is a condition
- * living at a read site in sand_reactions.c (not in the table) prints
- * exactly what that file's own REACTION_DOC(field, "why") annotation says
- * at the point that decides it - see reaction_doc.h and this file's
- * parse_reaction_docs()/cause_at() - never a clause guessed from the field
- * name alone. A field whose trigger lives at a read site but has not yet
- * been annotated that way is still future work, tracked in the plan's own
- * "Phasing" section, not something this pass fakes.
- *
- * THE ONE PLACE THIS DEVIATES FROM THE PLAN'S OWN WORDING, ON PURPOSE
- *
- * The plan's "Kind cannot be inferred" section names canopy_to, sprouts_to
- * and shatters_to as cell specs and every other `_to` as a material id.
- * That is not what the data says: MAT_GLASS.shatters_to holds MAT_SAND, an
- * ordinary material id, and MAT_DIRT.heats_to holds MATX(MATX_METAL), an
- * extended cell spec - so the true split is not by FIELD NAME, it is by
- * VALUE, exactly the way place_reacted() (sand_reactions.c) itself decides:
- * a byte >= (MAT_EXTENDED << 4) is a whole cell spec, anything below that is
- * a plain material id. to_name() below implements that check instead of a
- * fixed per-field list, because a fixed list would get shatters_to's own
- * current value wrong - it would print "empty" for glass shattering into
- * sand, which is exactly the "confidently wrong name, silently" failure the
- * plan's own paragraph warns about, one paragraph before naming the field
- * that trips it.
+ * Every rate and frequency word is the ladder's computed bucket, and a field
+ * whose real trigger lives at a read site prints that site's own
+ * REACTION_DOC(field, "why") annotation rather than a clause guessed from the
+ * field name.
  */
 
 #include <ctype.h>

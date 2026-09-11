@@ -1,56 +1,27 @@
 /*
  * ui_transform - a 2x3 affine transform for the UI layer, in fixed point.
  *
- * Every rect, icon, clip and text position microui hands to ui.c's
- * draw_command() is expressed in the UI's own LOGICAL coordinates - the ones
- * layout code lays widgets out in. This header is what turns a logical point
- * into the PHYSICAL point that actually lands on the panel, so a caller can
- * rotate (and later scale or translate) the whole UI without any call site
- * knowing: nothing above ui.c ever sees a physical coordinate.
+ * Every rect, icon, clip and text position microui hands to ui.c is in the
+ * UI's own LOGICAL coordinates. This turns a logical point into the PHYSICAL
+ * one that lands on the panel, so the whole UI can be rotated without any call
+ * site knowing: nothing above ui.c ever sees a physical coordinate. Pure
+ * geometry, which is what keeps it linkable on a host.
  *
- * PURE GEOMETRY, SEPARATE FROM DRAWING
+ * Fixed point because this is RISC-V with no FPU, and the transform is applied
+ * per rect, per glyph and per icon on every repaint - a software float trap on
+ * every multiply is not worth paying for a shape this simple. Q16.16 has ample
+ * range for a 368x448 panel and ample precision for rotate, scale, translate.
  *
- * Same split as ui_style.h documents for a bezel: this header only computes
- * WHERE things go, and touches neither gfx.c nor microui.c, so it stays
- * linkable on a host (see test/suites/suite_ui_transform.c). "microui.h" is
- * included for mu_Rect - the same dependency ui_style.h takes and for the
- * same reason - and "gfx/gfx_font.h" for gfx_font_t/gfx_font_advance()
- * (ui_text_glyph0_origin() below needs a font's cell width, not just a
- * rect); gfx_font.h is pure too - no gfx.h, no BSP - so this stays linkable
- * on a host either way.
+ * The type is more general than the backend, and that gap is the trap.
+ * ui_transform_t can express any affine map, shear included, while
+ * gfx_fill_rect() and gfx_set_clip() are axis-aligned only, the dirty tracker
+ * works in axis-aligned grid cells, and gfx_text_turned() knows only quarter
+ * turns. ui_transform_is_axis_preserving() is the boundary between the two,
+ * and the extension point if gfx ever grows a rotated blitter; without it a
+ * caller could push a 30 degree rotation and get silent misrendering back.
  *
- * FIXED POINT, NOT FLOAT
- *
- * This is RISC-V with no FPU. The transform is applied per rect, per glyph
- * and per icon, every repaint, so a software float emulation trap on every
- * multiply is not a cost worth paying for a shape this simple. Q16.16 has
- * plenty of range for a 368x448 panel (the panel's largest coordinate needs
- * only 9 bits) and plenty of precision for a rotate/scale/translate matrix.
- *
- * THE CONTRACT: A GENERAL TYPE, A NARROWER BACKEND
- *
- * ui_transform_t can express any 2x3 affine map - shear included. The
- * renderer underneath it cannot: gfx_fill_rect() and gfx_set_clip() are
- * axis-aligned only, the dirty tracker works in axis-aligned grid cells, and
- * gfx_text_turned() only knows quarter turns. So this renderer can honour
- * rotation by multiples of 90 degrees, translation, and scale - and nothing
- * else. A general matrix invites a caller to push a 30 degree rotation and
- * get silent misrendering back.
- *
- * ui_transform_is_axis_preserving() is the boundary between what the type can
- * express and what the backend can draw. ui.c's draw_command() classifies the
- * transform in force with it before painting a frame; see the comment there
- * for what happens when a transform fails the check. It is also the
- * extension point: if gfx ever grows a rotated blitter, the classifier widens
- * to admit more matrices and nothing above it - not this header, not ui.c's
- * callers - has to change.
- *
- * ROUNDING
- *
- * Every conversion back to an integer pixel rounds to nearest rather than
- * truncating, so a rect mapped and mapped back through ui_transform_invert()
- * lands where it started instead of drifting toward zero by up to a pixel
- * each way - see fp_round() below.
+ * Conversions back to an integer pixel round to nearest rather than
+ * truncating, so a rect mapped and inverted lands where it started.
  */
 #pragma once
 
