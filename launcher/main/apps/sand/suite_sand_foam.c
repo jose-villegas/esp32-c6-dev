@@ -242,20 +242,14 @@ static void test_a_liquid_interior_never_foams(void)
     }
 }
 
-/* THE REGRESSION GUARD for the trap the diagonal bits opened. Before this
- * change, `mask != 0` was "is this cell an edge at all", and it was
- * correct because the mask held nothing but the four cardinals. Adding
- * bits 4-7 makes that test silently wrong: a cell with every cardinal
- * neighbour occupied and exactly one diagonal empty would newly read as
- * an edge, and glass and stone would start outlining cells they used to
- * paint as solid interior - a change to two materials nobody asked to
- * touch, from a mistake nowhere near either of their own code.
- *
- * Checked by comparing a diagonal-only mask directly against mask 0 for
- * glass, stone, and a liquid: if MATERIAL_EDGE_CARDINAL is not what gates
- * the edge test (or the mask ever changes shape again), this is the test
- * that goes red, not some unrelated glass or stone test that merely
- * happens to exercise an edge. */
+/* THE REGRESSION GUARD for the trap the diagonal bits opened: `mask !=
+ * 0` read as "is this cell an edge" only while the mask held the four
+ * cardinals - with bits 4-7 added, a cell with every cardinal occupied
+ * and exactly one diagonal empty would falsely read as an edge,
+ * outlining cells that should paint as solid interior. Checked by
+ * comparing a diagonal-only mask against mask 0 for glass, stone, and a
+ * liquid: if MATERIAL_EDGE_CARDINAL is not what gates the edge test,
+ * this is the test that goes red. */
 static void test_a_diagonal_neighbour_alone_is_not_an_edge(void)
 {
     const unsigned diagonal_only = MATERIAL_EDGE_UP_LEFT;
@@ -306,23 +300,14 @@ static void test_a_diagonal_neighbour_alone_is_not_an_edge(void)
     }
 }
 
-/*=============================================================================
- * FOAM ANIMATES: a phase, mixed into the dither, so the same shape keeps
- * showing a DIFFERENT set of foamed cells from one frame to the next.
- *
- * Before this, foam was gated purely by (hash & 7u) against curvature's
- * threshold - stable for as long as the shape held still, which read as a
- * texture painted onto the water rather than something moving on it.
- * material_set_foam_phase() (material.h) adds a second, frame-global input
- * that material_colours() XORs into the hash before the same threshold test,
- * so the same cell's answer keeps changing while its curvature does not.
- *
- * All three tests below share the same high-curvature mask - all eight
- * neighbours empty, as curved as a rim on this board gets - because a flat
- * mask's threshold is 0 (see water_foam_threshold's own comment in
- * material.c) and `(anything) & 7u < 0` can never be true: a flat cell
- * cannot be made to foam by ANY hash or phase, which would make it useless
- * for pinning that phase changes the answer. */
+/* FOAM ANIMATES: a phase mixed into the dither, so the same shape shows a
+ * DIFFERENT set of foamed cells from one frame to the next -
+ * material_set_foam_phase() XORs a frame-global input into the hash
+ * before the curvature threshold, so a cell's answer changes while its
+ * curvature does not. All three tests below share the same
+ * high-curvature mask - all eight neighbours empty - because a flat
+ * mask's threshold is 0 and a flat cell cannot be made to foam by ANY
+ * hash or phase. */
 static const unsigned foam_spike_mask =
     MATERIAL_EDGE_LEFT | MATERIAL_EDGE_RIGHT | MATERIAL_EDGE_UP |
     MATERIAL_EDGE_DOWN | MATERIAL_EDGE_UP_LEFT | MATERIAL_EDGE_UP_RIGHT |
@@ -471,28 +456,14 @@ static void test_foam_never_stalls_between_frames(void)
  * only to be tuned by eye on the device. */
 #define TEST_FOAM_BLOB_SHIFT 3
 
-/* FOAM'S BLOBS ARE ACTUALLY BIGGER THAN ONE CELL - the coarse-sampling half
- * of change 2, checked directly against material_grain_hash() rather than
- * through paint_row_n(), which cannot be linked into a host test (it is
- * `static` in app_sand.c).
- *
- * Two claims, both necessary. WITHIN an 8x8 block, cells must collapse to
- * the identical shifted coordinate and therefore the identical hash -
- * shifting cx and cy right by three turns every coordinate 0-7 into the
- * same value, and likewise 8-15 - which is the entire mechanism a blob
- * rests on: paint_row_n() hands every cell of a block this same hash, so
- * they can only ever agree about whether to foam. The four cells sampled
- * below are the four CORNERS of that 8x8 block - (0,0), (7,0), (0,7) and
- * (7,7) relative to the block's own start - rather than an adjacent pair:
- * an 8x8 block is 4x the area a 4x4 one was, so the adjacent-corner
- * sub-sample that used to stand in for "the whole block" upstairs would
- * now cover only a sliver of it. Testing the actual extremes proves the
- * WHOLE block agrees, corner to corner, not just two cells that happen to
- * sit next to each other. BETWEEN two blocks that hash must generally
- * differ, or the "coarse grid" has collapsed to one giant block covering
- * the whole board instead of a grid of small ones - checked at two block
- * starts eight cells apart, exactly one block width, so an off-by-one in
- * where a block begins cannot hide behind a coincidence. */
+/* FOAM'S BLOBS ARE ACTUALLY BIGGER THAN ONE CELL - checked against
+ * material_grain_hash() directly, since paint_row_n() (which applies the
+ * shift) is `static` in app_sand.c and cannot link into a host test.
+ * WITHIN an 8x8 block every cell must collapse to the identical shifted
+ * hash - checked at all four CORNERS, not an adjacent pair, so the whole
+ * block is proven to agree. BETWEEN two blocks the hash must generally
+ * differ, checked one block width apart, or the grid has collapsed to
+ * one giant block. */
 static void test_foam_blobs_are_bigger_than_one_cell(void)
 {
     static const int block_starts[] = { 0, 8 };
