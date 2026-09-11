@@ -429,33 +429,14 @@ static void test_acid_dissolves_dune_sand_but_not_cullet(void)
         "of sand that happened to survive");
 }
 
-/* The consequence of that, and the reason it is worth paying for: a
- * finite amount of acid can only eat a finite amount. A drop lands on a
- * deep pile and stops partway rather than boring through the floor. */
-/* Acid fizzes: a dissolve sometimes leaves smoke where the cell was.
- *
- * Without it acid worked in complete silence - cells simply stopped
- * existing, with nothing on screen to say what had happened or that the
- * acid was doing anything at all. reaction_t.fizz puts a wisp in the cell
- * that was just eaten, which is about to be empty anyway.
- *
- * MAT_SMOKE and not MAT_STEAM: steam here means water that got hot, and
- * acid fumes are not that - the same distinction that made smoke its own
- * material in the first place. */
-/* A dedicated, larger fixture for the two fizz tests below, separate from
- * the shared 8x8 `s`/`cells` acid_tank() itself uses - see its own comment
- * for why. reaction_t.fizz dropped sharply (2026-09-01, see its own
- * comment in material.c) from "about one bite in six" to 6-in-256, and
- * the 8x8 tank's own acid_rows/sand_rows only ever offer a HANDFUL of
- * cells to dissolve in total (acid_tank(2,2)'s 4-wide, 2-row sand supply
- * is 8 cells, ever - once eaten, no more dissolve events can happen no
- * matter how many further steps run). 8 total tries at a 6-in-256 chance
- * has better than an 80% chance of landing ZERO fizzes for any ONE fixed
- * seed - not a step-budget problem, a TRIALS problem, which is why
- * raising the step count alone (tried first) did not fix it. A wide,
- * deep sand floor with acid poured over the whole top gives hundreds of
- * independent dissolve events instead of a handful, which is what
- * actually needs to change. */
+/* Acid eats a finite amount - a drop on a deep pile stops partway. It
+ * also fizzes (reaction_t.fizz): a MAT_SMOKE wisp where the cell was, not
+ * MAT_STEAM, since silent dissolving gives no on-screen sign. A larger
+ * fixture for the fizz tests: fizz is 6-in-256, and acid_tank()'s sand
+ * supply is only ~8 cells - 8 tries at that rate has better than 80%
+ * odds of zero fizzes for one seed, a TRIALS problem not a step-budget
+ * one. A deep floor with acid on top gives hundreds of independent tries
+ * instead. */
 #define FIZZ_W 40
 #define FIZZ_H 12
 
@@ -646,44 +627,14 @@ static void test_the_dilution_split_favours_neither_side(void)
         "favouring a side");
 }
 
-/* A dedicated fixture for the two pairing tests below - alternating
- * acid/water columns separated by a column of GLASS, not an empty gap.
- * Two different designs were tried first and both broke for their own
- * reason:
- *
- * - The packed dilute_sim fixture above lets an acid cell's LEFT or
- *   RIGHT neighbour be another acid cell. Once that neighbour has
- *   already won its own water-wins bite earlier in the same left-to-
- *   right row scan, it has already turned into water by the time THIS
- *   cell's own dissolve search reaches it - a failed give-roll on the
- *   water directly above falls through to left/right next, and can land
- *   on that freshly-converted neighbour instead. A water-wins column's
- *   steam ended up written to the column beside it, not above it -
- *   correct behaviour, just not what a test assuming "the water cell is
- *   always directly above" can tell apart from a bug.
- * - An EMPTY gap between pairs (the old "fizzle" fixture's own idiom)
- *   does not have that problem, but introduces a different one: an
- *   empty cell is something a liquid can spread INTO, and the main
- *   sweep runs before reactions do - by the time this pass even starts,
- *   water or acid may already have drifted sideways into the gap,
- *   scrambling the one-pair-per-column layout before a single bite ever
- *   lands.
- * - STONE was tried next, on the assumption that a wall would simply
- *   never be a dissolve target - wrong, and caught only by measuring
- *   it: stone IS dissolvable (material.c, dissolvable=60, "stone gives
- *   way to acid now, just slowly"), so an acid cell whose own water
- *   neighbour's give-roll happened to miss would fall through to the
- *   stone beside it and could eat the separator instead - rare enough
- *   in ONE step that the single-step tests below still passed on a
- *   slightly reduced sample, but a real, silent hole in what the
- *   fixture claimed to guarantee.
- *
- * GLASS closes both holes for real: acid's own material comment names
- * it "the sole exception" left once stone stopped being immune
- * (acid_tank()'s own comment, this file, makes the same point), and
- * like stone it is not something anything can flow into (nothing moves
- * before reactions runs, same as the fully packed fixture's own
- * stability). */
+/* A dedicated fixture for the pairing tests below - acid/water columns
+ * separated by GLASS, not the packed dilute_sim fixture above (a
+ * neighbour acid cell may already have converted to water by the time
+ * this cell's dissolve search reaches it, scrambling the mapping), an
+ * empty gap (a liquid can spread in before reactions runs), or STONE
+ * (itself dissolvable, dissolvable=60 - a missed give-roll can eat the
+ * separator). GLASS is the sole acid-immune separator left, and nothing
+ * flows into it first. */
 #define SEPARATED_W 4000
 #define SEPARATED_H 2
 
@@ -904,32 +855,14 @@ static void test_acid_evaporates_into_gas_when_forced(void)
         "in a single step");
 }
 
-/* SAND_ACID_DILUTE_MASS_BIAS's actual point, end to end - proven by
- * comparing the SAME sustained pour with the mechanism forced off
- * (sand_set_acid_dilute_mass_bias(&sim, 0), a pure unbiased coin flip)
- * against the same pour with it left at its real default, rather than
- * by watching one biased run alone approach total saturation.
- *
- * That was the bug in the first version of this test: at 400 steps, a
- * 100-wide tap re-filled every single step pours 40,000 cells into a
- * 4,900-cell basin - roughly eight times its capacity - which empties
- * the pool through sheer poured VOLUME regardless of whether the
- * reaction favours the tap at all. Confirmed directly: forcing the
- * win/lose split to make the tap NEVER win a single bite still left
- * the test passing, because the tap material displaces the pool by
- * gravity and refill alone once enough of it has been poured. Given
- * unlimited attempts against a fixed-size pool, sheer resupply wins
- * eventually even at a neutral 50/50 split - see this file's own
- * pour_and_count() history for why "does the tap end up dominant" was
- * never actually testing SAND_ACID_DILUTE_MASS_BIAS.
- *
- * Cut down to a step budget short enough that NEITHER run saturates
- * (leaving room for a difference to show at all) and turned into an
- * A/B comparison instead: the local-backing mechanism's whole claim is
- * that it makes a sustained excess convert its opposite FASTER, so
- * that is what gets measured - the biased run must convert strictly
- * more of the pool than the identically-seeded unbiased run does in
- * the same window, not just "some, eventually". */
+/* SAND_ACID_DILUTE_MASS_BIAS's point, proven by comparing the pour with
+ * the mechanism forced off (unbiased coin flip) against the pour at
+ * default, rather than watching one biased run alone approach
+ * saturation: given unlimited attempts on a fixed pool, resupply empties
+ * it eventually even at a neutral 50/50 split. Step budget stays short
+ * enough that neither run saturates: the biased run must convert
+ * strictly more of the pool than the unbiased run in the same window,
+ * not just "some, eventually". */
 #define DILUTE_POUR_W          100
 #define DILUTE_POUR_H          50
 #define DILUTE_POUR_POOL_DEPTH 20
