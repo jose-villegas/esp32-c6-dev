@@ -270,6 +270,25 @@ tree and `Root <- Water` is near the top.
 mean and the largest excursion measured, 5.8x. It appears in neither of the
 other two tables, and a mean-based suite never sees it.
 
+**AN ARENA BOARD HOLDS EXACTLY TWO MATERIALS, AND THAT IS A BLIND SPOT, NOT
+JUST A LIMIT.** A mechanism whose precondition is a THIRD material reads as
+100% rejection here, and reads that way convincingly - with counters, over
+millions of reaches.
+
+It has already produced one wrong answer. `Root 40 + Water 10` showed the
+plant ladder's root body entering 4,533,650 times and changing nothing across
+300 steps, which looked like a large behaviour-neutral skip waiting to be
+taken. It was not: every plant stage ultimately needs moist SOIL, and an
+arena board pairing roots with water contains no soil at all. On the real
+scenes the local predicates are true 99.5-100% of the time and nothing
+rejects; the skip was closed negative after the round was already briefed on
+those numbers.
+
+So: before believing an arena rejection count, ask what the mechanism's
+preconditions are and whether a two-material board can even satisfy them.
+Confirm any rejection rate against a real scene's own measured window before
+anyone builds on it.
+
 Host timing: good for shape, ranking and screening, silent on absolute cost.
 Anything that has to be priced goes to the board.
 
