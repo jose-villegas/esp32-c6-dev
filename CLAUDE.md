@@ -64,17 +64,12 @@ scripts/check-format.sh <file.c> [<file.h> ...]         # format in place
 scripts/check-format.sh --check <file.c> [<file.h> ...]  # verify only
 ```
 
-**A comment states the constraint that holds now. It never narrates how the
-code got here.** This is the rule the length limits below are only a symptom
-of: "a first attempt gated X behind Y — verified on device and reverted; a
-literal per-cell history was considered next and is not affordable either"
-is sixty lines whose surviving content is one sentence (a per-cell history
-costs 41,216 bytes, the size of the grid buffer). Keep the conclusion, which
-is the constraint; drop the journey, which is git log's. A rejected
-alternative earns a clause only where it is still rejected for a reason that
-still holds and someone would otherwise retry it — not as a record that it
-was tried. Measured on this tree: 227 comments carry that narrative shape,
-282,711 characters of prose between them.
+**A comment states the constraint that holds now; it never narrates how the
+code got here.** A reader needs what it is, why it exists, how it works —
+short. Keep a measured number where it is the evidence, and a rejected
+alternative only where someone would otherwise retry it, as a clause. Cut
+the journey: git log owns it. `scripts/find_narrative_comments.py` lists
+candidates.
 
 **Comment the WHY, not the WHAT — and only when the code doesn't already say
 it.** Clean, well-named code mostly speaks for itself; a comment exists for
@@ -128,9 +123,9 @@ if [ -f "$f" ] && command -v python >/dev/null 2>&1; then python "$f"; else exit
 
 The guard is not cosmetic: `python <missing file>` exits 2, and 2 is the code
 that blocks the edit, so an unguarded user-level entry would refuse every
-write in every other project. The tree holds 1,394 comments over the 300
-aim (748 over the 500 ceiling), 67% of them in the sand app; `--comments-only
-<ref>` proves a bulk trim moved no code.
+write in every other project. Run the checker for current counts rather than
+trusting one written here; `--comments-only <ref>` proves a bulk trim moved
+no code.
 
 Requires a **host** compiler (not the ESP32 toolchain) for the host tests:
 Windows `winget install BrechtSanders.WinLibs.POSIX.UCRT`, Debian/Ubuntu
