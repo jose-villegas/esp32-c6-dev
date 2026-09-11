@@ -40,12 +40,12 @@
  * 80, with a measured full present of 17.6 ms saying there is no software slack
  * left at this clock. Vendor/Espressif validate only 40.
  *
- * NOT, AS THIS COMMENT USED TO SAY, "a real panel ceiling". 80 MHz produces
- * corner artifacts - corruption at the START of a transfer rather than noise
- * across the frame - and that was twice taken for a bandwidth limit. Raising the
- * pads to 40 mA (CONFIG_LAUNCHER_GFX_QSPI_STRONG_PADS) makes them rare rather
- * than routine, which says the failure is edge rate or setup margin at the
- * receiver. Rare is not gone, so 80 stays opt-in - see bd esp32c6-kfg.
+ * 80 MHz produces corner artifacts - corruption at the START of a transfer
+ * rather than noise across the frame - not a bandwidth ceiling. Raising
+ * the pads to 40 mA (CONFIG_LAUNCHER_GFX_QSPI_STRONG_PADS) makes them rare
+ * rather than routine, which says the failure is edge rate or setup
+ * margin at the receiver. Rare is not gone, so 80 stays opt-in - see bd
+ * esp32c6-kfg.
  *
  * No in-between exists: the 80 MHz source's integer divider (n>=2 floor)
  * resolves to exactly 40 or 80, which is why the option is a bool.
