@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * fixed - shift-based fixed-point arithmetic, in one place.
  *
  * `static inline`: some of these run in the sand simulation's innermost
@@ -52,7 +52,7 @@
  * match whatever operation it already used - do not switch it to "round"
  * because that sounds more accurate. If the value is a one-shot geometric
  * computation, round is usually what you want.
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stdint.h>

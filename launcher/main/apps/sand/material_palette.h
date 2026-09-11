@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * material_palette - what a material LOOKS like, split from what it IS.
  *
  * material.h/material.c hold materials[]/reactions[] - identity and
@@ -11,7 +11,7 @@
  * already treats them as, and makes the dependency on gfx_color_t visible
  * at the include line instead of buried inside a file nothing else there
  * needed it for.
- *===========================================================================*/
+ */
 #pragma once
 
 #include "gfx/gfx_color.h"

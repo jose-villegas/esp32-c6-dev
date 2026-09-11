@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Portable suite: ui_bezel_spans - the bezel's geometry and shading.
  *
  * ui_style.h splits a style into geometry (ui_bezel_spans() and ui_shade(),
@@ -12,7 +12,7 @@
  * The rect used throughout is the one the launcher actually draws: a
  * full-width row at UI_ROW_HEIGHT (64), inset by UI_MARGIN. Where a size
  * matters to the assertion it is stated inline instead.
- *===========================================================================*/
+ */
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -52,9 +52,7 @@ static int luma(mu_Color c)
     return c.r * 2 + c.g * 5 + c.b;
 }
 
-/*---------------------------------------------------------------------------
- * Shading
- *-------------------------------------------------------------------------*/
+/* Shading */
 
 static void test_shading_by_zero_changes_nothing(void)
 {
@@ -86,9 +84,7 @@ static void test_shading_leaves_alpha_alone(void)
         "shading toward black must not touch alpha either");
 }
 
-/*---------------------------------------------------------------------------
- * Geometry
- *-------------------------------------------------------------------------*/
+/* Geometry */
 
 static void test_the_face_is_drawn_first_and_covers_the_whole_rect(void)
 {
@@ -179,13 +175,13 @@ static void test_the_shadowed_edges_are_drawn_over_the_lit_ones(void)
         "edge would not be painting over anything at the corner");
 }
 
-/*---------------------------------------------------------------------------
+/*
  * The panel
  *
  * ui_panel_spans() is ui_bezel_spans()'s sibling for a section frame - see
  * ui_style.h's "The panel" section. Same reasoning as the bezel tests above:
  * pure geometry, checked directly rather than by eyeballing five rects.
- *-------------------------------------------------------------------------*/
+ */
 
 #define PANEL_X 8
 #define PANEL_Y 24
@@ -282,14 +278,14 @@ static void test_panel_a_buffer_too_small_produces_nothing(void)
         "a bug, so refuse rather than fill what fits");
 }
 
-/*---------------------------------------------------------------------------
+/*
  * Text styles
  *
  * ui_text_passes() is ui_bezel_spans()'s sibling for text - see ui_style.h's
  * "Text" section for the reasoning. Same approach here: nobody can eyeball
  * nine overlapping text draws either, so the passes are checked directly
  * rather than by rendering anything.
- *-------------------------------------------------------------------------*/
+ */
 
 static const int TEXT_SENTINEL = -777;
 
@@ -424,9 +420,7 @@ static void test_a_text_buffer_too_small_produces_nothing(void)
     }
 }
 
-/*---------------------------------------------------------------------------
- * The text halo
- *-------------------------------------------------------------------------*/
+/* The text halo */
 
 static void test_halo_of_a_dark_ink_is_light_and_well_separated(void)
 {
@@ -463,9 +457,7 @@ static void test_halo_carries_alpha_through_unchanged(void)
         "same for a light, translucent ink");
 }
 
-/*---------------------------------------------------------------------------
- * Degenerate sizes
- *-------------------------------------------------------------------------*/
+/* Degenerate sizes */
 
 static void test_a_control_too_small_for_a_bezel_gets_a_flat_face(void)
 {

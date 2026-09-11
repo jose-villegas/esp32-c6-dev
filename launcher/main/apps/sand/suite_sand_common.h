@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Shared fixtures and assertion helpers for the sand suite files
  * (suite_sand_*.c). Pure test infrastructure, not a suite of its own - no
  * SUITE_REGISTER here, nothing here is a test_* function.
@@ -14,7 +14,7 @@
  * the release build and back in only under CONFIG_LAUNCHER_SELFTEST. A
  * differently-named file would silently link this test scaffolding into
  * release firmware instead.
- *===========================================================================*/
+ */
 #pragma once
 
 #include "material_palette.h"

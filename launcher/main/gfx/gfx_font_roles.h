@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * gfx_font_roles - which typeface plays which part, decided once, here, so
  * retyping the UI is an edit here rather than a grep.
  *
@@ -14,7 +14,7 @@
  * scale is a call-site argument. The boot title is an authored per-animation
  * knob, not a role; boot_anim.c names lmroman_40 through its own include so
  * this file never references it.
- *===========================================================================*/
+ */
 #pragma once
 
 #include "gfx/gfx_font.h"

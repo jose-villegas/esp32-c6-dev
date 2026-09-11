@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * sand_ui - the falling-sand app's UI state machine: which button/touch
  * edges move the app between RUNNING and its two overlay panels - the
  * material palette (SAND_UI_PALETTE, opened by BOOT) and the brush screen
@@ -39,7 +39,7 @@
  * under UI rotation. What a click on that tile MEANS - select it, or toggle
  * its mode - is still exactly this module's call, for the same testability
  * reason everything else here is: see suite_sand_ui.c.
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stdbool.h>

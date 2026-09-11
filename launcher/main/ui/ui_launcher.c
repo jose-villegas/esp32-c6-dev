@@ -1,10 +1,10 @@
-/*=============================================================================
+/*
  * ui_launcher - the home screen.
  *
  * Only the UI description lives here. Everything reusable - the microui
  * context, touch translation, painting and the repaint-only-what-changed
  * logic - is in ui.c, so an app can build its own UI the same way.
- *===========================================================================*/
+ */
 
 #include "ui/ui_launcher.h"
 

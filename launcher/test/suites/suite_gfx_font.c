@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Portable suite: gfx_font - the pure metrics half of a font descriptor.
  *
  * gfx_font.h splits a font into pure metrics (gfx_font_advance(),
@@ -17,7 +17,7 @@
  * gfx_font_8x8's own fields (cell_w, cell_h) rather than a second hardcoded
  * 8, so a change to the bitmap's cell size cannot silently drift out of
  * step with what this suite expects.
- *===========================================================================*/
+ */
 
 #include <string.h>
 
@@ -31,9 +31,7 @@
  * used, rather than repeated as a magic 2 at every call site below. */
 #define MIRRORED_GLYPH_SCALE 2
 
-/*---------------------------------------------------------------------------
- * gfx_font_8x8 - the real, shipped font
- *-------------------------------------------------------------------------*/
+/* gfx_font_8x8 - the real, shipped font */
 
 static void test_default_font_width_matches_char_w_per_character(void)
 {
@@ -127,11 +125,11 @@ static void test_monospace_advance_is_cell_w_times_scale_for_every_glyph(void)
     }
 }
 
-/*---------------------------------------------------------------------------
+/*
  * A synthetic proportional descriptor - the case with no real font behind
  * it yet, and so the easiest to get silently wrong (a monospace-only test
  * would still pass even if `advance` were never actually consulted).
- *-------------------------------------------------------------------------*/
+ */
 
 /* Covers 'A'..'D' (4 glyphs) with deliberately distinct per-glyph advances,
  * so a bug that returns the wrong glyph's advance, or falls through to the

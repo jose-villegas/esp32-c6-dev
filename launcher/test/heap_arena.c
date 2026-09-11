@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * A first-fit arena allocator that stands in for malloc/calloc/realloc/free
  * in the HOST test build, sized to what this project's device profile says
  * is actually free once the framebuffer is carved out (device_profiles/
@@ -35,7 +35,7 @@
  * is also compiled into the device firmware (main/CMakeLists.txt) and the
  * sand perf_probe harness (main/apps/sand/tools/perf_probe/build_probe.sh);
  * neither defines this macro or adds this file to its source list.
- *===========================================================================*/
+ */
 #ifdef HOST_HEAP_ARENA
 
 #include "heap_arena.h"

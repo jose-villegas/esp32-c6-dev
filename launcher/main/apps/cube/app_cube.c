@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * app_cube - the Gouraud-shaded rotating RGB cube, as a launcher app.
  *
  * Ownership is inverted compared with a standalone renderer: this does not run
@@ -10,7 +10,7 @@
  * S3L_Z_BUFFER 0 it keeps no depth buffer, resolving visibility by sorting
  * triangles back-to-front. A colour+depth rasterizer would want ~1.3 MB at
  * this resolution, against ~424 KiB of RAM on the whole chip.
- *===========================================================================*/
+ */
 
 #include <stdint.h>
 #include <stdio.h>

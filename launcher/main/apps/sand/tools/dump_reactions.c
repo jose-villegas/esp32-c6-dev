@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * dump_reactions - compile material.c's reaction tables into markdown.
  *
  * See docs/plans/Reaction-Doc-Generator-Plan.md for the design this follows.
@@ -55,7 +55,8 @@
  * current value wrong - it would print "empty" for glass shattering into
  * sand, which is exactly the "confidently wrong name, silently" failure the
  * plan's own paragraph warns about, one paragraph before naming the field
- * that trips it. */
+ * that trips it.
+ */
 
 #include <ctype.h>
 #include <errno.h>
@@ -82,7 +83,7 @@
  * checked below, so it needs its own name rather than a magic number. */
 #define ARRAY_LEN(a) (sizeof(a) / sizeof((a)[0]))
 
-/*-----------------------------------------------------------------------
+/*
  * The field table.
  *
  * One row per reaction_t field. `group` says which clause it contributes
@@ -94,7 +95,7 @@
  * lies in two directions" section). Phase 1 sets neither: every adverb
  * below takes the computed bucket, unedited, on purpose - that by-feel
  * pass is explicitly phase 2's job, not this file's.
- *---------------------------------------------------------------------*/
+ */
 
 typedef enum {
     GRP_IGNITE = 0,   /* catching fire: flammability, ignites_to, needs_air */
@@ -373,7 +374,7 @@ static const field_doc_t *field_doc(const char *name)
     exit(1);
 }
 
-/*-----------------------------------------------------------------------
+/*
  * REACTION_DOC parsing - the cause clauses this file cannot derive from
  * material.c's tables at all, because the condition that gates them lives
  * entirely at a read site in sand_reactions.c (see shatters_to's two
@@ -392,7 +393,7 @@ static const field_doc_t *field_doc(const char *name)
  * way field_doc() assumes - it just refers to a REACTION_DOC() invocation
  * (reported by number, `errno`/exit(1) same as the rest of this file) rather
  * than a `%s` this program already trusts elsewhere.
- *---------------------------------------------------------------------*/
+ */
 
 /* Comfortably more than the number of REACTION_DOC() calls sand_reactions.c
  * carries today (three, as of this writing) - raise it if a future one
@@ -574,9 +575,7 @@ static void causes_are_complete(void)
     if (!ok) exit(1);
 }
 
-/*-----------------------------------------------------------------------
- * Decoding.
- *---------------------------------------------------------------------*/
+/* Decoding. */
 
 /* Rate ladder (FK_RATE/SCALE_RATE): one chance per step against a steady
  * partner (expected wait = 256/value steps). 255 = instant, no RNG draw
@@ -623,14 +622,14 @@ static const char *adverb(const char *field_name, uint8_t v)
     return adverb_for(v);
 }
 
-/*-----------------------------------------------------------------------
+/*
  * Adverb exceptions - a by-feel override for the one case where this
  * ladder's single-steady-partner model provably disagrees with a measured
  * comment in material.c (see adverb_for()'s own top comment on sand's
  * heat_chance). A tiny table with a startup soundness check, the same
  * idiom field_docs_offsets_are_sound() already uses: wrong data here is
  * worse than no override at all, so it is checked, not just declared.
- *---------------------------------------------------------------------*/
+ */
 
 typedef struct {
     uint8_t     cell;   /* the row this override applies to - a plain
@@ -766,11 +765,11 @@ static const char *cause_marked(const char *field, size_t index)
     return buf;
 }
 
-/*-----------------------------------------------------------------------
+/*
  * One row's worth of rows (materials[] name + reactions[]/extended_
  * reactions[] row + movement kind), built once and reused for both the
  * per-material section and the pairwise join table below.
- *---------------------------------------------------------------------*/
+ */
 
 typedef struct {
     const char *name;
@@ -885,7 +884,7 @@ static void material_hex(uint8_t v, char *buf, size_t cap)
     snprintf(buf, cap, "#%02X%02X%02X", r8, g8, b8);
 }
 
-/*-----------------------------------------------------------------------
+/*
  * Legibility overrides - material_hex() above returns the device's exact
  * palette value, which is what the anatomy section below still shows (see
  * its own top comment: raw values are the documentation of the actual
@@ -903,7 +902,8 @@ static void material_hex(uint8_t v, char *buf, size_t cap)
  * exits(1) on any mismatch, so a future palette change cannot silently
  * leave a stale override in place the way it could with no check at all.
  * Only materials that actually fail get a row - passing materials read
- * straight through material_hex(), unmodified, forever. */
+ * straight through material_hex(), unmodified, forever.
+ */
 typedef struct {
     uint8_t     cell;    /* matched against mrow_t.color_id, same as
                           * ADVERB_EXCEPTIONS.cell */
@@ -1154,12 +1154,12 @@ static bool row_is_empty(const reaction_t *r)
     return true;
 }
 
-/*-----------------------------------------------------------------------
+/*
  * Per-material clause emitters, one per group, called in group sort-key
  * order for every material row. Each one is a no-op unless its group's
  * driver field is nonzero, so a material with (say) no plant fields at
  * all costs nothing but a skipped comparison.
- *---------------------------------------------------------------------*/
+ */
 
 static void emit_ignite(const reaction_t *r, uint8_t self_id)
 {
@@ -1549,7 +1549,7 @@ static void emit_material_section(const char *name, const reaction_t *r,
     emit_shatter(r);
 }
 
-/*-----------------------------------------------------------------------
+/*
  * The pairwise A + B -> C table.
  *
  * Keyed on the RATE field and branching on the target - never the other
@@ -1558,7 +1558,7 @@ static void emit_material_section(const char *name, const reaction_t *r,
  * or a third cell entirely (a plant drinking) - see the plan's "The
  * pairwise join is phase 1, not phase 2" section, which is the reason
  * this table exists at all rather than being deferred.
- *---------------------------------------------------------------------*/
+ */
 
 static bool is_burning_material(const reaction_t *r)
 {
@@ -1906,7 +1906,7 @@ static void emit_pairwise_table(void)
     }
 }
 
-/*-----------------------------------------------------------------------
+/*
  * "How these sentences are built."
  *
  * A separate section after the pairwise table, showing one representative
@@ -1933,7 +1933,8 @@ static void emit_pairwise_table(void)
  * See print_marked() for where a mark_t becomes its treatment,
  * representative_variant() and material_hex() for which swatch a material
  * is drawn at, and the Legend this function prints for the reader-facing
- * version of the same rationale. */
+ * version of the same rationale.
+ */
 
 typedef enum {
     MARK_NONE,     /* glue (see the Legend below) - printed as ordinary
@@ -2546,9 +2547,7 @@ static void emit_anatomy(void)
     }
 }
 
-/*-----------------------------------------------------------------------
- * main
- *---------------------------------------------------------------------*/
+/* main */
 
 int main(int argc, char **argv)
 {

@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Specification for the home gesture - a swipe from whichever screen edge is
  * currently carrying it, toward the centre, which is how an app is closed.
  * Which edge that is depends on the shell's orientation (see main.c's
@@ -15,7 +15,7 @@
  * edge-specific set: one trigger, one wrong-direction, one too-short, one
  * wrong-start-zone, enough to prove the axis and sign are right for that
  * edge without re-deriving every boundary already covered for bottom.
- *===========================================================================*/
+ */
 
 #include "unity.h"
 #include "suites.h"

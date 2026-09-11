@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Portable suite: gfx_dirty - the grid/leaf dirty-region tracker.
  *
  * gfx_dirty.h carries no ESP-IDF dependency, unlike gfx.c (which
@@ -11,7 +11,7 @@
  * LEAF_W/LEAF_H boundary is the likely bug class here, so several of these
  * lean on the exact boundary pixel rather than a value safely in the
  * middle of a leaf.
- *===========================================================================*/
+ */
 
 #include "unity.h"
 #include "suites.h"

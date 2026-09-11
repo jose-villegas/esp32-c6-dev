@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Portable suite: ui_pointer driving REAL microui.
  *
  * suite_ui_pointer.c only asserts the event LIST ui_pointer_step()
@@ -17,7 +17,7 @@
  * microui.c is plain C over stdio/stdlib/string, so it links here unchanged -
  * this is the only suite that links it, and the reason the "nothing here
  * links microui.c" note in run_tests.sh no longer holds.
- *===========================================================================*/
+ */
 
 #include <stdlib.h>
 #include <string.h>
@@ -142,9 +142,7 @@ static int taps_counted(int held_frames)
     return submits;
 }
 
-/*---------------------------------------------------------------------------
- * The regression this suite was written for.
- *-------------------------------------------------------------------------*/
+/* The regression this suite was written for. */
 
 static void test_a_tap_submits_the_button_underneath_it(void)
 {
@@ -202,9 +200,7 @@ static void test_a_tap_outside_the_button_submits_nothing(void)
     TEST_ASSERT_EQUAL_INT(0, submits);
 }
 
-/*---------------------------------------------------------------------------
- * The capability the held pointer exists for.
- *-------------------------------------------------------------------------*/
+/* The capability the held pointer exists for. */
 
 /* A slider needs mouse_down to persist ACROSS frames - microui only tracks
  * its value while (mouse_down | mouse_pressed) is set. This is what the

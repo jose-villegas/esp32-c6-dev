@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * material - what a cell is made of, and how that makes it behave.
  *
  * Pure data. The simulation reads this table and has no idea what "water" is;
@@ -45,15 +45,13 @@
  * flash: it costs zero RAM. The board has ~12.8 MB of flash spare and ~50 KB of
  * RAM, so anything that can be a constant should be one - including lookups
  * that would otherwise be computed. See material_palette().
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stdbool.h>
 #include <stdint.h>
 
-/*---------------------------------------------------------------------------
- * Cells
- *-------------------------------------------------------------------------*/
+/* Cells */
 
 typedef uint8_t cell_t;
 
@@ -123,9 +121,7 @@ typedef uint8_t cell_t;
 
 #define MATERIAL_LIQUID_DEPTH_BAND 24
 
-/*---------------------------------------------------------------------------
- * Materials
- *-------------------------------------------------------------------------*/
+/* Materials */
 
 typedef enum {
     MAT_EMPTY = 0,

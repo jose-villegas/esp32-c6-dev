@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * sand_work_counters - exact, deterministic per-pass work counts for the
  * liquid cross-flow path (bd esp32c6-8zx). Counting, not timing: a full day
  * was lost attributing a device regression because host wall-clock timing
@@ -28,7 +28,7 @@
  * compiled in, which is why compare_counters.py never leaves them on a
  * device build's own compile - see docs/sand/Perf-Round-Guide.md's
  * "Count, do not time" section for the full reasoning.
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stdint.h>

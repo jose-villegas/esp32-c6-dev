@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * touch - reads the touch panel on its own schedule.
  *
  * Sampling is deliberately decoupled from rendering. A frame takes ~40 ms
@@ -6,7 +6,7 @@
  * so polling once per frame drops taps entirely. This runs at TOUCH_POLL_HZ
  * and latches press/release edges, so an event that happens between two frames
  * is still delivered to the next one.
- *===========================================================================*/
+ */
 #pragma once
 
 #include "app.h"

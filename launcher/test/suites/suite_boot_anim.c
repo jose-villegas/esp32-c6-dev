@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Portable suite: the startup animation's projection, curve, smoothing and
  * timeline.
  *
@@ -18,7 +18,7 @@
  * heights, and it must NOT come anywhere near zero anywhere else. Those are
  * the first five nontrivial zeros of the zeta function, and no table of
  * plausible-looking numbers passes both halves by accident.
- *===========================================================================*/
+ */
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -47,9 +47,7 @@ static int32_t threshold_sq(int32_t q12)
     return q12 * q12;
 }
 
-/*---------------------------------------------------------------------------
- * The curve
- *-------------------------------------------------------------------------*/
+/* The curve */
 
 static void test_the_curve_climbs_from_zero_to_the_top(void)
 {
@@ -149,9 +147,7 @@ static void test_samples_are_clamped_rather_than_read_out_of_range(void)
                             boot_anim_sample(BOOT_ANIM_CURVE_POINTS + 99).im);
 }
 
-/*---------------------------------------------------------------------------
- * The camera
- *-------------------------------------------------------------------------*/
+/* The camera */
 
 static void test_the_quarter_wave_starts_at_zero_and_ends_at_one(void)
 {
@@ -456,7 +452,7 @@ static void test_an_untouched_keyframes_scale_reads_back_as_identity(void)
         "an unscaled keyframe's space.scale.z should read back as 1.0");
 }
 
-/*---------------------------------------------------------------------------
+/*
  * The seed keyframes
  *
  * A freely keyframed camera has no blanket off-panel guarantee - a wrong
@@ -464,7 +460,7 @@ static void test_an_untouched_keyframes_scale_reads_back_as_identity(void)
  * protecting: the SEED this repo ships, a sanity sweep against
  * boot_anim_keyframes[]. A generous margin, not a tight fit - catches the
  * seed going wildly broken, not tunable tighter.
- *-------------------------------------------------------------------------*/
+ */
 
 #define BOOT_ANIM_TEST_MAX_PANEL_MULTIPLE 3
 
@@ -528,9 +524,7 @@ static void test_the_seeds_three_axes_project_to_distinct_directions(void)
         "the real axis should not collapse onto the origin");
 }
 
-/*---------------------------------------------------------------------------
- * The wave
- *-------------------------------------------------------------------------*/
+/* The wave */
 
 /* `amp_q12`/`wavelength_q12`/`period_ms` are fabricated here, not read
  * from BOOT_ANIM_WAVE_HEIGHT_Q12/WAVELENGTH_Q12/PERIOD_MS - see
@@ -774,9 +768,7 @@ static void test_the_seeds_spokes_reach_their_full_length(void)
         "passed");
 }
 
-/*---------------------------------------------------------------------------
- * Smoothing
- *-------------------------------------------------------------------------*/
+/* Smoothing */
 
 static boot_anim_pt_t pt(int32_t re, int32_t im, int32_t t)
 {
@@ -893,9 +885,7 @@ static void test_spline_cs_matches_transforming_the_world_space_spline(void)
     }
 }
 
-/*---------------------------------------------------------------------------
- * Basic level of detail
- *-------------------------------------------------------------------------*/
+/* Basic level of detail */
 
 /* Two points far enough apart on screen that boot_anim_curve_lod_steps()
  * must not shortcut - an identity, orthographic view (focal 0) so the
@@ -990,13 +980,13 @@ static void test_curve_lod_steps_keeps_full_detail_when_the_probe_cannot_project
         "detail, not be assumed tiny");
 }
 
-/*---------------------------------------------------------------------------
+/*
  * Pacing
  *
  * tween_ramp()/tween_ease_out() themselves are tested in suite_tween.c;
  * what is left here is specific to how boot_anim.h USES them, not the
  * primitives themselves.
- *-------------------------------------------------------------------------*/
+ */
 
 /* Phase 1 only - see boot_anim_pen()'s own "TWO PHASES" comment. It reaches
  * BOOT_ANIM_CURVE_PHASE1_FRACTION, not BOOT_ANIM_ONE, at the end of
@@ -1264,9 +1254,7 @@ static void test_the_axes_are_there_before_the_curve_starts_climbing(void)
         "the axes should be drawn before anything is plotted against them");
 }
 
-/*---------------------------------------------------------------------------
- * Colour
- *-------------------------------------------------------------------------*/
+/* Colour */
 
 /* Every colour on the wheel is fully saturated: one channel at the top, one
  * at the bottom, the third somewhere between. That is what makes it a hue
@@ -1433,7 +1421,7 @@ static void test_the_live_end_of_the_curve_is_drawn_thicker(void)
         "a stroke between two pens should be thin again");
 }
 
-/*---------------------------------------------------------------------------
+/*
  * The title
  *
  * boot_anim_title_letter() now takes the font it is laying out - see its
@@ -1444,7 +1432,7 @@ static void test_the_live_end_of_the_curve_is_drawn_thicker(void)
  * just the layout FORMULA in the abstract - suite_gfx_font.c already
  * covers gfx_font_text_width()/gfx_font_advance() themselves against a
  * synthetic proportional font, so there is no need to repeat that here.
- *-------------------------------------------------------------------------*/
+ */
 
 /* Whichever font the timeline actually AUTHORS, resolved the same way
  * draw_title() resolves it (boot_anim.c). These tests check the real

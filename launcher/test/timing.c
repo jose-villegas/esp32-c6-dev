@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Implements the RUN_TEST override declared in timing.h.
  *
  * Wraps Unity's own dispatcher (UnityDefaultTestRun) from outside: the timer
@@ -12,7 +12,7 @@
  * never touches the existing "file:line:name:PASS" line - the one two
  * tools (launcher/tools/sweeps/validate_capture.py and
  * launcher/main/apps/sand/tools/report_performance.py) already parse.
- *===========================================================================*/
+ */
 #include "timing.h"
 
 #include <stdint.h>

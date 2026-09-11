@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * esp_timer_oracle_stub - always-zero esp_timer_get_time() for the oracle
  * image (bd oracle spike).
  *
@@ -17,7 +17,7 @@
  * esp_timer_get_time() gating something real" would mean, and there isn't
  * one; every call site in suite_sand_perf.c's DEVICE_BUILD block is
  * exactly this per-step budget shape.
- *===========================================================================*/
+ */
 #include <stdint.h>
 
 int64_t

@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Portable suite: icons_sand - structural facts about the brush screen's
  * baked artwork.
  *
@@ -10,7 +10,7 @@
  * that is established, the rest of this file checks facts a scan can pin
  * down - non-empty, in-bounds, small enough to draw, symmetric where the
  * artwork is meant to be.
- *===========================================================================*/
+ */
 
 #include <stdbool.h>
 #include <stddef.h>

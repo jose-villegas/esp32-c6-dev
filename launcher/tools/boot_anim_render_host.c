@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * boot_anim_render_host - render one frame of the boot animation with the
  * REAL firmware code (boot_anim.c + gfx.c, unmodified drawing logic) on a
  * host build, and write it out as a BMP.
@@ -31,7 +31,7 @@
  * Also prints one line to STDERR - "ORIGIN <x> <y>", the space's own local
  * origin projected through this frame's transform - see the comment at the
  * call site below for why.
- *===========================================================================*/
+ */
 
 #include <stdint.h>
 #include <stdio.h>

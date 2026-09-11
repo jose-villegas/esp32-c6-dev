@@ -1,11 +1,11 @@
-/*=============================================================================
+/*
  * Portable suite: the falling-sand automaton - material appearance -
  * painting, stone/glass speckle, and cullet's colour cycle.
  *
  * Split out of suite_sand.c (bd esp32c6 test-suite-refactor), which had grown
  * past 32,000 lines across 500+ tests. Shared fixtures and assertion helpers
  * live in suite_sand_common.{c,h} - see that header.
- *===========================================================================*/
+ */
 #include <math.h>   /* not every file in the split still needs atan2()/M_PI,
                      * but every file inherited suite_sand.c's own include
                      * block rather than being pruned by hand, to keep the
@@ -645,7 +645,7 @@ static void test_stone_speckles_by_position_at_every_temperature(void)
  * cullet/tone tests and the soil-tone test it was originally written for
  * need the same unpacking math. */
 
-/*=============================================================================
+/*
  * CULLET'S COLOUR CYCLE - each of the four reserved shades (SAND_CULLET_BASE
  * .. MATERIAL_VARIANTS - 1) is a STARTING POINT on a shared, slowly-advancing
  * 16-step colour cycle rather than a fixed colour of its own - see
@@ -658,7 +658,7 @@ static void test_stone_speckles_by_position_at_every_temperature(void)
  * it to 0 before returning, so none of them can depend on run order, and a
  * test run after this file finishes sees the same phase-0 rest look it would
  * have seen if none of these had run at all.
- *===========================================================================*/
+ */
 
 /* At rest (phase 0), the four cullet shades are four distinct tints, not one
  * colour repeated - the same claim test_each_material_is_painted_the_way_it_
@@ -841,13 +841,13 @@ static void test_cullet_stays_pale_at_every_phase(void)
     material_set_cullet_phase(0u);
 }
 
-/*=============================================================================
+/*
  * CULLET'S GLINT - the pale cycle above read as too white on the device, so
  * material_colours()'s MAT_SAND case now flashes a grain PURE WHITE instead
  * of its pale cycle colour, rarely (CULLET_GLINT_ONE_IN), for a different
  * few grains every phase step - a facet catching the light. See
  * CULLET_GLINT's and CULLET_GLINT_ONE_IN's own comments in material.c.
- *===========================================================================*/
+ */
 
 /* A glint is the brightest thing the panel can show, full white - not a
  * brighter tint of the grain's own colour, which reads worse on the

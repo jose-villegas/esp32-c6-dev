@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Portable suite: palette - grid arithmetic and hit-testing for the material
  * picker overlay.
  *
@@ -14,7 +14,7 @@
  * itself and threads the result through, the same way app_sand.c's
  * draw_palette() does - which is what tests the derivation, rather than
  * merely re-checking fixed-4 arithmetic under a new name.
- *===========================================================================*/
+ */
 
 #include <stdbool.h>
 #include <stddef.h>

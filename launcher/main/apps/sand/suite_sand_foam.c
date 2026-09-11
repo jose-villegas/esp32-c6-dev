@@ -1,11 +1,11 @@
-/*=============================================================================
+/*
  * Portable suite: the falling-sand automaton - water's foam, gathered at
  * crevices.
  *
  * Split out of suite_sand.c (bd esp32c6 test-suite-refactor), which had grown
  * past 32,000 lines across 500+ tests. Shared fixtures and assertion helpers
  * live in suite_sand_common.{c,h} - see that header.
- *===========================================================================*/
+ */
 #include <math.h>   /* not every file in the split still needs atan2()/M_PI,
                      * but every file inherited suite_sand.c's own include
                      * block rather than being pruned by hand, to keep the
@@ -30,7 +30,7 @@
 #include "util/intmath.h"
 #include "suite_sand_common.h"
 
-/*=============================================================================
+/*
  * WATER'S FOAM - gathered at crevices, never on a flat run.
  *
  * material_colours()'s own top comment (material.c) has the full account of
@@ -47,7 +47,8 @@
  * function's own free-fall branch), so that "did NOT foam" has an exact,
  * checkable answer: the plain fill-indexed palette entry, with no shift
  * applied at all. Foam is the one thing left that can make a rim cell
- * disagree with that value once gravity contributes nothing. */
+ * disagree with that value once gravity contributes nothing.
+ */
 
 /* Every test below reads this rim cell's own fill, at variant 12 - deep
  * enough that the pale/dark ends of the ramp are not near either clamp,

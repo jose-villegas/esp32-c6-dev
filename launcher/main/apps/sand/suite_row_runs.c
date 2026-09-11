@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Portable suite: row_runs - detecting and reconciling separate runs of
  * occupied cells within one row.
  *
@@ -8,7 +8,7 @@
  * tests lean adversarial on purpose: a blob splitting, two blobs merging,
  * a blob vanishing entirely, a new blob appearing in what used to be a
  * gap.
- *===========================================================================*/
+ */
 
 #include <stdbool.h>
 

@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * brush_screen_preview - render the sand app's brush screen through the real
  * firmware drawing code on a host, at both canvas sizes, so its composition
  * can be judged without a device build or a flash. Same shape as
@@ -25,7 +25,7 @@
  * for a rotated device, and landscape_pixel() reads it back through that
  * turn's inverse - derived by mapping a rect's corner, because a raw
  * per-pixel inverse of a rect-based transform is off by one at the edge.
- *===========================================================================*/
+ */
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -221,9 +221,7 @@ static void draw_screen(ui_transform_t t, int screen_w, int screen_h)
     const gfx_font_t *font = gfx_font_ui();
     const int scale = BRUSH_SCREEN_CAPTION_SCALE;
 
-    /*---------------------------------------------------------------
-     * Header: swatch, caption/name, info button.
-     *-------------------------------------------------------------*/
+    /* Header: swatch, caption/name, info button. */
     draw_panel(t, lay.header_panel, BRUSH_PANEL_FACE_COLOR, BRUSH_PANEL_BORDER_COLOR);
     draw_swatch(t, lay.swatch, PREVIEW_MATERIAL);
     draw_text(t, lay.material_caption, BRUSH_SCREEN_MATERIAL_CAPTION,
@@ -247,9 +245,7 @@ static void draw_screen(ui_transform_t t, int screen_w, int screen_h)
         draw_icon(t, icon_r, &icon_sand_table[ICON_SAND_INFO], BRUSH_TEXT_COLOR);
     }
 
-    /*---------------------------------------------------------------
-     * Brush mode: caption, three segments.
-     *-------------------------------------------------------------*/
+    /* Brush mode: caption, three segments. */
     draw_panel(t, lay.mode_panel, BRUSH_PANEL_FACE_COLOR, BRUSH_PANEL_BORDER_COLOR);
     draw_text(t, lay.mode_caption, BRUSH_SCREEN_MODE_CAPTION, BRUSH_CAPTION_COLOR, scale, -1);
 
@@ -280,9 +276,7 @@ static void draw_screen(ui_transform_t t, int screen_w, int screen_h)
         draw_text(t, label_r, label, ink, scale, 0);
     }
 
-    /*---------------------------------------------------------------
-     * Brush size: caption/value, slider.
-     *-------------------------------------------------------------*/
+    /* Brush size: caption/value, slider. */
     draw_panel(t, lay.size_panel, BRUSH_PANEL_FACE_COLOR, BRUSH_PANEL_BORDER_COLOR);
     draw_text(t, lay.size_caption, brush_screen_size_caption((brush_screen_segment_t)PREVIEW_MODE),
              BRUSH_CAPTION_COLOR, scale, -1);

@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * app_sand - falling sand, poured with a finger and steered by tilting.
  *
  * Three pieces, each of which knows nothing about the others:
@@ -37,7 +37,7 @@
  * 0x0A0C14 - see COL_BACKGROUND - so the untouched strip is indistinguishable
  * from the screen around it. start_sim() still clears the screen explicitly
  * before the first frame rather than leaning on that coincidence alone.
- *===========================================================================*/
+ */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -238,7 +238,7 @@ static int64_t  pour_awake_cells_total, idle_awake_cells_total;
 static uint32_t sim_accumulator_q8;
 static uint32_t pour_accumulator_ms;
 
-/*---------------------------------------------------------------------------
+/*
  * Sensor axes to screen axes
  *
  * The QMI8658 is soldered in some fixed orientation relative to the panel, and
@@ -254,13 +254,11 @@ static uint32_t pour_accumulator_ms;
  * The Y axis then runs across the screen, but pointing left, hence the
  * negation. Both facts came from tilting the board and watching which way the
  * sand went; there is no way to derive them.
- *-------------------------------------------------------------------------*/
+ */
 #define GRAVITY_SCREEN_X(s)  (-(s)->ay)
 #define GRAVITY_SCREEN_Y(s)  ( (s)->ax)
 
-/*---------------------------------------------------------------------------
- * Setup
- *-------------------------------------------------------------------------*/
+/* Setup */
 
 static void sand_enter(void)
 {
@@ -456,9 +454,7 @@ static void sand_exit(void)
 #endif
 }
 
-/*---------------------------------------------------------------------------
- * Drawing
- *-------------------------------------------------------------------------*/
+/* Drawing */
 
 #define SHINE_PERIOD   64      /* power of two - see the mask below */
 #define SHINE_STEP_MS  40
@@ -1455,9 +1451,7 @@ static void draw_brush_screen(const input_t *input)
 
         ui_set_font_scaled(gfx_font_ui(), BRUSH_SCREEN_CAPTION_SCALE);
 
-        /*---------------------------------------------------------------
-         * Header: swatch, caption/name, info button (drawn, inert).
-         *-------------------------------------------------------------*/
+        /* Header: swatch, caption/name, info button (drawn, inert). */
         draw_brush_panel(ctx, lay.header_panel);
 
         draw_brush_swatch(ctx, lay.swatch, brushes[ui.brush]);
@@ -1497,9 +1491,7 @@ static void draw_brush_screen(const input_t *input)
                         mu_color_hex(BRUSH_TEXT_COLOR));
         }
 
-        /*---------------------------------------------------------------
-         * Brush mode: caption, three segments.
-         *-------------------------------------------------------------*/
+        /* Brush mode: caption, three segments. */
         draw_brush_panel(ctx, lay.mode_panel);
         draw_brush_text(ctx, lay.mode_caption, BRUSH_SCREEN_MODE_CAPTION,
                         mu_color_hex(BRUSH_CAPTION_COLOR), BRUSH_SCREEN_CAPTION_SCALE, -1);
@@ -1546,9 +1538,7 @@ static void draw_brush_screen(const input_t *input)
             draw_brush_text(ctx, label_r, name, ink, BRUSH_SCREEN_CAPTION_SCALE, 0);
         }
 
-        /*---------------------------------------------------------------
-         * Brush size: caption/value, slider.
-         *-------------------------------------------------------------*/
+        /* Brush size: caption/value, slider. */
         draw_brush_panel(ctx, lay.size_panel);
 
         const char *size_caption =
@@ -1573,9 +1563,7 @@ static void draw_brush_screen(const input_t *input)
     ui_end(UI_NO_BACKGROUND);
 }
 
-/*---------------------------------------------------------------------------
- * Frame
- *-------------------------------------------------------------------------*/
+/* Frame */
 
 static void read_gravity_input(uint32_t dt_ms, imu_sample_t *sample, int *gx,
                                int *gy, int *flow, int *jostle,

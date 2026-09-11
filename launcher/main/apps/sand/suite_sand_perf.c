@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Portable suite: the falling-sand automaton - frame-budget performance
  * against the shared benchmark scenes, plus the app-level allocation
  * selfcheck and a couple of full-grid acid-bubble tests.
@@ -13,7 +13,7 @@
  * past 32,000 lines across 500+ tests. Shared fixtures and assertion helpers
  * live in suite_sand_common.{c,h}; the scene builders these frame-budget
  * tests measure live in suite_sand_scenes.{c,h} - see those headers.
- *===========================================================================*/
+ */
 #include <math.h>   /* not every file in the split still needs atan2()/M_PI,
                      * but every file inherited suite_sand.c's own include
                      * block rather than being pruned by hand, to keep the

@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * sand_priv - internals shared across sand.c, sand_liquid.c, sand_gas.c,
  * sand_reactions.c, sand_plants.c and sand_impulse.c.
  *
@@ -31,7 +31,7 @@
  * impulse_gravity_candidates()'s own comment in sand_impulse.c; bd
  * esp32c6-w2h), exactly what a direct test would have caught sooner. Move a
  * helper here when something actually needs to test it directly.
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stddef.h>

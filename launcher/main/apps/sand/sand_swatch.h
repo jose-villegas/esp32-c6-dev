@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * sand_swatch - which shade paints which cell of the brush screen's material
  * swatch.
  *
@@ -18,7 +18,7 @@
  * (spec, col, row) alone - never sand_t's RNG, never a frame or call
  * counter. Do not "liven it up" with anything that changes without the
  * brush or the grid size changing.
- *===========================================================================*/
+ */
 #pragma once
 
 #include "material.h"

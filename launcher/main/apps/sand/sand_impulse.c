@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * sand_impulse - grains, chunks and splashes in flight: the OUTWARD half of
  * the simulation, not gravity-ward.
  *
@@ -17,7 +17,7 @@
  * single call is this file's one seam back into sand.c, the same shape
  * sand_step_liquids() (sand_liquid.c) and sand_step_gas() (sand_gas.c) each
  * already have.
- *===========================================================================*/
+ */
 
 #include "sand_priv.h"
 

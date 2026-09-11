@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Specification for display - shell-owned orientation, decided from a
  * smoothed gravity vector with hysteresis around the quarter boundaries.
  *
@@ -9,7 +9,7 @@
  * behaviour parked exactly on a boundary, the asymmetric "60 out, 30 back"
  * thresholds, and that display_update() only reports true on a genuine
  * change.
- *===========================================================================*/
+ */
 
 #include "unity.h"
 #include "suites.h"

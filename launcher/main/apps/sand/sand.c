@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * sand - a falling-sand cellular automaton.
  *
  * The whole simulation is one rule applied to every grain: try to move the way
@@ -15,7 +15,7 @@
  * liquid - the two things that are NOT gravity-ward - lives in
  * sand_liquid.c. See sand_priv.h for why they need to share a few small
  * helpers, and sand_step_liquids() for where the two meet.
- *===========================================================================*/
+ */
 
 #include "sand_priv.h"
 
@@ -122,9 +122,7 @@ static cell_t random_gunpowder(sand_t *s, int band)
     return GUNPOWDER_CELL((uint8_t)tone);
 }
 
-/*---------------------------------------------------------------------------
- * Grid access
- *-------------------------------------------------------------------------*/
+/* Grid access */
 
 void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
 {
@@ -362,11 +360,11 @@ int sand_erase(sand_t *s, int cx, int cy, int radius)
  * outward-flight subsystem is one file, separate from this one's
  * gravity-ward sweep. */
 
-/*---------------------------------------------------------------------------
+/*
  * Emitters - see the `emitters` field of sand_t and the EMITTERS section of
  * sand.h for the design. What is here is just list management; the actual
  * per-step write lives in emit_from_emitters() below, next to sand_step().
- *-------------------------------------------------------------------------*/
+ */
 
 bool sand_add_emitter(sand_t *s, int x, int y, cell_t cell)
 {
@@ -449,9 +447,7 @@ static void emit_from_emitters(sand_t *s)
     }
 }
 
-/*---------------------------------------------------------------------------
- * Movement
- *-------------------------------------------------------------------------*/
+/* Movement */
 
 /* The sign/magnitude split both gravity_direction functions below start
  * with. Returns false for a zero vector, in which case the direction is

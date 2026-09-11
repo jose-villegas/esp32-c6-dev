@@ -1,11 +1,11 @@
-/*=============================================================================
+/*
  * Portable suite: ui_pointer - input_t to move/down/up events, held not
  * tapped.
  *
  * ui.c's own feed_input() has no host coverage - suite_ui.c is device-only -
  * so this is the first place the touch-to-mouse bridge's policy is actually
  * asserted rather than eyeballed on a screenshot.
- *===========================================================================*/
+ */
 
 #include <string.h>
 
@@ -52,10 +52,10 @@ press_through_hover(int x, int y) {
     }
 }
 
-/*-----------------------------------------------------------------------------
+/*
  * The synthesized hover frame - load-bearing, see ui.h's touch-to-mouse
  * comment. Lost, a touchscreen tap could never resolve into a click at all.
- *---------------------------------------------------------------------------*/
+ */
 
 static void
 test_a_tap_hovers_two_frames_before_pressing(void) {
@@ -83,9 +83,7 @@ test_a_tap_hovers_two_frames_before_pressing(void) {
     TEST_ASSERT_EQUAL_INT(20, ev[1].y);
 }
 
-/*-----------------------------------------------------------------------------
- * Holding, not releasing - the whole point of this module.
- *---------------------------------------------------------------------------*/
+/* Holding, not releasing - the whole point of this module. */
 
 static void
 test_a_drag_stays_down_across_moves_then_lifts_once(void) {
@@ -141,10 +139,10 @@ test_exactly_one_up_comes_out_of_one_press(void) {
     TEST_ASSERT_EQUAL_INT_MESSAGE(1, ups, "one press must yield one up, never zero or two");
 }
 
-/*-----------------------------------------------------------------------------
+/*
  * A tap fast enough to resolve inside one poll: the held policy can lose
  * it, so it has to be handled explicitly.
- *---------------------------------------------------------------------------*/
+ */
 
 static void
 test_a_same_frame_tap_still_yields_move_down_up(void) {
@@ -157,10 +155,10 @@ test_a_same_frame_tap_still_yields_move_down_up(void) {
     TEST_ASSERT_EQUAL_INT(UI_POINTER_UP, ev[2].kind);
 }
 
-/*-----------------------------------------------------------------------------
+/*
  * No phantom press for a finger that was already on the glass before the
  * UI ever asked about it.
- *---------------------------------------------------------------------------*/
+ */
 
 static void
 test_a_finger_already_down_at_open_synthesizes_no_press(void) {
@@ -188,11 +186,11 @@ test_a_finger_already_down_at_open_then_released_emits_no_up(void) {
                                   "a DOWN that was never emitted must not get a matching UP");
 }
 
-/*-----------------------------------------------------------------------------
+/*
  * The header promises never more than `max` - a too-small buffer must be
  * rejected outright, not partially filled, and must not touch state either
  * (a caller with a short buffer must not silently eat a press edge).
- *---------------------------------------------------------------------------*/
+ */
 
 static void
 test_a_too_small_buffer_returns_zero_and_leaves_state_untouched(void) {

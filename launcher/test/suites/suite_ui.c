@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Device suite: the UI layer's canvas model.
  *
  * The claim under test is the one an app relies on: a UI that has not changed
@@ -12,7 +12,7 @@
  * Windows here are deliberately non-overlapping. Overlapping ones must repaint
  * together (painter's order), which is correct but would hide the independence
  * these tests exist to prove.
- *===========================================================================*/
+ */
 
 #include "unity.h"
 #include "suites.h"
@@ -131,7 +131,7 @@ static void test_invalidate_forces_a_repaint(void)
         "this UI - returning to the launcher after an app has been running");
 }
 
-/*---------------------------------------------------------------------------
+/*
  * ui_layout_generation()
  *
  * Device-only for the same reason the rest of this suite is: the counter
@@ -143,7 +143,7 @@ static void test_invalidate_forces_a_repaint(void)
  * generation reset to its defined starting value - these tests read deltas
  * off that rather than hard-coding the starting value itself, so they do
  * not need to know or care what it is.
- *-------------------------------------------------------------------------*/
+ */
 
 static void test_layout_generation_unchanged_by_a_repeated_equal_transform(void)
 {
@@ -192,7 +192,7 @@ static void test_layout_generation_counts_a_sequence_of_genuine_changes(void)
         "exactly three times, not four and not fewer");
 }
 
-/*---------------------------------------------------------------------------
+/*
  * ui_begin_screen()
  *
  * mu_begin_window_ex() trusts a rect only on the FIRST open of its title,
@@ -200,7 +200,7 @@ static void test_layout_generation_counts_a_sequence_of_genuine_changes(void)
  * ui_height()) for this frame. Those change at runtime on a quarter-turn,
  * so a revisit in a larger orientation would keep the stale rect.
  * Device-only: needs a live mu_Container across frames.
- *-------------------------------------------------------------------------*/
+ */
 
 /* Opens and immediately closes one full-screen window via ui_begin_screen(),
  * simulating one visit to it in whatever orientation `quarter` selects
@@ -255,14 +255,14 @@ static void test_ui_begin_screen_corrects_a_stale_rect_from_a_prior_orientation(
         "of a rotated screen uncleared");
 }
 
-/*---------------------------------------------------------------------------
+/*
  * repaint_marked_canvases() under an odd quarter
  *
  * The background clear must transform its LOGICAL rect before
  * gfx_fill_rect(). Under an odd quarter (GFX_WIDTH != GFX_HEIGHT), an
  * untransformed rect covers only 368 of the physical framebuffer's 448
  * rows.
- *-------------------------------------------------------------------------*/
+ */
 static void test_repaint_clears_every_physical_row_under_an_odd_quarter(void)
 {
     fixture();

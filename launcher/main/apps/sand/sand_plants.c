@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * sand_plants - tree, root and leaf growth: from a bare seed cell to a
  * branching, thickening trunk with a canopy, fed by soil moisture a root
  * system draws down through itself.
@@ -19,7 +19,7 @@
  * sits between a leaf and the ground. step_one_growing_cell() is the one
  * that actually shapes a tree: height, lean, branch or thicken, then
  * harden a mature run into wood with a canopy on top.
- *===========================================================================*/
+ */
 
 #include "reaction_doc.h"
 #include "sand_priv.h"

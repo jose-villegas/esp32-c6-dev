@@ -1,11 +1,11 @@
-/*=============================================================================
+/*
  * Portable suite: the falling-sand automaton - liquid depth shading, shine
  * direction, and the depth debounce.
  *
  * Split out of suite_sand.c (bd esp32c6 test-suite-refactor), which had grown
  * past 32,000 lines across 500+ tests. Shared fixtures and assertion helpers
  * live in suite_sand_common.{c,h} - see that header.
- *===========================================================================*/
+ */
 #include <math.h>   /* not every file in the split still needs atan2()/M_PI,
                      * but every file inherited suite_sand.c's own include
                      * block rather than being pruned by hand, to keep the
@@ -392,7 +392,7 @@ static void test_shine_direction_is_unit_length(void)
     }
 }
 
-/*=============================================================================
+/*
  * LOCAL DEPTH - the depth signal now follows each puddle's own shape
  * rather than a fixed screen-position gradient, and combines its vertical
  * and horizontal readings continuously instead of switching between them.
@@ -423,7 +423,7 @@ static void test_shine_direction_is_unit_length(void)
  * test below mirrors the algorithm it pins with a small test-local helper,
  * built to match app_sand.c's real logic exactly, rather than calling into
  * it.
- *===========================================================================*/
+ */
 
 /* Mirrors app_sand.c's REAL vertical local depth (col_stable_depth[]/
  * col_top_row[]'s hold-then-commit, band-saturating climb) for FIXED
@@ -596,7 +596,7 @@ static void test_local_depth_follows_the_puddles_own_shape(void)
 
 }
 
-/*=============================================================================
+/*
  * THE SINGLE RAY WALK - one shared mirror of app_sand.c's replacement for
  * the two axis-aligned walks (col_stable_depth[]/row_stable_depth[] and
  * their max combiner) mirror_local_depth_column() above still pins at
@@ -612,7 +612,8 @@ static void test_local_depth_follows_the_puddles_own_shape(void)
  * row_b[]/local_depth_top_row[]/local_depth_prev_cy's own persistence
  * across frames - a fresh state (`ray_walk_state_reset()`: zeroed counts,
  * "untracked" debounce keys, and no row described by prev_row[] yet)
- * matches BSS-zero-then-untracked, exactly like the real statics start. */
+ * matches BSS-zero-then-untracked, exactly like the real statics start.
+ */
 
 /* Sized for this suite's own test grids, not the device's GRID_W_MAX - see
  * each test's own W constant for the actual grid width it uses; comfortably
@@ -750,7 +751,7 @@ static void ray_walk_frame_facts(int gx, int gy, bool *vertical_dominant,
     *h_reverse = (gx < 0);
 }
 
-/*=============================================================================
+/*
  * THE COMBINER'S REPLACEMENT HAS NO JUMP EITHER - kept its old name and its
  * old top comment's own history (below), because it still pins the same
  * property against whichever mechanism currently ships: hysteresis fixed
@@ -774,7 +775,8 @@ static void ray_walk_frame_facts(int gx, int gy, bool *vertical_dominant,
  * continuity, not the sparse-repaint staleness a separate test already
  * covers), and check the rendered luminance at one fixed cell never moves
  * by more than a fraction of the ramp's own full span in a single 3-degree
- * step. */
+ * step.
+ */
 static const struct { int gx, gy; } BLEND_SWEEP[] = {
     { 500, 866 },   /* 30 degrees */
     { 545, 839 },   /* 33 degrees */
@@ -1209,7 +1211,7 @@ static void test_the_horizontal_debounce_survives_open_air_beside_the_pool(void)
         "of frames, not be absorbed the way a one-frame blink is");
 }
 
-/*=============================================================================
+/*
  * mark_depth_band() (sand_priv.h) - the pour-staleness half of the same fix.
  *
  * The reported bug: water that looked settled kept showing its OLD,
@@ -1224,7 +1226,7 @@ static void test_the_horizontal_debounce_survives_open_air_beside_the_pool(void)
  * (move_liquid_grain()'s per-grain fall, the hottest path in the
  * simulation) deliberately does NOT call it - see that call site's own
  * comment in sand_liquid.c for why.
- *===========================================================================*/
+ */
 #define DEPTH_TEST_W 4
 #define DEPTH_TEST_H 80
 static uint8_t depth_test_cells[DEPTH_TEST_W * DEPTH_TEST_H];
@@ -1428,7 +1430,7 @@ static void test_a_shallow_puddle_still_shows_real_darkening(void)
         (near_surface_lum - near_bottom_lum) * 4 >= full_span, why);
 }
 
-/*=============================================================================
+/*
  * LOCAL DEPTH'S WAKE TICK - A SETTLED EDGE MUST NOT FLICKER STALE TO FRESH
  *
  * row_has_liquid[]'s own regression: the periodic wake tick (LOCAL_DEPTH_
@@ -1457,7 +1459,8 @@ static void test_a_shallow_puddle_still_shows_real_darkening(void)
  *
  * PROVEN LOAD-BEARING: temporarily restoring the reverted mask condition
  * inside wake_test_row_has_liquid() below reproduces the 21.71 collapse
- * almost exactly; the real condition returns it to 1.87. */
+ * almost exactly; the real condition returns it to 1.87.
+ */
 
 enum {
     WAKE_TEST_W = 48,
@@ -1714,7 +1717,7 @@ static void test_a_settled_edge_does_not_flicker_stale_to_fresh(void)
     TEST_ASSERT_TRUE_MESSAGE(worst_swing < WAKE_TEST_MAX_SWING, why);
 }
 
-/*=============================================================================
+/*
  * A DIRECTION FLIP MUST NOT CORRUPT THE BOUNDARY DEBOUNCE
  *
  * A DIFFERENT bug from the wake-tick staleness just above, in the SAME
@@ -1750,7 +1753,8 @@ static void test_a_settled_edge_does_not_flicker_stale_to_fresh(void)
  * PROVEN LOAD-BEARING: skipping the reset drives the mean debounced depth of
  * this column to 24.00 flat - the gradient collapsed into one colour. With
  * the reset applied, the same flip sequence holds a mean of 7.00, the honest
- * average of a 0..12 gradient plus the one-frame HOLD each flip costs. */
+ * average of a 0..12 gradient plus the one-frame HOLD each flip costs.
+ */
 
 enum {
     FLIP_TEST_H      = 16, /* rows 0..15 */
@@ -1893,7 +1897,7 @@ static void test_a_direction_flip_does_not_corrupt_the_boundary_debounce(void)
     TEST_ASSERT_TRUE_MESSAGE(mean_depth < FLIP_TEST_MAX_MEAN_DEPTH, why);
 }
 
-/*=============================================================================
+/*
  * A SPARSELY REPAINTED ROW MUST NOT BAND A TALL LIQUID COLUMN
  *
  * The third distinct bug in this same local-depth mechanism, after the wake
@@ -1928,7 +1932,8 @@ static void test_a_direction_flip_does_not_corrupt_the_boundary_debounce(void)
  * RE-VERIFIED against this walk: 0 banded pairs in the worst of 900 frames
  * at every run length tried, with more headroom than the two-walk design's
  * own fix had, since this walk bounds a broken chain's swing the same way
- * at every angle, not only near axis alignment. */
+ * at every angle, not only near axis alignment.
+ */
 
 enum {
     BAND_TEST_W = 36,
@@ -2168,7 +2173,7 @@ static void test_a_sparse_repaint_does_not_band_a_tall_liquid_column(void)
     TEST_ASSERT_TRUE_MESSAGE(worst < BAND_TEST_MAX_JUMPS, why);
 }
 
-/*=============================================================================
+/*
  * TURNING A SETTLED POOL MUST NOT FLASH THE WHOLE BODY
  *
  * THE DEVICE REPORT, in the user's own words: "a brief flip of colours" they
@@ -2202,7 +2207,8 @@ static void test_a_sparse_repaint_does_not_band_a_tall_liquid_column(void)
  * MEASURED, both sides of the same run: 522 cells cross a shade step in a
  * single frame without the fix against 31 with it; the device's own NORMAL-
  * quality 92x112 grid measures 841 against 83 in the standalone harness -
- * a quarter of the pool, gradient inverted end to end. */
+ * a quarter of the pool, gradient inverted end to end.
+ */
 
 enum {
     FLASH_TEST_W = 64,
@@ -2486,7 +2492,7 @@ static void test_turning_a_settled_pool_to_landscape_does_not_flash_the_whole_bo
     TEST_ASSERT_TRUE_MESSAGE(unguarded > FLASH_TEST_MAX_CELLS, why);
 }
 
-/*=============================================================================
+/*
  * TREMOR AT AXIS LOCK MUST NOT WIPE THE DEBOUNCE
  *
  * At PORTRAIT LOCK, gx sits near zero (device capture: tilt_x -12/-195
@@ -2503,7 +2509,8 @@ static void test_turning_a_settled_pool_to_landscape_does_not_flash_the_whole_bo
  * arithmetic about whether the flipped flag can change a number the walk
  * actually computes (see update_local_depth_gravity()'s own comment,
  * app_sand.c) - nothing tuned, nothing to re-tune. MEASURED: 39 resets and
- * 1472 cells moved without the gate; 0 and 0 with it. */
+ * 1472 cells moved without the gate; 0 and 0 with it.
+ */
 
 enum { TREMOR_TEST_FRAMES = 40 };
 
@@ -2607,7 +2614,7 @@ static void test_axis_lock_tremor_does_not_wipe_the_depth_debounce(void)
     TEST_ASSERT_TRUE_MESSAGE(ungated_changed > 0, why);
 }
 
-/*=============================================================================
+/*
  * A SUBMERGED OBSTACLE'S SHADOW MUST FOLLOW GRAVITY
  *
  * The shadow is a kept, deliberate feature (see LOCAL DEPTH's own top
@@ -2632,7 +2639,8 @@ static void test_axis_lock_tremor_does_not_wipe_the_depth_debounce(void)
  *
  * THE BOUND (5 degrees) is more than three times this test's own worst
  * measured value (1.2), real headroom rather than a value tuned to just
- * clear it. */
+ * clear it.
+ */
 
 /* NOT a size picked for this test's own runtime convenience. 92x112 gives
  * every one of the six tilts comfortable saturation headroom on every side. */
@@ -2838,7 +2846,7 @@ static void test_a_submerged_obstacle_casts_a_gravity_aligned_shadow(void)
         why);
 }
 
-/*=============================================================================
+/*
  * A FIXED TRUE DEPTH MUST READ THE SAME AT EVERY TILT ANGLE
  *
  * Closes the same defect the projection-then-max combiner did for the
@@ -2857,7 +2865,8 @@ static void test_a_submerged_obstacle_casts_a_gravity_aligned_shadow(void)
  * this test exists to catch.
  *
  * NO SAND GRID: a property of the WALK's own projection given an idealised
- * planar input, checked directly. */
+ * planar input, checked directly.
+ */
 static const struct { int gx, gy; } DEFECT2_SWEEP[] = {
     {    0, 1000 },   /*  0 degrees - gravity straight down */
     {  259,  966 },   /* 15 degrees */
@@ -2929,7 +2938,7 @@ static void test_a_fixed_depth_reads_the_same_at_every_tilt_angle(void)
     TEST_ASSERT_TRUE_MESSAGE(worst_deviation <= DEFECT2_MAX_DEVIATION, why);
 }
 
-/*=============================================================================
+/*
  * A SATURATED LIQUID BODY MUST READ THE SAME SHADE AT EVERY TILT ANGLE
  *
  * DEFECT THREE, for the two-walk design - see LOCAL DEPTH's own top comment
@@ -2951,7 +2960,8 @@ static void test_a_fixed_depth_reads_the_same_at_every_tilt_angle(void)
  *
  * NO SAND GRID HERE, same reasoning as test_a_fixed_depth_reads_the_same_
  * at_every_tilt_angle above - a property of the walk's own projection given
- * an idealised, fully-saturated input. */
+ * an idealised, fully-saturated input.
+ */
 static const struct { int gx, gy; } SATURATED_SWEEP[] = {
     {    0, 1000 },   /*  0 degrees */
     {  174,  985 },   /* 10 degrees */

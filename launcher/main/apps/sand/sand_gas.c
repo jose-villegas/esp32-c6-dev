@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * sand_gas - everything about a gas: rises, and disperses.
  *
  * Unlike a liquid, no part of a gas's movement can join the main sweep -
@@ -39,7 +39,7 @@
  * variant nibble as LIFE REMAINING, so a grain fades and clears itself.
  * Off by default (sand_set_decay()) - an undecayed test grain is
  * immortal, same as any other material with decay unset.
- *===========================================================================*/
+ */
 
 #include "sand_priv.h"
 
@@ -57,10 +57,10 @@ static uint16_t gas_mask(void)
     return mask;
 }
 
-/*---------------------------------------------------------------------------
+/*
  * Sub-pass 1: rise, and the two diagonal slides - try_fall_or_scatter()/
  * try_slide(), reused from sand.c with the direction inverted.
- *-------------------------------------------------------------------------*/
+ */
 
 /* One gas grain's turn - the same dispatch step_one_grain() runs for a
  * powder (fall/rise, then the two slides), but with an explicit wake,
@@ -357,11 +357,11 @@ static bool step_one_gas_row(sand_t *s, int y, int w, int rdx, int rdy,
     return any;
 }
 
-/*---------------------------------------------------------------------------
+/*
  * Sub-pass 2: perpendicular spread - mirrors sand_liquid.c's
  * equalise_liquids()/equalise_one_row()/equalise_one_cell(), whole-grain
  * instead of mass-based.
- *-------------------------------------------------------------------------*/
+ */
 
 /* Mirrors has_room_below() in sand_liquid.c: if this grain still has
  * somewhere to rise THIS step, sub-pass 1 above already moved it (or
@@ -709,9 +709,7 @@ static bool equalise_gas(sand_t *s, const int *perp, int rdx, int rdy)
     return found_any;
 }
 
-/*---------------------------------------------------------------------------
- * The whole step.
- *-------------------------------------------------------------------------*/
+/* The whole step. */
 
 void sand_step_gas(sand_t *s, int gx, int gy, int dx, int dy,
                    const int *slide_a, const int *slide_b,

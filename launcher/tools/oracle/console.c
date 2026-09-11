@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * console - the newlib syscall floor a freestanding link demands, plus one
  * byte-banged UART, for the QEMU riscv "virt" machine (bd oracle spike).
  *
@@ -15,7 +15,7 @@
  * to a linker-synthesised stub that always fails unless this is defined.
  * Single hart, no threads: one global reentrancy struct, already default-
  * initialised by libc itself (_impure_ptr), is the whole story.
- *===========================================================================*/
+ */
 #include <errno.h>
 #include <reent.h>
 #include <sys/stat.h>

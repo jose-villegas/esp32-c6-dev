@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Portable suite: the pseudo-random generator.
  *
  * Small, but everything above it leans on the two properties here - that the
@@ -6,7 +6,7 @@
  * they say. A test like "shaking flattens a pile" is only reproducible because
  * of the first, and the friction model expresses "never" and "always" as 0 and
  * 256 and needs those to be exact.
- *===========================================================================*/
+ */
 
 #include "unity.h"
 #include "suites.h"

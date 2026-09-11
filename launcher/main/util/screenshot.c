@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * screenshot - the device half: listens on the console for a trigger, then
  * prints the live framebuffer as base64 between marker lines that
  * tools/screenshot.py reads back out of the stream idf_monitor already uses.
@@ -18,7 +18,7 @@
  * idf_monitor does. Its own task, because screenshot_start() switches the fd
  * to the driver's interrupt-driven reader, which is what lets a read block
  * instead of main.c polling every frame.
- *===========================================================================*/
+ */
 #include "util/screenshot.h"
 
 #include <stdio.h>

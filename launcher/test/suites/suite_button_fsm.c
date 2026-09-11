@@ -1,9 +1,9 @@
-/*=============================================================================
+/*
  * Portable suite: button debouncing.
  *
  * Every one of these would need a stopwatch and a very steady hand on real
  * hardware. Passing time in as a parameter makes them instant.
- *===========================================================================*/
+ */
 
 #include "unity.h"
 #include "suites.h"
@@ -159,9 +159,7 @@ static void test_a_full_tap_gives_one_press_and_one_release(void)
     TEST_ASSERT_FALSE(button_fsm_take_released(&b));
 }
 
-/*-----------------------------------------------------------------------------
- * held: the short-press/long-press split.
- *---------------------------------------------------------------------------*/
+/* held: the short-press/long-press split. */
 
 static void test_a_short_press_gives_pressed_then_released_and_never_held(void)
 {

@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * sand - a falling-sand cellular automaton.
  *
  * Pure logic. It knows nothing about the panel, the accelerometer or the frame
@@ -13,7 +13,7 @@
  *
  * Coordinates follow the screen: x grows right, y grows DOWN. So ordinary
  * gravity is (0, +1).
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stdbool.h>

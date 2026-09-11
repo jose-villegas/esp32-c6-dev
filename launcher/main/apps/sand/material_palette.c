@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * material_palette - what a material looks like, built once at compile time.
  *
  * Split off material.c's data half (materials[], reactions[] - see that
@@ -15,7 +15,7 @@
  * once, and the alternative is either a table nobody can safely edit, or
  * building it at startup and paying for it in the resource there is least
  * of.
- *===========================================================================*/
+ */
 #include "material_palette.h"
 #include "util/intmath.h" /* see material_set_gravity() below */
 

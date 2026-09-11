@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * device_state - snapshotting the board's own state: uptime, memory, clock,
  * on-die temperature, orientation, and the IMU, as one JSON line.
  *
@@ -16,7 +16,7 @@
  * screenshot.c (which calls device_state_read() to attach a snapshot to
  * every capture - see screenshot_dump()) is its first caller, not its only
  * reason to exist.
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stdbool.h>

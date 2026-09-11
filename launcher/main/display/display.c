@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * display - see display.h for the module's job and the hysteresis math.
  *
  * A real translation unit rather than static inline in the header (compare
@@ -8,7 +8,7 @@
  * one call depends on where display_update() left `quarter` last time - so
  * it gets the same treatment as gesture.c and tilt.c, the two modules this
  * one is explicitly modelled on.
- *===========================================================================*/
+ */
 
 #include "display/display.h"
 

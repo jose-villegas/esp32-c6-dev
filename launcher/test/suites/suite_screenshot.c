@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Portable suite: screenshot_bmp_header/screenshot_bmp_row_stride - the pure
  * byte layout of the BMP screenshot_capture() (screenshot.c, device-only)
  * writes.
@@ -7,7 +7,7 @@
  * BITMAPFILEHEADER/BITMAPINFOHEADER field order rather than derived from the
  * same arithmetic screenshot_bmp_header() uses - a test that reused the
  * implementation's own shifts could carry the same bug and still pass.
- *===========================================================================*/
+ */
 
 #include "unity.h"
 #include "suites.h"
@@ -105,7 +105,7 @@ static void test_header_is_exactly_54_bytes_with_no_trailing_garbage(void)
     TEST_ASSERT_EQUAL_UINT8_ARRAY(expected_tail, &header[46], 8);
 }
 
-/*-----------------------------------------------------------------------------
+/*
  * screenshot_base64_encoded_len / screenshot_base64_encode
  *
  * The encode tests use RFC 4648's own worked example ("Man" and its
@@ -113,7 +113,7 @@ static void test_header_is_exactly_54_bytes_with_no_trailing_garbage(void)
  * anything derived from this file's own arithmetic - the same reasoning
  * suite_gfx_color.c's top comment gives for checking gfx_color_mix()
  * against GFX_RGB(...) constants instead of its own round-trip.
- *---------------------------------------------------------------------------*/
+ */
 
 static void test_encoded_len_matches_rfc4648_examples(void)
 {

@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Portable suite: util/tween.h - timeline ramps, easing and lerps.
  *
  * These moved here from boot_anim.h, which had its own private copies and
@@ -7,7 +7,7 @@
  * the boot animation, a letter's flight) into checks about the primitives
  * themselves - see suite_boot_anim.c's own history for the originals this
  * suite is closest to.
- *===========================================================================*/
+ */
 
 #include <stdint.h>
 
@@ -16,9 +16,7 @@
 
 #include "util/tween.h"
 
-/*---------------------------------------------------------------------------
- * tween_ramp()
- *-------------------------------------------------------------------------*/
+/* tween_ramp() */
 
 static void test_a_ramp_is_flat_before_and_after(void)
 {
@@ -45,9 +43,7 @@ static void test_a_zero_duration_ramp_jumps_straight_to_the_end(void)
     TEST_ASSERT_EQUAL_UINT8(255, tween_ramp(101, 100, 0));
 }
 
-/*---------------------------------------------------------------------------
- * tween_ease_out()
- *-------------------------------------------------------------------------*/
+/* tween_ease_out() */
 
 static void test_the_ease_keeps_its_endpoints_and_leads_in_the_middle(void)
 {
@@ -68,9 +64,7 @@ static void test_the_ease_never_goes_backwards(void)
     }
 }
 
-/*---------------------------------------------------------------------------
- * tween_ease_in()
- *-------------------------------------------------------------------------*/
+/* tween_ease_in() */
 
 static void test_the_ease_in_keeps_its_endpoints_and_lags_in_the_middle(void)
 {
@@ -109,9 +103,7 @@ static void test_ease_out_into_ease_in_makes_a_smooth_apex(void)
         "ease-in should still barely be moving just past the apex");
 }
 
-/*---------------------------------------------------------------------------
- * tween_lerp_i32()
- *-------------------------------------------------------------------------*/
+/* tween_lerp_i32() */
 
 static void test_lerp_hits_its_endpoints_exactly(void)
 {

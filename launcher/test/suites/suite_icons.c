@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Portable suite: gfx/icons_system.h's ICON_SYSTEM_CHECK - the artwork
  * MU_ICON_CHECK renders from the baked atlas (see ui.c's draw_command()).
  *
@@ -18,7 +18,7 @@
  *     mu_rect(r.x, r.y, r.h, r.h), and r.h is UI_ROW_HEIGHT (64 - see ui.h),
  *     the row height a settings-style toggle screen lays its two
  *     mu_checkbox() rows out at.
- *===========================================================================*/
+ */
 
 #include <stdbool.h>
 #include <stddef.h>

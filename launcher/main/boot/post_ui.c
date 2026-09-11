@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * post_ui - drawing the POST report on the panel.
  *
  * Kept out of post.c so that file stays about hardware. This is presentation
@@ -7,7 +7,7 @@
  *
  * Rendered at glyph scale 1 (8x8). At the UI's normal scale of 2 the panel is
  * only 23 characters wide, which is narrower than most of the detail strings.
- *===========================================================================*/
+ */
 
 #include "boot/post_ui.h"
 

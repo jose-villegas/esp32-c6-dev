@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * palette - grid arithmetic and hit-testing for the material picker overlay.
  *
  * Pure logic, no gfx and no touch state: a tile index in, a rectangle out,
@@ -48,7 +48,7 @@
  * needs both a forward mapping (draw tile i where?) and a reverse one (what
  * did this touch land on?) - not because they are free to drift apart. A
  * change to one's arithmetic is a change to the other's.
- *===========================================================================*/
+ */
 #pragma once
 
 /* Duplicated from gfx.h's GFX_WIDTH/GFX_HEIGHT - see this file's own top

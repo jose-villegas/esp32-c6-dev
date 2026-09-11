@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Device-only suite: cube app performance profiling.
  *
  * Measures frame budget breakdown for the rotating cube app over 10 seconds:
@@ -9,7 +9,7 @@
  * - Reports: min, max, average, median, p95
  *
  * Runs under DEVICE_BUILD only - needs real panel, DMA, and framebuffer.
- *===========================================================================*/
+ */
 #include "suites.h"   /* portable - needed by SUITE_REGISTER() even on host */
 
 #ifdef DEVICE_BUILD

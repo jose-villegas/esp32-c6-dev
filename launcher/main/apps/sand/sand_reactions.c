@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * sand_reactions - fire chemistry: ignites fuel, spreads, is extinguished,
  * burns out.
  *
@@ -53,7 +53,7 @@
  * CONDUCT_REACH bounds the walk's cost but must stay generous enough that
  * attenuation, not the cap, is what limits depth in any scene the brush can
  * actually draw.
- *===========================================================================*/
+ */
 
 #include "reaction_doc.h"
 #include "sand_priv.h"

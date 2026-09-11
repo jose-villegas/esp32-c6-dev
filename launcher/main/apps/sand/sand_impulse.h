@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * sand_impulse - the public API for grains, chunks and splashes in flight:
  * explosions, thrown debris, splash pushback. Split out of sand.h for the
  * same reason sand_impulse.c is split out of sand.c - see that file's own
@@ -10,7 +10,7 @@
  * `impulse_t *`), so this header forward-declares sand_t itself; every
  * function below only ever takes a sand_t*, never looks inside it, so the
  * incomplete type is enough here. sand.h completes the definition.
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stdint.h>

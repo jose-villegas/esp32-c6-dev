@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * gfx_font - a font DESCRIPTOR, so gfx can carry more than one font.
  *
  * Pure, like gfx_color.h: no gfx.h, no BSP, no drivers. That is what lets a
@@ -17,7 +17,7 @@
  * masked); this file stays pure metrics, no drawing, so both fonts'
  * widths/advances/heights are computable and testable on a host with
  * neither gfx.h nor a framebuffer.
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stddef.h>   /* NULL, used by the advance field of a monospace font */

@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Portable suite: sand_ui - the falling-sand app's UI state machine.
  *
  * Four of these tests each pin a bug that shipped to hardware because
@@ -7,7 +7,7 @@
  * commit that fixed them. The rest exercise the ordinary behaviour a
  * refactor this close to four shipped bugs cannot afford to get wrong
  * either.
- *===========================================================================*/
+ */
 
 #include <string.h>
 

@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * app_diagnostics - shows the POST report on demand, plus a second page of
  * developer-only toggles.
  *
@@ -28,7 +28,7 @@
  * one-off control that reads a button directly. Any future developer
  * toggle belongs on this same page as another mu_checkbox() row, not as
  * its own bespoke screen.
- *===========================================================================*/
+ */
 
 #include <stdio.h>
 

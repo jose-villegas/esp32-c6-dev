@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * app - the contract between the shell and the things it launches.
  *
  * "Apps" here are not processes. There is one binary, one address space and
@@ -9,7 +9,7 @@
  * An app never owns the screen or the frame loop. It draws into the shared
  * framebuffer when asked and returns; the shell decides when to present, and
  * paints its own chrome on top afterwards.
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stdbool.h>
@@ -74,7 +74,7 @@ typedef struct {
     void (*diagnostic_json)(char *out, size_t len);
 } app_t;
 
-/*---------------------------------------------------------------------------
+/*
  * The registry
  *
  * Apps register themselves. There is no central list to edit, which is the
@@ -89,7 +89,7 @@ typedef struct {
  *
  * Link order decides .init_array order, which is not something to rely on, so
  * the shell sorts by name before showing the list.
- *-------------------------------------------------------------------------*/
+ */
 
 #define APP_MAX 16
 

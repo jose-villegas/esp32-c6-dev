@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * ui_style - how a control's frame is drawn, separately from what it is.
  *
  * microui decides WHAT to draw (a button here, at this rect, in this state);
@@ -31,7 +31,7 @@
  * that list is invisible to the hash and would survive on screen as a stale
  * edge after the control underneath it changed. Styles produce spans; ui.c
  * turns spans into mu_draw_rect() calls; the hash sees all of it.
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stdbool.h>
@@ -60,9 +60,7 @@ typedef struct {
     mu_Color color;
 } ui_span_t;
 
-/*---------------------------------------------------------------------------
- * The bezel
- *-------------------------------------------------------------------------*/
+/* The bezel */
 
 /* Face, plus a lit pair of edges and a shadowed pair. */
 #define UI_BEZEL_MAX_SPANS 5
@@ -142,7 +140,7 @@ static inline int ui_bezel_spans(mu_Rect r, mu_Color face, bool sunken,
     return UI_BEZEL_MAX_SPANS;
 }
 
-/*---------------------------------------------------------------------------
+/*
  * Text
  *
  * A second style, sibling to the bezel above, for exactly the same reason:
@@ -150,7 +148,7 @@ static inline int ui_bezel_spans(mu_Rect r, mu_Color face, bool sunken,
  * question, and HOW it reads against whatever it sits on is a looks question
  * that should not require touching a call site. See suite_ui_style.c for the
  * geometry checks.
- *-------------------------------------------------------------------------*/
+ */
 
 typedef enum {
     UI_TEXT_PLAIN = 0,   /* one pass, exactly as today */
@@ -220,13 +218,13 @@ static inline int ui_text_passes(ui_text_style_t style, ui_text_pass_t *out,
     }
 }
 
-/*---------------------------------------------------------------------------
+/*
  * The panel
  *
  * A section frame for the brush screen's captioned groups: a face plus a
  * plain border, sibling to the bezel above but flat rather than lit/shadowed
  * - a panel groups content, it does not invite a press.
- *-------------------------------------------------------------------------*/
+ */
 
 /* Face, plus four border edges. */
 #define UI_PANEL_MAX_SPANS 5

@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * display - which way is "up", decided once for the whole shell.
  *
  * Orientation is a property of the physical device, not of any one app's
@@ -56,7 +56,7 @@
  * time. A vector parked exactly on the old 45-degree boundary (|gx| == |gy|)
  * satisfies neither the outbound nor the inbound test at either quarter, so
  * it never oscillates.
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stdbool.h>

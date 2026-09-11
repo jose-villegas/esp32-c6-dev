@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Device-only suite: boot animation performance profiling.
  *
  * Unlike suite_cube_perf.c's steady-state spinning cube, boot_anim_draw_
@@ -19,7 +19,7 @@
  * min/max/avg/median/p95 report.
  *
  * Runs under DEVICE_BUILD only - needs real panel, DMA, and framebuffer.
- *===========================================================================*/
+ */
 #include "suites.h"   /* portable - needed by SUITE_REGISTER() even on host */
 
 #ifdef DEVICE_BUILD

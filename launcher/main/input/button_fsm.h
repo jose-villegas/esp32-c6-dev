@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * button_fsm - raw button samples to press and release events.
  *
  * Pure logic: no GPIO, no clock, no I2C. Samples and the current time are
@@ -15,7 +15,7 @@
  *
  *   PWR is wired to the AXP2101, which debounces in hardware and reports a
  *   finished "short press" EVENT over I2C. Nothing here applies to it.
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stdbool.h>
@@ -37,7 +37,7 @@
  * windows do not compete. */
 #define BUTTON_HOLD_US (600 * 1000)
 
-/*-----------------------------------------------------------------------------
+/*
  * Contract
  *
  * `pressed`  fires on the debounced press edge, as always.
@@ -54,7 +54,7 @@
  * pure, tested layer, so a caller can write `if (released) cycle();` and
  * `if (held) open_panel();` side by side with no bookkeeping of its own and
  * no risk of both firing for one press.
- *---------------------------------------------------------------------------*/
+ */
 
 typedef struct {
     bool    stable;        /* the level currently believed */
