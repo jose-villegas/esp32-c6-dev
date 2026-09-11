@@ -583,16 +583,11 @@ void gfx_fill_rect(int x, int y, int w, int h, gfx_color_t color)
 /*---------------------------------------------------------------------------
  * Dithered fake transparency
  *
- * gfx_fill_rect_blend() (further down this file) is a REAL per-pixel blend,
- * but it pays for a framebuffer read - affordable at glyph scale, not
- * across a whole frame (see its own comment for why). Dithering is the
- * other way to fake transparency, and the classic one, for exactly the
- * cases a real blend is too expensive for: ordered (Bayer) dithering picks
- * WHICH pixels to draw, not how to blend the ones it does. No extra
- * framebuffer read, no float math, just a per-pixel threshold test against
- * a small fixed table - practically free next to a real blend, which is
- * exactly why 8-bit consoles used it for shadows and water decades before
- * this chip's own class of hardware could afford anything better.
+ * gfx_fill_rect_blend() (further down) is a REAL per-pixel blend, but pays
+ * for a framebuffer read - affordable at glyph scale, not a whole frame
+ * (its own comment). Dithering fakes transparency instead: ordered (Bayer)
+ * dithering picks WHICH pixels to draw via a per-pixel threshold, no
+ * framebuffer read, no float math.
  *---------------------------------------------------------------------------*/
 
 /* gfx_fill_rect() uses `alpha` (0-255) for coverage, avoiding framebuffer
@@ -721,22 +716,11 @@ void gfx_blit_dither(int x, int y, int w, int h, const gfx_color_t *src,
 /*---------------------------------------------------------------------------
  * Text
  *
- * One font-aware path (gfx_text_font(), gfx_font_width()) that everything
- * else here delegates to, passing gfx_font_ui() - see gfx_font.h for what a
- * gfx_font_t is and why it exists: honouring microui's mu_Font is a later
- * task, in files this one steers clear of, and that task needs a font to
- * point AT. gfx_font_ui() (gfx_font_roles.h) wraps font8x8_basic.h's data,
- * which is public-domain 8x8 bitmap data: one byte per row, and within a
- * row bit 0 is the LEFTMOST pixel - see gfx_font_8x8's own comment in
- * gfx_font.h.
- *
- * This used to be its own function here, gfx_default_font(), returning
- * &gfx_font_8x8 directly - the one entry the scheme had before more than
- * one role existed. It is retired in favour of gfx_font_ui(): "gfx's own
- * built-in default" and "the font the UI role names" were always the same
- * question asked twice, and every caller (ui.c, boot_anim.c, this file)
- * wanted the same answer either way, so there is no longer a reason to
- * make a caller pick which of two names to spell. */
+ * One font-aware path (gfx_text_font(), gfx_font_width()) everything else
+ * delegates to, passing gfx_font_ui(). See gfx_font.h for why gfx_font_t
+ * exists: honouring microui's mu_Font is a later task needing a font to
+ * point AT. gfx_font_ui() (gfx_font_roles.h) wraps font8x8_basic.h's
+ * public-domain bitmap data (gfx_font_8x8's comment, gfx_font.h). */
 
 int gfx_font_width(const gfx_font_t *font, const char *text, int len,
                    int scale)
