@@ -62,6 +62,7 @@ extern void sand_host_probe_run_mixed_flip(void);
 extern void sand_host_probe_run_settled_pool_to_landscape(void);
 extern void sand_host_probe_run_lava_stress(void);
 extern void sand_host_probe_run_four_liquids(void);
+extern void sand_host_probe_run_boiler(void);
 extern void sand_host_probe_run_wet_earth(void);
 extern void sand_host_probe_run_water_over_lava(void);
 extern void sand_host_probe_run_every_material_flip(void);
@@ -90,6 +91,7 @@ static const probe_scene_t SCENES[] = {
     {"settled_pool_to_landscape", sand_host_probe_run_settled_pool_to_landscape},
     {"lava_stress", sand_host_probe_run_lava_stress},
     {"four_liquids", sand_host_probe_run_four_liquids},
+    {"boiler", sand_host_probe_run_boiler},
     {"wet_earth", sand_host_probe_run_wet_earth},
     {"water_over_lava", sand_host_probe_run_water_over_lava},
     {"every_material_flip", sand_host_probe_run_every_material_flip},

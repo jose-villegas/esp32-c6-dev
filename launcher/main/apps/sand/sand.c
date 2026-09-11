@@ -751,6 +751,9 @@ static int sweep_x_order(sand_t *s, int dx)
  * a row index therefore fits a uint32_t exactly. */
 static uint32_t sweep_skip_mask;    /* KIND_STATIC and KIND_GAS - not ours */
 static uint32_t sweep_liquid_mask;  /* KIND_LIQUID - takes the liquid path  */
+/* liquid_mask()'s answer, indexed by CELL_MATERIAL rather than by row, kept
+ * here so a helper reading whole cells needs no extra argument to carry it. */
+static uint16_t sweep_cell_liquid_mask;
 static bool     sweep_tables_ready;
 
 static void build_sweep_tables(void)
@@ -766,14 +769,80 @@ static void build_sweep_tables(void)
             sweep_liquid_mask |= 1u << r;
         }
     }
+    sweep_cell_liquid_mask = liquid_mask();
     sweep_tables_ready = true;
+}
+
+/* One block-row's one-shot verdict, carried by pointer so the question is only
+ * ever asked on the liquid branch below - a board with no liquid on it never
+ * reaches it. One byte, so a block-row costs one store to arm it. */
+typedef enum {
+    DEST_UNKNOWN = 0,
+    DEST_HAS_ROOM,
+    DEST_FULL,
+} dest_state_t;
+
+/* Off the grid is no room: give_mass() returns 0 for a NULL destination row
+ * exactly as it does for a full cell. */
+static inline bool dest_row_full(const uint8_t *row, int x0, int x1)
+{
+    return row == NULL
+        || span_has_no_liquid_room(row, x0, x1, sweep_cell_liquid_mask);
+}
+
+/* Every cell a grain in this block can reach lies in one of three destination
+ * rows, within the block's own span plus a cell of margin - the fall and both
+ * slides - so one test per distinct row answers for every grain in the block.
+ * A sealed basin and the interior of a deep pool answer yes every step. */
+_Static_assert((SAND_BLOCK_W & (SAND_BLOCK_W - 1)) == 0,
+               "dest_rows_full() recovers a block's span from x by masking");
+
+static bool dest_rows_full(const uint8_t *prow, const uint8_t *arow,
+                           const uint8_t *brow, int x, int w)
+{
+    const int lo = x & ~(SAND_BLOCK_W - 1);
+    const int hi = lo + SAND_BLOCK_W;
+    const int x0 = (lo > 0) ? lo - 1 : 0;
+    const int x1 = (hi < w) ? hi + 1 : w;
+
+    if (!dest_row_full(prow, x0, x1)) {
+        return false;
+    }
+    if (arow != prow && !dest_row_full(arow, x0, x1)) {
+        return false;
+    }
+    if (brow != prow && brow != arow && !dest_row_full(brow, x0, x1)) {
+        return false;
+    }
+    return true;
+}
+
+/* A liquid grain that went nowhere is the cheapest evidence that the rows it
+ * reached for are full, and the only thing that buys dest_rows_full() its
+ * loads: on a falling column every grain moves and the span is never read.
+ * Asked once, since nothing later in the sweep can ADD room. */
+static bool step_one_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
+                                  uint8_t *arow, uint8_t *brow, int x, int y,
+                                  int w, int dx, int dy, const int *slide_a,
+                                  const int *slide_b, cell_t grain,
+                                  dest_state_t *dest)
+{
+    const bool moved = move_liquid_grain(s, row, prow, x, y, dx, dy, slide_a,
+                                         slide_b, grain, CELL_MATERIAL(grain),
+                                         *dest == DEST_FULL);
+    if (!moved && *dest == DEST_UNKNOWN) {
+        *dest = dest_rows_full(prow, arow, brow, x, w) ? DEST_FULL
+                                                       : DEST_HAS_ROOM;
+    }
+    return moved;
 }
 
 static bool step_one_grain(sand_t *s, uint8_t *row, uint8_t *prow,
                            uint8_t *arow, uint8_t *brow, int x, int y, int w,
                            int dx, int dy, const int *slide_a,
                            const int *slide_b, int load_dx, int load_dy,
-                           int jostle, bool driven[MATERIAL_ROWS][2])
+                           int jostle, bool driven[MATERIAL_ROWS][2],
+                           dest_state_t *dest)
 {
     const cell_t grain = row[x];
 
@@ -788,8 +857,8 @@ static bool step_one_grain(sand_t *s, uint8_t *row, uint8_t *prow,
         return false;
     }
     if (((sweep_liquid_mask >> mrow) & 1u) != 0) {
-        return move_liquid_grain(s, row, prow, x, y, dx, dy, slide_a,
-                                 slide_b, grain, CELL_MATERIAL(grain));
+        return step_one_liquid_grain(s, row, prow, arow, brow, x, y, w, dx,
+                                     dy, slide_a, slide_b, grain, dest);
     }
 
     const material_t *mat = material_of(grain);
@@ -930,6 +999,8 @@ static void step_one_block(const sweep_ctx_t *ctx, int bx)
         cx_from = hi - 1; cx_to = lo - 1;
     }
 
+    dest_state_t dest = DEST_UNKNOWN;
+
     bool moved_here = false;
     unsigned saw_liquid = 0;
     for (int x = cx_from; x != cx_to; x += ctx->x_step) {
@@ -946,7 +1017,7 @@ static void step_one_block(const sweep_ctx_t *ctx, int bx)
                                ctx->arow, ctx->brow, x, ctx->y, ctx->w,
                                ctx->dx, ctx->dy, ctx->slide_a, ctx->slide_b,
                                ctx->load_dx, ctx->load_dy, ctx->jostle,
-                               ctx->driven)) {
+                               ctx->driven, &dest)) {
             moved_here = true;
         }
     }
