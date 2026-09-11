@@ -591,10 +591,9 @@ static void test_glass_grain_is_quieter_than_stone(void)
 
 /* Stone's speckle comes from the cell's POSITION, not from its variant.
  *
- * Stone used to carry a random shade and a wall looked like rock because
- * of it. Spending the variant on temperature took that away; deriving the
- * shade from a per-cell hash instead puts it back without the variant
- * having to mean two things at once.
+ * The variant is spent on temperature, so the speckle that makes a wall
+ * read as rock has to come from somewhere else; a per-cell position hash
+ * supplies it without the variant having to mean two things at once.
  *
  * Both halves are asserted because both can fail on their own: a speckle
  * that does not vary is a flat slab again, and one that varies with
