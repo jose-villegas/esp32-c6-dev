@@ -127,8 +127,20 @@ Keep, only if still true and not obvious from the code:
   holds (not a tuning journey - just the current shape and why).
 - A short cross-reference to where fuller logic or history lives (a
   function name, a doc path) - do not restate what's at the destination.
+- How a TEST's own setup is arranged - seeding, ordering, why a fixture
+  call sits outside a loop rather than inside it - when that arrangement
+  is not visible from the code under test, only from the test itself
+  (e.g. calling fixture() once before a 16-trial loop, not once per
+  trial, because per-trial would re-seed the RNG and replay one identical
+  trial sixteen times).
 
 Hard rules, regardless of length:
+- A comment that contains a cross-reference - a function name written
+  `like_this()`, a file path such as `sand.c`, or a named test - can
+  never be answered with DELETE. Keep the citation alone, stripped of
+  everything else: a bare "see <that function>'s own comment" is
+  itself a complete, correct answer. Losing it is not a shorter comment,
+  it is navigation the code cannot recover on its own.
 - Never invent, compute, or round a number, name, or fact that is not
   already stated (or spelled out in words, e.g. "five thousand") in the
   original text below. If you are not sure a number belongs, leave it out
@@ -148,6 +160,17 @@ Hard rules, regardless of length:
 Comment ({length} characters):
 {text}
 """
+
+CITED_RETRY = """You answered DELETE, but that comment points at where its \
+reasoning actually lives: {cites}. Deleting it throws away the pointer as \
+well as the duplication, and nothing in the code can recover it.
+
+Reply with the cross-reference alone - a sentence or so naming what it \
+points at, and nothing that restates what is at the destination.
+
+{text}
+"""
+
 
 RETRY = """That was {got} characters, still over {limit}. Rewrite it shorter. \
 Reply with nothing but the prose.
@@ -251,6 +274,32 @@ def looks_like_meta_reply(prose):
                 or PROMPT_ECHO.search(prose))
 
 
+# The one word this script actually tells a model to reply with, plus its
+# closest synonyms, used as an imperative VERB (followed by a determiner)
+# rather than a noun or a lowercase word in ordinary prose. Case-sensitive
+# on purpose: this repo's own house style uses ALL-CAPS emphasis phrases
+# ("THE ONLY CHECK...", "HALF OF A TWO-PART GUARANTEE") that must not trip
+# this, and ordinary prose legitimately uses these same words lowercase
+# ("the compiler can delete the walk").
+DIRECTIVE_LEAK = re.compile(
+    r"\b(?:DELETE|DISCARD|OMIT|REMOVE)\b\s+"
+    r"(?:the|this|that|these|those|it|any|all)\b")
+
+
+def leaks_directive(original, prose):
+    """Catches this script's own instruction wording leaking into a live
+    rewrite - observed verbatim, mid-prose: "DELETE the measurement
+    details." split_delete() only strips a leading or trailing DELETE, and
+    looks_like_meta_reply() only catches talk ABOUT replying, so a
+    directive sitting in the MIDDLE of an otherwise plausible rewrite
+    passed both. A match already present verbatim in the ORIGINAL comment
+    is exempted - a rewrite quoting existing text forward has not leaked
+    anything.
+    """
+    m = DIRECTIVE_LEAK.search(prose)
+    return bool(m) and m.group(0) not in original
+
+
 DIGIT = re.compile(r"\d+")
 WORD = re.compile(r"[A-Za-z]{4,}")
 
@@ -306,6 +355,118 @@ def drops_attribution(old, new):
     return bool(ATTRIBUTION.search(old)) and not ATTRIBUTION.search(new)
 
 
+# A wrapped identifier continues across comment lines with a trailing `_-`
+# and no separating character on the next line - a house convention (see
+# e.g. suite_sand_perf.c's own use of it), not something this script
+# invented. Comment.text (and this script's own flattened `prose`) already
+# joined those lines with a plain space, so what the wrap looks like here
+# is the literal substring "word_- next"; rejoining it is what lets a
+# correctly-wrapped citation resolve, and lets a genuinely truncated one -
+# nothing valid stitched onto the far side of the hyphen - fail to
+# resolve, which is the defect this exists to catch.
+# The optional `*` absorbs a C comment gutter, so this is correct whether it
+# is handed extracted prose or raw source - a silent no-op on the latter
+# would drop exactly the citations a wrap was hiding.
+WRAP_JOIN = re.compile(r"(\w+_)-\s+\*?\s*(\w+)")
+
+
+def rejoin_wraps(text):
+    return WRAP_JOIN.sub(r"\1\2", text)
+
+
+# A function call, a test name, or a source file this repo's own comments
+# cite by name.
+CITATION = re.compile(
+    r"\b[A-Za-z_]\w*\(\)|\btest_[A-Za-z0-9_]+\b|\b[\w][\w/]*\.[ch]\b")
+
+_SOURCE_LOCK = threading.Lock()
+_source_ids = None
+_source_files = None
+
+
+def _repo_root():
+    r = subprocess.run(["git", "rev-parse", "--show-toplevel"],
+                       capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else os.getcwd()
+
+
+def source_index():
+    """Every identifier-shaped token, and every .c/.h filename, under
+    launcher/ - built once per process and reused for the rest of the run,
+    so resolving a citation costs a dict lookup, not a fresh grep, and a
+    long retry loop stays cheap. Loose on purpose: presence anywhere in the
+    tree, not proof of a definition - this is the mechanical floor
+    (a name that exists nowhere is a defect regardless of how good the
+    prose reads), not a meaning check.
+    """
+    global _source_ids, _source_files
+    if _source_ids is None:
+        with _SOURCE_LOCK:
+            if _source_ids is None:
+                ids, files = set(), set()
+                root = os.path.join(_repo_root(), "launcher")
+                for dirpath, dirs, filenames in os.walk(root):
+                    dirs[:] = [d for d in dirs
+                              if d not in ("build", "build.diag")]
+                    for fn in filenames:
+                        if not fn.endswith((".c", ".h")):
+                            continue
+                        files.add(fn)
+                        try:
+                            with open(os.path.join(dirpath, fn),
+                                      encoding="utf-8", errors="replace") as f:
+                                ids.update(re.findall(r"[A-Za-z_]\w*",
+                                                      f.read()))
+                        except OSError:
+                            continue
+                _source_ids, _source_files = ids, files
+    return _source_ids, _source_files
+
+
+def cited_tokens(text):
+    """Every cross-reference a comment carries - the thing a DELETE would
+    throw away along with the duplication it was right to cut."""
+    return sorted(set(CITATION.findall(rejoin_wraps(text))))
+
+
+def unresolved_citations(prose):
+    """Cross-references a rewrite makes that resolve nowhere under
+    launcher/ - checked after rejoin_wraps() so a correctly-wrapped
+    identifier is judged on what it actually spells, not on the space this
+    script's own flattening left inside it. The observed failure this
+    catches: a rewrite that produced `test_a_screen_of_-` with nothing
+    valid stitched onto the far side of the hyphen - a citation to a
+    function that does not exist, reading as perfectly good prose.
+    """
+    text = rejoin_wraps(prose)
+    ids, files = source_index()
+    bad = []
+    for m in CITATION.finditer(text):
+        token = m.group(0)
+        if token.endswith((".c", ".h")):
+            if token.rsplit("/", 1)[-1] not in files:
+                bad.append(token)
+        else:
+            name = token[:-2] if token.endswith("()") else token
+            if name not in ids:
+                bad.append(token)
+    return bad
+
+
+def invented_citations(original, prose):
+    """Cross-references the rewrite makes that the original never made.
+
+    Existence is NOT the test, and that is the whole point: this script's own
+    prompt once carried a worked example naming a real function, the model
+    copied it verbatim into comments in an unrelated file, and every one of
+    those citations resolved. A pointer the source comment never carried is a
+    fabrication however plausible it reads - and a citation that resolves to
+    the wrong place is worse than one that resolves nowhere, because nothing
+    downstream will ever flag it."""
+    had = set(cited_tokens(original))
+    return [c for c in cited_tokens(prose) if c not in had]
+
+
 def response_problems(original, prose, ceiling):
     """Automated defects in a candidate rewrite - the concrete failure
     shapes a model has actually produced in this repo, not a meaning check
@@ -317,12 +478,21 @@ def response_problems(original, prose, ceiling):
         problems.append("over ceiling")
     if looks_like_meta_reply(prose):
         problems.append("meta-reply")
+    if leaks_directive(original, prose):
+        problems.append("directive leak")
     if fabricates_number(original, prose):
         problems.append("fabricated number")
     if drops_attribution(original, prose):
         problems.append("dropped attribution/licence notice")
     if not shares_vocabulary(original, prose):
         problems.append("no shared vocabulary")
+    invented = invented_citations(original, prose)
+    if invented:
+        problems.append("invented citation: " + ", ".join(invented[:3]))
+    bad_citations = unresolved_citations(prose)
+    if bad_citations:
+        problems.append(
+            f"unresolved cross-reference: {', '.join(bad_citations)}")
     return problems
 
 
@@ -414,6 +584,23 @@ def trim_file(path, opts, log, results):
         prose = ask(model, PROMPT.format(limit=opts["limit"],
                     length=com.length, text=original), log)
         wants_delete, prose = split_delete(prose)
+
+        # A DELETE used to be taken at its word - the one answer that
+        # skipped response_problems() entirely, and the one the model got
+        # wrong most often: it deleted comments whose whole surviving value
+        # was the cross-reference they carried. Ask once more, naming what
+        # the comment points at; a second DELETE leaves it alone rather than
+        # dropping a pointer the code cannot recover.
+        cites = cited_tokens(original) if wants_delete else []
+        if com.own_line and wants_delete and cites:
+            prose = ask(model, CITED_RETRY.format(
+                cites=", ".join(cites[:4]), text=original), log)
+            wants_delete, prose = split_delete(prose)
+            if wants_delete or not prose:
+                results["kept"].append({
+                    "path": path, "line": com.line, "length": com.length,
+                    "reason": "deletes a cross-reference"})
+                continue
 
         if com.own_line and wants_delete:
             row = {"path": path, "line": com.line, "before": com.length,
@@ -633,8 +820,7 @@ def write_report(path, results, opts, seconds):
         f.write(f"- shortened: **{len(shortened)}**"
                 f" ({len(shortened) - len(over_aim)} to the aim,"
                 f" {len(over_aim)} only within the ceiling),"
-                f" deleted entirely: **{len(deleted)}**"
-                f" (pure change history - git log owns it),"
+                f" deleted entirely: **{len(deleted)}**,"
                 f" left alone: {len(u)}\n")
         f.write(f"- prose removed: {saved:,} characters\n")
         skipped = results.get("skipped") or []
@@ -647,10 +833,13 @@ def write_report(path, results, opts, seconds):
             f.write(f"- **files discarded (code would have moved): "
                     f"{', '.join(results['rejected'])}**\n")
         if deleted:
-            f.write("\n## Deleted entirely\n\nEach was judged to be pure "
-                    "change-history narration with no constraint that still "
-                    "applies. Verify none of these was actually load-bearing "
-                    "before trusting this list.\n\n")
+            f.write("\n## Deleted entirely\n\nEach was answered DELETE "
+                    "outright - the model's reasoning isn't captured, so "
+                    "don't assume it was change history; review of past "
+                    "runs found most of these were actually a duplicated "
+                    "cross-reference or restated content instead. Verify "
+                    "none of these was actually load-bearing before "
+                    "trusting this list.\n\n")
             for r in sorted(deleted, key=lambda r: -r["before"]):
                 f.write(f"### {r['path']}:{r['line']}  ({r['before']} chars"
                         f" removed)\n\n")
