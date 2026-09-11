@@ -135,29 +135,12 @@ static int32_t units(int n)
 /*---------------------------------------------------------------------------
  * The floor
  *
- * The complex plane zeta's value lives in, drawn as a floor at t = 0.
- * Giving it a floor rather than leaving the two axes bare is what makes
- * the third axis read as height instead of as a third line through the
- * same point.
- *
- * A POLAR grid - concentric rings, each a genuine circle, plus a handful
- * of radial spokes - not the square lattice of crossing horizontal/
- * vertical lines this used to be. Two things needed that, together:
- * boot_anim_wave_height() (see boot_anim.h's "The wave" section) already
- * lifts a point by its true distance from the origin, so a ring drawn as
- * a real circle rises as one uniform ring, exactly like a water ripple's
- * own wavefront; a square ring cannot ever BE that shape, whatever its
- * height does, and neither can its COLOUR - boot_anim_grid_hue() below
- * still colours one ring in one flat tone, so on the old crossing-line
- * grid that tone traced the same square/diamond the lines themselves did,
- * not the circle the maths already treated it as. A circle fixes both
- * with the one change.
- *
- * `far`/`d` are fixed local-space reach now, not scaled by a shrink of
- * their own - the grid IS the plane the curve and axes are drawn against,
- * and now reads as the same scale changing they do because it goes
- * through the exact same space transform they do (see "Projection" above),
- * rather than riding its own separate pulse the way it used to. */
+ * Drawn at t = 0 as a POLAR grid (concentric circles + radial spokes),
+ * not a square lattice - boot_anim_wave_height() lifts a point by its
+ * true distance from the origin, so only a real circle rises as one
+ * uniform ring, and only a real circle matches boot_anim_grid_hue()'s
+ * one-tone-per-ring colouring.
+ *---------------------------------------------------------------------------*/
 
 #define BOOT_ANIM_GRID_CIRCLE_STEPS 12
 
@@ -654,10 +637,10 @@ static void title_glyph_origin(int view_x, int view_y, int glyph_w,
  * Drop-shadow dx/dy (authored, signed) go through
  * boot_anim_title_shadow_offset()'s quarter-turn first: "down-right" in
  * the reader's frame differs from panel space. DITHERED, not solid: fake
- * transparency, this panel's usual trick with no real blending. 255 is
- * pixel-identical to the old plain call; 0 disables. Halo is plain
- * COL_BG, not luminance-derived: that flips white the instant ink dips
- * dark, backwards for fading to black. */
+ * transparency, this panel's usual trick with no real blending - 255 is
+ * pixel-identical to a solid draw, 0 disables. Halo is plain COL_BG, not
+ * luminance-derived: that flips white the instant ink dips dark,
+ * backwards for fading to black. */
 void draw_title(uint32_t now_ms, uint8_t ink)
 {
     const gfx_color_t c = gfx_color_mix(COL_BG, COL_WHITE, ink);
