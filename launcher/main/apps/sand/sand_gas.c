@@ -1,49 +1,45 @@
-/*=============================================================================
+/*
  * sand_gas - everything about a gas: rises, and disperses.
  *
  * Unlike a liquid, no part of a gas's movement can join the main sweep -
  * see step_one_grain()'s own comment in sand.c. Rising is the OPPOSITE of
  * gravity-ward, so it needs its own pass, swept in the reverse row/column
- * order from the main sweep, for exactly the same reason the main sweep's
- * own order has to be right: a move has to land in already-visited
+ * order from the main sweep: a move has to land in already-visited
  * territory, or a rising grain gets picked up and moved repeatedly,
  * teleporting to the ceiling in one step.
  *
  * HOW A GRAIN MOVES inside that pass is gas_walk_once(): one draw, one
- * probe, a biased random walk. The exhaustive mover it replaced - sand.c's
+ * probe, a biased random walk. The exhaustive mover - sand.c's
  * try_fall_or_scatter()/try_slide(), run with the direction negated - is
  * still reachable through sand_set_gas_walk(false) so the two can be
- * compared, and is the only thing that still needs the care those
- * primitives take here: driven_by_gravity() wants a gas-local table built
- * against the REVERSED gravity vector, not the main sweep's own, and the
- * reversed sweep's x order has to reuse sand_step()'s own x_step negated
- * rather than call sweep_x_order() again (that function has a side effect -
- * see its own comment in sand.c).
+ * compared; it needs driven_by_gravity()'s gas-local table built against
+ * the REVERSED gravity vector, and the reversed sweep's x order reuses
+ * sand_step()'s own x_step negated rather than call sweep_x_order()
+ * again (that function has a side effect - see its own comment in
+ * sand.c).
  *
- * Rising alone only piles gas into a heap against whatever it hits - the
- * same shape water's own gravity-ward primitive produces alone, which is
- * exactly why sand_liquid.c's cross-flow pass exists. equalise_gas() below
- * is gas's version of that: mirrors equalise_liquids()'s structure closely
- * (see sand_liquid.c), swapping mass-splitting for a plain whole-cell hop
- * to the nearest open cell along the perpendicular.
+ * Rising alone only piles gas into a heap against whatever it hits, the
+ * same shape water's gravity-ward primitive produces alone - why
+ * sand_liquid.c's cross-flow pass exists. equalise_gas() below is gas's
+ * version: mirrors equalise_liquids()'s structure (sand_liquid.c),
+ * swapping mass-splitting for a whole-cell hop to the nearest open cell
+ * along the perpendicular.
  *
- * Gas rising through standing LIQUID is its own problem: can_enter() cannot
- * express mobility and is far too hot a predicate to teach it. Both movers
- * carry the case themselves - gas_walk_once() inline, try_bubble() for the
- * exhaustive path.
+ * Gas rising through standing LIQUID is its own problem: can_enter()
+ * cannot express mobility and is far too hot a predicate to teach it.
+ * Both movers carry the case themselves - gas_walk_once() inline,
+ * try_bubble() for the exhaustive path.
  *
- * Whole-grain also means gas cannot THIN a saturated pocket the way water
- * levels one - a cell is either a full grain or empty, nothing between, so
- * a held-down pour saturates its own neighbourhood faster than the spread
- * pass can find real gaps to move into, and looks and behaves like a pile
- * of sand until it does. tick_decay() (sand_priv.h, shared with fire's
- * own burn-out - see sand_reactions.c) is what keeps that from being
- * permanent: material.h's `decay` field reuses the variant nibble as LIFE
- * REMAINING (per that file's own top comment), so a grain fades and clears
- * itself rather than accumulating forever. Off by default (see
- * sand_set_decay()) - a test that places gas and does not ask for decay
- * gets an immortal grain, same as every material before this one.
- *===========================================================================*/
+ * Whole-grain also means gas cannot THIN a saturated pocket the way
+ * water levels one - a cell is either a full grain or empty, so a
+ * held-down pour saturates its neighbourhood faster than the spread
+ * pass can find gaps, and behaves like a pile of sand until it does.
+ * tick_decay() (sand_priv.h, shared with fire's burn-out - see
+ * sand_reactions.c) keeps that from being permanent: `decay` reuses the
+ * variant nibble as LIFE REMAINING, so a grain fades and clears itself.
+ * Off by default (sand_set_decay()) - an undecayed test grain is
+ * immortal, same as any other material with decay unset.
+ */
 
 #include "sand_priv.h"
 
@@ -61,10 +57,10 @@ static uint16_t gas_mask(void)
     return mask;
 }
 
-/*---------------------------------------------------------------------------
+/*
  * Sub-pass 1: rise, and the two diagonal slides - try_fall_or_scatter()/
  * try_slide(), reused from sand.c with the direction inverted.
- *-------------------------------------------------------------------------*/
+ */
 
 /* One gas grain's turn - the same dispatch step_one_grain() runs for a
  * powder (fall/rise, then the two slides), but with an explicit wake,
@@ -148,18 +144,13 @@ static const __attribute__((unused)) struct { uint16_t upto; int8_t off; } gas_w
     { 256,  2 },   /* sideways, the other  */
 };
 
-/* DERIVED FROM THE WEIGHTS TABLE ABOVE, WHICH STAYS THE SOURCE OF TRUTH.
- * Every boundary in it is a multiple of 8, so roll >> 3 selects a bucket
- * exactly and thirty-two entries cover all 256 rolls - the linear search this
- * replaces cost up to seven iterations, each with its own load and branch.
- *
- * Const, so it costs no RAM: the loop was the expense, not the memory, and
- * this board has 322 KiB of its ~424 KiB under the framebuffer (a 256-entry
- * version of this table failed check_static_ram by 224 bytes). One cached
- * load replaces the walk.
- *
- * Hand-written, so it must agree with the weights: a single wrong entry moves
- * the behaviour fingerprint, which was confirmed by mutating one. */
+/* DERIVED FROM THE WEIGHTS TABLE ABOVE, the source of truth: every
+ * boundary is a multiple of 8, so roll >> 3 selects a bucket exactly,
+ * replacing a linear search that cost up to seven iterations. Const, so
+ * it costs no RAM - this board has 322 KiB of its ~424 KiB under the
+ * framebuffer, and a 256-entry version of this table failed
+ * check_static_ram by 224 bytes. Hand-written, so it must agree with the
+ * weights: a single wrong entry moves the behaviour fingerprint. */
 static const int8_t gas_walk_offset[32] = {
     0,  0,  0,  0,  0,  0,  0,  0,  0,     /* rolls   0.. 71 - stay on course */
     -1, -1, -1, -1, -1, -1, -1, -1, -1,    /* rolls  72..143 - one notch left */
@@ -210,11 +201,11 @@ static inline bool gas_walk_once(sand_t *s, uint8_t *row, int x, int y, int w,
     const int ny  = y + d[1];
     const int nx  = x + d[0];
 
-    /* ONE PROBE FOR BOTH OUTCOMES. move_to() and the buoyancy fallback each
-     * used to derive the row (a multiply), load the target and dereference
-     * materials[] for themselves - and on a packed grid the blocked path,
-     * which paid both, is the common one. can_enter() has already asked
-     * whether the blocker is a liquid and how heavy it is. */
+    /* ONE PROBE FOR BOTH OUTCOMES: move_to() and the buoyancy fallback
+     * share the same row/target lookup rather than each deriving it
+     * separately - on a packed grid the blocked path is the common one.
+     * can_enter() has already asked whether the blocker is a liquid and
+     * how heavy it is. */
     uint8_t *const trow = dest_row(s, ny);
     if (trow == NULL || (unsigned)nx >= (unsigned)w) {
         return false;
@@ -366,11 +357,11 @@ static bool step_one_gas_row(sand_t *s, int y, int w, int rdx, int rdy,
     return any;
 }
 
-/*---------------------------------------------------------------------------
+/*
  * Sub-pass 2: perpendicular spread - mirrors sand_liquid.c's
  * equalise_liquids()/equalise_one_row()/equalise_one_cell(), whole-grain
  * instead of mass-based.
- *-------------------------------------------------------------------------*/
+ */
 
 /* Mirrors has_room_below() in sand_liquid.c: if this grain still has
  * somewhere to rise THIS step, sub-pass 1 above already moved it (or
@@ -393,13 +384,11 @@ static inline bool has_room_above(const uint8_t *arow, int x, int rdx, int w)
 }
 
 /* Whether the immediate neighbour along (px, py) is worth searching past:
- * truly empty, OR the same gas - unlike a wall or denser material. The
- * earlier version returned true only for CELL_IS_EMPTY, mirroring the
- * liquid fast path too closely: gas has no level to compare, so it
- * treated another gas cell like a wall, never calling find_nearest_empty()
- * for real space further out. Matters for a 2D pour under a ceiling: many
- * INDEPENDENT rows, a row mid-pour getting grains faster than one pass
- * resolves. */
+ * truly empty, OR the same gas - unlike a wall or denser material. Gas
+ * has no level to compare (unlike liquid), so treating another gas cell
+ * as a stop would block find_nearest_empty() from reaching real space
+ * further out. Matters for a 2D pour under a ceiling: many independent
+ * rows, a row mid-pour getting grains faster than one pass resolves. */
 static inline bool neighbour_is_open(const uint8_t *nrow, int x, int px,
                                      int w, uint8_t gas_id)
 {
@@ -726,9 +715,7 @@ static bool equalise_gas(sand_t *s, const int *perp, int rdx, int rdy)
     return found_any;
 }
 
-/*---------------------------------------------------------------------------
- * The whole step.
- *-------------------------------------------------------------------------*/
+/* The whole step. */
 
 void sand_step_gas(sand_t *s, int gx, int gy, int dx, int dy,
                    const int *slide_a, const int *slide_b,

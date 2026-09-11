@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Per-test wall time, without editing a single suite file.
  *
  * Every suite calls Unity's RUN_TEST(func) directly. RUN_TEST is a macro
@@ -15,7 +15,7 @@
  * the same guard from the other side and compiles UnityDefaultTestRun's
  * body out entirely (it becomes "the replacement runner"), which breaks the
  * only function this file's .c half calls. Both build scripts keep it out.
- *===========================================================================*/
+ */
 #pragma once
 
 #define RUN_TEST(func) suite_run_test_timed(func, #func, __LINE__)

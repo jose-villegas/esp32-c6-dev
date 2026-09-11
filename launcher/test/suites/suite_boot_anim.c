@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Portable suite: the startup animation's projection, curve, smoothing and
  * timeline.
  *
@@ -18,7 +18,7 @@
  * heights, and it must NOT come anywhere near zero anywhere else. Those are
  * the first five nontrivial zeros of the zeta function, and no table of
  * plausible-looking numbers passes both halves by accident.
- *===========================================================================*/
+ */
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -47,9 +47,7 @@ static int32_t threshold_sq(int32_t q12)
     return q12 * q12;
 }
 
-/*---------------------------------------------------------------------------
- * The curve
- *-------------------------------------------------------------------------*/
+/* The curve */
 
 static void test_the_curve_climbs_from_zero_to_the_top(void)
 {
@@ -149,9 +147,7 @@ static void test_samples_are_clamped_rather_than_read_out_of_range(void)
                             boot_anim_sample(BOOT_ANIM_CURVE_POINTS + 99).im);
 }
 
-/*---------------------------------------------------------------------------
- * The camera
- *-------------------------------------------------------------------------*/
+/* The camera */
 
 static void test_the_quarter_wave_starts_at_zero_and_ends_at_one(void)
 {
@@ -233,12 +229,11 @@ static void test_identity_transform_leaves_the_origin_at_screen_centre(void)
         "identity transform");
 }
 
-/* The one property that actually distinguishes perspective from the old
- * axonometric projection: a point further from the camera has to project
- * SMALLER (closer to screen centre) than the same point nearer the camera,
- * for a real focal length. re/im map to X/Z (see boot_anim_project()'s own
- * comment on the axis mapping) - im is depth here, re is the offset being
- * compared at two different depths. */
+/* The property that distinguishes a real perspective projection: a point
+ * further from the camera must project SMALLER (closer to screen centre)
+ * than the same point nearer the camera, for a real focal length. re/im
+ * map to X/Z (see boot_anim_project()'s axis-mapping comment) - im is
+ * depth, re is the offset compared at two depths. */
 static void test_a_point_further_from_the_camera_projects_smaller(void)
 {
     const boot_anim_view_t view = identity_view(S3L_F);
@@ -305,25 +300,14 @@ static void test_project_segment_cs_rejects_a_segment_entirely_behind(void)
         "should be rejected entirely, not clipped against itself");
 }
 
-/* boot_anim_project_segment_cs()'s near-plane clip, at asymmetric,
- * deliberately-not-a-clean-fraction-of-512 coordinates - the exact case
- * the Q16 rewrite (see this function's own comment in boot_anim.h)
- * exists for: a clip fraction that lands nowhere near a multiple of
- * 1/S3L_F (1/512) is precisely where the OLD precision rounded the
- * worst. Verified against an independent double-precision reference
- * computed right here, not against whatever the function under test
- * happens to produce - worked out once BY RUNNING IT (temporarily
- * reverting the Q16 fix and forcing a zero-tolerance assertion to read
- * the exact numbers back - see this repo's own "watch it fail before it
- * passes" testing convention), not by hand, after an earlier hand
- * calculation here turned out to be wrong:
+/* boot_anim_project_segment_cs()'s near-plane clip at asymmetric,
+ * non-clean-fraction-of-512 coordinates, precision-sensitive at Q16
+ * (boot_anim.h). Verified against an independent double-precision
+ * reference, not the function under test.
  *
  *   clip fraction = 86/496 = 0.17338...
- *   this test's tolerance (20px) comfortably contains the Q16 result's
- *   own error against the double-precision reference (7px, 0px) while
- *   still rejecting the OLD S3L_F(512)-precision result for the exact
- *   same inputs (3831px, 2352px off) - the actual regression this test
- *   protects against, even though the old code no longer exists to call. */
+ *   tolerance (20px) contains the Q16 error (7px, 0px) while rejecting
+ *   S3L_F(512)'s result for the same inputs (3831px, 2352px off). */
 static void test_project_segment_cs_clips_asymmetric_coordinates(void)
 {
     const boot_anim_view_t view = identity_view(S3L_F);
@@ -434,11 +418,10 @@ static void test_spoke_reveal_target_advances_evenly_in_screen_space(void)
                     "1/target - a plateau these test constants should "
                     "never actually produce");
                 /* Consecutive per-step shrinkages should stay within 25%
-                 * of each other - loose on purpose (this is a fixed-point
+                 * of each other - loose on purpose (a fixed-point
                  * approximation, not exact reciprocal interpolation), but
-                 * tight enough that the OLD linear-in-radius formula (whose
-                 * first step alone covers ~90% of the total 1/near-to-
-                 * 1/far span) would fail it outright. */
+                 * tight enough to reject a linear-in-radius formula, whose
+                 * first step alone covers ~90% of the span. */
                 const double ratio = delta / prev_delta;
                 TEST_ASSERT_TRUE_MESSAGE(ratio > 0.75 && ratio < 1.25,
                     "consecutive reach steps should shrink 1/target by "
@@ -469,19 +452,15 @@ static void test_an_untouched_keyframes_scale_reads_back_as_identity(void)
         "an unscaled keyframe's space.scale.z should read back as 1.0");
 }
 
-/*---------------------------------------------------------------------------
+/*
  * The seed keyframes
  *
- * Unlike the old fixed axonometric projection - three compile-time screen
- * directions, provably fitting the panel for any camera angle - a real,
- * freely keyframed 3D camera has no such blanket guarantee: point it the
- * wrong way and the scene is off-panel, which is a legitimate thing a
- * creative edit can do, not a bug in the projection. What is still worth
- * protecting is the SEED this repo ships - a sanity sweep against the
- * actual committed boot_anim_keyframes[], not a property of the projection
- * in general. A generous margin, not a tight fit: this catches "the seed
- * is now wildly broken", not "the seed could be tuned tighter".
- *-------------------------------------------------------------------------*/
+ * A freely keyframed camera has no blanket off-panel guarantee - a wrong
+ * angle can put the scene off-panel, a legitimate edit, not a bug. Worth
+ * protecting: the SEED this repo ships, a sanity sweep against
+ * boot_anim_keyframes[]. A generous margin, not a tight fit - catches the
+ * seed going wildly broken, not tunable tighter.
+ */
 
 #define BOOT_ANIM_TEST_MAX_PANEL_MULTIPLE 3
 
@@ -545,9 +524,7 @@ static void test_the_seeds_three_axes_project_to_distinct_directions(void)
         "the real axis should not collapse onto the origin");
 }
 
-/*---------------------------------------------------------------------------
- * The wave
- *-------------------------------------------------------------------------*/
+/* The wave */
 
 /* `amp_q12`/`wavelength_q12`/`period_ms` are fabricated here, not read
  * from BOOT_ANIM_WAVE_HEIGHT_Q12/WAVELENGTH_Q12/PERIOD_MS - see
@@ -653,20 +630,13 @@ static void test_wave_height_is_frozen_when_the_period_is_zero(void)
         "than crash or drift");
 }
 
-/* The seed this repo ships has the ripple authored off (BOOT_ANIM_WAVE_
- * HEIGHT_Q12 == 0) until someone turns it up through the editor - not a
- * claim boot_anim_wave_height() itself makes (see its own comment), so
- * worth its own test the way test_the_seed_finishes_the_curve_before_
- * the_dissolve_starts() already checks a different seed-specific fact. */
-/* This used to assert the seed's own wave height was 0 - true when the
- * ripple was a brand new knob nobody had authored yet, and false the
- * moment anyone tuned one in, which is exactly what happened. A seed
- * value an author is expected to change is not a fact worth pinning; what
- * IS worth pinning is that whatever they tune stays COHERENT, since
- * boot_anim_wave_height() reads all three numbers together and a nonzero
- * height against a zero wavelength or period is the combination that
- * silently draws nothing (see that function's own early-out). Holds
- * whether the ripple is authored on or off. */
+/* A seed value an author is expected to change is not a fact worth
+ * pinning to a specific number; what's worth pinning is that whatever
+ * they tune stays COHERENT: boot_anim_wave_height() reads height,
+ * wavelength and period together, and a nonzero height against a zero
+ * wavelength or period is the combination that silently draws nothing
+ * (see that function's own early-out). Holds whether the ripple is
+ * authored on or off. */
 static void test_the_seeds_wave_is_coherently_authored(void)
 {
     TEST_ASSERT_TRUE_MESSAGE(BOOT_ANIM_WAVE_HEIGHT_Q12 >= 0,
@@ -687,8 +657,7 @@ static void test_the_seeds_wave_is_coherently_authored(void)
  * reason boot_anim_grid_alpha() reads BOOT_ANIM_GRID_START_MS/RING_MS/
  * FADE_MS directly rather than taking them as arguments - so these test
  * against the seed's own real generated values (BOOT_ANIM_WAVE_IN_MS,
- * BOOT_ANIM_WAVE_OUT_MS, BOOT_ANIM_MS), the same way
- * test_wave_front_starts_at_the_origin... used to before this rewrite. */
+ * BOOT_ANIM_WAVE_OUT_MS, BOOT_ANIM_MS). */
 static void test_wave_envelope_is_zero_at_the_very_start(void)
 {
     TEST_ASSERT_EQUAL_UINT8(0, boot_anim_wave_envelope(0));
@@ -765,32 +734,28 @@ static void test_the_title_wave_never_swings_wider_as_it_calms(void)
     }
 }
 
-/* Measured from BOOT_ANIM_WAVE_OUT_MS, not from BOOT_ANIM_MS: the
- * envelope's contract is that it reaches zero one ramp after the fade-out
- * STARTS, and whether that lands before the animation's own end is a
- * timeline choice, not a property of this function. The seed currently
- * parks wave_out_ms exactly at total_ms - so the ripple is still at full
- * strength on the last frame, which is fine because boot_anim_ink() has
- * been taking the whole picture to black since fade_start_ms long before
- * then. Asserting against BOOT_ANIM_MS, as this used to, made the test a
- * hostage to that one authoring decision. */
+/* Measured from BOOT_ANIM_WAVE_OUT_MS, not BOOT_ANIM_MS: the envelope's
+ * contract is that it reaches zero one ramp after the fade-out STARTS,
+ * and whether that lands before the animation's own end is a timeline
+ * choice, not a property of this function. The seed currently parks
+ * wave_out_ms exactly at total_ms, so the ripple is still at full
+ * strength on the last frame - fine, since boot_anim_ink() has been
+ * taking the whole picture to black since fade_start_ms long before
+ * then. */
 static void test_wave_envelope_fades_back_to_zero_after_its_ramp(void)
 {
     TEST_ASSERT_EQUAL_UINT8(0, boot_anim_wave_envelope(
         BOOT_ANIM_WAVE_OUT_MS + BOOT_ANIM_WAVE_ENVELOPE_RAMP_MS));
 }
 
-/* The reach's own endpoints, read off whatever the seed authors rather
- * than off the all-zero default it used to ship. That default ("every
- * spoke at full length instantly", the behaviour from before either field
- * existed - see gen_boot_anim_timeline.py's own comment) is still covered
- * here, because a start and draw of 0 make the two assertions below land
- * on 0ms and 1ms exactly as the old test did; a seed that animates its
- * spokes instead simply moves where they are sampled, which is the point.
- *
- * tween_ramp() is what makes the second one exact at the boundary rather
- * than merely close - see its own comment on reaching 255 AT
- * start + duration, not one millisecond after. */
+/* The reach's own endpoints, read off whatever the seed authors: a start
+ * and draw of 0 still lands the two assertions below on 0ms and 1ms
+ * exactly, covering the all-zero case (gen_boot_anim_timeline.py's own
+ * comment); a seed that animates its spokes instead simply moves where
+ * they are sampled, which is the point. tween_ramp() makes the second
+ * assertion exact at the boundary rather than merely close - see its own
+ * comment on reaching 255 AT start + duration, not one millisecond
+ * after. */
 static void test_the_seeds_spokes_reach_their_full_length(void)
 {
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(0,
@@ -803,9 +768,7 @@ static void test_the_seeds_spokes_reach_their_full_length(void)
         "passed");
 }
 
-/*---------------------------------------------------------------------------
- * Smoothing
- *-------------------------------------------------------------------------*/
+/* Smoothing */
 
 static boot_anim_pt_t pt(int32_t re, int32_t im, int32_t t)
 {
@@ -922,9 +885,7 @@ static void test_spline_cs_matches_transforming_the_world_space_spline(void)
     }
 }
 
-/*---------------------------------------------------------------------------
- * Basic level of detail
- *-------------------------------------------------------------------------*/
+/* Basic level of detail */
 
 /* Two points far enough apart on screen that boot_anim_curve_lod_steps()
  * must not shortcut - an identity, orthographic view (focal 0) so the
@@ -1019,15 +980,13 @@ static void test_curve_lod_steps_keeps_full_detail_when_the_probe_cannot_project
         "detail, not be assumed tiny");
 }
 
-/*---------------------------------------------------------------------------
+/*
  * Pacing
  *
- * tween_ramp()/tween_ease_out() themselves are tested in suite_tween.c now -
- * this file used to have its own copies under boot_anim_ramp()/
- * boot_anim_ease_out(), with their own tests, before both moved to
- * util/tween.h as shared vocabulary. What is left here is specific to how
- * boot_anim.h USES them, not the primitives themselves.
- *-------------------------------------------------------------------------*/
+ * tween_ramp()/tween_ease_out() themselves are tested in suite_tween.c;
+ * what is left here is specific to how boot_anim.h USES them, not the
+ * primitives themselves.
+ */
 
 /* Phase 1 only - see boot_anim_pen()'s own "TWO PHASES" comment. It reaches
  * BOOT_ANIM_CURVE_PHASE1_FRACTION, not BOOT_ANIM_ONE, at the end of
@@ -1157,21 +1116,12 @@ static void test_the_floor_fades_in_from_the_origin_outward(void)
 }
 
 /* The floor has no edge: it fades out with distance instead of stopping.
- * Long after everything has arrived, each ring must still be dimmer than the
- * one inside it, all the way down to nothing. */
-/* NON-increasing per ring, plus a real drop across any span, rather than
- * strictly dimmer at every single ring as this used to demand.
- *
- * Strict per-ring was only ever satisfiable while the alpha ceiling was
- * large next to the ring count: the falloff is left * ceiling / FADE, so
- * with the seed's current 128 rings against a ceiling of 64 each ring is
- * worth half a level and adjacent PAIRS land on the same integer (63, 63,
- * 62, 62, ...). That is arithmetic, not a regression - and it is invisible
- * on the panel, because what the eye reads as "a plane going away" is the
- * overall gradient, not whether ring 62 and ring 63 differ by one 255th.
- * The two assertions below are what the test's own name actually claims:
- * it never gets BRIGHTER with distance, and it genuinely falls rather than
- * plateauing into a tile with an edge. */
+ * Checked as NON-increasing per ring plus a real drop across any span,
+ * not strictly dimmer at every ring: falloff is left * ceiling / FADE,
+ * so with 128 rings against a ceiling of 64, each ring is worth half a
+ * level and adjacent pairs land on the same integer (63, 63, 62, 62,
+ * ...) - arithmetic, not a regression, invisible on the panel since the
+ * eye reads the overall gradient. */
 static void test_the_floor_fades_out_with_distance_rather_than_stopping(void)
 {
     const uint32_t settled = BOOT_ANIM_MS;
@@ -1232,24 +1182,14 @@ static void test_the_grid_climb_runs_the_whole_animation(void)
     }
 }
 
-/* The floor's own opacity ceiling starts at BOOT_ANIM_GRID_MAX and climbs
- * to BOOT_ANIM_GRID_CEILING_MAX alongside the whitening, rather than
- * sitting fixed while only the colour moves - see boot_anim_grid_climb()'s
- * own comment for why raising the colour alone was not enough. Checked
- * through the innermost ring's own alpha, since the ceiling itself is not
- * a separate exposed function. */
-/* How far the floor's opacity ceiling travels is authored, not fixed:
- * boot_anim_grid_alpha() lerps it from BOOT_ANIM_GRID_MAX to
- * BOOT_ANIM_GRID_CEILING_MAX, so a seed that sets those two EQUAL - which
- * the current one does, both 64 - has deliberately asked for a floor that
- * holds one steady brightness while only its hue climbs. This used to
- * demand a strict climb and so failed the moment that was authored.
- *
- * What must hold either way is that the opacity never goes BACKWARDS: a
- * settled ring dimming again partway through would read as the floor
- * guttering, and would mean the ceiling lerp or the arrival ramp had been
- * wired the wrong way round. The strict-climb case is still asserted, but
- * only where the seed actually asks for one. */
+/* The floor's opacity ceiling climbs from BOOT_ANIM_GRID_MAX to
+ * BOOT_ANIM_GRID_CEILING_MAX alongside the whitening rather than sitting
+ * fixed; checked through the innermost ring's alpha, since the ceiling
+ * has no exposed function of its own. Travel is authored: a seed with
+ * the two constants EQUAL (both 64, currently) asks for a floor at one
+ * brightness while only hue climbs. What must hold either way: opacity
+ * never goes BACKWARDS. Strict-climb is still asserted where the seed
+ * asks for one. */
 static void test_the_floor_opacity_never_falls_back(void)
 {
     /* Ring 1's own fade-in (BOOT_ANIM_GRID_RING_MS + BOOT_ANIM_GRID_FADE_MS
@@ -1314,9 +1254,7 @@ static void test_the_axes_are_there_before_the_curve_starts_climbing(void)
         "the axes should be drawn before anything is plotted against them");
 }
 
-/*---------------------------------------------------------------------------
- * Colour
- *-------------------------------------------------------------------------*/
+/* Colour */
 
 /* Every colour on the wheel is fully saturated: one channel at the top, one
  * at the bottom, the third somewhere between. That is what makes it a hue
@@ -1483,7 +1421,7 @@ static void test_the_live_end_of_the_curve_is_drawn_thicker(void)
         "a stroke between two pens should be thin again");
 }
 
-/*---------------------------------------------------------------------------
+/*
  * The title
  *
  * boot_anim_title_letter() now takes the font it is laying out - see its
@@ -1494,16 +1432,14 @@ static void test_the_live_end_of_the_curve_is_drawn_thicker(void)
  * just the layout FORMULA in the abstract - suite_gfx_font.c already
  * covers gfx_font_text_width()/gfx_font_advance() themselves against a
  * synthetic proportional font, so there is no need to repeat that here.
- *-------------------------------------------------------------------------*/
+ */
 
 /* Whichever font the timeline actually AUTHORS, resolved the same way
- * draw_title() resolves it (boot_anim.c) - not gfx_font_lmroman_40
- * hardcoded, as this was when that font was the only one the title could
- * use. These tests check the real authored geometry, so they have to ask
- * the same question the renderer does: title_font and title_scale are a
- * pair, and pinning the font here while the seed tunes the scale for the
- * OTHER one tests a combination that never ships - a 51px cell at 5x,
- * which duly ran off the panel and failed. */
+ * draw_title() resolves it (boot_anim.c). These tests check the real
+ * authored geometry, so they ask the same question the renderer does:
+ * title_font and title_scale are a pair, and pinning the font while the
+ * seed tunes the scale for a different one tests a combination that
+ * never ships (e.g. a 51px cell at 5x, off the panel). */
 #define TITLE_FONT ((BOOT_ANIM_TITLE_FONT == BOOT_ANIM_TITLE_FONT_8X8) \
                         ? &gfx_font_8x8 : &gfx_font_lmroman_40)
 
@@ -1513,29 +1449,14 @@ static void test_the_wobble_is_exactly_flat_once_a_letter_has_arrived(void)
     TEST_ASSERT_EQUAL_INT(0, boot_anim_title_wobble(-100));
 }
 
-/* THE test. Walk d from 1 (just setting off) down to 0 (arrived) and record
- * where the wobble crosses zero; the gaps between successive crossings must
- * strictly grow. A constant-frequency wobble whose AMPLITUDE merely shrinks
- * - the mistake this is checking was not made - would pass every other test
- * here and still be wrong: it would vibrate to a stop instead of settling. */
-/* Counts sign changes in each HALF of the flight rather than comparing
- * gaps between four consecutive crossings, as this used to.
- *
- * The property under test is unchanged - the wobble is a chirp, packing
- * its oscillation into the early, far part of the flight and stretching
- * out as the letter settles - and so is the reason it holds:
- * boot_anim_title_wobble() drives its phase off d SQUARED, so the first
- * half of the approach (d from 1.0 to 0.5) sweeps three quarters of the
- * total phase and the second half only the remaining quarter. Comparing
- * the two halves measures exactly that, and needs just ONE crossing to
- * do it.
- *
- * Gap-comparison needed four, which is not something a seed owes anyone:
- * BOOT_ANIM_TITLE_TURNS_PHASE is authored, and the current seed's 92000
- * is 1.4 turns over the whole flight - a deliberately gentler wobble than
- * the 3.5 turns that was in the file when this test was written, and only
- * two crossings in total. The chirp was still there; the old test simply
- * could not see it. */
+/* THE test: catches a wobble whose frequency stays constant while only
+ * its AMPLITUDE shrinks - it would pass every other test here and still
+ * be wrong, vibrating to a stop instead of settling. Counts sign changes
+ * in each HALF of the flight: phase is driven off d SQUARED, so the
+ * first half of the approach (d 1.0 to 0.5) sweeps three quarters of the
+ * total phase and the second half only the remaining quarter - comparing
+ * the two halves measures exactly that, and needs just one crossing to
+ * do it. */
 static void test_the_wobbles_oscillation_slows_as_it_lands(void)
 {
     int early = 0, late = 0, prev_sign = 0;
@@ -1635,15 +1556,12 @@ static void test_a_letter_starts_off_panel_to_the_left(void)
 }
 
 /* Regression guard for the bug boot_anim_title_letter()'s own comment in
- * boot_anim.h describes: final_x used to be `i * (8 * SCALE + GAP)`, a
- * fixed per-letter cell, which is only correct for a MONOSPACE font. This
- * checks the real formula directly against gfx_font_text_width() - the
- * same pure sum-of-advances function gfx_font.h's own suite already pins
- * against a synthetic proportional font - rather than against a second,
- * hand-derived copy of the arithmetic that could make the same mistake
- * twice. Watching this fail against the pre-fix `i * (8*SCALE+GAP)`
- * formula (temporarily restore it to see) is what proves this test can
- * catch the bug it exists for, not just describe it. */
+ * boot_anim.h describes: a fixed per-letter cell, `i * (8 * SCALE +
+ * GAP)`, is correct only for a MONOSPACE font. Checks the real formula
+ * directly against gfx_font_text_width() - the same pure sum-of-advances
+ * function gfx_font.h's own suite already pins against a synthetic
+ * proportional font - rather than a second, hand-derived copy of the
+ * arithmetic that could make the same mistake twice. */
 static void test_final_x_matches_the_advance_sum(void)
 {
     /* Any moment past every letter's own flight is fine: only the FINAL
@@ -1684,9 +1602,8 @@ static void test_the_title_stays_on_the_panel_once_visible(void)
     /* The full glyph cell, not just its anchor corner - (x, y) is where a
      * glyph's cell BEGINS, so the cell's far edge is what actually has to
      * stay on the panel. cell_w and cell_h separately, not one shared
-     * `cell` - font_lmroman_40's cell is NOT square (51x58), unlike the
-     * old gfx_font_8x8 this test used to size itself off; conflating the
-     * two axes here would silently check the wrong bound on whichever axis
+     * `cell`: font_lmroman_40's cell is NOT square (51x58), so conflating
+     * the two axes would silently check the wrong bound on whichever axis
      * differs. */
     const int cell_w = TITLE_FONT->cell_w * BOOT_ANIM_TITLE_SCALE;
     const int cell_h = TITLE_FONT->cell_h * BOOT_ANIM_TITLE_SCALE;

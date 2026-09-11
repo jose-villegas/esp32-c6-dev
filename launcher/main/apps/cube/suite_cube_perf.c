@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Device-only suite: cube app performance profiling.
  *
  * Measures frame budget breakdown for the rotating cube app over 10 seconds:
@@ -9,7 +9,7 @@
  * - Reports: min, max, average, median, p95
  *
  * Runs under DEVICE_BUILD only - needs real panel, DMA, and framebuffer.
- *===========================================================================*/
+ */
 #include "suites.h"   /* portable - needed by SUITE_REGISTER() even on host */
 
 #ifdef DEVICE_BUILD
@@ -91,22 +91,12 @@ typedef struct {
  * here needs that precision yet. */
 #define MAX_SAMPLES  128
 
-/* Heap-allocated by cube_perf_fixture() and freed by cube_perf_teardown(),
- * not static arrays any more - a full selftest run walks every suite in one
- * boot (see suites.c's suites_run_all(), alphabetical by suite name), and
- * "cube_perf" sorts ahead of "sand": the ~3 KB these two arrays used to cost
- * as permanent .bss was, on its own, more than ten times the margin by which
- * suite_sand.c's REAL_W*REAL_H (184x224, 41216 bytes) test grids missed
- * their single largest free block on device (40960 bytes measured - a
- * 256-byte shortfall). That is a static-footprint problem, not the runtime
- * heap fragmentation it first looked like: a HEAPDIAG capture taken
- * immediately before and after this suite's own ~20s of rendering showed
- * the largest free block completely unchanged across it, proving this
- * suite's *execution* never touches the heap - only its *existence* as
- * compiled-in .bss did. Freeing these before the suite returns gives that
- * budget back to every suite that runs after it in the same boot, the same
- * malloc/free-around-the-test pattern suite_sand.c's own big grids already
- * use for exactly this reason. */
+/* Heap-allocated, not static: suite order matters, since "cube_perf"
+ * sorts ahead of "sand" in a full selftest boot, and these arrays' ~3 KB
+ * of permanent .bss alone exceeded ten times the margin by which
+ * suite_sand.c's test grids missed their largest free block on device
+ * (40960 bytes measured, a 256-byte shortfall). Freeing them before
+ * return gives that budget back to every suite that runs after. */
 static frame_sample_t *samples = NULL;
 static int sample_count = 0;
 

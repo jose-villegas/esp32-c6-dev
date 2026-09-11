@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * sand_liquid - everything about a liquid that is not the powder sweep.
  *
  * sand_step(), in sand.c, moves every grain the same way whatever it is made
@@ -11,7 +11,7 @@
  * safely live in that sweep at all - see the comment above equalise_liquids()
  * for why. sand_step_liquids() is the one thing sand_step() calls after its
  * sweep finishes: cross-flow levelling.
- *===========================================================================*/
+ */
 
 #include "sand_priv.h"
 
@@ -20,9 +20,7 @@
 
 /* See liquid_mask() in sand_priv.h */
 
-/*---------------------------------------------------------------------------
- * Everything that is NOT gravity-ward, and so cannot live in that sweep.
- *-------------------------------------------------------------------------*/
+/* Everything that is NOT gravity-ward, and so cannot live in that sweep. */
 
 /* WHY A SEPARATE PASS: the main sweep guarantees no double-move sweeping
  * gravity-ward; tilted gravity pins both axes, so only ONE cross-flow
@@ -440,18 +438,18 @@ static void equalise_liquids(sand_t *s, const xflow_t *f, int sight,
  * halving how often it runs halved that, and 0.5 rows a step is still a drift
  * - gas rises at about 0.7 and nobody calls that wrong.
  *
- * A block skip was tried first and measured worth nothing: the scenes that
- * regress are liquid-dense, so BLOCK_LIQUID_NEAR is set nearly everywhere. */
+ * A block skip buys nothing here: the scenes that regress are liquid-dense,
+ * so BLOCK_LIQUID_NEAR is set nearly everywhere in them. */
 #define LIQUID_SORT_PERIOD 2
 
-/*-----------------------------------------------------------------------------
+/*
  * Sub-pass: a lighter liquid rises through a denser one.
  *
  * A PASS OF ITS OWN, not the denser cell sinking during the main sweep, whose
  * no-double-move guarantee covers the cell that MOVES and not the one it
  * DISPLACES - so every row's water sank past the same oil in turn, carrying it
  * sixteen rows in a step. Gas has always risen in its own pass.
- *---------------------------------------------------------------------------*/
+ */
 
 static bool float_lighter_liquids(sand_t *s, int dx, int dy)
 {

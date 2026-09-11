@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * suite_sand_split.h - the single-step decomposition harness.
  *
  * PERMANENT, unlike the gates it drives. Pass gates are scaffolding that
@@ -14,14 +14,14 @@
  * See docs/sand/Perf-Instruments.md for when to reach for this and for the
  * three rules it enforces - identical boards per configuration, min over
  * repeats, and a scene being its setup plus its builder plus its pours.
- *===========================================================================*/
+ */
 #pragma once
 
 /* Nothing here without the gates: the harness exists to flip them, and a
  * build with none would carry three unused functions. */
 #if CONFIG_LAUNCHER_SAND_PASS_GATES
 
-/*---------------------------------------------------------------------------
+/*
  * The single-step decomposition harness.
  *
  * Every gated round needs the same five steps: rebuild the scene, warm it with
@@ -41,7 +41,7 @@
  *
  * A NULL gate times the same step with nothing flipped - the baseline every
  * phase is subtracted from. See docs/sand/Perf-Instruments.md.
- *-------------------------------------------------------------------------*/
+ */
 typedef struct {
     const char *name;
     /* EVERYTHING THE BUDGET ROW DOES, not just its builder. The first use of

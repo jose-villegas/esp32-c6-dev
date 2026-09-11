@@ -1,11 +1,11 @@
-/*=============================================================================
+/*
  * Portable suite: the falling-sand automaton - the extended range - sixteen
  * materials behind the last slot.
  *
  * Split out of suite_sand.c (bd esp32c6 test-suite-refactor), which had grown
  * past 32,000 lines across 500+ tests. Shared fixtures and assertion helpers
  * live in suite_sand_common.{c,h} - see that header.
- *===========================================================================*/
+ */
 #include <math.h>   /* not every file in the split still needs atan2()/M_PI,
                      * but every file inherited suite_sand.c's own include
                      * block rather than being pruned by hand, to keep the
@@ -87,14 +87,9 @@ static void test_heat_through_a_pan_lights_oil_rather_than_boiling_it(void)
 
 /* A powder lands ON another powder, and still sinks through a liquid.
  *
- * Displacement used to be "anything not static, if you are heavier", so a
- * heavier powder fell straight through a lighter one - dirt through snow,
- * sand through snow, dirt through sand. Reported as dirt passing through a
- * snowbank instead of landing on it, which is what it looked like.
- *
  * A grain can push its way down through water or through smoke and cannot
- * push its way through packed grains however heavy it is. Density still
- * decides fluids and stops deciding anything between solids.
+ * push its way through packed grains however heavy it is. Density decides
+ * fluids and stops deciding anything between solids.
  *
  * Both halves in one test, because "powders stack" passes just as well on
  * a board where nothing displaces anything at all - which would leave sand
@@ -124,34 +119,14 @@ static void test_a_powder_lands_on_a_powder_but_sinks_in_a_liquid(void)
             }
         }
         for (int x = 2; x < W - 2; x++) {
-            /* BONE DRY (variant 0), not the 4 this used to carry. Variant
-             * IS moisture for a soil material (CELL_MOISTURE(),
-             * material.h) - so a dropped DIRT grain here used to start
-             * able to soak and percolate into the bed underneath it,
-             * which has nothing to do with the displacement rule this
-             * test exists to check and everything to do with
-             * reaction_t.soaks and SOIL_PERCOLATE_CHANCE
-             * (sand_reactions.c). A wet grain COULD, over the run, turn a
-             * few deep bed cells into MAT_DIRT of their own by soaking
-             * alone - not by falling through anything - and this test's
-             * own measurement (lowest cell of `dropped`'s material)
-             * cannot tell that apart from the grain having actually
-             * sunk. Reported after PART 2 of the roots-and-percolation
-             * change slowed the downward soaking rate: the change
-             * shifted the shared RNG stream from that point on (this
-             * file's own repeated warning - see try_ignite() and
-             * step_one_soaking_cell()'s own top comments), and the new
-             * roll sequence happened to soak far enough to reach the
-             * bed's own floor within this test's 300 steps where the old
-             * one had not. The dropped grain itself was never displaced
-             * either way - confirmed by inspecting the grid directly -
-             * this test was only ever passing by an accident of which
-             * rolls the RNG happened to produce, not because it was
-             * pinning the rule it names. Starting bone dry removes the
-             * soaking side channel entirely, on both SAND and DIRT
-             * (SAND's variant is a shade and was never affected either
-             * way), so this test is only ever sensitive to displacement
-             * again, whatever the soaking rates are tuned to next. */
+            /* BONE DRY (variant 0): variant IS moisture for a soil material
+             * (CELL_MOISTURE()), so a wet DIRT grain here could soak/
+             * percolate into the bed below by itself - unrelated to the
+             * displacement rule this test checks, and indistinguishable
+             * from real sinking in this test's own measurement (lowest cell
+             * of dropped's material). Starting bone dry removes that
+             * soaking side channel entirely on both SAND and DIRT, so this
+             * test is only ever sensitive to displacement. */
             sand_set(&s, x, 1, CELL_MAKE(dropped, 0));
         }
 
@@ -189,16 +164,11 @@ static void test_a_powder_lands_on_a_powder_but_sinks_in_a_liquid(void)
 
 /* Hot gas warms what it touches - convection.
  *
- * It is here for what it makes VISIBLE rather than for what it achieves.
- * Measured three times against whether it helps shatter glass, it does
- * not: warmer air costs snow its life, because a pane above room
- * temperature charges snow for touching it, and snow is the scarce thing.
- *
- * What it does do is make heat reach where conduction cannot. Measured on
- * a stone flue with a wood fire at the bottom, the top of the flue sits at
- * ambient without it and one to two levels above with - the difference
- * between a chimney that is stone cold at the top and one that is warm,
- * which is only worth anything now that stone shows its temperature. */
+ * It exists for what it makes VISIBLE rather than for what it achieves:
+ * warmer air does not help shatter glass - it costs snow, the scarce
+ * resource, its life. What it does do is make heat reach where
+ * conduction cannot: on a stone flue with a fire at the bottom, the top
+ * sits at ambient without it and one to two levels above with it. */
 static void test_hot_gas_warms_what_it_touches(void)
 {
     fixture();

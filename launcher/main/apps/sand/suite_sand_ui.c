@@ -1,13 +1,13 @@
-/*=============================================================================
+/*
  * Portable suite: sand_ui - the falling-sand app's UI state machine.
  *
- * Four of these tests each pin a bug that shipped to hardware before this
- * logic could be host-tested at all - see sand_ui.h's own top comment for
- * the shape they share. Those are marked below with the commit that fixed
- * them (or, for the one still unfixed on this branch until now, the commit
- * that reported it). The rest exercise the ordinary behaviour a refactor
- * this close to four shipped bugs cannot afford to get wrong either.
- *===========================================================================*/
+ * Four of these tests each pin a bug that shipped to hardware because
+ * this logic could not be host-tested before - see sand_ui.h's own top
+ * comment for the shape they share; several are marked below with the
+ * commit that fixed them. The rest exercise the ordinary behaviour a
+ * refactor this close to four shipped bugs cannot afford to get wrong
+ * either.
+ */
 
 #include <string.h>
 
@@ -62,11 +62,9 @@ static input_t no_input(void)
     return in;
 }
 
-/* A point that used to guarantee a miss when a test drove sand_ui through a
- * raw touch release - see test_tapping_outside_every_tile_does_nothing()'s
- * own comment for why the coordinates themselves no longer matter to what
- * that test is actually pinning. Kept as a named pair rather than inlined
- * so that test still reads as "a tap, somewhere", not as two magic numbers. */
+/* An out-of-bounds point, named so the test below reads as "a tap,
+ * somewhere" rather than two magic numbers - see its own comment for why
+ * the exact coordinates don't matter. */
 static void outside_every_tile(int *px, int *py)
 {
     *px = -5;
@@ -160,10 +158,9 @@ static void test_opening_with_no_finger_down_then_tapping_a_tile_selects_that_ti
     TEST_ASSERT_FALSE(ui.swallow_release);
 
     /* microui has already done its own hit-test by the time anything calls
-     * this - see sand_ui.h's "WHO HIT-TESTS AND WHO DECIDES" comment - so
-     * driving this test no longer means feeding sand_ui_step() a touch
-     * release at tile 2's coordinates; it means calling the entry point
-     * that call would have resolved to. */
+     * this (see sand_ui.h's "WHO HIT-TESTS AND WHO DECIDES"), so this
+     * drives sand_ui_tile_clicked() directly rather than feeding
+     * sand_ui_step() a touch release at tile 2's coordinates. */
     const unsigned tap_actions = sand_ui_tile_clicked(&ui, 2);
 
     TEST_ASSERT_TRUE(tap_actions & SAND_UI_REDRAW_PALETTE);
@@ -370,21 +367,14 @@ static void test_tapping_the_selected_tile_when_it_cannot_emit_does_nothing(void
     TEST_ASSERT_EQUAL_UINT8(BRUSH_POUR, ui.modes[1]);
 }
 
-/* Old behaviour: a tap outside every tile did nothing, because palette_hit()
- * returned -1 for it and sand_ui's own handling then had no hit to act on.
- * That hit-test is microui's job now (see sand_ui.h's "WHO HIT-TESTS AND WHO
- * DECIDES" comment): draw_palette()'s mu_button() per tile simply never
- * returns true for a point outside every tile, so sand_ui_tile_clicked() is
- * never called at all - there is nothing left here for a point outside
- * every tile to be fed to.
- *
- * What this test pins instead, unchanged from before: sand_ui_step() itself
- * never touches brush/erasing for anything other than a BOOT edge while the
- * palette is open, whatever the touch is doing - selection only ever
- * changes through sand_ui_tile_clicked(). Driving it through sand_ui_step()
- * with an ordinary (non-BOOT) touch frame, coordinates included, still
- * exercises exactly that guarantee - it is simply no longer the coordinates
- * doing the work. */
+/* draw_palette()'s mu_button() per tile never returns true for a point
+ * outside every tile (see sand_ui.h's "WHO HIT-TESTS AND WHO DECIDES"), so
+ * sand_ui_tile_clicked() is never called for one. What this test pins:
+ * sand_ui_step() never touches brush/erasing for anything but a BOOT edge
+ * while the palette is open - selection only changes through
+ * sand_ui_tile_clicked(). Driving it through sand_ui_step() with an
+ * ordinary touch frame still exercises that guarantee; the coordinates
+ * themselves do no work. */
 static void test_tapping_outside_every_tile_does_nothing(void)
 {
     sand_ui_t ui;

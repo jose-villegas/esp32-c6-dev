@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Portable suite: util/fixed.h - shift-based fixed-point arithmetic.
  *
  * The whole reason this header exists is a widening cast (int64_t) that must
@@ -9,7 +9,7 @@
  * is not an exact multiple of the shift), so this suite is built around
  * exactly those two failure shapes rather than around "does multiplication
  * work".
- *===========================================================================*/
+ */
 
 #include <stdint.h>
 
@@ -18,9 +18,7 @@
 
 #include "util/fixed.h"
 
-/*---------------------------------------------------------------------------
- * fx_mul_floor() against a hand-written ((int64_t)a * b) >> shift
- *-------------------------------------------------------------------------*/
+/* fx_mul_floor() against a hand-written ((int64_t)a * b) >> shift */
 
 static void test_mul_floor_matches_a_hand_written_widened_shift(void)
 {
@@ -47,7 +45,7 @@ static void test_mul_floor_matches_a_hand_written_widened_shift(void)
     }
 }
 
-/*---------------------------------------------------------------------------
+/*
  * floor vs round: the divergence that would change sand's physics
  *
  * mom_x_q8 in sand.c is signed and routinely negative. Its decay uses
@@ -56,7 +54,7 @@ static void test_mul_floor_matches_a_hand_written_widened_shift(void)
  * that for fx_mul_round() because "round" sounds more correct, this is the
  * exact shape of value that would silently change: a negative product that
  * is not an exact multiple of the shift.
- *-------------------------------------------------------------------------*/
+ */
 
 static void test_floor_and_round_diverge_on_an_inexact_negative_product(void)
 {
@@ -78,10 +76,10 @@ static void test_floor_and_round_diverge_on_an_inexact_negative_product(void)
         "-300/256 = -1.171875, nearest is -1");
 }
 
-/*---------------------------------------------------------------------------
+/*
  * fx_mul_round(): nearest for positives, and ui_fp_round()'s own tie rule
  * (ties away from zero) for negatives
- *-------------------------------------------------------------------------*/
+ */
 
 static void test_mul_round_rounds_to_nearest_for_positives(void)
 {
@@ -110,10 +108,10 @@ static void test_mul_round_ties_away_from_zero_for_negatives(void)
     TEST_ASSERT_EQUAL_INT32(-2, fx_mul_round(-7, 1, 2));
 }
 
-/*---------------------------------------------------------------------------
+/*
  * Exact multiples: floor and round must agree when there is nothing to
  * round or floor away
- *-------------------------------------------------------------------------*/
+ */
 
 static void test_floor_and_round_agree_on_exact_multiples(void)
 {
@@ -135,10 +133,10 @@ static void test_floor_and_round_agree_on_exact_multiples(void)
     }
 }
 
-/*---------------------------------------------------------------------------
+/*
  * The widening cast: a 32-bit product that would overflow int32_t must
  * still give the correct answer
- *-------------------------------------------------------------------------*/
+ */
 
 static void test_mul_floor_survives_a_32_bit_overflowing_product(void)
 {
@@ -175,10 +173,10 @@ static void test_mul_round_survives_a_32_bit_overflowing_product(void)
     TEST_ASSERT_EQUAL_INT32(expect, fx_mul_round(46341, 46341, 8));
 }
 
-/*---------------------------------------------------------------------------
+/*
  * Both shifts the tree actually uses: Q8 (sand, tilt) and Q16.16 (the UI
  * transform) are the same helper, parameterised
- *-------------------------------------------------------------------------*/
+ */
 
 static void test_the_same_helpers_serve_both_shift_8_and_shift_16(void)
 {

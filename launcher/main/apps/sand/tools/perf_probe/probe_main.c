@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * probe_main - host driver for every frame-budget scene that has a
  * SAND_HOST_PROBE wrapper in suite_sand.c (bd esp32c6-o2s: the canonical
  * host attribution probe, replacing the per-round copies this tree
@@ -41,7 +41,7 @@
  * ESP_LOGI() line the device build prints (see suite_sand.c) - this driver
  * does not re-time anything itself. run_probe.py parses that line back out
  * of captured stdout.
- *===========================================================================*/
+ */
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>

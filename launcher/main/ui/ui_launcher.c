@@ -1,10 +1,10 @@
-/*=============================================================================
+/*
  * ui_launcher - the home screen.
  *
  * Only the UI description lives here. Everything reusable - the microui
  * context, touch translation, painting and the repaint-only-what-changed
  * logic - is in ui.c, so an app can build its own UI the same way.
- *===========================================================================*/
+ */
 
 #include "ui/ui_launcher.h"
 
@@ -14,15 +14,9 @@
 
 #define COL_BACKGROUND 0x0A0C14
 
-/* Sized to the longest current app name plus margin, the same way an
- * app's own in-app menu button width is sized to its longest label:
- * "Falling Sand" is the longest of the three registered names, 192 px
- * at GFX_CHAR_W.
- * mu_draw_control_text() centers a button's label and clips it to the
- * rect rather than wrapping or shrinking it, so a wider label is
- * chopped off at both ends with no warning. 240 leaves 64 px margins
- * either side and 48 px of slack around the longest label - check a
- * future name's width first. */
+/* A label too wide is clipped at both ends with no warning, so this is
+ * sized to the longest registered name (192 px) plus slack. Check a new
+ * name's width before adding it. */
 #define LAUNCHER_BTN_W 240
 
 void ui_launcher_init(void)

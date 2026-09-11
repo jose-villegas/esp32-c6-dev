@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * post - power-on self test.
  *
  * A health check of the board's hardware, run on every boot in EVERY build,
@@ -8,7 +8,7 @@
  * That distinction is why this is separate from selftest.c:
  *
  *   POST                              test suites
- *   ------------------------------    ------------------------------
+ *
  *   ships in release                  diagnostics builds only
  *   checks hardware presence/health   checks software behaviour
  *   read-only, no side effects        draws to the panel, mutates state
@@ -18,7 +18,7 @@
  * Everything here must stay non-destructive: probing, reading identity
  * registers, reporting. Nothing that changes device state or costs real time,
  * because it runs before the user sees anything.
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stdbool.h>

@@ -1,10 +1,10 @@
-/*=============================================================================
+/*
  * Portable suite: the falling-sand automaton - seeds, foliage, and growing.
  *
  * Split out of suite_sand.c (bd esp32c6 test-suite-refactor), which had grown
  * past 32,000 lines across 500+ tests. Shared fixtures and assertion helpers
  * live in suite_sand_common.{c,h} - see that header.
- *===========================================================================*/
+ */
 #include <math.h>   /* not every file in the split still needs atan2()/M_PI,
                      * but every file inherited suite_sand.c's own include
                      * block rather than being pruned by hand, to keep the
@@ -424,15 +424,12 @@ static void test_a_limb_hangs_on_to_a_wooden_trunk(void)
 }
 
 
-/* A tree is not a stick.
- *
- * Growth used to go straight up from the tip, every time, which grew a
- * one-cell column and nothing else - reported as growing "mostly one
- * side". Reaching the tip is still the common case; what makes it a tree
- * is that it sometimes leans, sometimes starts a limb further down, and
- * sometimes thickens the trunk instead. The last of those is what turns a
- * sapling into wood, because hardening counts a straight run along gravity
- * and a second column beside the first is a second run of its own. */
+/* A tree is not a stick: reaching the tip is the common case, but what
+ * makes it a tree is that growth sometimes leans, sometimes starts a
+ * limb further down, and sometimes thickens the trunk instead. The last
+ * of those is what turns a sapling into wood - hardening counts a
+ * straight run along gravity, and a second column beside the first is a
+ * second run of its own. */
 static void test_a_tree_grows_wider_than_one_column(void)
 {
     fixture();
@@ -695,25 +692,14 @@ static void test_a_hardened_trunk_is_thicker_at_the_foot(void)
         "only asks whether it is thick");
 }
 
-/* A limb TRAVELS. It does not go out one cell and then climb.
- *
- * Growth used to reckon every direction from gravity, which meant a branch
- * could never get anywhere: one cell out makes a run of ONE, and a run
- * under three trips the gate that forces the straight-up arm - on every
- * attempt, for ever. So limbs went out a single cell and then grew
- * vertically alongside the trunk, which is the same thin-thread shape that
- * made basal suckers look like floating debris.
- *
- * A run's direction is not stored anywhere; it is read back off the grid,
- * from where the run has been over its last few cells. `holds_line` is the
- * chance of using it, and zero restores the old behaviour exactly - which
- * is what this is really pinned against.
- *
- * On a grid of its own, because the shared fixture is eight by eight and a
- * diagonal limb runs out of ceiling in three cells - far too soon to tell
- * travelling from the sideways cell an occasional LEAN produces anyway.
- * The limb is pre-built with a heading already established, because what
- * is being tested is what a run does once it HAS a direction. */
+/* A limb TRAVELS, not out one cell then climbing: direction is read back
+ * off the grid's recent cells, not stored. `holds_line` is the chance of
+ * using it; zero restores the old direction-from-gravity path, which
+ * this is pinned against. On its own grid: the shared 8x8 fixture runs a
+ * diagonal limb out of ceiling in three cells, too soon to tell
+ * travelling from an occasional LEAN. The limb starts with a heading
+ * already set, since what is tested is what a run does once it HAS
+ * one. */
 #define LIMB_W 30
 #define LIMB_H 26
 
@@ -789,18 +775,12 @@ static void test_a_limb_travels_outward_instead_of_climbing(void)
 }
 
 
-/* A crowned trunk puts out new growth; a bare one does not.
- *
- * This is where a tree's growth comes from now. It used to come from a
- * green tip that hardening deliberately spared - which meant every tree
- * carried green permanently, and growth scaled with how much of it there
- * was, because every green cell rolled every step.
- *
- * The "already in leaf" half is not decoration, it is the bound. A canopy
- * touches a dozen cells of wood; if bare wood could bud, the rate would
- * scale with the trunk and the forest would run away exactly as it did
- * when growth scaled with green. Crowned wood at the head of its trunk is
- * a handful of cells per tree however fat it gets. */
+/* A crowned trunk puts out new growth; a bare one does not - growth
+ * comes only from already-crowned wood. The "already in leaf" half is
+ * not decoration, it is the bound: a canopy touches a dozen cells of
+ * wood, so if bare wood could bud the rate would scale with the trunk
+ * and the forest would run away; crowned wood at the head of its trunk
+ * is a handful of cells per tree however fat it gets. */
 static void test_a_crowned_trunk_buds_and_a_bare_one_does_not(void)
 {
     const int cx = W / 2;
@@ -904,21 +884,13 @@ static void test_a_crowned_trunk_buds_and_a_bare_one_does_not(void)
 
 /* --- foliage -------------------------------------------------------------- */
 
-/* A leaf on a tree never multiplies, and never moves.
- *
- * This is the entire reason foliage is its own material rather than more
- * plant. Every cell of a PLANT is a grower, and find_water() walks down
- * through wood so foliage can always drink - which means a canopy made of
- * plant would feed the growth loop with every leaf it put out, and that
- * loop has run away once already.
- * Charging moisture per leaf makes it expensive; having no `grows` field
- * makes it impossible.
- *
- * Two scenes, because one cannot show both halves without confusing them.
- * A trunk standing in wet soil BUDS leaves of its own (see wood's
- * `sprouts`), so a scene with both a trunk and watered ground cannot tell
- * "the leaf spread" from "the tree put out another one" - which is exactly
- * how this test first failed when budding changed from plant to foliage. */
+/* A leaf on a tree never multiplies, and never moves: foliage is its own
+ * material because every PLANT cell is a grower and find_water() walks
+ * through wood so foliage can drink - a canopy of plant would feed the
+ * growth loop with every leaf. Two scenes, since one cannot show both
+ * halves without confusing them: a trunk in wet soil BUDS its own leaves
+ * (wood's `sprouts`), so a scene with both a trunk and watered ground
+ * cannot tell the leaf spreading from the tree budding another. */
 static void test_a_leaf_neither_spreads_nor_falls(void)
 {
     /* One: on watered soil with NO wood anywhere. Nothing else in the
@@ -1347,11 +1319,11 @@ static void test_a_bare_trunk_in_wet_ground_buds_again(void)
         sand_set(&s, W / 2, y, CELL_MAKE(MAT_WOOD, 0));
     }
 
-    /* Specifically FOLIAGE. It used to bud a plant, and a plant at the
-     * foot of a trunk is a sucker - a grower, which climbed the outside
-     * of the trunk as a wandering one-cell thread that never got thick
-     * enough to harden and stop. Asserting on MAT_EXTENDED alone would
-     * pass on either, which is what it did while the bug was there. */
+    /* Specifically FOLIAGE, not MAT_EXTENDED alone: a plant at the foot
+     * of a trunk is a sucker - a grower, which would climb the outside
+     * of the trunk as a wandering one-cell thread that never gets thick
+     * enough to harden and stop - and MAT_EXTENDED would pass on
+     * either. */
     int budded = 0;
     for (int i = 0; i < 1500 && !budded; i++) {
         sand_step(&s, 0, 1000, 0);

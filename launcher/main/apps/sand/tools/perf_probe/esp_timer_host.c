@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * esp_timer_host - a REAL host implementation of esp_timer_get_time(), for
  * this probe only.
  *
@@ -11,7 +11,7 @@
  * suite_sand.c's frame-budget scenes at all), so timing.c takes the
  * esp_timer_get_time() branch for real - this file is what makes that
  * link.
- *===========================================================================*/
+ */
 #include <stdint.h>
 
 #if defined(_WIN32)

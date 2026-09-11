@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * gfx_dirty - the grid dirty-region tracker behind gfx_present(), as a
  * standalone, ESP-IDF-free module.
  *
@@ -27,7 +27,7 @@
  * untapped" for the full reasoning behind the grid, the leaf layer
  * underneath it, and the two real bugs (MALLOC_CAP_DMA, the semaphore's
  * lack of per-transfer identity) this design surfaced.
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stdbool.h>

@@ -18,7 +18,7 @@ Options:
   --top N       longest offenders to list (default 20; 0 for all)
   --files       list per-file counts instead of individual comments
   --all         include vendored and generated sources (excluded by default)
-  --no-banners  ignore file/section header banners
+  --no-banners  ignore each file's header comment
   --changed REF check only files that differ from REF (the enforcement gate)
   --staged      check only files staged for commit
   --exit-zero   always exit 0, even with violations
@@ -40,6 +40,7 @@ import sys
 # report.
 EXCLUDED = (
     "launcher/components/",
+    "launcher/test/framework/",
     "launcher/main/boot/boot_anim_curve.h",
     "launcher/main/boot/boot_anim_image.h",
     "launcher/main/boot/boot_anim_timeline.h",
@@ -54,6 +55,7 @@ class Comment:
         self.kind = kind  # "block" or "line"
         self.raw_lines = []
         self.spans = [(start, end)]
+        self.first = False
 
     @property
     def text(self):
@@ -75,26 +77,33 @@ class Comment:
         return len(self.text)
 
     @property
+    def lines(self):
+        """How tall the comment is. A file header is judged on this rather
+        than on character count, since it describes a whole module and the
+        character rule is aimed at comments beside code."""
+        return len(self.raw_lines)
+
+    @property
     def line_range(self):
         return range(self.line, self.line + len(self.raw_lines))
 
     @property
     def has_rule(self):
-        """Opens with a drawn rule - `/*====`, `//----`. A section header."""
+        """Opens with a drawn rule - `/*====`, `//----`. Decoration this tree
+        does not use; scripts/strip_comment_rules.py finds any that returns."""
         first = self.raw_lines[0].strip()
         return bool(re.match(r"^/\*[=*\-_#]{4,}", first)
                     or re.match(r"^//\s*[=*\-_#]{4,}", first))
 
     @property
     def is_banner(self):
-        """A file or section header, not a comment sitting next to code.
+        """The file's header - its first comment, wherever it sits.
 
-        Only meaningful when the whole file was scanned: `line == 1` reads as
-        "file header" here, but in an edit fragment line 1 is just wherever the
-        fragment starts, which would exempt any comment written at its top.
-        Code holding a fragment wants `has_rule`.
+        Only meaningful when the whole file was scanned. An edit fragment has
+        a first comment too, and it is rarely the file's; code holding a
+        fragment has to find the header on disk.
         """
-        return self.line == 1 or self.has_rule
+        return self.first
 
 
 def scan(path, source):
@@ -164,6 +173,8 @@ def scan(path, source):
             i = end
         else:
             i += 1
+    if comments:
+        comments[0].first = True
     return comments
 
 
@@ -367,8 +378,16 @@ def main(argv):
         banners = sum(1 for c in over if c.is_banner)
         print(f"longest         {lengths[-1]} characters"
               f"  (median offender {lengths[len(lengths) // 2]})")
-        print(f"  of those       {banners} file/section header banners,"
+        print(f"  of those       {banners} file headers,"
               f" {len(over) - banners} beside code")
+        # Headers answer to height, not characters - see Comment.lines.
+        heads = [c for c in comments if c.is_banner]
+        if heads:
+            tall = sum(1 for c in heads if c.lines > 50)
+            aim = sum(1 for c in heads if c.lines > 30)
+            tallest = max(c.lines for c in heads)
+            print(f"headers         {len(heads)}  ({aim} over 30 lines,"
+                  f" {tall} over 50, tallest {tallest})")
         print()
         print("were the limit instead:")
         for alt in (200, 300, 400, 600, 800, 1200):

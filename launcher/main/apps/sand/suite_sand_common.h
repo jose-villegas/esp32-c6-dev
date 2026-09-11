@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Shared fixtures and assertion helpers for the sand suite files
  * (suite_sand_*.c). Pure test infrastructure, not a suite of its own - no
  * SUITE_REGISTER here, nothing here is a test_* function.
@@ -14,7 +14,7 @@
  * the release build and back in only under CONFIG_LAUNCHER_SELFTEST. A
  * differently-named file would silently link this test scaffolding into
  * release firmware instead.
- *===========================================================================*/
+ */
 #pragma once
 
 #include "material_palette.h"
@@ -38,11 +38,9 @@ extern uint8_t  cells[W * H];
  * ever live at a time, each test's own fixture helper re-inits it with
  * sand_init() before use, and no function mixes two members of fx, or one
  * of these with s/wide (this split's other two heavily-shared fixtures -
- * see suite_sand_motion.c, suite_sand_locality.c and
- * suite_sand_materials.c for the same idea applied to fixtures - big,
- * pool, pour - that turned out to be reused by only one file each rather
- * than across the split, and so stayed static there instead of moving
- * here).
+ * big, pool, pour, in suite_sand_motion.c, suite_sand_locality.c and
+ * suite_sand_materials.c - are each reused by only one file, so they stay
+ * static there instead of moving here).
  *
  * Rule for new tests: use exactly ONE member of fx. A fixture that must
  * stay alive alongside another needs its own static, local to whichever

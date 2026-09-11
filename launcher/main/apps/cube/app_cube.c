@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * app_cube - the Gouraud-shaded rotating RGB cube, as a launcher app.
  *
  * Ownership is inverted compared with a standalone renderer: this does not run
@@ -10,7 +10,7 @@
  * S3L_Z_BUFFER 0 it keeps no depth buffer, resolving visibility by sorting
  * triangles back-to-front. A colour+depth rasterizer would want ~1.3 MB at
  * this resolution, against ~424 KiB of RAM on the whole chip.
- *===========================================================================*/
+ */
 
 #include <stdint.h>
 #include <stdio.h>
@@ -85,10 +85,10 @@ static int frame_x0, frame_y0, frame_x1, frame_y1;
 
 /* On-screen framerate readout - the other half of what makes the toggle
  * above worth having: main.c's own report_fps() only ever reaches a
- * serial console, so seeing partial_updates actually change anything
- * used to mean a laptop plugged in next to the board. Windowed on dt_ms
- * rather than esp_timer_get_time() like report_fps() does, so this needs
- * nothing beyond what cube_frame() is already handed. */
+ * serial console, so this is what lets partial_updates' effect be seen
+ * with nothing but the board itself. Windowed on dt_ms rather than
+ * esp_timer_get_time() like report_fps() does, so this needs nothing
+ * beyond what cube_frame() is already handed. */
 #define FPS_WINDOW_MS 500
 static uint32_t fps_frame_count;
 static uint32_t fps_window_elapsed_ms;

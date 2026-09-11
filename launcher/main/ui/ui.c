@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * ui - shared microui integration.  See ui.h for what and why.
  *
  * THE CANVAS MODEL
@@ -22,7 +22,7 @@
  * The one rule that has to be respected is painter's order. Windows are drawn
  * back to front, so repainting one means repainting anything above it that
  * overlaps - otherwise the repaint erases what was on top.
- *===========================================================================*/
+ */
 
 #include "ui/ui.h"
 
@@ -156,7 +156,7 @@ static int measure_text_height(mu_Font font)
     return gfx_font_height(fs.font, fs.scale);
 }
 
-/*---------------------------------------------------------------------------
+/*
  * Styling
  *
  * Every frame microui draws - button, checkbox, slider, scrollbar, window
@@ -170,7 +170,7 @@ static int measure_text_height(mu_Font font)
  * now holds DOWN for the whole press, so focus covers most of a tap on its
  * own - but the one synthesized hover frame before DOWN lands has no focus
  * yet, so hover still has to key the sunken look too.
- *-------------------------------------------------------------------------*/
+ */
 
 static bool is_button_frame(int colorid)
 {
@@ -324,7 +324,7 @@ void ui_init(void)
     invalidated = true;
 }
 
-/*---------------------------------------------------------------------------
+/*
  * Touch to mouse
  *
  * This is the one place where touch and microui genuinely disagree, so it is
@@ -355,7 +355,8 @@ void ui_init(void)
  * transform but identity, a control would be hit where it was laid out
  * rather than where it now visibly is. This is the one place touch enters
  * microui, which is exactly why it is also the one place this mapping needs
- * to happen. */
+ * to happen.
+ */
 static ui_pointer_t pointer;
 
 /* Also where ui_pointer_step()'s off-screen park point (-1, -1) gets mapped:
@@ -542,14 +543,14 @@ int ui_begin_screen(mu_Context *ctx, const char *title, int opt)
     return open;
 }
 
-/*---------------------------------------------------------------------------
+/*
  * Painting
  *
  * Every command's geometry is mapped through the transform in force before
  * it reaches gfx - see ui_transform.h for what that buys, and ui_set_transform()
  * above for why an invalid one renders as identity rather than being rejected
  * at the point it was set.
- *-------------------------------------------------------------------------*/
+ */
 
 typedef struct {
     gfx_color_t color;
@@ -591,13 +592,12 @@ static void draw_command(const mu_Command *cmd)
 
         /* WHY THE WHOLE STRING'S BOX IS MAPPED, NOT ITS ORIGIN: every
          * other command maps its rect through ui_transform_rect(), proven
-         * exact under any quarter turn. This used to map only the origin
-         * and walk per-glyph steps from there - a point doesn't commute
-         * with "walk N glyphs, take the far edge", so at quarter 1/3 the
-         * string landed a glyph cell off, at quarter 2 off both axes
-         * (rotated text drifting off-centre). Now measures the LOGICAL
-         * box - same one used to size it - and maps that, like the
-         * others. */
+         * exact under any quarter turn. A point does not commute with
+         * "walk N glyphs, take the far edge" under rotation, so mapping
+         * just the origin and walking per-glyph from there drifts a
+         * string off at quarter turns 1-3. Mapping the LOGICAL box
+         * instead - the same one used to size it - keeps it exact, like
+         * every other command. */
         const int tw = gfx_font_text_width(font, cmd->text.str, -1, scale);
         const int th = gfx_font_height(font, scale);
         const mu_Rect box = ui_transform_rect(

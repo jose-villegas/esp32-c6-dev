@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * The test suites, shared by both runners.
  *
  * Every suite here is compiled into BOTH:
@@ -19,7 +19,7 @@
  * A portable suite must not include any ESP-IDF or hardware header, so it can
  * link on a host. Suites that need the chip are guarded with DEVICE_BUILD and
  * are simply not compiled into the host runner.
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stdbool.h>

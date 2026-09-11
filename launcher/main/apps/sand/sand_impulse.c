@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * sand_impulse - grains, chunks and splashes in flight: the OUTWARD half of
  * the simulation, not gravity-ward.
  *
@@ -17,7 +17,7 @@
  * single call is this file's one seam back into sand.c, the same shape
  * sand_step_liquids() (sand_liquid.c) and sand_step_gas() (sand_gas.c) each
  * already have.
- *===========================================================================*/
+ */
 
 #include "sand_priv.h"
 
@@ -40,12 +40,12 @@ static const uint16_t disc_counts[DISC_COUNT_MAX_RADIUS + 1] = {
     3209,
 };
 
-/* The out-of-range path, and the reason this file no longer carries an integer
- * square root at all. As |dy| grows the widest x can only shrink, so ONE
- * monotone walk finds every row's half-width using multiplies and compares -
- * no division, no sqrt - and x steps down at most `radius` times across the
- * whole loop. sand_displace() is public, so a radius past the table is
- * reachable even though nothing in the tree does it. */
+/* The out-of-range path: as |dy| grows the widest x can only shrink, so
+ * ONE monotone walk finds every row's half-width using multiplies and
+ * compares - no division, no sqrt needed anywhere in this file - and x
+ * steps down at most `radius` times across the whole loop.
+ * sand_displace() is public, so a radius past the table is reachable
+ * even though nothing in the tree does it. */
 static int disc_count_walk(int radius)
 {
     const int r2 = radius * radius;
@@ -465,12 +465,11 @@ static void impulse_decay(impulse_t *entry, uint8_t mat_id, int cells)
     entry->speed = (entry->speed > total) ? (uint8_t)(entry->speed - total) : 0;
 }
 
-/* Shared by push and gravity-drift, charged identically: a free drift
- * swap once let a mostly-spent chunk tunnel through with no drag.
- * `impact_speed` is captured before drag touches `entry->speed` -
- * transfer derives from what was LOST, not what is left. `dir_for_transfer`
- * is not always `entry->dir`: the drift can displace along a heading it
- * never moved through. */
+/* Shared by push and gravity-drift, charged identically: `impact_speed`
+ * is captured before drag touches `entry->speed`, so transfer derives
+ * from what was LOST, not what is left. `dir_for_transfer` is not
+ * always `entry->dir`: the drift can displace along a heading it never
+ * moved through. */
 static void impulse_charge_displacement(sand_t *s, impulse_t *entry,
                                         size_t new_index, int dir_for_transfer,
                                         impulse_t *deferred,

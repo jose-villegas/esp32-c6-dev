@@ -7,7 +7,7 @@
 #   check-comment-length.sh                     # whole repo, 20 worst listed
 #   check-comment-length.sh --files             # per-file counts instead
 #   check-comment-length.sh --limit 400         # try a different limit
-#   check-comment-length.sh --no-banners        # skip file/section headers
+#   check-comment-length.sh --no-banners        # skip each file's header
 #   check-comment-length.sh path/to/file.c ...  # just these files
 #
 # As a gate, on the comments a change actually touches - which is what makes

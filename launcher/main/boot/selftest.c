@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * On-device self test.
  *
  * Runs at boot, inside the shipped firmware, before the launcher starts. There
@@ -13,7 +13,7 @@
  * Cost is roughly half a second, most of it the DMA tests waiting on real
  * frames, which is cheap enough to pay on every boot for the guarantee that a
  * booting device is a verified device.
- *===========================================================================*/
+ */
 
 #include "boot/selftest.h"
 

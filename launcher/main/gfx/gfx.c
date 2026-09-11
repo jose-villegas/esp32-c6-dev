@@ -66,11 +66,11 @@ static struct { int x0, y0, x1, y1; } clip;
 static gfx_color_t *gather_buf;
 #endif
 
-/*---------------------------------------------------------------------------
+/*
  * Panel plumbing - device-only. A host build never brings a panel up or
  * presents to one; see gfx_init()/gfx_suspend()/gfx_resume()/gfx_present()
  * below for the host side of each.
- *-------------------------------------------------------------------------*/
+ */
 
 #ifdef ESP_PLATFORM
 static bool IRAM_ATTR on_strip_sent(esp_lcd_panel_io_handle_t io,
@@ -271,9 +271,7 @@ gfx_color_t *gfx_framebuffer(void)
     return fb;
 }
 
-/*---------------------------------------------------------------------------
- * Dirty tracking
- *-------------------------------------------------------------------------*/
+/* Dirty tracking */
 
 static bool partial_clear_on;
 static bool interlace_on;
@@ -356,9 +354,7 @@ bool gfx_region_dirty(int x, int y, int w, int h)
     return dirty_region_dirty(y, h);
 }
 
-/*---------------------------------------------------------------------------
- * Colour
- *-------------------------------------------------------------------------*/
+/* Colour */
 
 /* Pack 0xRRGGBB to RGB565, byte-swapped. QSPI needs high and low bytes
  * swapped, but LVGL's port doesn't handle it. */
@@ -367,9 +363,7 @@ gfx_color_t gfx_rgb(uint32_t rgb)
     return GFX_RGB(rgb);
 }
 
-/*---------------------------------------------------------------------------
- * Clipping
- *-------------------------------------------------------------------------*/
+/* Clipping */
 
 void gfx_set_clip(int x, int y, int w, int h)
 {
@@ -390,9 +384,7 @@ void gfx_clear_clip(void)
     clip.y1 = GFX_HEIGHT;
 }
 
-/*---------------------------------------------------------------------------
- * Primitives
- *-------------------------------------------------------------------------*/
+/* Primitives */
 
 /* Ignores clip rect; clears whole-screen or bounding box; marks box dirty. */
 void gfx_clear(gfx_color_t color)
@@ -580,20 +572,15 @@ void gfx_fill_rect(int x, int y, int w, int h, gfx_color_t color)
     mark_band(y0, y1);   /* already clipped above */
 }
 
-/*---------------------------------------------------------------------------
+/*
  * Dithered fake transparency
  *
- * gfx_fill_rect_blend() (further down this file) is a REAL per-pixel blend,
- * but it pays for a framebuffer read - affordable at glyph scale, not
- * across a whole frame (see its own comment for why). Dithering is the
- * other way to fake transparency, and the classic one, for exactly the
- * cases a real blend is too expensive for: ordered (Bayer) dithering picks
- * WHICH pixels to draw, not how to blend the ones it does. No extra
- * framebuffer read, no float math, just a per-pixel threshold test against
- * a small fixed table - practically free next to a real blend, which is
- * exactly why 8-bit consoles used it for shadows and water decades before
- * this chip's own class of hardware could afford anything better.
- *---------------------------------------------------------------------------*/
+ * gfx_fill_rect_blend() (further down) is a REAL per-pixel blend, but pays
+ * for a framebuffer read - affordable at glyph scale, not a whole frame
+ * (its own comment). Dithering fakes transparency instead: ordered (Bayer)
+ * dithering picks WHICH pixels to draw via a per-pixel threshold, no
+ * framebuffer read, no float math.
+ */
 
 /* gfx_fill_rect() uses `alpha` (0-255) for coverage, avoiding framebuffer
  * reads. gfx_dither_covers() in gfx_color.h. Returns if 0. */
@@ -718,25 +705,15 @@ void gfx_blit_dither(int x, int y, int w, int h, const gfx_color_t *src,
     mark_band(y0, y1);
 }
 
-/*---------------------------------------------------------------------------
+/*
  * Text
  *
- * One font-aware path (gfx_text_font(), gfx_font_width()) that everything
- * else here delegates to, passing gfx_font_ui() - see gfx_font.h for what a
- * gfx_font_t is and why it exists: honouring microui's mu_Font is a later
- * task, in files this one steers clear of, and that task needs a font to
- * point AT. gfx_font_ui() (gfx_font_roles.h) wraps font8x8_basic.h's data,
- * which is public-domain 8x8 bitmap data: one byte per row, and within a
- * row bit 0 is the LEFTMOST pixel - see gfx_font_8x8's own comment in
- * gfx_font.h.
- *
- * This used to be its own function here, gfx_default_font(), returning
- * &gfx_font_8x8 directly - the one entry the scheme had before more than
- * one role existed. It is retired in favour of gfx_font_ui(): "gfx's own
- * built-in default" and "the font the UI role names" were always the same
- * question asked twice, and every caller (ui.c, boot_anim.c, this file)
- * wanted the same answer either way, so there is no longer a reason to
- * make a caller pick which of two names to spell. */
+ * One font-aware path (gfx_text_font(), gfx_font_width()) everything else
+ * delegates to, passing gfx_font_ui(). See gfx_font.h for why gfx_font_t
+ * exists: honouring microui's mu_Font is a later task needing a font to
+ * point AT. gfx_font_ui() (gfx_font_roles.h) wraps font8x8_basic.h's
+ * public-domain bitmap data (gfx_font_8x8's comment, gfx_font.h).
+ */
 
 int gfx_font_width(const gfx_font_t *font, const char *text, int len,
                    int scale)
@@ -878,7 +855,7 @@ void gfx_text_turned(int x, int y, const char *text, gfx_color_t color,
     gfx_text_font(x, y, text, color, scale, quarter_turns, gfx_font_ui());
 }
 
-/*---------------------------------------------------------------------------
+/*
  * Dithered text
  *
  * A second, complete copy of draw_rotated_font_pixel()/draw_glyph_font()/
@@ -891,7 +868,7 @@ void gfx_text_turned(int x, int y, const char *text, gfx_color_t color,
  * `alpha == 255` check back out of it at every call site forever. The
  * duplication is small (three short functions) and it buys that
  * guarantee outright instead of by inspection.
- *---------------------------------------------------------------------------*/
+ */
 
 static void draw_rotated_font_pixel_dither(const gfx_font_t *font, int x,
                                            int y, int row, int col,
@@ -985,9 +962,7 @@ void gfx_text_font_dither(int x, int y, const char *text, gfx_color_t color,
     }
 }
 
-/*---------------------------------------------------------------------------
- * Present
- *-------------------------------------------------------------------------*/
+/* Present */
 
 #if CONFIG_LAUNCHER_DEVELOPMENT
 /* See gfx.h for "why not always compiled". Used by gfx_set_debug_overlay()

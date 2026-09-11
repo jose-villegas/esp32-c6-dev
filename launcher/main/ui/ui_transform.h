@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * ui_transform - a 2x3 affine transform for the UI layer, in fixed point.
  *
  * Every rect, icon, clip and text position microui hands to ui.c's
@@ -51,7 +51,7 @@
  * truncating, so a rect mapped and mapped back through ui_transform_invert()
  * lands where it started instead of drifting toward zero by up to a pixel
  * each way - see fp_round() below.
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stdbool.h>
@@ -75,7 +75,7 @@ typedef struct {
     ui_fp_t a, b, c, d, tx, ty;
 } ui_transform_t;
 
-/*---------------------------------------------------------------------------
+/*
  * Fixed-point helpers
  *
  * Not part of the public shape of this header, but static inline like
@@ -95,7 +95,7 @@ typedef struct {
  * fixed.h's fx_round_shift(), the primitive under fx_mul_round() that takes
  * the combined value directly, so the rounding rule itself still lives in
  * one place.
- *-------------------------------------------------------------------------*/
+ */
 
 static inline int64_t ui_fp_round(int64_t v)
 {
@@ -117,9 +117,7 @@ static inline ui_fp_t ui_fp_div(ui_fp_t num, ui_fp_t den)
     return (ui_fp_t)fx_div_round(num, den, UI_FP_SHIFT);
 }
 
-/*---------------------------------------------------------------------------
- * Construction
- *-------------------------------------------------------------------------*/
+/* Construction */
 
 static inline ui_transform_t ui_transform_identity(void)
 {
@@ -194,9 +192,7 @@ static inline bool ui_transform_invert(ui_transform_t t, ui_transform_t *out)
     return true;
 }
 
-/*---------------------------------------------------------------------------
- * Application
- *-------------------------------------------------------------------------*/
+/* Application */
 
 static inline void ui_transform_point(ui_transform_t t, int x, int y, int *ox,
                                       int *oy)

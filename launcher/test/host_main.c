@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Host runner - the fast loop.
  *
  * Builds and runs in well under a second, which is what makes
@@ -7,7 +7,7 @@
  *
  * The same suite sources are compiled into the firmware's self-test, so a
  * green run here is the same set of assertions the board will make.
- *===========================================================================*/
+ */
 
 #include <stdio.h>
 

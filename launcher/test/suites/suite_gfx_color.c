@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Portable suite: gfx_color_mix - blending two panel-packed pixels.
  *
  * gfx_color_t is RGB565 with the bytes swapped (see gfx_color.h's own top
@@ -15,7 +15,7 @@
  * G), which is what makes GFX_RGB565's R8>>3 / G8>>2 / B8>>3 truncation
  * land on an exact, by-hand-predictable value instead of something that
  * itself needs rounding to check.
- *===========================================================================*/
+ */
 
 #include "unity.h"
 #include "suites.h"
@@ -164,7 +164,7 @@ static void test_adding_never_makes_a_channel_darker(void)
     }
 }
 
-/*-----------------------------------------------------------------------------
+/*
  * gfx_color_rgb888 - unpacking a panel colour back to 0xRRGGBB.
  *
  * The property under test is GFX_RGB(gfx_color_rgb888(c)) == c for every c -
@@ -175,7 +175,7 @@ static void test_adding_never_makes_a_channel_darker(void)
  * on the other two channels' values - so a handful of colours that between
  * them exercise every channel at 0 and at its own maximum is as convincing as
  * the full sweep and a great deal cheaper.
- *---------------------------------------------------------------------------*/
+ */
 
 /* 0xRRGGBB constants covering pure black, pure white, each channel alone at
  * its own maximum (0xF80000/0x00FC00/0x0000F8 - the largest 0xRRGGBB value
@@ -218,7 +218,7 @@ static void test_expanding_a_colour_twice_is_idempotent(void)
     }
 }
 
-/*-----------------------------------------------------------------------------
+/*
  * gfx_dither_covers - the per-pixel ordered-dither coverage test shared by
  * gfx_fill_rect_dither() (device suite: test_dither_* in suite_gfx.c, which
  * exercises this function only indirectly, through a real framebuffer fill)
@@ -227,7 +227,7 @@ static void test_expanding_a_colour_twice_is_idempotent(void)
  * tests are what boot_anim.c's own comment on that AND - "equivalent to
  * testing the lower of the two against one cell" - is checked against,
  * rather than merely asserted in a comment.
- *---------------------------------------------------------------------------*/
+ */
 
 /* gfx_dither_level() is the alpha->level scaling gfx_dither_covers() itself
  * compares against the table - exposed so a caller with a whole row at one

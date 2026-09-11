@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * imu - the QMI8658 six-axis accelerometer and gyroscope.
  *
  * Sits on the shared I2C bus at 0x6b, the same bus POST probes. There is no
@@ -15,7 +15,7 @@
  *
  * Both are read in one transfer - the data registers are contiguous - so using
  * both costs nothing over using either.
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stdbool.h>

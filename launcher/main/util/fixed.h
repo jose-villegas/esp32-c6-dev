@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * fixed - shift-based fixed-point arithmetic, in one place.
  *
  * `static inline`: some of these run in the sand simulation's innermost
@@ -31,16 +31,11 @@
  * bringing it down.
  *
  * These are NOT interchangeable, and picking the one that "sounds more
- * correct" is exactly the mistake this comment exists to head off:
+ * correct" is exactly the mistake this comment exists to head off: on a
+ * signed, routinely-negative accumulator, fx_mul_round() nudges every
+ * negative step upward relative to fx_mul_floor() and changes the
+ * simulation's output over many steps.
  *
- *   - sand.c used to decay a Q8, signed, routinely-negative momentum
- *     accumulator (mom_x_q8/mom_y_q8, built from a shaken tilt direction)
- *     with fx_mul_floor(), matching the `>> 8` it was hand-rolled as before
- *     this header existed - swapping in fx_mul_round() would have nudged
- *     every negative decay step upward by up to one part in 256 and changed
- *     the simulation's output. Removed 2026-08-30 along with the rest of
- *     the wall-rebound splash mechanism (see git history), but kept here as
- *     a worked example of exactly the mistake this comment warns against.
  *   - boot_anim.c's phase-span interpolation uses fx_mul_floor() on an
  *     operand already guarded non-negative by its own caller - floor and
  *     round agree there, so the choice is only for consistency with the
@@ -57,7 +52,7 @@
  * match whatever operation it already used - do not switch it to "round"
  * because that sounds more accurate. If the value is a one-shot geometric
  * computation, round is usually what you want.
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stdint.h>

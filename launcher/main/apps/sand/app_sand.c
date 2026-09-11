@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * app_sand - falling sand, poured with a finger and steered by tilting.
  *
  * Three pieces, each of which knows nothing about the others:
@@ -37,7 +37,7 @@
  * 0x0A0C14 - see COL_BACKGROUND - so the untouched strip is indistinguishable
  * from the screen around it. start_sim() still clears the screen explicitly
  * before the first frame rather than leaning on that coincidence alone.
- *===========================================================================*/
+ */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -238,7 +238,7 @@ static int64_t  pour_awake_cells_total, idle_awake_cells_total;
 static uint32_t sim_accumulator_q8;
 static uint32_t pour_accumulator_ms;
 
-/*---------------------------------------------------------------------------
+/*
  * Sensor axes to screen axes
  *
  * The QMI8658 is soldered in some fixed orientation relative to the panel, and
@@ -254,13 +254,11 @@ static uint32_t pour_accumulator_ms;
  * The Y axis then runs across the screen, but pointing left, hence the
  * negation. Both facts came from tilting the board and watching which way the
  * sand went; there is no way to derive them.
- *-------------------------------------------------------------------------*/
+ */
 #define GRAVITY_SCREEN_X(s)  (-(s)->ay)
 #define GRAVITY_SCREEN_Y(s)  ( (s)->ax)
 
-/*---------------------------------------------------------------------------
- * Setup
- *-------------------------------------------------------------------------*/
+/* Setup */
 
 static void sand_enter(void)
 {
@@ -366,20 +364,18 @@ static void start_sim(void)
     /* impulse_buf allocates LAST, deliberately: grid needs the single
      * largest contiguous heap run, so it must pick first. Reordering does
      * not create more contiguous space, only decides who gets first pick -
-     * moving impulse_buf ahead of grid was tried and produced a WORSE
-     * failure (no memory for the grid at all). Do not reorder without a
-     * fresh device capture showing it helps; the only one that ever tried
-     * showed it hurting. */
+     * moving impulse_buf ahead of grid produced a WORSE failure (no
+     * memory for the grid at all). Do not reorder without a fresh device
+     * capture showing it helps. */
     if (impulse_buf == NULL) {
         impulse_buf = malloc((size_t)APP_IMPULSE_MAX * sizeof(*impulse_buf));
         /* LOUD, NOT FATAL, unlike the buffers below: sand_enable_impulses
          * (NULL, ...) safely disables just DETONATE, so failing here alone
          * shouldn't strand a player who never wanted it behind a "no
-         * memory" screen. Logs largest_free_block, not total free heap:
-         * total free heap already told a wrong story for two failed
-         * budgets this app shipped believing were safe (see
-         * SAND_IMPULSE_BUDGET_BYTES) - largest block is what actually
-         * caught them. */
+         * memory" screen. Logs largest_free_block, not total free heap -
+         * total free heap tells the wrong story here (see
+         * SAND_IMPULSE_BUDGET_BYTES); largest block is what actually
+         * predicts whether this allocation succeeds. */
         if (impulse_buf == NULL) {
             ESP_LOGE(TAG, "Could not allocate the %d-entry blast buffer "
                           "(%u bytes) - detonate will be a no-op this "
@@ -458,9 +454,7 @@ static void sand_exit(void)
 #endif
 }
 
-/*---------------------------------------------------------------------------
- * Drawing
- *-------------------------------------------------------------------------*/
+/* Drawing */
 
 #define SHINE_PERIOD   64      /* power of two - see the mask below */
 #define SHINE_STEP_MS  40
@@ -532,28 +526,14 @@ static uint32_t wood_leaf_wake_elapsed_ms;
 
 static int glass_last_phase;
 
-/*=============================================================================
- * A LIQUID INTERIOR'S LOCAL DEPTH.
- *
- * Local depth follows each puddle's own shape rather than the old flat
- * screen-position gradient, which read as a metallic sheen across the whole
- * screen rather than depth into a liquid - see
- * test_local_depth_follows_the_puddles_own_shape. An obstacle poking
- * through a pool casts a depth "shadow"; that shadow is a deliberate
- * feature, but earlier shapes of this mechanism could only draw it
- * axis-aligned, never along the true gravity direction (git log up to
- * commit 3376c8e has the full history of those attempts and why each was
- * replaced).
- *
- * This walk instead steps along the gravity ray itself (Bresenham),
- * switching between a per-row and a per-column regime at 45 degrees - NOT
- * the same mistake an even earlier, single-dominant-axis shape made: both
- * regimes here measure the same quantity, distance along the gravity ray,
- * so the regime flip changes only how that count is computed, never what
- * it means, and the two sides agree exactly at the 45-degree crossing by
- * construction. See LOCAL_DEPTH_COUNT_CEILING below for why the raw step
- * count is scaled to cells only once, at combine time.
- *===========================================================================*/
+/* A LIQUID INTERIOR'S LOCAL DEPTH: follows each puddle's own shape, not a
+ * flat screen-position gradient, so an obstacle poking through a pool
+ * casts a depth "shadow" along the true gravity direction. Walked along
+ * the gravity ray itself (Bresenham), switching per-row/per-column
+ * regime at 45 degrees: both regimes measure the same quantity, distance
+ * along the ray, so the flip changes only how the count is computed,
+ * never what it means, and the two sides agree exactly at the crossing
+ * by construction. */
 
 static unsigned local_depth_scale_q8;
 static bool local_depth_vertical_dominant;
@@ -648,12 +628,11 @@ static void update_local_depth_gravity(int gx, int gy)
     local_depth_h_reverse = new_h_reverse;
 }
 
-/* A pool's INTERIOR - the bulk of its rows, the part this array already
- * marked before the widening - is unaffected: a row with any interior
- * cell was already gated in, rim or not. The widening can only ADD the
- * handful of edge-only rows the old condition used to skip; it cannot
- * double the marked-row count the way gating on "any liquid" from scratch
- * would if the array previously gated on nothing at all. */
+/* A pool's INTERIOR - the bulk of its rows - is unaffected: a row with
+ * any interior cell is already gated in, rim or not. Widening the gate
+ * can only ADD the handful of edge-only rows a tighter condition would
+ * skip; it cannot double the marked-row count the way gating on "any
+ * liquid" from scratch would if the array gated on nothing at all. */
 #define LOCAL_DEPTH_WAKE_MS 120
 
 static uint32_t local_depth_wake_elapsed_ms;
@@ -1306,10 +1285,10 @@ static void draw_palette(const input_t *input)
             /* Badge shows eligibility (material_can_emit(), false for every
              * KIND_STATIC material - gunpowder is the one extended-range
              * exception, being KIND_POWDER). Border/fill are a FIXED pair,
-             * unlike the bezel above: it used to derive from the face too,
-             * but Snow's near-white face made the armed fill nearly
-             * invisible against it - a mark that must read on every swatch
-             * can't itself be made of the swatch. */
+             * not derived from the face like the bezel above - Snow's
+             * near-white face would make a derived fill nearly invisible
+             * against it, and a mark that must read on every swatch can't
+             * itself be made of the swatch. */
             if (material_can_emit(brushes[i])) {
                 const mu_Color border = mu_color_hex(PALETTE_BADGE_BORDER_COLOR);
                 const mu_Color fill   = mu_color_hex(PALETTE_BADGE_FILL_COLOR);
@@ -1472,9 +1451,7 @@ static void draw_brush_screen(const input_t *input)
 
         ui_set_font_scaled(gfx_font_ui(), BRUSH_SCREEN_CAPTION_SCALE);
 
-        /*---------------------------------------------------------------
-         * Header: swatch, caption/name, info button (drawn, inert).
-         *-------------------------------------------------------------*/
+        /* Header: swatch, caption/name, info button (drawn, inert). */
         draw_brush_panel(ctx, lay.header_panel);
 
         draw_brush_swatch(ctx, lay.swatch, brushes[ui.brush]);
@@ -1514,9 +1491,7 @@ static void draw_brush_screen(const input_t *input)
                         mu_color_hex(BRUSH_TEXT_COLOR));
         }
 
-        /*---------------------------------------------------------------
-         * Brush mode: caption, three segments.
-         *-------------------------------------------------------------*/
+        /* Brush mode: caption, three segments. */
         draw_brush_panel(ctx, lay.mode_panel);
         draw_brush_text(ctx, lay.mode_caption, BRUSH_SCREEN_MODE_CAPTION,
                         mu_color_hex(BRUSH_CAPTION_COLOR), BRUSH_SCREEN_CAPTION_SCALE, -1);
@@ -1563,9 +1538,7 @@ static void draw_brush_screen(const input_t *input)
             draw_brush_text(ctx, label_r, name, ink, BRUSH_SCREEN_CAPTION_SCALE, 0);
         }
 
-        /*---------------------------------------------------------------
-         * Brush size: caption/value, slider.
-         *-------------------------------------------------------------*/
+        /* Brush size: caption/value, slider. */
         draw_brush_panel(ctx, lay.size_panel);
 
         const char *size_caption =
@@ -1590,9 +1563,7 @@ static void draw_brush_screen(const input_t *input)
     ui_end(UI_NO_BACKGROUND);
 }
 
-/*---------------------------------------------------------------------------
- * Frame
- *-------------------------------------------------------------------------*/
+/* Frame */
 
 static void read_gravity_input(uint32_t dt_ms, imu_sample_t *sample, int *gx,
                                int *gy, int *flow, int *jostle,

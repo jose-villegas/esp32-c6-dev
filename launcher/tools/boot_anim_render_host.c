@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * boot_anim_render_host - render one frame of the boot animation with the
  * REAL firmware code (boot_anim.c + gfx.c, unmodified drawing logic) on a
  * host build, and write it out as a BMP.
@@ -31,7 +31,7 @@
  * Also prints one line to STDERR - "ORIGIN <x> <y>", the space's own local
  * origin projected through this frame's transform - see the comment at the
  * call site below for why.
- *===========================================================================*/
+ */
 
 #include <stdint.h>
 #include <stdio.h>
@@ -71,10 +71,9 @@ int main(int argc, char **argv)
 
     /* The space's own local origin (0,0,0 - t=0, zeta=0), projected through
      * this frame's camera+space transform and printed to STDERR (never
-     * stdout, which is the BMP) - kept, as asked, now that a real 3D
-     * transform has nowhere on the JSON side to author a screen position
-     * directly: boot_anim_editor_server.py reads this line and hands it to
-     * the editor as a read-only "where does the origin land" readout. */
+     * stdout, which is the BMP): the JSON side has nowhere to author a
+     * screen position directly, so boot_anim_editor_server.py reads this
+     * line as a read-only "where does the origin land" readout. */
     {
         const boot_anim_view_t view = boot_anim_view(GFX_WIDTH, GFX_HEIGHT, now_ms);
         int ox, oy;

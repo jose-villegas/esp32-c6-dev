@@ -28,10 +28,9 @@ static unsigned open_palette(sand_ui_t *ui, bool touch_in_progress)
  * and the accumulator resets that keep the pause from cashing in as a
  * burst of catch-up steps, are app_sand.c's job - see
  * SAND_UI_CLOSE_PALETTE. Asks for the mode label via SAND_UI_SHOW_LABEL
- * only if the brush or its mode actually changed while open. Since
- * cycling no longer confirms on the way past each material, this is the
- * only feedback closing gets, and it should say nothing when there is
- * nothing to confirm. */
+ * only if the brush or its mode actually changed while open - the only
+ * feedback closing gets, so it says nothing when there is nothing to
+ * confirm. */
 static unsigned close_palette(sand_ui_t *ui)
 {
     unsigned actions = SAND_UI_CLOSE_PALETTE;
@@ -80,11 +79,11 @@ static unsigned handle_palette_input(sand_ui_t *ui, const input_t *input)
 
 /* What a click on palette tile `index` means - see this function's own
  * doc comment in sand_ui.h for the full contract, and the "WHO
- * HIT-TESTS AND WHO DECIDES" note there for why the hit-test that
- * produces `index` is no longer this module's job. draw_palette() in
+ * HIT-TESTS AND WHO DECIDES" note there for why the hit-test producing
+ * `index` belongs to microui, not this module. draw_palette() in
  * app_sand.c is the only caller, from inside its own per-tile mu_button()
- * loop - which is also why there is no "index hits nothing" branch here:
- * an index this function is ever handed already named a real tile. */
+ * loop, so there is no "index hits nothing" branch here: an index this
+ * function is ever handed already named a real tile. */
 unsigned sand_ui_tile_clicked(sand_ui_t *ui, int index)
 {
     /* Swallow the first click after the panel opens with a finger already
@@ -212,11 +211,9 @@ uint8_t sand_ui_radius(const sand_ui_t *ui)
     return ui->radius_px[ui->mode];
 }
 
-/* Only reachable while SAND_UI_RUNNING (renamed from handle_brush_input(),
- * which used to cycle PAINT/ERASE/DETONATE on a PWR press - that cycle is
- * gone, replaced by opening the brush screen below). BOOT opens the
- * palette; PWR opens the brush screen; both read the edge, never
- * `.held`, for the same reason open_palette()'s own call site does. */
+/* Only reachable while SAND_UI_RUNNING. BOOT opens the palette; PWR opens
+ * the brush screen; both read the edge, never `.held`, for the same
+ * reason open_palette()'s own call site does. */
 static unsigned handle_running_input(sand_ui_t *ui, const input_t *input)
 {
     if (input->boot.released) {

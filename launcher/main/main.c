@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * The shell: boots the device, runs the frame loop, and switches between the
  * launcher and whichever app is running.
  *
@@ -9,7 +9,7 @@
  * Note this task must never return. Once firmware goes idle on this board the
  * chip stops responding to reset signalling and can only be recovered with the
  * BOOT button - see docs/notes/Flashing-and-Toolchain.md.
- *===========================================================================*/
+ */
 
 #include <stdint.h>
 #include <string.h>
@@ -102,11 +102,9 @@ int display_shell_quarter(void) { return display_quarter(&shell_display); }
 /* Content-driven, not a fixed physical reference: the exit gesture lives
  * on whichever PHYSICAL edge the content's logical bottom maps to,
  * tracking rotation the same way ui_transform_rect() makes buttons/text
- * do. An earlier USB-opposite-edge rule tested wrong on device (Portrait
- * needs BOTTOM, not the LEFT that rule produced) - not hand-derived any
- * more: this table maps a strip along the logical canvas's bottom edge
- * through the same transform pipeline the exhaustive sweep already
- * proved exact. */
+ * do. Not hand-derived per quarter: this table maps a strip along the
+ * logical canvas's bottom edge through the same transform pipeline the
+ * exhaustive sweep already proved exact. */
 static gesture_edge_t exit_edge_for_quarter(int quarter)
 {
     static const gesture_edge_t edge_for_quarter[4] = {

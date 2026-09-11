@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * sand - a falling-sand cellular automaton.
  *
  * Pure logic. It knows nothing about the panel, the accelerometer or the frame
@@ -13,7 +13,7 @@
  *
  * Coordinates follow the screen: x grows right, y grows DOWN. So ordinary
  * gravity is (0, +1).
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stdbool.h>
@@ -306,7 +306,7 @@ bool sand_emitter_at(const sand_t *s, int i, int *x, int *y, cell_t *cell);
  * right-shift, not the linear SAND_IMPULSE_SPEED_RAMP every other
  * material uses. BIGGER SHIFT MEANS SLOWER DECAY, NOT FASTER:
  * `speed -= speed >> SHIFT`, so 1 leaves half per cell, 2 leaves 3/4 -
- * easy to get backwards (a stale comment here once did). */
+ * easy to get backwards. */
 #define SAND_SPLASH_SPEED_DECAY_SHIFT  2
 
 /* CASCADE - a WATER/ACID impulse that moves relays its push into the SAME

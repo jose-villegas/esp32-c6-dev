@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * ui_pointer - input_t to a short list of pointer events, held not tapped.
  *
  * Pure logic, no microui calls and no gfx: what makes the touch-to-mouse
@@ -8,7 +8,7 @@
  *
  * Coordinates in and out are PHYSICAL (screen) coordinates. Mapping each
  * point through ui.c's to_logical() is that caller's job, not this module's.
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stdbool.h>

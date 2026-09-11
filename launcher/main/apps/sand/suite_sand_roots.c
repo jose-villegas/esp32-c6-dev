@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Portable suite: the falling-sand automaton - roots, plus a handful of
  * extended-material/palette/metal-shine/gunpowder-tone regression tests
  * that had drifted under the same "--- roots ---" banner in suite_sand.c
@@ -10,7 +10,7 @@
  * Split out of suite_sand.c (bd esp32c6 test-suite-refactor), which had grown
  * past 32,000 lines across 500+ tests. Shared fixtures and assertion helpers
  * live in suite_sand_common.{c,h} - see that header.
- *===========================================================================*/
+ */
 #include <math.h>   /* not every file in the split still needs atan2()/M_PI,
                      * but every file inherited suite_sand.c's own include
                      * block rather than being pruned by hand, to keep the
@@ -209,33 +209,17 @@ static void test_a_root_column_does_not_spend_the_trees_lift(void)
         "a root must cost the tree no TREE_LIFT at all");
 }
 
-/* A root with dirt piled back on top of it does not cut the tree off
- * from the water below it. Dirt shifts, so a root that formed at a
- * collar can end up buried under fresh soil later - and without the
- * transparency fix in find_water()'s own soil walk, a root would look
- * exactly like the dead end it exists to prevent, reintroducing the bug
- * from the other side.
- *
- * A DEEP wet reserve below the root, not the original single row - since
- * PART 2 of the roots feature, a root sitting directly on its only
- * reachable water is itself a second consumer of that exact cell
- * (step_one_rooting_cell(), sand_reactions.c): given enough steps it
- * will eventually eat the very cell this test's ORIGINAL one-row version
- * depended on and convert it to more root, which the soil walk then
- * crosses too, arriving at stone with nothing left to find - a real
- * race between the root's own slow, serial, one-cell-at-a-time eating
- * and the tree's growth roll, and for the fixed seed this suite always
- * runs with, the root used to win it (measured: FAILED, deterministically,
- * against the single-row version). That is not the transparency bug this
- * test exists to catch - find_water()'s own walk was never touched by
- * PART 2 - it is the new mechanism competing for the one cell of water
- * the old, narrower scene happened to offer. Six rows deep is far more
- * than the root can plausibly eat through (each conversion needs its own
- * independent roll, one cell at a time, only ever on the single newest
- * cell of the column) before the tree's own, faster-firing growth roll
- * succeeds at least once - which is the actual claim under test. */
+/* A root with dirt piled back on top of it must not cut the tree off
+ * from the water below it (find_water()'s own soil-walk transparency). */
 #define BURIED_ROOT_TEST_W 8
 #define BURIED_ROOT_TEST_H 16
+/* A DEEP wet reserve (6 rows), not a single row: since PART 2 of the
+ * roots feature, a root on its only reachable water is itself a second
+ * consumer of that cell (step_one_rooting_cell()) - a single-row reserve
+ * races the root's own slow eating against the tree's growth roll,
+ * deterministically losing for this suite's fixed seed, a different
+ * failure from the transparency bug under test. Six rows is far more than
+ * the root can plausibly eat through before growth succeeds once. */
 #define BURIED_ROOT_WET_ROWS 6
 
 static void test_a_buried_root_does_not_cut_off_the_water_below_it(void)
@@ -975,18 +959,13 @@ static void test_conduction_never_pushes_water_up_or_into_anything_but_soil(void
     }
 }
 
-/* No "brings water deeper than bare soil" test here, deliberately. It was
- * written and it failed for reasons that have nothing to do with the
- * claim: on this 8x8 grid percolation alone floods a six-row bed inside
- * any run long enough to matter, so there is no depth left for a conduit
- * to add - and a column that DOES carry water down then eats the cell it
- * wetted, so measuring moisture in dirt counts the delivery as a loss.
- * The depth claim is established where it can be seen, on the 60x70
- * harness with a 19-row dry bed watered at the collar: mean deepest root
- * 4.6 rows with conduction off, 15.0 with it on, over ten seeds (see
- * ROOT_CONDUCT_CHANCE's own comment in sand_reactions.c, and the Roots
- * section of docs/sand/Sand-Simulation.md). What the suite pins is the
- * mechanism itself - the two tests above. */
+/* No "brings water deeper than bare soil" test here: on this 8x8 grid,
+ * percolation alone already floods a six-row bed, leaving no depth for a
+ * conduit to add, and a conducting column eats the cell it wetted,
+ * undercounting moisture-based measurement. The depth claim is proven on
+ * the 60x70 harness instead: mean deepest root 4.6 rows with conduction
+ * off, 15.0 with it on, over ten seeds (ROOT_CONDUCT_CHANCE's comment,
+ * sand_reactions.c; docs/sand/Sand-Simulation.md). */
 
 static void test_a_thickly_rooted_cell_stops_growing(void)
 {
@@ -1845,21 +1824,12 @@ static void test_a_moving_grain_keeps_the_shade_it_was_poured_with(void)
 
 
 /* Sand that turns to soil arrives WET, and a wet cell carries no tone of
- * its own (material.h's own comment on soil's state split) - so the
- * grain's shade, which used to become the new soil's tone, now simply
- * has nowhere to go. That is the trade this re-encoding makes: soil got
- * its dry tones back by giving up an independent tone while wet, and wet
- * soil's own variation is the moisture gradient percolation lays down
- * instead of a carried tone - see step_one_soaking_cell()'s own comment
- * on its soaks_to branch (sand_reactions.c).
- *
- * What survives instead is simpler: whichever end of the dune band a
- * grain came from, it converts to the SAME moisture - the one unit
- * `soaks` just took - because the shade plays no part in the conversion
- * at all any more. This used to be
- * test_wet_sand_becomes_soil_in_the_tone_its_shade_implies, pinning the
- * derivation that carried a shade across into a tone; there is no
- * derivation left to pin. */
+ * its own (material.h's state-split comment) - so the grain's shade has
+ * nowhere to go. Wet soil's variation instead comes from the moisture
+ * gradient percolation lays down (step_one_soaking_cell()'s soaks_to
+ * branch, sand_reactions.c). Whichever end of the dune band a grain came
+ * from, it converts to the same moisture - the one unit `soaks` just
+ * took - since shade plays no part in the conversion. */
 static void test_wet_sand_becomes_soil_wet_with_no_tone_of_its_own(void)
 {
     const uint8_t dark_shade = 1;                       /* low half  */

@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Portable suite: ui_slider - the geometry behind ui_slider_int(), the knob
  * you can drag rather than only tap-to-jump (see ui_pointer.h, Phase 1,
  * which is what makes a drag possible at all).
@@ -6,7 +6,7 @@
  * Header-only, like ui_style.h, and tested the same way: nobody can eyeball
  * a knob rect landing one pixel off where a finger touched, so the geometry
  * is checked directly rather than by looking at a screenshot.
- *===========================================================================*/
+ */
 
 #include <stdlib.h>
 
@@ -30,10 +30,10 @@ static slider_fixture_t fixture(void)
     };
 }
 
-/*-----------------------------------------------------------------------------
+/*
  * The round trip - the property that stops a knob drifting a step every
  * time a finger touches it without moving.
- *---------------------------------------------------------------------------*/
+ */
 
 static void test_round_trip_holds_for_every_value_in_range(void)
 {
@@ -81,9 +81,7 @@ static void test_a_touch_picks_the_value_whose_knob_centres_nearest_it(void)
     }
 }
 
-/*-----------------------------------------------------------------------------
- * The knob never leaves the track.
- *---------------------------------------------------------------------------*/
+/* The knob never leaves the track. */
 
 static void test_knob_sits_flush_inside_the_track_at_lo_and_hi(void)
 {
@@ -113,9 +111,7 @@ static void test_knob_stays_inside_the_track_everywhere_between(void)
     }
 }
 
-/*-----------------------------------------------------------------------------
- * Quantization and clamping of a touch.
- *---------------------------------------------------------------------------*/
+/* Quantization and clamping of a touch. */
 
 static void test_a_touch_quantizes_to_the_nearest_step(void)
 {
@@ -142,9 +138,7 @@ static void test_a_touch_beyond_either_end_clamps_not_wraps(void)
         "a touch far to the right must clamp to hi, not wrap around");
 }
 
-/*-----------------------------------------------------------------------------
- * The filled portion.
- *---------------------------------------------------------------------------*/
+/* The filled portion. */
 
 static void test_fill_width_never_exceeds_the_track(void)
 {
@@ -169,10 +163,10 @@ static void test_fill_width_grows_with_value(void)
         "a higher value must never fill less of the track than a lower one");
 }
 
-/*-----------------------------------------------------------------------------
+/*
  * Degenerate cases - none of these may divide by zero or hand back a knob
  * wider than its track.
- *---------------------------------------------------------------------------*/
+ */
 
 static void test_lo_equals_hi_returns_lo_without_dividing_by_zero(void)
 {

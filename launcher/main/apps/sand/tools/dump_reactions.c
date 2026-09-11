@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * dump_reactions - compile material.c's reaction tables into markdown.
  *
  * See docs/plans/Reaction-Doc-Generator-Plan.md for the design this follows.
@@ -55,7 +55,8 @@
  * current value wrong - it would print "empty" for glass shattering into
  * sand, which is exactly the "confidently wrong name, silently" failure the
  * plan's own paragraph warns about, one paragraph before naming the field
- * that trips it. */
+ * that trips it.
+ */
 
 #include <ctype.h>
 #include <errno.h>
@@ -82,7 +83,7 @@
  * checked below, so it needs its own name rather than a magic number. */
 #define ARRAY_LEN(a) (sizeof(a) / sizeof((a)[0]))
 
-/*-----------------------------------------------------------------------
+/*
  * The field table.
  *
  * One row per reaction_t field. `group` says which clause it contributes
@@ -94,7 +95,7 @@
  * lies in two directions" section). Phase 1 sets neither: every adverb
  * below takes the computed bucket, unedited, on purpose - that by-feel
  * pass is explicitly phase 2's job, not this file's.
- *---------------------------------------------------------------------*/
+ */
 
 typedef enum {
     GRP_IGNITE = 0,   /* catching fire: flammability, ignites_to, needs_air */
@@ -177,54 +178,12 @@ typedef struct {
     { offsetof(reaction_t, field), #field, (grp), FK_RATE, SCALE_CHANCE, \
       (vb), NULL, (voc) }
 
-/* The two SCALE_CHANCE vocabularies. Both index off the same four slots
- * (chance_bucket_for(), in the Decoding section below) - only the WORDS
- * differ, because a one-shot chance/256 can answer two different
- * questions depending on what it is conditioned on.
- *
- * Four slots, not five: 0 and 255 are handled directly in adverb() as the
- * categorical absolutes they are (see adverb_for()'s own top comment for
- * why 0/255 are not extremes of a scale) - "never" for 0, unconditionally,
- * on both vocabularies; the OTHER absolute (255, "costs no draw at all")
- * DOES still take a vocabulary word here, because unlike the rate ladder
- * there is no shared word that reads right for both "how often" and "how
- * well" ("always" fits a frequency, "outright" fits an ease/resistance
- * question, and neither fits the other) - so slot 0 of each array below is
- * that word, and slots 1-3 are the three ordinary buckets, high to low.
- *
- * Silence is NOT an option here, unlike the rate ladder's middle band -
- * see adverb_for()'s own comment on why RATE can stay quiet for the
- * common case but CHANCE cannot: a reader who sees no word at all for
- * `residue` would read that as "always leaves smoke", which is false at
- * (say) 90/256. So every nonzero, non-255 value here always prints one of
- * the three in-between words - never nothing.
- *
- * frequency_words[] is "how often does this happen" - the right question
- * for residue, fizz, harden_chance, canopy and holds_line, each a fresh
- * roll at its own moment ("mostly leaves smoke when it burns out").
- *
- * ease_words[] is "how well does this go, given it is already happening" -
- * the right question for `dissolvable` alone. Its own comment in
- * material.h is explicit that it is "the chance an ATTEMPT to dissolve
- * succeeds", i.e. conditional on an attempt already under way, not a
- * frequency in its own right - "Mostly gives way to acid" answers a
- * question nobody asked, and fronts the adverb besides. Same buckets,
- * different vocabulary - see field_doc_t.chance_vocab. Deliberately no
- * duration word anywhere in this array (a prior version used "almost
- * instantly" / "slowly" here, smuggling a time-to-wait word into a
- * chance-of-success question - the same category error the rate/frequency
- * split exists to prevent, just missed on this one field).
- *
- * THESE ARE THE TECHNICAL WORDS - emit_anatomy() and emit_pairwise_table()
- * read through these two arrays (via adverb()/adverb_cell()) and print
- * exactly this vocabulary, unchanged, on purpose: both sections are
- * documentation of the generator and the raw table for a maintainer, not
- * player-facing prose, and this doc's own top note says so. The DEFAULT
- * per-material section reads a SEPARATE, simpler pair - see
- * frequency_words_child[]/ease_words_child[] and adverb_child()/
- * adverb_cell_child() just below - so that one section can be worded for
- * an early-elementary reader without silently rewording the two sections
- * a maintainer actually reads this file's own vocabulary tables for. */
+/* Two SCALE_CHANCE vocabularies share chance_bucket_for()'s four slots -
+ * only the words differ. 255 still needs a word here, unlike the rate
+ * ladder: no shared word fits both "how often" and "how well". Silence
+ * isn't an option either: a missing word for `residue` reads as "always",
+ * which can be false. frequency_words[] = "how often"; ease_words[] =
+ * "how well, given it's already happening" (dissolvable only). */
 static const char *const frequency_words[] = {
     "always", "mostly", "occasionally", "seldom",
 };
@@ -415,7 +374,7 @@ static const field_doc_t *field_doc(const char *name)
     exit(1);
 }
 
-/*-----------------------------------------------------------------------
+/*
  * REACTION_DOC parsing - the cause clauses this file cannot derive from
  * material.c's tables at all, because the condition that gates them lives
  * entirely at a read site in sand_reactions.c (see shatters_to's two
@@ -434,7 +393,7 @@ static const field_doc_t *field_doc(const char *name)
  * way field_doc() assumes - it just refers to a REACTION_DOC() invocation
  * (reported by number, `errno`/exit(1) same as the rest of this file) rather
  * than a `%s` this program already trusts elsewhere.
- *---------------------------------------------------------------------*/
+ */
 
 /* Comfortably more than the number of REACTION_DOC() calls sand_reactions.c
  * carries today (three, as of this writing) - raise it if a future one
@@ -616,65 +575,16 @@ static void causes_are_complete(void)
     if (!ok) exit(1);
 }
 
-/*-----------------------------------------------------------------------
- * Decoding.
- *---------------------------------------------------------------------*/
+/* Decoding. */
 
-/* The rate ladder - for FK_RATE fields with scale == SCALE_RATE: a chance
- * rolled every step against a steady partner, which has a genuine expected
- * TIME to wait (SIM_HZ 60 - see app_sand.c - so one step is ~16.7ms, and
- * the expected wait against one steady partner is 256/value steps).
- *
- * 0 AND 255 ARE NOT ENDS OF A SCALE, THEY ARE A DIFFERENT CATEGORY
- *
- * 0 means the reaction cannot happen - never, full stop, not "extremely
- * slowly". 255 means it happens on contact and costs NO random draw at
- * all: see flammability's own comment in material.h - a material at 255
- * leaves the RNG stream exactly as it was before the field existed,
- * because try_ignite() (sand_reactions.c) short-circuits before rolling.
- * Both are therefore handled as flat, unconditional words below, not as
- * the top/bottom rungs of the ladder that follows.
- *
- * THE MIDDLE IS SILENT ON PURPOSE
- *
- * Everything from 1 to 254 used to print a word (a six-band ladder:
- * instantly/swiftly/fast/readily/steadily/slowly). Measured against this
- * table's actual values, one band - "fast" and up - covered the vast
- * majority of them: "quickly"-class words printed on the clear majority of
- * every adverb this file emitted, an ordinary-case word that told a reader
- * nothing they could not already assume. The fix is to stop printing a
- * word for the ordinary case and let SILENCE mean "nothing unusual here" -
- * readable because a RATE lives in a sentence ("catches fire from fire or
- * lava") where dropping the adverb entirely still reads as a complete,
- * true claim. Only the genuinely slow band still speaks up:
- *
- *   v == 0            never    (cannot happen - see above)
- *   v in 1..5         slowly   (>= ~853ms against one steady partner)
- *   v in 6..254       (nothing - ordinary speed, said by staying quiet)
- *   v == 255          instantly (no draw at all - see above)
- *
- * The cutoff sits at 5, verified against this table's own data rather than
- * assumed: wood's `flammability` is 6, one step above the cutoff, and
- * correctly falls silent - a flame front touches several of a log's faces
- * at once, so the single-steady-partner model this ladder is built on
- * already understates wood's real ignition speed, and silence (ordinary)
- * reads closer to true than a printed "slowly" would. Glass's `cools` (5)
- * and dirt's `dries` (2, moved down from an earlier 5 - see MAT_DIRT's own
- * comment - so both sit at or under the cutoff either way) both land in
- * "slowly", correctly: draining heat back to ambient and drying out are
- * both meant to read as slow, ongoing processes, not something that just
- * happens.
- *
- * ONE MEASURED EXCEPTION: sand's `heat_chance` (16) computes to SILENT
- * under this cutoff, but MAT_SAND's own comment in material.c measures the
- * real behaviour as "deliberately slow... something you set up and wait
- * for" - a bed of eleven cells under a held flame takes 137 steps (~2.3s)
- * to fully convert, because the model above assumes one steady partner and
- * heat_chance is actually rolled per adjacent heat source, so an interior
- * cell with no direct exposure waits on its neighbours first. That gap
- * between the model and the measured comment is real, so it is handled as
- * a checked ADVERB_EXCEPTIONS entry below, not by moving this cutoff to
- * paper over it. */
+/* Rate ladder (FK_RATE/SCALE_RATE): one chance per step against a steady
+ * partner (expected wait = 256/value steps). 255 = instant, no RNG draw
+ * (try_ignite() short-circuits before rolling; see flammability in
+ * material.h). 6..254 stays silent, reading true unqualified. Exception:
+ * sand's heat_chance (16) is silent by this rule but rolls per adjacent
+ * heat source, so a held-flame bed converts far slower in practice
+ * (~137 steps) - a checked ADVERB_EXCEPTIONS entry below, not a moved
+ * cutoff. */
 #define RATE_SLOW_CUTOFF 5
 
 static const char *adverb_for(uint8_t v)
@@ -712,14 +622,14 @@ static const char *adverb(const char *field_name, uint8_t v)
     return adverb_for(v);
 }
 
-/*-----------------------------------------------------------------------
+/*
  * Adverb exceptions - a by-feel override for the one case where this
  * ladder's single-steady-partner model provably disagrees with a measured
  * comment in material.c (see adverb_for()'s own top comment on sand's
  * heat_chance). A tiny table with a startup soundness check, the same
  * idiom field_docs_offsets_are_sound() already uses: wrong data here is
  * worse than no override at all, so it is checked, not just declared.
- *---------------------------------------------------------------------*/
+ */
 
 typedef struct {
     uint8_t     cell;   /* the row this override applies to - a plain
@@ -855,11 +765,11 @@ static const char *cause_marked(const char *field, size_t index)
     return buf;
 }
 
-/*-----------------------------------------------------------------------
+/*
  * One row's worth of rows (materials[] name + reactions[]/extended_
  * reactions[] row + movement kind), built once and reused for both the
  * per-material section and the pairwise join table below.
- *---------------------------------------------------------------------*/
+ */
 
 typedef struct {
     const char *name;
@@ -903,36 +813,14 @@ static const mrow_t *find_row(const char *name)
     exit(1);
 }
 
-/* The variant a FRESHLY PAINTED cell of `material` actually gets, mirrored
- * from random_cell() in sand.c - deliberately, not independently reasoned
- * about: that function is the one place that decides what a fresh cell of
- * each material looks like, and this doc's swatches are supposed to be
- * showing the reader that exact cell rather than a second, possibly
- * disagreeing, guess at it. If random_cell() ever grows a branch, changes
- * a constant, or reorders its checks, this needs the same change or the
- * two silently drift apart again - check both when you touch either.
- *
- * The one deliberate difference: random_cell() draws one random number
- * where its variant is a shade (the plain shade-band case, and the tone
- * half of a drying material's variant); this picks the CENTRE of that same
- * range instead, every time, because a swatch needs no RNG and a fixed
- * doc needs a fixed answer.
- *
- * This used to be a fixed "+13" on every ordinary material - copied from
- * app_sand.c's brush_color(), which still does that (see this file's own
- * top comment on why that file cannot be touched here). +13 happened to
- * read as a plausible shade for sand, which is the ONE material it was
- * ever measured against, and was wrong for everything whose variant means
- * something other than a shade: it read glass and stone as hot (they bank
- * TEMPERATURE in their variant, and 13 is far above SAND_AMBIENT_HEAT),
- * wood as mid-burn (its variant is LIFE LEFT TO BURN, and 13 is one ember
- * short of fully consumed), and sand itself as cullet (13 sits inside the
- * top four shades sand.c reserves for glass that has been broken back down
- * to sand - see SAND_CULLET_BASE in material.h - not in the dune band an
- * ordinary painted grain actually takes). A variant does not mean the same
- * thing for every material, so one fixed number cannot be a representative
- * swatch for all of them; only asking each material's own fields, the way
- * random_cell() does, can. */
+/* The variant a freshly painted cell of `material` gets, mirrored from
+ * random_cell() in sand.c - not independently reasoned about; check both
+ * when touching either. random_cell() draws a random shade; this picks
+ * the CENTRE of that range, since a fixed doc needs a fixed answer. A
+ * variant means something different per material (stone/glass bank
+ * TEMPERATURE, wood LIFE LEFT TO BURN, sand can mean cullet), so only
+ * asking each material's own fields, like random_cell(), gives a
+ * representative swatch. */
 static uint8_t representative_variant(material_id_t material)
 {
     /* A fresh liquid cell is a full one - see random_cell()'s own comment. */
@@ -960,39 +848,14 @@ static uint8_t representative_variant(material_id_t material)
     return (uint8_t)mid;
 }
 
-/* Writes the colour material value v resolves to, as "#rrggbb", into buf -
- * v decodes exactly the way to_name() decodes a TARGET field (a plain
- * material id, or a whole MATX() cell spec), so any raw field value or an
- * all_rows[] row's own mrow_t.color_id can be passed straight through.
- *
- * Reads material_palette() at the representative swatch a freshly painted
- * cell of this material actually takes - representative_variant() above
- * for an ordinary material (see its own comment for why that is not the
- * "+13" app_sand.c's brush_color() still uses), the whole cell unchanged
- * for an extended one, exactly as random_cell() itself leaves it (an
- * extended cell's low nibble names WHICH extended material this is, not a
- * shade, so there is no variant for random_cell() - or this - to pick; see
- * try_spawn_one()'s own comment in sand.c). This doc's colours are
- * therefore the colours a freshly poured cell of each material actually
- * shows on the panel, not a second independent guess at them - and, for
- * the four materials whose variant means something other than a plain
- * shade, no longer the same guess brush_color() makes either.
- *
- * gfx_color_t is RGB565 with the two bytes swapped (GFX_RGB(), gfx_color.h
- * - the QSPI panel wants the opposite byte order to the chip's native
- * layout), so recovering 0xRRGGBB is GFX_RGB() run backwards: swap the
- * bytes back, split into 5/6/5 bit fields, then scale each field up to
- * 8 bits with round-to-nearest ((n * 255 + half_max) / max) rather than a
- * naive shift, so 0x1F (5-bit max) recovers as 0xFF (8-bit max) and not
- * 0xF8.
- *
- * Takes a caller-owned buffer rather than a shared static one (contrast
- * prose_name(), which gets away with exactly one shared buffer because
- * nothing here ever calls it twice before printing) - an anatomy example
- * can need two or more colours live at once inside a single seg_t[] build
- * (GRP_HARDEN's hardens_to and clings_to, or a heat_sources list with two
- * members), and one shared buffer would silently turn every earlier colour
- * into the last one computed. buf must be at least COLOR_LEN bytes. */
+/* Writes v's colour as "#rrggbb" into buf. Reads material_palette() at the
+ * representative swatch a fresh cell of this material actually takes
+ * (representative_variant() above), not brush_color()'s "+13" -
+ * deliberately different for materials whose variant isn't a plain shade.
+ * Caller-owned buffer, not shared static: an anatomy example can need two
+ * or more colours live at once (hardens_to and clings_to), and a shared
+ * buffer would overwrite the earlier one. buf must be at least COLOR_LEN
+ * bytes. */
 static void material_hex(uint8_t v, char *buf, size_t cap)
 {
     const cell_t base = (v >= (uint8_t)(MAT_EXTENDED << 4))
@@ -1008,6 +871,9 @@ static void material_hex(uint8_t v, char *buf, size_t cap)
                         representative_variant(
                             (material_id_t)CELL_MATERIAL(base)));
     const gfx_color_t packed = material_palette()[swatch];
+    /* gfx_color_t is RGB565 byte-swapped (GFX_RGB(), gfx_color.h); this
+     * reverses that, then round-to-nearest (not a naive shift) so 0x1F
+     * recovers as 0xFF, not 0xF8. */
     const uint16_t rgb565 = (uint16_t)((packed >> 8) | (packed << 8));
     const uint8_t r5 = (rgb565 >> 11) & 0x1Fu;
     const uint8_t g6 = (rgb565 >> 5)  & 0x3Fu;
@@ -1018,7 +884,7 @@ static void material_hex(uint8_t v, char *buf, size_t cap)
     snprintf(buf, cap, "#%02X%02X%02X", r8, g8, b8);
 }
 
-/*-----------------------------------------------------------------------
+/*
  * Legibility overrides - material_hex() above returns the device's exact
  * palette value, which is what the anatomy section below still shows (see
  * its own top comment: raw values are the documentation of the actual
@@ -1036,7 +902,8 @@ static void material_hex(uint8_t v, char *buf, size_t cap)
  * exits(1) on any mismatch, so a future palette change cannot silently
  * leave a stale override in place the way it could with no check at all.
  * Only materials that actually fail get a row - passing materials read
- * straight through material_hex(), unmodified, forever. */
+ * straight through material_hex(), unmodified, forever.
+ */
 typedef struct {
     uint8_t     cell;    /* matched against mrow_t.color_id, same as
                           * ADVERB_EXCEPTIONS.cell */
@@ -1287,12 +1154,12 @@ static bool row_is_empty(const reaction_t *r)
     return true;
 }
 
-/*-----------------------------------------------------------------------
+/*
  * Per-material clause emitters, one per group, called in group sort-key
  * order for every material row. Each one is a no-op unless its group's
  * driver field is nonzero, so a material with (say) no plant fields at
  * all costs nothing but a skipped comparison.
- *---------------------------------------------------------------------*/
+ */
 
 static void emit_ignite(const reaction_t *r, uint8_t self_id)
 {
@@ -1301,41 +1168,14 @@ static void emit_ignite(const reaction_t *r, uint8_t self_id)
     const char *adv = adverb_child("flammability", r->flammability);
 
 
-    /* "0 (MAT_EMPTY) is read as MAT_FIRE" - reaction_t.ignites_to's own
-     * comment in material.h, and try_ignite() (sand_reactions.c) does
-     * exactly that. Not an inference: it is the field's documented and
-     * coded default. That comment also names the other two shapes
-     * `ignites_to` takes, and each gets its own sentence rather than one
-     * template forcing all three through "becoming %s":
-     *
-     *   resolves to MAT_FIRE (explicit, or the 0 default) - the fuel is
-     *   simply gone, replaced by flame. "becoming Fire" would be true but
-     *   redundant, so it is dropped rather than said.
-     *
-     *   resolves to itself (wood) - burning is a STATE of this material,
-     *   not a transformation into a different one. The same comment says
-     *   why: it "stays put and keeps burning rather than turning into a
-     *   flame that immediately floats away". "becoming Wood" says the
-     *   opposite of that - it reads as a change - so the sentence says
-     *   what actually happens instead.
-     *
-     *   resolves to a third material - the fuel chars into something else
-     *   entirely. Nothing hits this today, but the shape is real: a
-     *   slower fuel could leave behind ash or coal instead of relighting
-     *   as itself.
-     *
-     * Reworded for an early-elementary reader (see this file's own
-     * ADVERB_EXCEPTIONS-adjacent notes and the module-level pass this
-     * belongs to): "burns in place" and "charring to" both read as plain
-     * English to an adult but were never tested against a five-year-old,
-     * so "keeps burning right where it is" and "turns into" replace them -
-     * same claims, plainer verbs, and the coloured $\textcolor{}{}$ name is
-     * untouched either way. Each of the three branches used to fold its
-     * extra clause onto the "Catches fire..." sentence with a trailing
-     * "and" (and needs_air's clause besides, for oil) - re-reading this as
-     * the child-reader persona (.claude/agents/child-reader.md) flagged
-     * that combination as running long enough to blur the beginning by the
-     * end, so every extra fact now gets its own short sentence instead. */
+    /* ignites_to has three shapes (material.h's own comment; try_ignite()
+     * matches). Each gets its own sentence, not one template: MAT_FIRE/0
+     * default drops "becoming Fire" as redundant. Self (wood) - burning
+     * is a STATE not a transformation, so the sentence avoids "becoming
+     * Wood". A third material - unused today but a real shape (ash/coal).
+     * Wording targets an early-elementary reader (child-reader persona);
+     * each extra fact gets its own sentence, not a trailing "and", so
+     * reading does not blur by the end. */
     if (r->ignites_to == 0 || r->ignites_to == MAT_FIRE) {
         printf("- *Catches* %s%s from %s.\n", mat_span_v(MAT_FIRE),
                rate_gap(adv), heat_sources);
@@ -1709,7 +1549,7 @@ static void emit_material_section(const char *name, const reaction_t *r,
     emit_shatter(r);
 }
 
-/*-----------------------------------------------------------------------
+/*
  * The pairwise A + B -> C table.
  *
  * Keyed on the RATE field and branching on the target - never the other
@@ -1718,7 +1558,7 @@ static void emit_material_section(const char *name, const reaction_t *r,
  * or a third cell entirely (a plant drinking) - see the plan's "The
  * pairwise join is phase 1, not phase 2" section, which is the reason
  * this table exists at all rather than being deferred.
- *---------------------------------------------------------------------*/
+ */
 
 static bool is_burning_material(const reaction_t *r)
 {
@@ -2066,107 +1906,47 @@ static void emit_pairwise_table(void)
     }
 }
 
-/*-----------------------------------------------------------------------
+/*
  * "How these sentences are built."
  *
- * Not the per-material table itself - that stays clean, unmarked prose,
- * on purpose: it is the deliverable a future brush-description feature
- * will read from, not a place for this file's own internals to leak into.
- * This is a SEPARATE section, appended after the pairwise table, showing
- * one representative sentence per group (see group_id_t) with its slots
- * marked, so a reader can see how much of each sentence is a generated
- * slot and how much is hand-written glue inside an emit_*() function.
+ * A separate section after the pairwise table, showing one representative
+ * sentence per group (group_id_t) with its slots marked. The table itself
+ * stays clean unmarked prose - it is the deliverable a brush-description
+ * feature will read, not a place for this file's internals to leak into.
  *
- * Every marked RATE and OBJECT word below is pulled through the exact
- * same adverb()/to_name()/prose_name() calls (and the exact same live
- * reaction_t rows) the real per-material clauses use above - so those
- * words track material.c and cannot go stale the way a typed-out example
- * would. The GLUE text cannot be sourced the same way: it is prose typed
- * directly into the matching emit_*() function's printf() calls, so it is
- * transcribed by hand from that function here, and needs a matching edit
- * if that function's own wording ever changes - each example below names
- * the emit_*() function and fields it mirrors, to make that edit findable.
+ * Marked RATE and OBJECT words come through the same adverb()/to_name()/
+ * prose_name() calls and the same live reaction_t rows as the real clauses
+ * above, so they cannot go stale. GLUE cannot be: it is typed into an
+ * emit_*() printf and transcribed here by hand, so changing that wording
+ * needs a matching edit here - each example names the function it mirrors.
  *
- * The material slots are marked with inline LaTeX colour spans -
- * $\textcolor{#RRGGBB}{\text{...}}$, SINGLE dollars on each side. An
- * earlier version used $${\color{...}...}$$ per slot and failed three ways
- * at once: $$...$$ is DISPLAY math (a block element), so every marked span
- * broke onto its own centred line and shredded the sentence; VSCode's math
- * extension reads a bare $ as its own inline delimiter, so it saw $$ as two
- * of those and threw a KaTeX parse error; and even rendered correctly,
- * KaTeX sets the words in an italic serif math font that clashes with the
- * surrounding sans prose. A version after that switched to plain markdown
- * emphasis - **bold**, `code`, *italic* - which sidesteps all three
- * failures but loses colour: three visual weights cannot carry five
- * distinct slots, so Subject had to share **bold** with Verb and Cause had
- * to fold into unmarked glue. Inline single-dollar math keeps colour and
- * drops the block-math and font problems: $\textcolor{...}{\text{...}}$
- * flows inline, renders upright (`\text{}` switches back out of math
- * italics), and every material name below gets its own colour rather than
- * sharing a channel - see COLOUR MEANS MATERIAL, NOTHING ELSE below for
- * why grammar roles do NOT also compete for that same channel any more,
- * which is what lets plain markdown emphasis back in for them without
- * repeating that earlier failure.
+ * COLOUR MEANS MATERIAL, NOTHING ELSE. Every material name renders in that
+ * material's own colour, read from material_palette() - the array the panel
+ * itself renders from. Grammar role is carried by typography instead:
+ * MARK_VERB italic, MARK_RATE bold, MARK_CAUSE bold italic, glue unmarked.
+ * One channel per question, so neither has to share.
  *
- * WHICH COLOUR A MATERIAL GETS
+ * Colour spans are inline $\textcolor{#RRGGBB}{\text{...}}$, single dollars:
+ * display math ($$) is a block element and breaks each span onto its own
+ * centred line, shredding the sentence.
  *
- * Subject and Object used to be two fixed, unrelated colours (a flat red
- * for whichever row the sentence is about, a flat green for whichever
- * material a field's value names) - which meant the colour told you SLOT,
- * not SUBSTANCE: Wood and Glass rendered in the identical red, Steam and
- * Sand in the identical green, even though the whole point of colouring a
- * material anywhere else in this game is that no two materials share a
- * colour. Every material NAME below - subject or object, and the literal
- * word "fire" inside "Catches fire" (emit_ignite()'s own wording for
- * ignites_to's 0/MAT_FIRE default, not a to_name() call, but naming
- * MAT_FIRE all the same) - now renders in THAT material's own colour
- * instead: material_hex() below reads it straight out of
- * material_palette(), the exact array the panel itself renders from, at
- * the same representative swatch a freshly painted cell of that material
- * actually takes - see representative_variant()'s own comment for why that
- * is not simply app_sand.c's brush_color() variant-13 shortcut, and
- * material_hex()'s for the extended-cell case, which still is.
- *
- * COLOUR MEANS MATERIAL, NOTHING ELSE
- *
- * Verb, Rate/frequency and Cause used to keep one fixed colour each, the
- * same way Subject/Object once did before the fix just above - which left
- * colour answering two unrelated questions at once (WHICH material, and
- * WHICH grammar role), and the palette only ever had an opinion on the
- * first one: nothing in material_palette() says what colour `melts`
- * should be, so those three colours were arbitrary picks this file made
- * up out of nowhere, not derived from anything the game itself knows.
- * Colour now means exactly one thing on this whole page - "this word is a
- * material" - and grammar role moved to typography instead: MARK_VERB
- * prints as *italic* (a light touch for the action), MARK_RATE as
- * **bold** (every rate word scannable in one pass - which is exactly what
- * made the by-feel adverb tuning pass legible once it landed), and
- * MARK_CAUSE as ***bold italic*** (a clause rather than a single word, and
- * the rarest thing on this page - every instance today is a clause
- * recovered from a REACTION_DOC() call in sand_reactions.c, via cause_at()
- * above). Glue stays plain and unmarked, same as always. This
- * is not a return to the all-markdown attempt two paragraphs up, which
- * failed because it had to carry FIVE distinct slots (Subject, Object,
- * Verb, Rate, Cause) through three visual weights: with material identity
- * now handled entirely by its own per-instance LaTeX colour span, the
- * typography channel only has to tell apart THREE grammar roles plus
- * unmarked glue - one weight per role, nothing sharing, nothing left
- * over. See print_marked() below for where each mark_t turns into its
- * treatment, and the Legend this function prints for the reader-facing
- * version of this same rationale. */
+ * See print_marked() for where a mark_t becomes its treatment,
+ * representative_variant() and material_hex() for which swatch a material
+ * is drawn at, and the Legend this function prints for the reader-facing
+ * version of the same rationale.
+ */
 
 typedef enum {
     MARK_NONE,     /* glue (see the Legend below) - printed as ordinary
                     * markdown text, in the reader's own theme colour. */
     MARK_MATERIAL, /* a material's own name - colour is per-INSTANCE, not
-                    * per-slot: two MARK_MATERIAL segments in the same
-                    * sentence (a subject and a cause used to be able to
-                    * share a word; now Wood and Fire never share a colour)
-                    * each carry their own hex in seg_t.color, computed by
-                    * material_hex() below. Colour means exactly one thing
-                    * on this page - "this word is a material" - so this is
-                    * the only mark that still carries one; see COLOUR
-                    * MEANS MATERIAL, NOTHING ELSE above. */
+                    * per-slot: each segment carries its own hex in
+                    * seg_t.color, computed by material_hex() below, so two
+                    * materials in one sentence never share a colour.
+                    * Colour means exactly one thing on this page - "this
+                    * word is a material" - so this is the only mark that
+                    * still carries one; see COLOUR MEANS MATERIAL,
+                    * NOTHING ELSE above. */
     MARK_VERB,     /* the action - *italic*, see print_marked() below and
                     * the Legend this file prints. */
     MARK_RATE,     /* rate / frequency - **bold**. */
@@ -2767,9 +2547,7 @@ static void emit_anatomy(void)
     }
 }
 
-/*-----------------------------------------------------------------------
- * main
- *---------------------------------------------------------------------*/
+/* main */
 
 int main(int argc, char **argv)
 {

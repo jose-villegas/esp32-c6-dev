@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * oracle_main - bare-metal driver, one scene per image (bd oracle spike).
  *
  * Modelled on launcher/main/apps/sand/tools/perf_probe/probe_main.c's own
@@ -16,7 +16,7 @@
  * image has no way to reach into QEMU to request. One scene per invocation
  * is not a limitation being worked around; it is the simplest shape that is
  * still correct.
- *===========================================================================*/
+ */
 #include <stdio.h>
 #include <string.h>
 

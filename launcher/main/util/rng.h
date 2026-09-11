@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * rng - a small deterministic pseudo-random generator, for anything that wants
  * one.
  *
@@ -20,7 +20,7 @@
  * thousands of times a second from its innermost loop, and a function call per
  * draw across a translation-unit boundary would be a real cost - removing that
  * generator from the common path was once worth a factor of two.
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stdbool.h>

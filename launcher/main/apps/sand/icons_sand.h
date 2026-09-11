@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * GENERATED FILE - do not edit.
  *
  *     python tools/gen_icons.py main/apps/sand/icons/sand.png main/apps/sand/icons/sand.json > main/apps/sand/icons_sand.h
@@ -6,7 +6,7 @@
  * Baked from main/apps/sand/icons/sand.png (16x16 cells) - see gfx/icon.h for
  * icon_t's own fields and tools/gen_icons.py for the PNG/SVG decode,
  * validation and packing this table was produced by.
- *===========================================================================*/
+ */
 #pragma once
 
 #include <stdint.h>

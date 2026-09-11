@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Specification for the touch state machine.
  *
  * This is the logic that turns "the controller reported a point / reported
@@ -9,7 +9,7 @@
  * The debounce cases below are not hypothetical: the FT5x06's INT line signals
  * "data ready" rather than "finger down" and drops briefly mid-touch, which
  * made a held finger flicker between pressed and released.
- *===========================================================================*/
+ */
 
 #include "unity.h"
 #include "suites.h"

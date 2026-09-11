@@ -1,5 +1,5 @@
 #pragma once
-/*=============================================================================
+/*
  * Interface to heap_arena.c's bookkeeping, for timing.c's per-test hook.
  *
  * Everything here (and everything in heap_arena.c) is compiled in ONLY when
@@ -7,7 +7,7 @@
  * That means this header is safe to include unconditionally, but timing.c
  * still guards the #include itself: it costs nothing and keeps the device
  * build and perf_probe from ever resolving this path at all.
- *===========================================================================*/
+ */
 #ifdef HOST_HEAP_ARENA
 
 #include <stddef.h>

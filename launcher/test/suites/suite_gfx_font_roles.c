@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * Portable suite: gfx_font_roles - the accessors, not the fonts behind them.
  *
  * gfx_font_roles.h is deliberately thin: each role is a `static inline`
@@ -14,16 +14,14 @@
  * gfx.h is deliberately NOT included here, the same reason suite_gfx_font.c
  * does not include it: it pulls in bsp/esp-bsp.h, which does not compile on
  * a host, and gfx_font_roles.h itself only needs gfx_font.h to do its job.
- *===========================================================================*/
+ */
 
 #include "unity.h"
 #include "suites.h"
 
 #include "gfx/gfx_font_roles.h"
 
-/*---------------------------------------------------------------------------
- * gfx_font_ui() - the UI/body-text role
- *-------------------------------------------------------------------------*/
+/* gfx_font_ui() - the UI/body-text role */
 
 /* Pointer identity, not a field-by-field comparison: gfx_font_ui() promises
  * to hand back gfx_font_8x8 itself, the one instance every drawing path

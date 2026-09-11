@@ -1,4 +1,4 @@
-/*=============================================================================
+/*
  * sand_liquid_move - the liquid-movement helpers called FROM sand_step()'s
  * main sweep, `static inline` here for the same reason as dest_row() and
  * mark_rows() in sand_priv.h: move_liquid_grain() sits on the hottest path
@@ -7,7 +7,7 @@
  * between sand.c (the sweep that calls move_liquid_grain()) and
  * sand_liquid.c (whose cross-flow half still uses pour_into() and
  * liquid_may_move()) - each .c file gets its own inlinable copy.
- *===========================================================================*/
+ */
 #pragma once
 
 #include "sand_priv.h"
@@ -98,9 +98,7 @@ static inline int room_in(cell_t c, uint8_t id)
     return MASS_MAX - CELL_VARIANT(c);
 }
 
-/*---------------------------------------------------------------------------
- * The one piece of liquid movement inside the main sweep.
- *-------------------------------------------------------------------------*/
+/* The one piece of liquid movement inside the main sweep. */
 
 /* Row-shaped bookkeeping. Calls mark_rows() up to thrice per grain. Cache
  * removal makes it cheap. */

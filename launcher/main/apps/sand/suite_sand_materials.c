@@ -1,11 +1,11 @@
-/*=============================================================================
+/*
  * Portable suite: the falling-sand automaton - material identity,
  * displacement, and levelling.
  *
  * Split out of suite_sand.c (bd esp32c6 test-suite-refactor), which had grown
  * past 32,000 lines across 500+ tests. Shared fixtures and assertion helpers
  * live in suite_sand_common.{c,h} - see that header.
- *===========================================================================*/
+ */
 #include <math.h>   /* not every file in the split still needs atan2()/M_PI,
                      * but every file inherited suite_sand.c's own include
                      * block rather than being pruned by hand, to keep the
@@ -387,13 +387,10 @@ static long mass_in_basin(void)
 
 static void test_a_tipped_basin_pours_its_water_out(void)
 {
-    /* The reported behaviour: tilting the board poured some of the water and
-     * then stopped, leaving a lump sitting in the basin like sand.
-     *
-     * The cause was that a liquid spread along a SCREEN row, which is only
-     * "along the surface" while gravity points straight down. Tilted, water
-     * could no longer level in its own frame, so it heaped against the low
-     * wall instead of running over the lip. */
+    /* Tilting the board must still pour the water, not heap it: a liquid
+     * that spreads along a SCREEN row only levels correctly while gravity
+     * points straight down, so tilted, it can heap against the low wall
+     * instead of running over the lip. */
     build_full_basin();
     const long held = mass_in_basin();
     TEST_ASSERT_GREATER_THAN_MESSAGE(100, held,
@@ -404,24 +401,14 @@ static void test_a_tipped_basin_pours_its_water_out(void)
         sand_step(&pour, 1000, 300, 0);
     }
 
-    /* Not held/10. That threshold encoded the OLD bug rather than the
-     * physics: under this gravity the basin's right-hand wall (stone at
-     * x=12, y=8..13, floor stone at y=13) is a FLOOR, and the corner at
-     * (11,12) is a genuine pocket - the only way out is to climb to y<=7
-     * and go over the wall's top corner at (12,7). The level plane through
-     * that spill corner is (x-12)*1000 + (y-7)*300 > 0 for "below the
-     * plane", and within the region mass_in_basin() measures (x 6..11,
-     * y 8..12) only (11,11) and (11,12) satisfy it - two cells, 30 units of
-     * the 144 this basin started with. No correct simulation can empty this
-     * basin below that 30, so held/10 = 14 was never a reachable target; it
-     * was only ever met while cross-flow treated a vertical ray as level and
-     * let water climb the wall for nothing. The fix leaves 51: those 30
-     * physically-trapped units plus about 1.4 cells of residual film, which
-     * is the levelling rule's own dead band - a transfer moves whole mass
-     * units, so up to one unit of level difference can persist at each hop
-     * of a chain, and the escape route out of this corner is a four-hop
-     * chain. 75 sits above the fix's 51 with room, and still below anything
-     * that would call a heaped-up basin a pour. */
+    /* 75, not held/10: under this gravity the basin's right wall is a
+     * floor, and the corner at (11,12) is a genuine pocket reachable only
+     * by climbing to y<=7 and over the wall's top corner - about 30 of the
+     * basin's 144 units are physically trapped there, plus ~1.4 cells of
+     * residual film from the levelling rule's own dead band (a transfer
+     * moves whole mass units, so up to one unit of difference can persist
+     * per hop). 75 sits above that floor without calling a heaped basin a
+     * pour. */
     const long left = mass_in_basin();
     TEST_ASSERT_LESS_THAN_MESSAGE(75, (int)left,
         "held on its side, a basin of water must pour rather than heap - 75 "
@@ -778,32 +765,14 @@ static int settled_surface_slope_q10(int w, int h, int gx, int gy, int steps)
 
 static void test_a_pool_settles_at_the_angle_it_is_tilted_to(void)
 {
-    /* The reported bug: a settled liquid surface only ever came out
-     * perfectly flat or snapped to the 45-degree diagonal, never anywhere
-     * in between - because equalise_liquids() levelled along a single ray
-     * taken perpendicular to the NEAREST of the eight gravity directions,
-     * so a settled surface could only ever be perpendicular to one of
-     * those eight, and quantised to 0/45/90 degrees. It is worst at the
-     * app's LOW quality setting, whose grid is 368/6 x 448/6 = 61x74 -
-     * which is why 61x74 is one of the fixtures below by name, not a round
-     * number picked for convenience.
-     *
-     * Two tilts are needed, not one: 20 and 26 degrees sit either side of
-     * the 22.5-degree boundary between two of the eight octants, and the
-     * old behaviour failed them in OPPOSITE directions - flat below the
-     * boundary (the nearest direction was still the axis) and snapped to
-     * the diagonal above it (the nearest direction became the diagonal).
-     * A fix that only moved the boundary rather than removing it could pass
-     * one of these and fail the other.
-     *
-     * Measured on the host, all four fixtures, 2500 steps, this q10 slope
-     * against the true one:
-     *   on the fix:  20deg 0.262-0.369 (true 0.364); 26deg 0.394-0.479 (true 0.488)
-     *   before it:   20deg 0.012-0.032 (dead flat);  26deg 0.645-0.941 (snapped
-     *                                                 to the diagonal)
-     * so the band asserted below, 0.15 to 0.58 (154 to 594 in q10), is green
-     * on the fix at every fixture with at least 0.10 of margin, and red
-     * before it at every fixture in both directions. */
+    /* Two tilts are needed: 20 and 26 degrees sit either side of the
+     * 22.5-degree boundary between two of the eight gravity octants
+     * equalise_liquids() levels against, so a bug quantising to that
+     * boundary would fail them in opposite directions. Measured on the
+     * host, all four fixtures, 2500 steps: true q10 slope 0.364 (20deg)
+     * and 0.488 (26deg); the asserted band 0.15-0.58 clears both with
+     * margin and excludes both the flat (0) and diagonal (1024) quantised
+     * outcomes. */
     static const struct { int w, h; } fixtures[] = {
         { 32, 20 }, { 40, 28 }, { 61, 74 }, { 92, 56 },
     };
@@ -847,28 +816,13 @@ static void test_water_falling_onto_water_also_queues_a_small_displacement(void)
      * landing, gated to a genuine fall (open space one step above) rather
      * than ordinary internal levelling. */
     enum { CX = 1, POOL_TOP = 6, SURFACE_MASS = MASS_MAX / 2 };
-    /* Sized well past exact_disc_count(SAND_SPLASH_RADIUS_WATER) (sand.c),
-     * NOT SPLASH_W * SPLASH_H - the disc this call seeds is a property of
-     * the RADIUS, not of this tiny 3-wide grid, and a buffer only as big
-     * as the grid's own cell count starved queue_outward_impulse()'s own
-     * thinning: `keep = min(disc_count, room)` came out buffer-limited,
-     * and thinning spread those few kept slots evenly across the WHOLE
-     * untrimmed disc - most of which falls off a grid this narrow - so
-     * every kept slot could land out of bounds and nothing ever queued,
-     * even though the trigger itself (chance, radius) fired correctly.
-     * 4096, not 1024 any more - RADIUS_WATER doubling to 20 put
-     * exact_disc_count() at 1257, past the old 1024, which would have
-     * silently reintroduced exactly this starvation. 4096 comfortably
-     * clears today's radius with headroom for tuning it further. */
-    /* HEAP, not the stack: impulse_t is 6 bytes, so 4096 of them is 24 KB
-     * against this device's 3,584-byte main task stack
-     * (CONFIG_ESP_MAIN_TASK_STACK_SIZE). On the host, with megabytes of
-     * stack, the array was invisible; on the board it panicked with a
-     * Stack protection fault and reboot-looped the whole self-test before
-     * it could reach any frame-budget test. That is the same bug, in this
-     * same file, that the sixth tuning attempt fixed once already - see
-     * docs/sand/Performance-Tuning-Attempts.md - and the same fix: every
-     * other fixture here mallocs, and so must this one. */
+    /* Sized to exact_disc_count(SAND_SPLASH_RADIUS_WATER) (sand.c), not
+     * this grid's own cell count - a buffer sized to the grid starves
+     * queue_outward_impulse()'s thinning and can queue nothing even on a
+     * correctly firing trigger. HEAP, not the stack: impulse_t is 6 bytes,
+     * so 4096 of them is 24 KB against this device's 3,584-byte main task
+     * stack - see docs/sand/Performance-Tuning-Attempts.md for the stack
+     * overflow this avoids. */
     impulse_t *drop_impulse_buf = malloc(4096 * sizeof *drop_impulse_buf);
     TEST_ASSERT_NOT_NULL_MESSAGE(drop_impulse_buf,
         "the splash impulse queue must fit in what the framebuffer leaves");
@@ -915,45 +869,18 @@ static uint8_t crater_cells[CRATER_W * CRATER_H];
 
 static void test_a_water_splash_actually_opens_a_gap(void)
 {
-    /* "impulse_count > 0" (an earlier version of this test) only proves
-     * something got QUEUED - it says nothing about whether the queued
-     * swap ever produced a visible change. can_impulse_enter()
-     * (step_impulses(), sand.c) lets a flying grain swap into ANY
-     * non-static occupant, not only an empty one, so a splash that only
-     * ever aims at more water "succeeds" mechanically while changing
+    /* can_impulse_enter() (step_impulses(), sand.c) lets a flying grain
+     * swap into any non-static occupant, not only empty ones, so a splash
+     * aimed only at more water succeeds mechanically while changing
      * nothing on screen - reported on device as "still just merging, not
-     * a repel". This test pins the actual, visible claim instead: a
-     * genuine, MULTI-CELL crater opens around the point of impact, not
-     * one lonely cell - see splash_displace()'s own comment (sand_liquid.c)
-     * for why one cell was all an earlier version of the mechanic itself
-     * could ever produce (every push shared one origin and only one could
-     * ever win), which this scene is built wide enough to actually catch.
-     *
-     * A narrow (3-wide) pool was tried first and could not exercise this
-     * at all: the redesigned mechanic pushes a NEIGHBOUR further outward,
-     * which needs two clear cells past that neighbour, and a 3-wide grid
-     * has nowhere with that much room next to a contact point. This pool
-     * sits 3 columns wide (POOL_L..POOL_R) in an 11-wide grid so BOTH
-     * flanks, and both lower diagonals, have real clearance beyond them -
-     * four independent directions a crater could plausibly open in, from
-     * four different source cells that cannot collide with each other the
-     * way a single shared origin did. */
+     * a repel". This test pins the visible claim instead: a genuine
+     * multi-cell crater opens around impact, not one lonely cell. The pool
+     * is 3 columns wide in an 11-wide grid so every flank and diagonal has
+     * real clearance to open into. */
     enum { CX = 6, POOL_TOP = 6, SURFACE_MASS = MASS_MAX / 2,
            POOL_L = 5, POOL_R = 7 };
-    /* 4096, not CRATER_W * CRATER_H - see drop_impulse_buf's own comment
-     * in the test above for why a buffer only as big as the grid's own
-     * cell count starves queue_outward_impulse()'s thinning and can queue
-     * nothing at all, even on a correctly-firing trigger, and for why 1024
-     * itself stopped being enough once RADIUS_WATER doubled to 20. */
-    /* HEAP, not the stack: impulse_t is 6 bytes, so 4096 of them is 24 KB
-     * against this device's 3,584-byte main task stack
-     * (CONFIG_ESP_MAIN_TASK_STACK_SIZE). On the host, with megabytes of
-     * stack, the array was invisible; on the board it panicked with a
-     * Stack protection fault and reboot-looped the whole self-test before
-     * it could reach any frame-budget test. That is the same bug, in this
-     * same file, that the sixth tuning attempt fixed once already - see
-     * docs/sand/Performance-Tuning-Attempts.md - and the same fix: every
-     * other fixture here mallocs, and so must this one. */
+    /* 4096, not CRATER_W * CRATER_H, and HEAP not the stack - see
+     * drop_impulse_buf's own comment in the test above for why. */
     impulse_t *buf = malloc(4096 * sizeof *buf);
     TEST_ASSERT_NOT_NULL_MESSAGE(buf,
         "the crater impulse queue must fit in what the framebuffer leaves");
@@ -1011,45 +938,14 @@ static uint8_t cascade_test_cells[CASCADE_TEST_W * CASCADE_TEST_H];
 
 static void test_a_cascading_impulse_moves_more_than_one_cell(void)
 {
-    /* An ordinary impulse only ever moves the ONE grain it was queued
-     * for. See step_impulses()'s own CASCADE comment (sand.c) for the
-     * fix: a successful WATER or ACID move relays its push into whatever
-     * of the SAME material sits one step BEHIND where it started (so
-     * that cell can advance into the gap this one just left), queued for
-     * the NEXT step's pass rather than this one's - the speed halves
-     * each hop (SAND_CASCADE_SPEED_DIVISOR), so the wave loses energy and
-     * dies out on its own, but a chain of connected liquid should still
-     * move as a group for a few hops, not as one grain stepping aside
-     * while the rest of the chain stays exactly put.
-     *
-     * A VERTICAL column, pushed UP (against gravity), not a horizontal
-     * row pushed sideways - tried first, and confounded by something
-     * unrelated to the cascade entirely: cross-flow (equalise_liquids(),
-     * sand_liquid.c) runs every step PERPENDICULAR to gravity, and with
-     * gravity straight down that perpendicular axis is horizontal - the
-     * exact axis the impulse was also pushing along. The row filled
-     * itself completely within three steps through perfectly ordinary
-     * levelling, with or without any impulse, so "is any cell in the row
-     * empty" could never isolate the cascade's own contribution. Gravity
-     * can never move water UP on its own, so a column pushed upward has
-     * no such confound: any water found above where the column originally
-     * ended must have arrived via the impulse system, and specifically
-     * MORE THAN ONE cell up there at once (checked at a single instant,
-     * after the loop below) is only possible if more than one entry was
-     * in flight together - a lone, non-cascading impulse can only ever
-     * occupy one cell at a time, however far it travels alone over
-     * however many steps.
-     *
-     * EXACTLY ONE CELL WIDE, not merely narrow - a 3-wide version of
-     * this same scene was tried first and had a THIRD confound: the
-     * "down the slope" diagonal slides in move_liquid_grain()
-     * (sand_liquid.c) let the column leak sideways into the empty
-     * flanking columns even though it was already fully settled
-     * vertically, corrupting the column's own mass distribution over
-     * time for reasons that had nothing to do with any impulse. A grid
-     * exactly as wide as the column leaves no adjacent column to leak
-     * into at all - both sides read as solid via sand_at()'s own
-     * off-grid convention, the same guarantee a real wall would give. */
+    /* An impulse only ever moves the ONE grain queued - a successful
+     * WATER/ACID move relays its push into same-material behind it
+     * (step_impulses()'s CASCADE comment, sand.c), speed halving each hop
+     * so the wave dies out. A VERTICAL column pushed UP, not sideways:
+     * cross-flow runs horizontal every step, and gravity never moves
+     * water up on its own, so water above the column must be the
+     * impulse. EXACTLY ONE CELL WIDE, or the diagonal slide leaks it
+     * sideways, unrelated to any impulse. */
     enum { COL = 0, TOP = 8, COL_LEN = 8, DIR_UP = 4 };
     impulse_t buf[64];
     sand_init(&fx.cascade_test_sim, cascade_test_cells, CASCADE_TEST_W,
@@ -1109,28 +1005,14 @@ static void test_a_cascading_impulse_moves_more_than_one_cell(void)
 #define STIR_H 30
 static uint8_t stir_cells[STIR_W * STIR_H];
 
-/* THE PINPOINTING TEST THE MAINTAINER ASKED FOR. Reported: pouring water
- * over dirt makes the submerged dirt "move a lot". Measured (see can_
- * impulse_enter()'s own comment, sand.c, for the full numbers) rather than
- * argued: the obvious suspect, splash_displace()'s directed ring kick
- * (sand_liquid.c), barely ever touched a dirt cell - 60 times out of
- * roughly 7,500 firings on this same shape of scene. The actual cause was
- * can_impulse_enter() itself, which used to let a flying water grain swap
- * into ANY non-static occupant on the way to landing, dirt included -
- * every splash grain the pour kicked up tunnelled straight through
- * whatever dirt sat in its path. Built as close to the measured scene as
- * this file's own helpers allow: a settled dirt bed, a settled pool of
- * water resting on it, and a continuous stream poured on top of that pool
- * for hundreds of steps, so plenty of drops land hard on an already-full
- * surface and splash.
- *
- * TRACKS POSITION, NOT BYTES - "assert on dirt cells moving, not on
- * impulse internals" is the brief this test was written against. A dirt
- * cell's own MOISTURE nibble legitimately changes near standing water
- * (wicking - unrelated to this bug, and not something this test should
- * ever fail on), so what is pinned here is whether MAT_DIRT itself ever
- * leaves one of its starting cells - the thing the report actually
- * complained about - not whether any byte of it changed in place. */
+/* Pouring water over a dirt bed must never move a dirt cell out of
+ * position - can_impulse_enter() (sand.c) gates a flying water grain's
+ * swap to liquid targets only, so a splash-kicked grain cannot tunnel
+ * through dirt in its path. A settled dirt bed and pool, with a
+ * continuous stream poured on top. Tracks whether MAT_DIRT leaves its
+ * starting cell, not whether any byte changed - moisture legitimately
+ * shifts near standing water (wicking), which must never fail this
+ * test. */
 static void test_pouring_water_over_a_dirt_bed_never_moves_a_dirt_cell(void)
 {
     enum {
@@ -1202,36 +1084,14 @@ static void test_pouring_water_over_a_dirt_bed_never_moves_a_dirt_cell(void)
         "either - the two counts are the same swap seen from its two ends");
 }
 
-/* THE DIRECT VERSION OF THE SAME CLAIM, isolated from the pinpointing
- * scene's own moving parts (splash chance, radius decay, a continuous
- * pour) down to one water grain and one dirt grain: queue a single
- * impulse aimed straight at a dirt cell and watch it fail to arrive.
- *
- * SIDEWAYS, not straight down - traced two confounds out of this test
- * before landing here, neither one this file's fault. A single dirt cell
- * with open, empty ground either side let ordinary gravity's own diagonal
- * slide walk the water around it before the impulse ever ran; filling the
- * whole row with dirt fixed that but let sand_step_liquids()'s cross-flow
- * spread the one water cell sideways across the open row above it instead
- * (see splash_displace()'s own comment, sand_liquid.c, for the identical
- * "open ground either side" shape of that older, related bug). Neither
- * confound is why a THIRD attempt, straight down with a full dirt row AND
- * a floor pinning the water in place, still passed on UNFIXED code: dirt
- * is DENSER than water (62 against 30), so the instant the impulse's own
- * bugged swap puts water below dirt, ORDINARY gravity - can_enter(),
- * sand_priv.h, ALLOWS a denser powder to sink through a lighter liquid -
- * immediately sinks the dirt back down through the water on the very next
- * step, before this test's own loop ever gets to look. The two mechanisms
- * fight to the same visible resting place, byte-for-byte, and a test that
- * only checks the FINAL position cannot tell "the impulse rule already
- * refused this" from "ordinary gravity kept undoing what the impulse rule
- * allowed" - confirmed by a full per-step board dump, not assumed.
- * SIDEWAYS has no such shadow: ordinary powder movement only ever
- * considers straight-down and the two gravity-relative diagonals as
- * candidates (step_one_grain(), sand.c) - a purely horizontal neighbour is
- * never one of them, density or no density - so a floor under both cells
- * (blocking the vertical candidates outright) leaves the impulse this test
- * queues as the ONLY mechanism that could ever move either cell at all. */
+/* Isolates the pinpointing test's claim to one water grain and one dirt
+ * grain: queue an impulse at a dirt cell and watch it fail to arrive.
+ * SIDEWAYS, not down: dirt is DENSER than water, so a bugged swap gets
+ * undone by gravity next step, and a final-position check cannot tell
+ * that from a refusal. Ordinary powder movement never considers a
+ * horizontal neighbour (step_one_grain(), sand.c), so with a floor
+ * blocking vertical candidates, this impulse is the only mechanism that
+ * could move either cell. */
 static void test_a_flying_water_grain_does_not_swap_into_dirt_in_its_path(void)
 {
     fixture();
