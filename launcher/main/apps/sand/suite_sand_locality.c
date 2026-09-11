@@ -271,23 +271,26 @@ static void test_sideways_tilt_wakes_only_the_disturbed_column(void)
  * comment above for the full story; this is the same bug class. */
 static uint8_t *pool_cells;
 static uint8_t *pool_sleep_blocks;
-static sand_t   pool;
+static sand_t  *pool_p;
 
 static void pool_fixture(void)
 {
     pool_cells        = malloc((size_t)POOL_W * POOL_H);
     pool_sleep_blocks = malloc((size_t)POOL_BLOCK_COLS * POOL_BLOCK_ROWS);
+    pool_p            = malloc(sizeof *pool_p);
     TEST_ASSERT_NOT_NULL(pool_cells);
     TEST_ASSERT_NOT_NULL(pool_sleep_blocks);
+    TEST_ASSERT_NOT_NULL(pool_p);
 
-    sand_init(&pool, pool_cells, POOL_W, POOL_H, 77u);
-    sand_enable_sleeping(&pool, pool_sleep_blocks);
+    sand_init(pool_p, pool_cells, POOL_W, POOL_H, 77u);
+    sand_enable_sleeping(pool_p, pool_sleep_blocks);
 }
 
 static void pool_free(void)
 {
     free(pool_cells);
     free(pool_sleep_blocks);
+    free(pool_p);
 }
 
 static void test_liquid_cross_flow_wakes_only_the_blocks_it_touches_by_range(void)
@@ -299,23 +302,23 @@ static void test_liquid_cross_flow_wakes_only_the_blocks_it_touches_by_range(voi
     pool_fixture();
 
     for (int y = POOL_H - POOL_WALL_ROWS; y < POOL_H; y++) {
-        sand_set(&pool, 0, y, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
-        sand_set(&pool, POOL_W - 1, y, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+        sand_set(pool_p, 0, y, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+        sand_set(pool_p, POOL_W - 1, y, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
     }
     /* POOL_WATER_COLS columns wide and POOL_WATER_H tall - see the comment
      * above POOL_W for why both need to scale with the pool rather than
      * staying a single fixed-height column. */
     for (int x = 1; x <= POOL_WATER_COLS; x++) {
         for (int y = 0; y < POOL_WATER_H; y++) {
-            sand_set(&pool, x, y, CELL_MAKE(MAT_WATER, 8));
+            sand_set(pool_p, x, y, CELL_MAKE(MAT_WATER, 8));
         }
     }
 
     for (int i = 0; i < 600; i++) {
-        sand_step(&pool, 0, 1000, 0);
+        sand_step(pool_p, 0, 1000, 0);
     }
 
-    const int far_end_material = CELL_MATERIAL(sand_at(&pool, POOL_W - 2, POOL_H - 1));
+    const int far_end_material = CELL_MATERIAL(sand_at(pool_p, POOL_W - 2, POOL_H - 1));
 
     pool_free();
     TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER, far_end_material,

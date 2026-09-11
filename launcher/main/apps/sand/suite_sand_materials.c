@@ -328,28 +328,50 @@ static void test_water_poured_into_a_basin_reaches_both_ends(void)
 /* A basin needs room around it, so these get a grid of their own. */
 #define POUR_W 18
 #define POUR_H 14
-static uint8_t pour_cells[POUR_W * POUR_H];
-static sand_t  pour;
+static uint8_t *pour_cells;
+static sand_t  *pour_p;
+
+/* Both basin tests own their grid for the length of one test - see
+ * suite_sand_common.h on why a fixture this size is not a file static. */
+static void pour_alloc(void)
+{
+    pour_cells = malloc((size_t)POUR_W * POUR_H);
+    pour_p     = malloc(sizeof *pour_p);
+    if (!pour_cells || !pour_p) {
+        free(pour_cells);
+        free(pour_p);
+        TEST_ASSERT_TRUE_MESSAGE(false,
+            "basin grid must fit in what the framebuffer leaves");
+    }
+}
+
+static void pour_free(void)
+{
+    free(pour_cells);
+    free(pour_p);
+    pour_cells = NULL;
+    pour_p     = NULL;
+}
 
 /* An open-topped stone basin, filled with water and settled level. */
 static void build_full_basin(void)
 {
-    sand_init(&pour, pour_cells, POUR_W, POUR_H, 9u);
+    sand_init(pour_p, pour_cells, POUR_W, POUR_H, 9u);
 
     for (int y = POUR_H - 6; y < POUR_H; y++) {
-        sand_set(&pour, 5,  y, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
-        sand_set(&pour, 12, y, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+        sand_set(pour_p, 5,  y, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+        sand_set(pour_p, 12, y, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
     }
     for (int x = 5; x < 13; x++) {
-        sand_set(&pour, x, POUR_H - 1, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+        sand_set(pour_p, x, POUR_H - 1, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
     }
     for (int y = POUR_H - 4; y < POUR_H - 1; y++) {
         for (int x = 6; x < 12; x++) {
-            sand_set(&pour, x, y, CELL_MAKE(MAT_WATER, 8));
+            sand_set(pour_p, x, y, CELL_MAKE(MAT_WATER, 8));
         }
     }
     for (int i = 0; i < 200; i++) {
-        sand_step(&pour, 0, 1000, 0);
+        sand_step(pour_p, 0, 1000, 0);
     }
 }
 
@@ -358,7 +380,7 @@ static int material_in_basin(material_id_t m)
     int n = 0;
     for (int y = POUR_H - 6; y < POUR_H - 1; y++) {
         for (int x = 6; x < 12; x++) {
-            if (CELL_MATERIAL(sand_at(&pour, x, y)) == m) {
+            if (CELL_MATERIAL(sand_at(pour_p, x, y)) == m) {
                 n++;
             }
         }
@@ -376,7 +398,7 @@ static long mass_in_basin(void)
     long total = 0;
     for (int y = POUR_H - 6; y < POUR_H - 1; y++) {
         for (int x = 6; x < 12; x++) {
-            const cell_t c = sand_at(&pour, x, y);
+            const cell_t c = sand_at(pour_p, x, y);
             if (!CELL_IS_EMPTY(c) && CELL_MATERIAL(c) == MAT_WATER) {
                 total += CELL_VARIANT(c);
             }
@@ -391,6 +413,7 @@ static void test_a_tipped_basin_pours_its_water_out(void)
      * that spreads along a SCREEN row only levels correctly while gravity
      * points straight down, so tilted, it can heap against the low wall
      * instead of running over the lip. */
+    pour_alloc();
     build_full_basin();
     const long held = mass_in_basin();
     TEST_ASSERT_GREATER_THAN_MESSAGE(100, held,
@@ -398,7 +421,7 @@ static void test_a_tipped_basin_pours_its_water_out(void)
 
     /* Tipped hard to the right - far past any angle of repose. */
     for (int i = 0; i < 600; i++) {
-        sand_step(&pour, 1000, 300, 0);
+        sand_step(pour_p, 1000, 300, 0);
     }
 
     /* 75, not held/10: under this gravity the basin's right wall is a
@@ -425,7 +448,7 @@ static void test_a_tipped_basin_pours_its_water_out(void)
      * has the SHAPE a puddle in a pocket has, not the shape a pile has. */
     for (int y = POUR_H - 6; y < POUR_H - 1; y++) {
         for (int x = 6; x <= 9; x++) {
-            const cell_t c = sand_at(&pour, x, y);
+            const cell_t c = sand_at(pour_p, x, y);
             char why[128];
             snprintf(why, sizeof why,
                      "water heaped at (%d,%d), away from the low corner - "
@@ -434,6 +457,8 @@ static void test_a_tipped_basin_pours_its_water_out(void)
                 !CELL_IS_EMPTY(c) && CELL_MATERIAL(c) == MAT_WATER, why);
         }
     }
+
+    pour_free();
 }
 
 static void test_a_tipped_basin_keeps_its_sand(void)
@@ -442,30 +467,33 @@ static void test_a_tipped_basin_keeps_its_sand(void)
      * the same way must NOT all run out. If both emptied, the test above would
      * be measuring gravity rather than the difference between a liquid and a
      * powder. */
-    sand_init(&pour, pour_cells, POUR_W, POUR_H, 9u);
+    pour_alloc();
+    sand_init(pour_p, pour_cells, POUR_W, POUR_H, 9u);
     for (int y = POUR_H - 6; y < POUR_H; y++) {
-        sand_set(&pour, 5,  y, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
-        sand_set(&pour, 12, y, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+        sand_set(pour_p, 5,  y, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+        sand_set(pour_p, 12, y, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
     }
     for (int x = 5; x < 13; x++) {
-        sand_set(&pour, x, POUR_H - 1, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+        sand_set(pour_p, x, POUR_H - 1, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
     }
     for (int y = POUR_H - 4; y < POUR_H - 1; y++) {
         for (int x = 6; x < 12; x++) {
-            sand_set(&pour, x, y, CELL_MAKE(MAT_SAND, 8));
+            sand_set(pour_p, x, y, CELL_MAKE(MAT_SAND, 8));
         }
     }
     for (int i = 0; i < 200; i++) {
-        sand_step(&pour, 0, 1000, 0);
+        sand_step(pour_p, 0, 1000, 0);
     }
 
     for (int i = 0; i < 600; i++) {
-        sand_step(&pour, 1000, 300, 0);
+        sand_step(pour_p, 1000, 300, 0);
     }
 
     TEST_ASSERT_GREATER_THAN_MESSAGE(0, material_in_basin(MAT_SAND),
         "sand has friction and an angle of repose, so a tipped basin must "
         "keep some of it");
+
+    pour_free();
 }
 
 /* Wide enough that a puddle has somewhere to go. On a grid the pour can fill,
@@ -797,7 +825,6 @@ static void test_a_pool_settles_at_the_angle_it_is_tilted_to(void)
 
 #define SPLASH_W 3
 #define SPLASH_H 10
-static uint8_t splash_cells[SPLASH_W * SPLASH_H];
 
 static void test_water_falling_onto_water_also_queues_a_small_displacement(void)
 {
@@ -817,6 +844,9 @@ static void test_water_falling_onto_water_also_queues_a_small_displacement(void)
     impulse_t *drop_impulse_buf = malloc(4096 * sizeof *drop_impulse_buf);
     TEST_ASSERT_NOT_NULL_MESSAGE(drop_impulse_buf,
         "the splash impulse queue must fit in what the framebuffer leaves");
+    uint8_t *splash_cells = malloc((size_t)SPLASH_W * SPLASH_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(splash_cells,
+        "splash column grid must fit in what the framebuffer leaves");
     sand_init(&fx.splash_sim, splash_cells, SPLASH_W, SPLASH_H, 1u);
     sand_enable_impulses(&fx.splash_sim, drop_impulse_buf, 4096);
 
@@ -852,11 +882,12 @@ static void test_water_falling_onto_water_also_queues_a_small_displacement(void)
     TEST_ASSERT_TRUE_MESSAGE(queued,
         "a drop that fell through open space and landed on an existing "
         "puddle's surface must queue a small directed impulse");
+
+    free(splash_cells);
 }
 
 #define CRATER_W 11
 #define CRATER_H 12
-static uint8_t crater_cells[CRATER_W * CRATER_H];
 
 static void test_a_water_splash_actually_opens_a_gap(void)
 {
@@ -875,6 +906,9 @@ static void test_a_water_splash_actually_opens_a_gap(void)
     impulse_t *buf = malloc(4096 * sizeof *buf);
     TEST_ASSERT_NOT_NULL_MESSAGE(buf,
         "the crater impulse queue must fit in what the framebuffer leaves");
+    uint8_t *crater_cells = malloc((size_t)CRATER_W * CRATER_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(crater_cells,
+        "crater grid must fit in what the framebuffer leaves");
     sand_init(&fx.crater_sim, crater_cells, CRATER_W, CRATER_H, 1u);
     sand_enable_impulses(&fx.crater_sim, buf, 4096);
 
@@ -921,11 +955,12 @@ static void test_a_water_splash_actually_opens_a_gap(void)
         "clear more than one cell around the point of impact - a single "
         "cleared cell means the crater is still only ever one grain wide, "
         "whatever the radius or chance settings claim to allow");
+
+    free(crater_cells);
 }
 
 #define CASCADE_TEST_W 1
 #define CASCADE_TEST_H 16
-static uint8_t cascade_test_cells[CASCADE_TEST_W * CASCADE_TEST_H];
 
 static void test_a_cascading_impulse_moves_more_than_one_cell(void)
 {
@@ -939,6 +974,9 @@ static void test_a_cascading_impulse_moves_more_than_one_cell(void)
      * sideways, unrelated to any impulse. */
     enum { COL = 0, TOP = 8, COL_LEN = 8, DIR_UP = 4 };
     impulse_t buf[64];
+    uint8_t *cascade_test_cells = malloc((size_t)CASCADE_TEST_W * CASCADE_TEST_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cascade_test_cells,
+        "cascade column grid must fit in what the framebuffer leaves");
     sand_init(&fx.cascade_test_sim, cascade_test_cells, CASCADE_TEST_W,
              CASCADE_TEST_H, 1u);
     sand_enable_impulses(&fx.cascade_test_sim, buf, 64);
@@ -973,13 +1011,14 @@ static void test_a_cascading_impulse_moves_more_than_one_cell(void)
         "impulse_count climbing above 1 proves the cascade queued a "
         "second, independent entry rather than the lone grain simply "
         "moving alone");
+
+    free(cascade_test_cells);
 }
 
 /* --- pouring water must not stir the dirt bed underneath it --------------- */
 
 #define STIR_W 14
 #define STIR_H 30
-static uint8_t stir_cells[STIR_W * STIR_H];
 
 /* Pouring water over a dirt bed must never move a dirt cell out of
  * position - can_impulse_enter() (sand.c) gates a flying water grain's
@@ -1006,6 +1045,9 @@ static void test_pouring_water_over_a_dirt_bed_never_moves_a_dirt_cell(void)
     impulse_t *buf = malloc(4096 * sizeof *buf);
     TEST_ASSERT_NOT_NULL_MESSAGE(buf,
         "the pour impulse queue must fit in what the framebuffer leaves");
+    uint8_t *stir_cells = malloc((size_t)STIR_W * STIR_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(stir_cells,
+        "stir basin grid must fit in what the framebuffer leaves");
     sand_init(&fx.stir_sim, stir_cells, STIR_W, STIR_H, 0xC0FFEEu);
     sand_enable_impulses(&fx.stir_sim, buf, 4096);
 
@@ -1058,6 +1100,8 @@ static void test_pouring_water_over_a_dirt_bed_never_moves_a_dirt_cell(void)
     TEST_ASSERT_EQUAL_INT_MESSAGE(0, arrived_elsewhere,
         "and MAT_DIRT must not show up outside the bed's own footprint "
         "either - the two counts are the same swap seen from its two ends");
+
+    free(stir_cells);
 }
 
 /* Isolates the pinpointing test's claim to one water grain and one dirt
@@ -1135,7 +1179,6 @@ static void test_a_flying_water_grain_still_displaces_another_liquid(void)
 
 #define LIQ_CASCADE_W 1
 #define LIQ_CASCADE_H 16
-static uint8_t liq_cascade_cells[LIQ_CASCADE_W * LIQ_CASCADE_H];
 
 /* The same scene and the same impulse_count > 1 signal as
  * test_a_cascading_impulse_moves_more_than_one_cell above, run against
@@ -1145,6 +1188,9 @@ static void test_a_water_into_water_cascade_is_untouched_by_the_liquid_fix(void)
 {
     enum { COL = 0, TOP = 8, COL_LEN = 8, DIR_UP = 4 };
     impulse_t buf[64];
+    uint8_t *liq_cascade_cells = malloc((size_t)LIQ_CASCADE_W * LIQ_CASCADE_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(liq_cascade_cells,
+        "liquid cascade column grid must fit in what the framebuffer leaves");
     sand_init(&fx.liq_cascade_sim, liq_cascade_cells, LIQ_CASCADE_W,
              LIQ_CASCADE_H, 1u);
     sand_enable_impulses(&fx.liq_cascade_sim, buf, 64);
@@ -1169,6 +1215,8 @@ static void test_a_water_into_water_cascade_is_untouched_by_the_liquid_fix(void)
         "liquid gate - the gate only narrows what happens when the target "
         "is NOT liquid, so an all-water chain must come through completely "
         "untouched");
+
+    free(liq_cascade_cells);
 }
 
 void run_sand_materials_suite(void)

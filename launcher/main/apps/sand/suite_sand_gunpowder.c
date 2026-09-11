@@ -1253,12 +1253,13 @@ static void test_water_wets_gunpowder_and_it_dries_out_slowly(void)
      * see, put its own bound at 241 - real ints here or not, this only
      * compiles clean on the device toolchain past that mark. */
 
-    /* static, not a stack frame: the device's main task stack is 3584
-     * bytes total, shared with Unity and printf, and check_stack_usage.py
-     * gates any one frame at 1024 - this buffer has no reason to sit on
-     * the stack at all. */
-    static char why[320];
-    snprintf(why, sizeof why,
+    /* Heap, not a stack frame: the device's main task stack is 3584 bytes
+     * total, shared with Unity and printf, and check_stack_usage.py gates
+     * any one frame at 1024. */
+    char *why = malloc(320);
+    TEST_ASSERT_NOT_NULL_MESSAGE(why,
+        "the failure message must fit in what the framebuffer leaves");
+    snprintf(why, 320,
              "gunpowder dries at half dirt's rate so after the SAME "
              "%d-step budget more of it must still be wet - gunpowder "
              "%d/%d wet, dirt %d/%d wet (roughly 56%% against 31%% "
@@ -1267,6 +1268,7 @@ static void test_water_wets_gunpowder_and_it_dries_out_slowly(void)
              budget, gp_wet, WET_DRY_TRIALS, dirt_wet, WET_DRY_TRIALS,
              WET_DRY_TRIALS);
     TEST_ASSERT_GREATER_THAN_INT_MESSAGE(dirt_wet, gp_wet, why);
+    free(why);
 }
 
 /* An upper bound, not full conservation: a lit cell reads moisture_of()
