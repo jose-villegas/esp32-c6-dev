@@ -14,10 +14,10 @@
  * Every bug this logic has shipped to hardware has the same shape: an input
  * edge consumed by the state that should not own it (a BOOT hold also
  * cycling the brush, a palette close whose matching release advanced the
- * brush, a pour's release selecting a palette tile). All of them reached
- * the device because this logic used to live in app_sand.c, the one file in
- * the app the host test runner cannot compile (see run_tests.sh's SOURCES
- * comment on the app_*.c convention). Moving it here is what lets
+ * brush, a pour's release selecting a palette tile). This logic must not
+ * live in app_sand.c, the one file in the app the host test runner cannot
+ * compile (see run_tests.sh's SOURCES comment on the app_*.c convention) -
+ * every one of those bugs shipped while it did. Living here is what lets
  * suite_sand_ui.c pin bugs of this shape down for good.
  *
  * WHAT STAYS BEHIND
