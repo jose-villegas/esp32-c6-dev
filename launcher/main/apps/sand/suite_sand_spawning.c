@@ -465,30 +465,13 @@ static void test_emitted_water_produces_a_continuing_stream(void)
         "for as long as the tap runs");
 }
 
-/* The bug this whole block exists to catch: emit_from_emitters() used to
- * write s->emitters[i].cell RAW, via sand_set(). But that cell is not the
- * exact byte to write - it is whatever the app's brush table handed
- * sand_add_emitter() (see brushes[] in app_sand.c), and every entry there
- * is CELL_MAKE(material, 0), a PLACEHOLDER. What variant 0 means depends on
- * the material's kind (see material.h's top comment and random_cell() in
- * sand.c): for a KIND_LIQUID it is a fill level of zero - no water, no
- * lava, nothing to render or flow, even though the high nibble still says
- * MAT_WATER or MAT_LAVA. A water or lava emitter reported as producing
- * nothing visible is exactly that cell.
- *
- * Every test below places the emitter with CELL_MAKE(material, 0), the
- * literal brush placeholder, rather than one of this file's own WATER/
- * LAVA/GAS/... macros - those already carry a non-placeholder variant (8),
- * which would not reproduce what the app actually hands the emitter.
- *
- * And every test steps with gravity (0, 0, 0) rather than a real vector.
- * sand_step() runs emit_from_emitters() first and then returns immediately
- * when the dithered direction is (0, 0) - "free fall: no down, so nothing
- * settles" - which skips the gravity sweep, the liquid pass, the gas pass
- * and the reactions pass entirely (see sand_step()'s own comment). That
- * isolates the one thing under test - what the emitter itself wrote - from
- * anything that could move or react the cell a moment later and make a
- * mismatch about something else. */
+/* emit_from_emitters() must write the exact placeholder brushes[] hands
+ * sand_add_emitter() (app_sand.c): CELL_MAKE(material, 0), whose variant 0
+ * means fill-level zero for KIND_LIQUID (material.h) - not a real cell.
+ * Tests below use that literal placeholder, not this file's WATER/LAVA/...
+ * macros (variant 8), and step with gravity (0, 0, 0) so sand_step()
+ * returns after emit_from_emitters() (its own comment), isolating what was
+ * written from later movement or reactions. */
 
 static void test_an_emitted_liquid_cell_is_full_not_the_placeholders_zero_mass(void)
 {
@@ -656,14 +639,13 @@ static void test_an_emitter_and_sand_spawn_cell_agree_about_every_material(void)
     }
 }
 
-/* The observable claim behind all the byte-level tests above: a liquid
- * emitter left running has to make a POOL, not merely keep writing cells
- * that carry the right material and no water. Summing CELL_VARIANT (the
- * fill level) rather than counting cells is the point - the old bug's
- * cells were entirely present, entirely MAT_WATER, and entirely empty of
- * mass, so a count-based check (see
- * test_emitted_water_produces_a_continuing_stream above) passed against it
- * without noticing anything was wrong. */
+/* The observable claim behind the byte-level tests above: a liquid emitter
+ * left running has to make a POOL, not merely keep writing cells that
+ * carry the right material and no water. Summing CELL_VARIANT (the fill
+ * level) rather than counting cells is the point: a cell can be present
+ * and correctly MAT_WATER while carrying zero mass, which a count-based
+ * check (test_emitted_water_produces_a_continuing_stream above) would not
+ * catch. */
 static void test_a_running_water_emitter_accumulates_mass_on_the_floor(void)
 {
     fixture();
