@@ -411,6 +411,12 @@ static inline int find_nearest_empty(const sand_t *s, int x, int y, int px,
                                      int py, int sight, uint8_t gas_id,
                                      int *run_len_out)
 {
+    /* Loop control was a third of this walk's branches - one load, two
+     * rejects per iteration - and straight-line runs pay on a core with no
+     * branch predictor. find_shallowest(), the liquid twin, gets nothing:
+     * GCC declines there, a liquid's `sight` capping the walk at 8 where
+     * smoke's 24 makes four copies worth it. */
+#pragma GCC unroll 4
     for (int k = 1; k <= sight; k++) {
         const int sx = x + px * k;
         const int sy = y + py * k;

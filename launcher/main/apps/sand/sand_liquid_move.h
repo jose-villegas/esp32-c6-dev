@@ -142,45 +142,6 @@ static inline bool liquid_may_move(sand_t *s, uint8_t id)
     return m >= 255 || (int)(rng_next(&s->rng) & 0xFF) < m;
 }
 
-static inline int foreign_liquid_neighbours(const sand_t *s, int x, int y,
-                                            uint8_t id)
-{
-    static const int dirs[4][2] = { { 0, -1 }, { 0, 1 }, { -1, 0 }, { 1, 0 } };
-    const int w = s->w;
-    const int h = s->h;
-
-    int n = 0;
-    for (int k = 0; k < 4; k++) {
-        const int nx = x + dirs[k][0];
-        const int ny = y + dirs[k][1];
-        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
-            continue;
-        }
-        const cell_t c = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
-        if (CELL_IS_EMPTY(c)) {
-            continue;
-        }
-        const material_t *m = material_of(c);
-        if (m->kind == KIND_LIQUID && CELL_MATERIAL(c) != id) {
-            n++;
-        }
-    }
-    return n;
-}
-
-/* Drag stops FINGER: first cell moves freely, subsequent cells progressively
- * less willing. */
-static inline bool drag_allows_swap(sand_t *s, int x, int y, uint8_t id)
-{
-    const int surrounded = foreign_liquid_neighbours(s, x, y, id);
-    if (surrounded <= 1) {
-        return true;
-    }
-    /* 2 -> mask 1 (1 in 2), 3 -> mask 3 (1 in 4), 4 -> mask 7 (1 in 8). */
-    const unsigned mask = (1u << (unsigned)(surrounded - 1)) - 1u;
-    return (rng_next(&s->rng) & mask) == 0u;
-}
-
 static inline bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
                        int x, int y, int dx, int dy,
                        const int *slide_a, const int *slide_b,

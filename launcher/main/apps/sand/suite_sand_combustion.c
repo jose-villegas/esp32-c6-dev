@@ -2129,7 +2129,7 @@ static void test_water_still_puts_fire_out(void)
         "quench on one touch - and still turn the fire to steam");
 }
 
-/* Liquids sink/float by density via sink_through_lighter_liquid():
+/* Liquids sink/float by density via float_lighter_liquids():
  * room_in() refuses a cell holding another material and a liquid never
  * consults can_enter(), so without it two liquids simply block each other
  * and the lighter one stays trapped forever. material.h's `mobility` is
