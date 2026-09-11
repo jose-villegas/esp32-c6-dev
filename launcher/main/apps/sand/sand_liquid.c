@@ -285,6 +285,20 @@ static inline bool span_blocks_flow(const uint8_t *row, int x0, int x1,
     return true;
 }
 
+/* A block is SAND_BLOCK_H rows tall, so "liquid is near" holds for every row
+ * of a band a pool merely touches, and half of those rows hold nothing at
+ * all. Worth its own scan rather than the walk's: one induction variable and
+ * an empty test, against the walk's four and a spilled reload per cell. */
+static inline bool span_is_empty(const uint8_t *row, int x0, int x1)
+{
+    for (int x = x0; x < x1; x++) {
+        if (!CELL_IS_EMPTY(row[x])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /* The answer a skipped span still owes equalise_liquids(): found_any is what
  * clears may_have_liquid. */
 static inline bool span_has_liquid(const uint8_t *row, int x0, int x1,
@@ -319,6 +333,17 @@ static inline bool rays_blocked(const uint8_t *ax_row, const uint8_t *dg_row,
     return dg_row == NULL || span_blocks_flow(dg_row, sx0, sx1, is_liquid);
 }
 
+/* THE AXIS ROW WHERE THE DIAGONAL RAY IS UNREACHABLE: a cell takes that ray
+ * only when `pat < q_q8`, and pat is a multiple of q_q8, so a lean of zero
+ * tangent reads `0 < 0`. Saying so lets rays_blocked() short-circuit on
+ * `dg_row == ax_row` and skip a block on one span. */
+static inline const uint8_t *diagonal_row(const sand_t *s, int y,
+                                          const xflow_t *r,
+                                          const uint8_t *ax_row)
+{
+    return (r->q_q8 != 0) ? dest_row(s, y + r->dg[1]) : ax_row;
+}
+
 static bool equalise_one_row(sand_t *s, int y, int w, int x_step,
                              const xflow_t *r, int dx, int dy, int sight,
                              uint16_t is_liquid)
@@ -326,7 +351,7 @@ static bool equalise_one_row(sand_t *s, int y, int w, int x_step,
     uint8_t *row = s->cells + (size_t)y * (size_t)w;
 
     const uint8_t *const ax_row = dest_row(s, y + r->ax[1]);
-    const uint8_t *const dg_row = dest_row(s, y + r->dg[1]);
+    const uint8_t *const dg_row = diagonal_row(s, y, r, ax_row);
     const uint8_t *const below_row = dest_row(s, y + dy);
 
     bool any_liquid = false;
@@ -346,6 +371,10 @@ static bool equalise_one_row(sand_t *s, int y, int w, int x_step,
         }
         const int lo = bx * SAND_BLOCK_W;
         const int hi = (lo + SAND_BLOCK_W < w) ? lo + SAND_BLOCK_W : w;
+
+        if (span_is_empty(row, lo, hi)) {
+            continue;
+        }
 
         /* SKIPPED WHOLE when both rays land where nothing can be lower - the
          * shape a SETTLED pool holds, and worth rediscovering every step,
