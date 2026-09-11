@@ -29,33 +29,33 @@ import re
 import sys
 
 TARGET = 300  # aim for this
-# A header is exempt from the character rule and judged on height
-# instead. 30 lines says what a module is and what was rejected; 50 is
-# already too long, not a comfortable allowance.
+LIMIT = 500  # hard ceiling - only a comment that truly needs the room stays here
+
+# A file header describes a module rather than a line of code, so it answers
+# to height instead of characters.
 BANNER_TARGET = 30
 BANNER_LIMIT = 50
 
-# Phrases that only introduce a story about how the code got here. Kept
-# narrow on purpose: the looser set in scripts/find_narrative_comments.py
-# is for building a worklist, where a false positive costs a glance. Here
-# it costs a refused edit, so only openers with no other use qualify.
-# style(9) has three comment shapes and none of them has headings inside.
-# A comment needing sections is a document, and the code is not where a
-# document goes.
-# A function needing its parts commented wants splitting. Most functions
-# here carry no internal comment at all, so five in one edit is an
-# outlier rather than a busy day.
+# A function needing its parts commented wants splitting. Most functions here
+# carry no internal comment at all, so five in one edit is an outlier rather
+# than a busy day.
 INTERNAL_COMMENTS_MAX = 5
 
+# style(9) has three comment shapes and none of them has headings inside. A
+# comment needing sections is a document, and the code is not where a document
+# goes.
 CAPS_HEADING = re.compile(r"^[A-Z][A-Z0-9 ,'()/-]{14,}$")
 
+# Phrases that only introduce a story about how the code got here. Kept narrow
+# on purpose: the looser set in scripts/find_narrative_comments.py builds a
+# worklist, where a false positive costs a glance. Here it costs a refused
+# edit, so only openers with no other use qualify.
 NARRATIVE = re.compile(
     r"(a first attempt|an earlier version|the first version|"
     r"was considered (?:next|first|and)|used to (?:be|do|have|gate|live|"
     r"call|read|gat)|verified and reverted|tried (?:this|that|it) first|"
     r"we (?:tried|first tried)|before the (?:fix|rewrite)|"
     r"after the rewrite|has since been)", re.I)
-LIMIT = 500  # hard ceiling - only a comment that truly needs the room stays here
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 try:
@@ -85,13 +85,46 @@ def written_text(payload):
     return None, None, path
 
 
+def header_of(path, text):
+    """The file's header comment, and where `text` begins inside the file.
+
+    Nothing draws a rule any more, so a header is marked by being the file's
+    first comment - position, which a fragment does not carry. The hook runs
+    after the write, so the fragment can be found on disk; the offset is None
+    when it appears more than once and cannot be placed.
+    """
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            source = f.read()
+    except OSError:
+        return None, None
+    found = scan(path, source)
+    if not found:
+        return None, None
+    at = source.find(text)
+    if at < 0 or source.find(text, at + 1) >= 0:
+        return found[0], None
+    return found[0], at
+
+
+def is_header(comment, head, at):
+    """Whether `comment`, written at offset `at` of its file, is the header."""
+    if head is None:
+        return False
+    if at is None:
+        return bool(comment.text) and comment.text in head.text
+    lo, hi = head.spans[0][0], head.spans[-1][1]
+    return at + comment.spans[0][0] < hi and at + comment.spans[-1][1] > lo
+
+
 def over_aim_banner_lines(path, text):
     """Lines of header sitting above BANNER_TARGET. The ratchet's second jaw,
     applied to the one kind of comment the character rule cannot see."""
     if not text:
         return 0
+    head, at = header_of(path, text)
     return sum(c.lines for c in scan(path, text)
-               if c.has_rule and c.lines > BANNER_TARGET)
+               if is_header(c, head, at) and c.lines > BANNER_TARGET)
 
 
 def over_aim_total(path, text):
@@ -101,8 +134,9 @@ def over_aim_total(path, text):
     about the prose as a whole, not about any one block surviving intact."""
     if not text:
         return 0
+    head, at = header_of(path, text)
     return sum(c.length for c in scan(path, text)
-               if c.length > TARGET and not c.has_rule)
+               if c.length > TARGET and not is_header(c, head, at))
 
 
 def main():
@@ -115,13 +149,11 @@ def main():
     if not text:
         return 0
 
-    # A section header's drawn `====` rule counts toward the length, and asked
-    # to fit, a model deletes the rule - observed twice. The rule is aimed at
-    # comments beside code, so headers are exempt. `has_rule`, not `is_banner`:
-    # the latter also treats line 1 as a header, and line 1 of an edit fragment
-    # is wherever the fragment happens to start.
+    # The character rule is aimed at comments beside code, so a file's own
+    # header answers to height instead.
+    head, at = header_of(path, text)
     over = [c for c in scan(path, text)
-            if c.length > LIMIT and not c.has_rule]
+            if c.length > LIMIT and not is_header(c, head, at)]
 
     # Counted off the raw text: scan() strips a comment's indentation, and
     # indentation is exactly what says "inside a function" here.
@@ -178,7 +210,7 @@ def main():
         return 2
 
     tall = [c for c in scan(path, text)
-            if c.has_rule and c.lines > BANNER_LIMIT]
+            if is_header(c, head, at) and c.lines > BANNER_LIMIT]
     if tall:
         print(f"Header height rule: {len(tall)} header"
               f"{'' if len(tall) == 1 else 's'} you just wrote to "
