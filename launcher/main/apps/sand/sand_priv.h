@@ -505,12 +505,17 @@ latch_content_flags(sand_t* s, cell_t cell) {
 /* The four cardinals every per-cell reaction pass walks - fire chemistry and
  * tree growth both need it, unlike ring_dir()'s 8-way table above.
  *
- * ONE COPY, EIGHT BYTES. As `static const` in a header each TU got its own, so
- * the image carried two 32-byte tables in flash. Extern plus int8_t makes it
- * one 8-byte table. Still DROM - `const` lives in flash regardless - so the
- * win is cache footprint, measured at 1-2% on nearly every scene that walks
- * neighbours (bd esp32c6-fs7). */
-extern const int8_t reaction_dirs[4][2];
+ * int8_t, not int, is what fs7 bought: 8 bytes a copy, not 32. `static` pays
+ * one extra copy for the four `#pragma GCC unroll 4` walks in
+ * sand_reactions.c - behind `extern` those pragmas are worth under half as
+ * much. Neither form folds the offsets (objdump: `lb 0(a5)` survives every
+ * unrolled copy), so `extern` is not a way to keep the win. */
+static const int8_t reaction_dirs[4][2] = {
+    {0, -1},
+    {0, 1},
+    {-1, 0},
+    {1, 0},
+};
 
 /* Use precomputed `at` index to write `mat` into cell. Every cell creation
  * goes through here. */
