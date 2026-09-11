@@ -333,7 +333,9 @@ static void test_soil_dries_biased_by_the_neighbour_it_just_watered(void)
 
 static void test_a_watered_bank_does_not_dry_back_to_one_flat_tone(void)
 {
-    static uint8_t grid[DRY_BANK_W * DRY_BANK_H];
+    uint8_t *grid = malloc((size_t)DRY_BANK_W * DRY_BANK_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(grid,
+        "the drying-bank grid must fit in what the framebuffer leaves");
     sand_t t;
     sand_init(&t, grid, DRY_BANK_W, DRY_BANK_H, 12345u);
     sand_clear(&t);
@@ -414,6 +416,8 @@ static void test_a_watered_bank_does_not_dry_back_to_one_flat_tone(void)
      * this test does not build. The floor is where a regression lands:
      * lose the imprint and all eighty dry onto tone 0. */
     TEST_ASSERT_TRUE_MESSAGE(distinct >= 3 && commonest * 2 < total, why);
+
+    free(grid);
 }
 
 /* ONE MONOTONE RAMP, not two independently-shifted tones that each had to

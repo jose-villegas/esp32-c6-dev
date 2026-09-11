@@ -43,7 +43,9 @@
 static void assert_every_change_is_marked(material_id_t m, int steps,
                                           const char *what)
 {
-    static uint8_t seen[W * H];
+    uint8_t *seen = malloc((size_t)W * H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(seen,
+        "the change map must fit in what the framebuffer leaves");
 
     fixture();
     sand_track_dirty_rows(&s, dirty);
@@ -66,7 +68,7 @@ static void assert_every_change_is_marked(material_id_t m, int steps,
     }
 
     for (int i = 0; i < steps; i++) {
-        memcpy(seen, s.cells, sizeof seen);
+        memcpy(seen, s.cells, (size_t)W * H);
         memset(dirty, 0, sizeof dirty);   /* the renderer clears as it draws */
         sand_step(&s, 0, 1000, 0);
 
@@ -81,6 +83,8 @@ static void assert_every_change_is_marked(material_id_t m, int steps,
             }
         }
     }
+
+    free(seen);
 }
 
 static void test_every_cell_change_marks_its_row_dirty(void)

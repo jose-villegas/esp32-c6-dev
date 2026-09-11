@@ -396,11 +396,13 @@ static void mirror_local_depth_column(sand_t *g, int cx, int h,
  * carry a two-cell plug with real water above and below it. */
 #define OBST_POOL_W 6
 #define OBST_POOL_H 14
-static uint8_t obst_pool_cells[OBST_POOL_W * OBST_POOL_H];
 
 static void test_local_depth_follows_the_puddles_own_shape(void)
 {
     enum { PW = OBST_POOL_W, PH = OBST_POOL_H };
+    uint8_t *obst_pool_cells = malloc((size_t)PW * PH);
+    TEST_ASSERT_NOT_NULL_MESSAGE(obst_pool_cells,
+        "obstructed-pool grid must fit in what the framebuffer leaves");
     sand_init(&fx.obst_pool, obst_pool_cells, PW, PH, 4242u);
 
     for (int y = 2; y < PH; y++) {
@@ -507,6 +509,7 @@ static void test_local_depth_follows_the_puddles_own_shape(void)
         "would mean the walk stopped working after the first obstacle, "
         "not merely reset at it");
 
+    free(obst_pool_cells);
 }
 
 /*
@@ -688,11 +691,13 @@ static const struct { int gx, gy; } BLEND_SWEEP[] = {
  * covers that). */
 enum { BLEND_POOL_W = 4, BLEND_POOL_H = 40 };
 enum { BLEND_TEST_CX = 0, BLEND_TEST_CY = BLEND_POOL_H - 1 };
-static uint8_t blend_pool_cells[BLEND_POOL_W * BLEND_POOL_H];
 
 static void test_the_blend_has_no_jump_crossing_45_degrees(void)
 {
     enum { PW = BLEND_POOL_W, PH = BLEND_POOL_H };
+    uint8_t *blend_pool_cells = malloc((size_t)PW * PH);
+    TEST_ASSERT_NOT_NULL_MESSAGE(blend_pool_cells,
+        "blend-sweep pool grid must fit in what the framebuffer leaves");
     sand_init(&fx.blend_pool, blend_pool_cells, PW, PH, 9001u);
 
     for (int y = 2; y < PH; y++) {
@@ -751,6 +756,8 @@ static void test_the_blend_has_no_jump_crossing_45_degrees(void)
                  abs_step, i - 1, i, full_span);
         TEST_ASSERT_TRUE_MESSAGE(abs_step <= max_step, why);
     }
+
+    free(blend_pool_cells);
 }
 
 /* PAINT_ROW_N()'s debounced walk. A per-cell debounce history is not
@@ -853,7 +860,6 @@ static void mirror_debounced_depth_column(sand_t *g, int cx, int h,
 
 #define DEBOUNCE_TEST_W 4
 #define DEBOUNCE_TEST_H 20
-static uint8_t debounce_test_cells[DEBOUNCE_TEST_W * DEBOUNCE_TEST_H];
 
 /* DIAGNOSTIC PROBE checks if boundary moves NEW row consecutively, unlike
  * BLINK. Ensures col_top_row[cx] never repeats, so never COMMITS. Prevents
@@ -862,6 +868,10 @@ static uint8_t debounce_test_cells[DEBOUNCE_TEST_W * DEBOUNCE_TEST_H];
 static void test_a_continuously_moving_boundary_does_not_run_away(void)
 {
     enum { CX = 1, START_TOP = 5, DRAIN_ROWS = 8 };
+    uint8_t *debounce_test_cells =
+        malloc((size_t)DEBOUNCE_TEST_W * DEBOUNCE_TEST_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(debounce_test_cells,
+        "debounce probe grid must fit in what the framebuffer leaves");
     sand_init(&fx.debounce_test, debounce_test_cells, DEBOUNCE_TEST_W,
              DEBOUNCE_TEST_H, 2u);
     for (int y = START_TOP; y < DEBOUNCE_TEST_H; y++) {
@@ -898,6 +908,8 @@ static void test_a_continuously_moving_boundary_does_not_run_away(void)
             "wrong, saturated value", i + 1, new_top, depth[new_top]);
         TEST_ASSERT_LESS_OR_EQUAL_UINT_MESSAGE(3u, depth[new_top], why);
     }
+
+    free(debounce_test_cells);
 }
 
 /* THE ACTUAL REGRESSION: a pool with open air above it (every real pool
@@ -909,6 +921,10 @@ static void test_a_continuously_moving_boundary_does_not_run_away(void)
 static void test_the_debounce_survives_open_air_above_the_pool(void)
 {
     enum { CX = 1, WATER_TOP = 5 };
+    uint8_t *debounce_test_cells =
+        malloc((size_t)DEBOUNCE_TEST_W * DEBOUNCE_TEST_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(debounce_test_cells,
+        "debounce pool grid must fit in what the framebuffer leaves");
     sand_init(&fx.debounce_test, debounce_test_cells, DEBOUNCE_TEST_W,
              DEBOUNCE_TEST_H, 1u);
     for (int y = WATER_TOP; y < DEBOUNCE_TEST_H; y++) {
@@ -986,6 +1002,8 @@ static void test_the_debounce_survives_open_air_above_the_pool(void)
         "a boundary that genuinely moved - the old top cell erased and not "
         "coming back - must commit to its new position within a couple of "
         "frames, not be absorbed the way a one-frame blink is");
+
+    free(debounce_test_cells);
 }
 
 static void mirror_debounced_depth_row(sand_t *g, int cy, int w,
@@ -1016,11 +1034,15 @@ static void mirror_debounced_depth_row(sand_t *g, int cy, int w,
 
 #define HDEBOUNCE_TEST_W 20
 #define HDEBOUNCE_TEST_H 4
-static uint8_t hdebounce_test_cells[HDEBOUNCE_TEST_W * HDEBOUNCE_TEST_H];
 
 static void test_the_horizontal_debounce_survives_open_air_beside_the_pool(void)
 {
     enum { CY = 1, WATER_LEFT = 5 };
+    uint8_t *hdebounce_test_cells =
+        malloc((size_t)HDEBOUNCE_TEST_W * HDEBOUNCE_TEST_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(hdebounce_test_cells,
+        "horizontal debounce pool grid must fit in what the framebuffer "
+        "leaves");
     sand_init(&fx.hdebounce_test, hdebounce_test_cells, HDEBOUNCE_TEST_W,
              HDEBOUNCE_TEST_H, 1u);
     for (int x = WATER_LEFT; x < HDEBOUNCE_TEST_W; x++) {
@@ -1098,6 +1120,8 @@ static void test_the_horizontal_debounce_survives_open_air_beside_the_pool(void)
         "a boundary that genuinely moved - the old leftmost cell erased and "
         "not coming back - must commit to its new position within a couple "
         "of frames, not be absorbed the way a one-frame blink is");
+
+    free(hdebounce_test_cells);
 }
 
 /*
@@ -1111,11 +1135,20 @@ static void test_the_horizontal_debounce_survives_open_air_beside_the_pool(void)
  */
 #define DEPTH_TEST_W 4
 #define DEPTH_TEST_H 80
-static uint8_t depth_test_cells[DEPTH_TEST_W * DEPTH_TEST_H];
-static uint8_t depth_test_dirty[DEPTH_TEST_H];
 
 static void test_pouring_onto_a_settled_pool_redirties_a_bounded_band_below(void)
 {
+    uint8_t *depth_test_cells = malloc((size_t)DEPTH_TEST_W * DEPTH_TEST_H);
+    uint8_t *depth_test_dirty = malloc((size_t)DEPTH_TEST_H);
+    /* Both checked together, then freed together on failure - see
+     * wake_test_run() above for why asserting on each in turn leaks. */
+    if (!depth_test_cells || !depth_test_dirty) {
+        free(depth_test_cells);
+        free(depth_test_dirty);
+        TEST_ASSERT_TRUE_MESSAGE(false,
+            "pour-staleness grid and dirty-row map must fit in what the "
+            "framebuffer leaves");
+    }
     sand_init(&fx.depth_test, depth_test_cells, DEPTH_TEST_W, DEPTH_TEST_H, 99u);
 
     /* A deep reservoir, full width, so it starts already level and settles
@@ -1135,7 +1168,7 @@ static void test_pouring_onto_a_settled_pool_redirties_a_bounded_band_below(void
     memcpy(settled_snapshot, depth_test_cells, sizeof settled_snapshot);
 
     sand_track_dirty_rows(&fx.depth_test, depth_test_dirty);
-    memset(depth_test_dirty, 0, sizeof depth_test_dirty);
+    memset(depth_test_dirty, 0, (size_t)DEPTH_TEST_H);
 
     /* The pour: new water dropped at the very top, well above the
      * reservoir's current surface. */
@@ -1208,6 +1241,9 @@ static void test_pouring_onto_a_settled_pool_redirties_a_bounded_band_below(void
         "marked dirty just because a pour happened above it - bounding "
         "the mark is what keeps a pour from repainting a reservoir far "
         "deeper than any shading could possibly need to change");
+
+    free(depth_test_dirty);
+    free(depth_test_cells);
 }
 
 
@@ -1251,7 +1287,6 @@ static void test_every_liquid_interior_is_exactly_the_body_colour_when_saturated
  * obstacle; mirror_local_depth_column() reads the real local depth off the
  * live grid. */
 enum { SHALLOW_POOL_W = 4, SHALLOW_POOL_H = 20 };
-static uint8_t shallow_pool_cells[SHALLOW_POOL_W * SHALLOW_POOL_H];
 /* The bar is a quarter of the ramp's own full span (computed, not
  * hand-picked), not a hand-typed luminance number. PROVEN LOAD-BEARING:
  * restoring the old `/255` divide turns this test RED (surface and bottom
@@ -1261,6 +1296,9 @@ static uint8_t shallow_pool_cells[SHALLOW_POOL_W * SHALLOW_POOL_H];
 static void test_a_shallow_puddle_still_shows_real_darkening(void)
 {
     enum { PW = SHALLOW_POOL_W, PH = SHALLOW_POOL_H };
+    uint8_t *shallow_pool_cells = malloc((size_t)PW * PH);
+    TEST_ASSERT_NOT_NULL_MESSAGE(shallow_pool_cells,
+        "shallow pool grid must fit in what the framebuffer leaves");
     sand_init(&fx.shallow_pool, shallow_pool_cells, PW, PH, 777u);
 
     /* Rows 0-1 stay empty (the surface); rows 2..PH-1 are water - 18 rows,
@@ -1310,6 +1348,8 @@ static void test_a_shallow_puddle_still_shows_real_darkening(void)
              near_surface_lum, near_bottom_lum, full_span);
     TEST_ASSERT_TRUE_MESSAGE(
         (near_surface_lum - near_bottom_lum) * 4 >= full_span, why);
+
+    free(shallow_pool_cells);
 }
 
 /*
@@ -1337,9 +1377,10 @@ static uint8_t wake_test_blocks[
     ((WAKE_TEST_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
     ((WAKE_TEST_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)];
 
-static union {
-    ray_walk_state_t wake_ray_state, band_ray_state, flash_ray_state;
-} fx_ray;
+/* The ray walk's cross-frame state, one walk at a time: every test that
+ * needs it allocates it, uses it and frees it, so no walk's 392 bytes sit
+ * in .bss between runs. */
+static ray_walk_state_t *fx_ray;
 /* wake_test_cells/wake_prev_occupied/wake_displayed_depth used to be file
  * statics here, permanently resident .bss even though only wake_test_run()
  * below ever touches them - malloc'd there instead, fresh per call, freed
@@ -1381,14 +1422,17 @@ static double wake_test_run(int steps)
      * MATERIAL_LIQUID_DEPTH_BAND (24), comfortably inside int8_t's range. */
     int8_t *wake_displayed_depth = malloc((size_t)WAKE_TEST_W * WAKE_TEST_H *
                                            sizeof *wake_displayed_depth);
+    fx_ray = malloc(sizeof *fx_ray);
     /* All three checked together, then freed together on failure -
      * asserting straight after each malloc in turn would longjmp out on the
      * first failure (Unity's assert never returns) and leak every
      * allocation that came before it, permanently, for the rest of the run. */
-    if (!wake_test_cells || !wake_prev_occupied || !wake_displayed_depth) {
+    if (!wake_test_cells || !wake_prev_occupied || !wake_displayed_depth ||
+        !fx_ray) {
         free(wake_test_cells);
         free(wake_prev_occupied);
         free(wake_displayed_depth);
+        free(fx_ray);
         TEST_ASSERT_TRUE_MESSAGE(false,
             "wake test buffers (grid/prev-occupied/displayed-depth) must "
             "fit in what the framebuffer leaves");
@@ -1398,7 +1442,7 @@ static double wake_test_run(int steps)
               41u);
     sand_enable_sleeping(&fx.wake_test_grid, wake_test_blocks);
 
-    ray_walk_state_reset(&fx_ray.wake_ray_state);
+    ray_walk_state_reset(fx_ray);
     memset(wake_prev_occupied, 0,
            (size_t)WAKE_TEST_W * WAKE_TEST_H * sizeof *wake_prev_occupied);
     for (int i = 0; i < WAKE_TEST_W * WAKE_TEST_H; i++) {
@@ -1497,7 +1541,7 @@ static double wake_test_run(int steps)
             unsigned row_depth[RAY_WALK_STATE_W];
             mirror_ray_walk_row(&fx.wake_test_grid, y, WAKE_TEST_W, WAKE_TEST_H,
                                 vdom, vrev, hrev, ax, ay, scale_q8,
-                                MATERIAL_LIQUID_DEPTH_BAND, &fx_ray.wake_ray_state,
+                                MATERIAL_LIQUID_DEPTH_BAND, fx_ray,
                                 row_depth);
             for (int x = 0; x < WAKE_TEST_W; x++) {
                 const cell_t here = sand_at(&fx.wake_test_grid, x, y);
@@ -1551,6 +1595,8 @@ static double wake_test_run(int steps)
     free(wake_test_cells);
     free(wake_prev_occupied);
     free(wake_displayed_depth);
+    free(fx_ray);
+    fx_ray = NULL;
 
     return worst_jump;
 }
@@ -1760,12 +1806,15 @@ static int band_test_run(void)
      * MATERIAL_LIQUID_DEPTH_BAND (24) range. */
     int8_t *band_displayed_depth = malloc((size_t)BAND_TEST_W * BAND_TEST_H *
                                            sizeof *band_displayed_depth);
+    fx_ray = malloc(sizeof *fx_ray);
     /* All three checked together, then freed together on failure - see
      * wake_test_run()'s own comment on the same pattern, above. */
-    if (!band_test_cells || !band_prev_occupied || !band_displayed_depth) {
+    if (!band_test_cells || !band_prev_occupied || !band_displayed_depth ||
+        !fx_ray) {
         free(band_test_cells);
         free(band_prev_occupied);
         free(band_displayed_depth);
+        free(fx_ray);
         TEST_ASSERT_TRUE_MESSAGE(false,
             "band test buffers (grid/prev-occupied/displayed-depth) must "
             "fit in what the framebuffer leaves");
@@ -1774,7 +1823,7 @@ static int band_test_run(void)
     sand_init(&fx.band_test_grid, band_test_cells, BAND_TEST_W, BAND_TEST_H, 41u);
     sand_enable_sleeping(&fx.band_test_grid, band_test_blocks);
 
-    ray_walk_state_reset(&fx_ray.band_ray_state);
+    ray_walk_state_reset(fx_ray);
     memset(band_prev_occupied, 0,
            (size_t)BAND_TEST_W * BAND_TEST_H * sizeof *band_prev_occupied);
     for (int i = 0; i < BAND_TEST_W * BAND_TEST_H; i++) {
@@ -1872,7 +1921,7 @@ static int band_test_run(void)
             unsigned row_depth[RAY_WALK_STATE_W];
             mirror_ray_walk_row(&fx.band_test_grid, cy, BAND_TEST_W, BAND_TEST_H,
                                 vdom, vrev, hrev, ax, ay, scale_q8, ceiling,
-                                &fx_ray.band_ray_state, row_depth);
+                                fx_ray, row_depth);
             for (int x = 0; x < BAND_TEST_W; x++) {
                 band_displayed_depth[cy * BAND_TEST_W + x] =
                     (int8_t)row_depth[x];
@@ -1929,6 +1978,8 @@ static int band_test_run(void)
     free(band_test_cells);
     free(band_prev_occupied);
     free(band_displayed_depth);
+    free(fx_ray);
+    fx_ray = NULL;
 
     return worst;
 }
@@ -1996,16 +2047,18 @@ static uint8_t *flash_test_cells;
 static uint8_t  flash_test_blocks[
     ((FLASH_TEST_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
     ((FLASH_TEST_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)];
-static uint8_t  flash_test_dirty[FLASH_TEST_H];
+static uint8_t *flash_test_dirty;
 static int8_t  *flash_displayed;       /* -1 = never painted */
 static int8_t  *flash_displayed_prev;
-static uint8_t  flash_row_has_liquid[FLASH_TEST_H];
+static uint8_t *flash_row_has_liquid;
 static bool flash_vdom_prev, flash_vrev_prev, flash_hrev_prev;
 
 /* flash_test_free() must be called after reading buffers to avoid leaks.
  * Split from flash_test_settle() to allow future callers fresh buffers
  * without re-settingtle. Returns false and frees successful allocations if
  * any malloc fails. */
+static void flash_test_free(void);
+
 static bool flash_test_alloc(void)
 {
     flash_test_cells = malloc((size_t)FLASH_TEST_W * FLASH_TEST_H);
@@ -2013,13 +2066,12 @@ static bool flash_test_alloc(void)
                               sizeof *flash_displayed);
     flash_displayed_prev = malloc((size_t)FLASH_TEST_W * FLASH_TEST_H *
                                    sizeof *flash_displayed_prev);
-    if (!flash_test_cells || !flash_displayed || !flash_displayed_prev) {
-        free(flash_test_cells);
-        free(flash_displayed);
-        free(flash_displayed_prev);
-        flash_test_cells = NULL;
-        flash_displayed = NULL;
-        flash_displayed_prev = NULL;
+    flash_test_dirty = malloc((size_t)FLASH_TEST_H);
+    flash_row_has_liquid = malloc((size_t)FLASH_TEST_H);
+    fx_ray = malloc(sizeof *fx_ray);
+    if (!flash_test_cells || !flash_displayed || !flash_displayed_prev ||
+        !flash_test_dirty || !flash_row_has_liquid || !fx_ray) {
+        flash_test_free();
         return false;
     }
     return true;
@@ -2030,6 +2082,15 @@ static void flash_test_free(void)
     free(flash_test_cells);
     free(flash_displayed);
     free(flash_displayed_prev);
+    free(flash_test_dirty);
+    free(flash_row_has_liquid);
+    free(fx_ray);
+    flash_test_cells = NULL;
+    flash_displayed = NULL;
+    flash_displayed_prev = NULL;
+    flash_test_dirty = NULL;
+    flash_row_has_liquid = NULL;
+    fx_ray = NULL;
 }
 
 static void flash_test_frame_reset(int gx, int gy, int grid_w, int grid_h,
@@ -2091,7 +2152,7 @@ static void flash_test_paint(int gx, int gy, bool wake_fired)
         flash_row_has_liquid[cy] = 0;
         mirror_ray_walk_row(&fx.flash_test_grid, cy, FLASH_TEST_W, FLASH_TEST_H,
                             vdom, vrev, hrev, ax, ay, scale_q8,
-                            MATERIAL_LIQUID_DEPTH_BAND, &fx_ray.flash_ray_state,
+                            MATERIAL_LIQUID_DEPTH_BAND, fx_ray,
                             row_depth);
         for (int x = 0; x < FLASH_TEST_W; x++) {
             const cell_t c = sand_at(&fx.flash_test_grid, x, cy);
@@ -2140,14 +2201,14 @@ static void flash_test_settle(bool guard_chain, bool gate_reset)
         }
     }
 
-    ray_walk_state_reset(&fx_ray.flash_ray_state);
-    fx_ray.flash_ray_state.ignore_chain_break = !guard_chain;
-    memset(flash_row_has_liquid, 0, sizeof flash_row_has_liquid);
+    ray_walk_state_reset(fx_ray);
+    fx_ray->ignore_chain_break = !guard_chain;
+    memset(flash_row_has_liquid, 0, (size_t)FLASH_TEST_H);
     for (int i = 0; i < FLASH_TEST_W * FLASH_TEST_H; i++) {
         flash_displayed[i] = -1;
     }
     /* sand_enter()'s own first full repaint. */
-    memset(flash_test_dirty, 1, sizeof flash_test_dirty);
+    memset(flash_test_dirty, 1, (size_t)FLASH_TEST_H);
 
     flash_vdom_prev = true;
     flash_vrev_prev = false;
@@ -2160,7 +2221,7 @@ static void flash_test_settle(bool guard_chain, bool gate_reset)
     for (int f = 0; f < FLASH_TEST_SETTLE; f++) {
         sand_step(&fx.flash_test_grid, -12, FLASH_TEST_G, 0);
         flash_test_frame_reset(-12, FLASH_TEST_G, FLASH_TEST_W, FLASH_TEST_H,
-                               gate_reset, &fx_ray.flash_ray_state, &flash_vdom_prev,
+                               gate_reset, fx_ray, &flash_vdom_prev,
                                &flash_vrev_prev, &flash_hrev_prev, &fired);
         flash_wake_elapsed_ms += FLASH_TEST_DT_MS;
         bool wake_fired = false;
@@ -2189,7 +2250,7 @@ static int flash_test_run(bool guard_chain, bool gate_reset)
         const int gy = FLASH_TEST_G - gx;
 
         flash_test_frame_reset(gx, gy, FLASH_TEST_W, FLASH_TEST_H, gate_reset,
-                               &fx_ray.flash_ray_state, &flash_vdom_prev,
+                               fx_ray, &flash_vdom_prev,
                                &flash_vrev_prev, &flash_hrev_prev, &fired);
         wake_elapsed_ms += FLASH_TEST_DT_MS;
         bool wake_fired = false;
@@ -2304,7 +2365,7 @@ static void tremor_test_run(bool gate_reset, int *resets, int *changed)
         const int gx = (f & 1) ? 12 : -12;
         const int gy = FLASH_TEST_G;
         flash_test_frame_reset(gx, gy, FLASH_TEST_W, FLASH_TEST_H, gate_reset,
-                               &fx_ray.flash_ray_state, &flash_vdom_prev,
+                               fx_ray, &flash_vdom_prev,
                                &flash_vrev_prev, &flash_hrev_prev, &fired);
         fires += fired ? 1 : 0;
         wake_elapsed_ms += FLASH_TEST_DT_MS;

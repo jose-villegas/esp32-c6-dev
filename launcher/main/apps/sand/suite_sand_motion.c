@@ -610,28 +610,40 @@ static void test_a_flat_bed_does_not_slide_on_a_slight_tilt(void)
  * not enough to have a deep bed and somewhere for it to go. */
 #define BIG_W 16
 #define BIG_H 12
-static uint8_t big_cells[BIG_W * BIG_H];
-static sand_t  big;
 
 /* Pours a bed `rows` deep down a steep tilt and reports how far its trailing
  * edge ends up. */
 static int settled_base_x(int rows, uint32_t seed)
 {
-    sand_init(&big, big_cells, BIG_W, BIG_H, seed);
+    uint8_t *big_cells = malloc((size_t)BIG_W * BIG_H);
+    sand_t  *big       = malloc(sizeof *big);
+    if (!big_cells || !big) {
+        free(big_cells);
+        free(big);
+        TEST_ASSERT_TRUE_MESSAGE(false,
+            "the deep-bed grid must fit in what the framebuffer leaves");
+    }
+
+    sand_init(big, big_cells, BIG_W, BIG_H, seed);
     for (int y = BIG_H - rows; y < BIG_H; y++) {
         for (int x = 2; x < 8; x++) {
-            sand_set(&big, x, y, SAND_FIRST_SHADE);
+            sand_set(big, x, y, SAND_FIRST_SHADE);
         }
     }
     for (int i = 0; i < 120; i++) {
-        sand_step(&big, 1200, 1000, 0);   /* well past the angle of repose */
+        sand_step(big, 1200, 1000, 0);   /* well past the angle of repose */
     }
+    int base = BIG_W;
     for (int x = 0; x < BIG_W; x++) {
-        if (sand_at(&big, x, BIG_H - 1) != SAND_EMPTY) {
-            return x;
+        if (sand_at(big, x, BIG_H - 1) != SAND_EMPTY) {
+            base = x;
+            break;
         }
     }
-    return BIG_W;
+
+    free(big);
+    free(big_cells);
+    return base;
 }
 
 static void test_a_deep_bed_is_harder_to_move_than_a_thin_one(void)
