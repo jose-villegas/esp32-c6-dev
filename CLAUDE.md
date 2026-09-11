@@ -85,33 +85,25 @@ one-liner in a three-line block, or real sentences filled like a paragraph.
 No headings inside a comment - one needing sections is a document, so put it
 in `docs/`.
 
-**Comment the WHY, not the WHAT — and only when the code doesn't already say
-it.** Clean, well-named code mostly speaks for itself; a comment exists for
-context, a decision, or a non-obvious constraint, not to restate what the
-next line does. Keep comments accurate — an outdated one is worse than none,
-so update it in the same edit that changes the code it describes. Length
-follows from this, not the other way around: **300 characters is the aim,
-500 the hard ceiling** for a comment that still needs the room after cutting
-everything the code already says and everything that's really change history
-(git log owns that — dates, old values, "raised from X to Y", a bug's own
-incident report all belong there, not in the source). A short remainder, or
-none at all, is the normal, correct outcome for most fields and functions —
-not a sign the cut fell short. A run of consecutive own-line `//` lines, or
-of consecutive own-line `/* */` blocks with no code between them, counts as
-one comment for scoring; length is the prose, markers and `*` gutters
-stripped, so re-wrapping never changes the score and chopping one
-explanation into several adjacent blocks doesn't dodge it either. File and
-section header banners (`/*====`) are exempt — asked to fit, a model deletes
-the rule rather than the prose. The rule is aimed at comments beside code.
+**300 characters is the aim, 500 the hard ceiling** for whatever survives
+those cuts, and a short remainder or none at all is the normal outcome. A run
+of consecutive own-line `//` lines, or of consecutive own-line `/* */` blocks
+with no code between them, counts as one comment for scoring; length is the
+prose, markers and `*` gutters stripped, so re-wrapping never changes the
+score and chopping one explanation into several adjacent blocks doesn't dodge
+it either. Keep a comment accurate or delete it — an outdated one is worse
+than none, so update it in the same edit that changes the code it describes.
 
-**A header answers to height instead: 30 lines the aim, 50 the hard
-limit — and 50 is already too long, not a comfortable allowance.** It says
-what the module IS and what was deliberately rejected; prose that belongs
-beside the code it describes should live there, where the character rule
-applies to it. Without this, the character exemption is an escape hatch:
-nothing stopped an explanation migrating into a banner to get out of the
-limit. Enforced by the same hook, which also refuses to let an edit grow a
-header already past 30 lines.
+**A file's header — its first comment — answers to height instead: 30 lines
+the aim, 50 the hard limit, and 50 is already too long rather than a
+comfortable allowance.** It says what the module IS and what was deliberately
+rejected; prose that belongs beside the code it describes should live there,
+where the character rule applies to it. Without this the exemption is an
+escape hatch — nothing stops an explanation migrating into the header to get
+out of the limit — so the same hook also refuses to let an edit grow a header
+already past 30 lines. Nothing draws a `/*====` rule: `style(9)` has three
+comment shapes and none of them has one, and position is what marks a header.
+`scripts/strip_comment_rules.py` rewrites any that comes back.
 
 ```sh
 scripts/check-comment-length.sh                 # whole repo, 20 worst listed
