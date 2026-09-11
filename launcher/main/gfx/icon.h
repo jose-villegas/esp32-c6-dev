@@ -42,9 +42,7 @@ typedef struct {
 
 /* One run, in whatever coordinate space its producer documents - a plain
  * carrier for a caller that wants icon_walk_blocks()'s runs collected into
- * an array instead of streamed to a callback (test suites do this). Used to
- * live in icons.h beside the hand-typed format that owned it first; that
- * format is gone, this outlived it. */
+ * an array instead of streamed to a callback (test suites do this). */
 typedef struct {
     int x, y, w, h;
 } icon_rect_t;
