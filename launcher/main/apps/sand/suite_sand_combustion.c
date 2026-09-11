@@ -485,17 +485,13 @@ static void test_fire_ignites_an_adjacent_flammable_neighbour(void)
         "a flammable neighbour touching fire must ignite");
 }
 
-/* bd esp32c6-zs8: an igniting gas cell that touches a KIND_STATIC
- * neighbour bursts instead of just catching - see gas_ignite_confined()'s
- * own comment in sand_reactions.c for the design (gas in the open burns,
- * the same gas walled in bursts) and try_ignite()'s own comment for why
- * this is gated on s->impulse_buf != NULL.
+/* An igniting gas cell touching a KIND_STATIC neighbour bursts instead of
+ * just catching - see gas_ignite_confined() (sand_reactions.c) for the
+ * design and try_ignite() for why it is gated on s->impulse_buf != NULL.
  *
- * HEAP, not static file scope - shared by the two tests below, each of
- * which mallocs its own W * H impulse_t buffer and frees it before its
- * own assertions can fail; see drop_impulse_buf's own comment above for
- * why this file's static test fixtures cannot share the framebuffer's
- * memory budget. */
+ * The two tests below each malloc their own impulse buffer on the HEAP and
+ * free it before their assertions can fail; static fixtures here cannot
+ * share the framebuffer's memory budget. */
 
 static void test_a_confined_gas_pocket_bursts_instead_of_just_catching(void)
 {
@@ -516,22 +512,13 @@ static void test_a_confined_gas_pocket_bursts_instead_of_just_catching(void)
 
     sand_step(&s, 0, 1000, 0);
 
-    /* (4,2) is fire_room()'s own ceiling stone, directly above the gas
-     * cell - within sand_explode()'s core radius but never itself
-     * touching fire. sand_explode()'s core fill (SAND_EXPLODE_CORE_
-     * DIVISOR, sand.h) writes fire into every cell within that radius
-     * UNCONDITIONALLY, occupied or not, before a single flight entry is
-     * even queued - so only a REAL explosion ever touches it at all; a
-     * plain place_reacted() ignition only ever touches the one cell it
-     * targets, so the stone above it would still be stone. NOT_EQUAL
-     * rather than fire specifically: the fresh fire the core just wrote
-     * is itself a non-static occupied cell inside the blast radius, so
-     * sand_displace()'s own annulus loop queues it for outward flight too
-     * (sand_explode()'s own comment in sand.c) - it may already have
-     * moved on by the time this runs, same as any grain caught in a
-     * blast, and where it lands afterward is no longer pinned; see
-     * test_a_strong_close_blast_can_breach_a_wall's own comment for the
-     * same reasoning applied to an ordinary DETONATE blast. */
+    /* (4,2) is the ceiling stone above the gas cell: inside sand_explode()'s
+     * core radius, never itself touching fire. The core fill writes fire
+     * into every cell in that radius unconditionally, so only a real
+     * explosion reaches it - a plain place_reacted() ignition touches only
+     * its target. NOT_EQUAL rather than fire specifically, because that
+     * fresh fire is itself queued for outward flight and may already have
+     * moved on. */
     const uint8_t ceiling_material = CELL_MATERIAL(sand_at(&s, 4, 2));
     const uint8_t gas_cell_material = CELL_MATERIAL(sand_at(&s, 4, 3));
     const int impulse_count = s.impulse_count;
@@ -792,18 +779,12 @@ static void test_liquid_wins_over_smothering(void)
 static void test_igniting_a_neighbour_marks_its_row_dirty(void)
 {
     dirty_fixture();
-    /* Box gas in on every side except where it touches fire below, so it
-     * cannot drift away via its OWN rise or spread pass (both run before
-     * reactions, in the same step) before reactions gets to check it. A
-     * straight-up ceiling alone blocks the plain rise but leaves the
-     * diagonal slide fallback free to move it up-left/up-right instead
-     * (which is exactly what happened the first time this test was
-     * written with only the straight-up cell blocked) - and a ceiling
-     * with no side walls at all leaves the perpendicular spread pass
-     * free to walk it sideways out of column 3 entirely (the failure
-     * before that). All three of straight-up, both diagonals-up, and
-     * both sideways neighbours need blocking - everywhere except where
-     * fire sits, directly below. */
+    /* Box gas in on every side except where it touches fire below: its own
+     * rise and spread passes both run before reactions in the same step.
+     * Straight-up, both up-diagonals and both sideways neighbours all need
+     * blocking - a ceiling alone leaves the diagonal slide fallback, and a
+     * ceiling without side walls leaves the perpendicular spread pass free
+     * to walk it out of the column. */
     sand_set(&s, 2, 2, STONE);
     sand_set(&s, 3, 2, STONE);
     sand_set(&s, 4, 2, STONE);
@@ -1635,14 +1616,11 @@ static void test_an_ember_burns_out_over_time(void)
     TEST_ASSERT_EQUAL_INT_MESSAGE(1, sand_count(&s),
         "setup: exactly one burning log placed");
 
-    /* Twice an ember's own full life, not once: reaction_t.flare (no test
-     * override exists for it - see the note on why smoke/flare get none)
-     * can spawn a fresh MAT_FIRE cell on any step the ember is still
-     * alive, and that fire cell gets its own full MATERIAL_VARIANTS-1
-     * decay budget starting from whenever it was born - worst case, on
-     * the ember's very last living step. This gives both budgets room to
-     * run out even then, so the test is not at the mercy of exactly when
-     * (if ever) the flare roll happens to hit. */
+    /* Twice an ember's own life, not once: reaction_t.flare can spawn a
+     * fresh MAT_FIRE cell on any step the ember still lives, and that fire
+     * gets its own full MATERIAL_VARIANTS-1 budget from whenever it was
+     * born - worst case the ember's last step. Both budgets need room to
+     * run out. */
     for (int i = 0; i < 2 * (MATERIAL_VARIANTS - 1); i++) {
         sand_step(&s, 0, 1000, 0);
     }
@@ -1696,18 +1674,12 @@ static void test_quenching_costs_the_water_a_unit_of_mass(void)
         "should cost a pot a sip of water per step boiled, not a gulp");
 }
 
-/* MAT_FIRE.quench_to is MAT_STEAM (material.c) - water's own figure -
- * but step_one_burning_cell() substitutes the QUENCHING liquid's own
- * boils_to when that liquid is acid, and then, unlike water's clean
- * deterministic flash to steam, rolls twice more - see
- * SAND_ACID_QUENCH_RESIDUE_CHANCE / SAND_ACID_QUENCH_SMOKE_CHANCE's own
- * comment (sand.h) for why: whether anything is left behind at all, and
- * if so, gas or smoke (biased toward smoke). 2000 independent fire/acid
- * pairs, one step, counted - the same loose statistical-bias shape
- * test_the_dilution_split_favours_neither_side already uses for
- * SAND_ACID_DILUTE_TO_WATER_CHANCE, for the same reason: asserting on the
- * bias itself, not a single sample, and without hard-coding exact counts
- * a future retune of either constant would break. */
+/* MAT_FIRE.quench_to is MAT_STEAM, but step_one_burning_cell() substitutes
+ * the quenching liquid's own boils_to when that liquid is acid, then rolls
+ * twice more (SAND_ACID_QUENCH_RESIDUE_CHANCE / SAND_ACID_QUENCH_SMOKE_
+ * CHANCE, sand.h): whether anything is left at all, and if so gas or smoke.
+ * Counted over many independent pairs and asserted on the bias, not on
+ * exact counts a retune of either constant would break. */
 #define QUENCH_W 2000
 
 /* cells is HEAP, not static file scope - each of the three callers below
@@ -1895,22 +1867,11 @@ static void test_burnt_out_fire_can_leave_smoke(void)
         }
     }
 
-    /* Checked after EVERY step, not just once at the end, and for a
-     * reason worth spelling out: s->decay is a single override that
-     * applies to every material at once (see sand_set_decay()), not
-     * just fire, so a freshly created steam cell is JUST as forced to
-     * decay away as the fire that made it - it does not get to sit
-     * still and wait to be inspected. sand_set(FIRE) here (unlike
-     * sand_spawn()) also skips random_cell()'s "fresh transient starts
-     * at full life" rule, so these cells start at CELL_MAKE(..., 8), not
-     * 15 - they burn out around step 8, not step 15. A loop that ran a
-     * comfortable margin PAST that (as
-     * test_an_ember_burns_out_over_time's does, deliberately, to give a
-     * late flare room to also finish decaying) would just as
-     * deliberately give any steam created around step 8 enough of that
-     * same margin to fully decay away AGAIN before the check ever runs -
-     * the opposite of comfortable here. Checking every step catches
-     * steam the moment it exists, however long it goes on to live. */
+    /* Checked after EVERY step, not once at the end: sand_set_decay() is a
+     * single override applying to every material, so the smoke a burnt-out
+     * fire leaves is forced to decay away just as fast as the fire was. A
+     * loop that ran past the burn-out point would let the smoke it is
+     * looking for expire before the check. */
     bool found_steam = false;
     for (int i = 0; i < 2 * (MATERIAL_VARIANTS - 1) && !found_steam; i++) {
         sand_step(&s, 0, 1000, 0);
@@ -1931,16 +1892,6 @@ static void test_burnt_out_fire_can_leave_smoke(void)
         "broken, not unlucky");
 }
 
-/* The two byproducts must not be the same material, asserted directly
- * rather than left implied by the two tests either side of it.
- *
- * They WERE one material - MAT_STEAM did both jobs - and sharing the row
- * was defensible right up until you watched it: a fire dying in mid-air
- * with no water within reach puffing bright white kettle-steam reads as
- * a bug, because the player can see there was nothing there to boil.
- * This pins the split so nobody re-merges them on the entirely correct
- * observation that the two materials[] rows are nearly identical - the
- * difference that matters is the palette, not the physics. */
 /* Relative luminance of a rendered cell, 0-255. The palette stores
  * panel-ready (byte-swapped) RGB565 - see gfx_color.h - so this undoes
  * both before weighting the channels the way an eye does. */
@@ -1954,24 +1905,14 @@ static int cell_luminance(cell_t c)
     return (r * 30 + g * 59 + b * 11) / 100;
 }
 
-/* The palette test the two-material split exists for.
+/* The palette test the two-material split exists for. MAT_STEAM and
+ * MAT_SMOKE are near-identical rows in materials[], so telling them apart
+ * on sight is the only thing that makes them worth being two materials -
+ * their palettes are load-bearing, not decorative.
  *
- * MAT_STEAM and MAT_SMOKE are near-identical rows in materials[] - the
- * ONLY thing that makes them worth being two materials is that a player
- * can tell them apart on sight. That makes their palettes load-bearing
- * rather than decorative, which is unusual enough here to be worth
- * asserting: everything else in this suite tests behaviour, and a future
- * palette tweak that quietly collapsed these two back into the same
- * range would break the feature while passing every other test in the
- * file.
- *
- * Two separate properties, and the second is the one that is easy to
- * lose. Equal-life brightness ordering is the obvious one. Non-overlap
- * of the whole RANGES is the subtle one: a puff of smoke is caught at
- * whatever point in its life you happen to look at it, so "fresh smoke
- * is dimmer than dying steam" is what actually guarantees no cell is
- * ever ambiguous. The first draft of this palette had the first
- * property and not the second. */
+ * Non-overlap of the whole RANGES is the property that is easy to lose: a
+ * puff is caught at whatever point in its life you look at it, so only
+ * "fresh smoke is dimmer than dying steam" leaves no ambiguous cell. */
 static void test_steam_and_smoke_are_told_apart_by_brightness(void)
 {
     int smallest_gap = 255;
@@ -2006,15 +1947,11 @@ static void test_steam_and_smoke_are_told_apart_by_brightness(void)
 /* water_column()/first_row_holding()/mass_held_by() live in
  * suite_sand_common.{c,h} - reused far past this section.
  *
- * The behaviour try_bubble() exists for, and the one this simulation could
- * not do at all before it.
- *
  * can_enter() only lets a DENSER mover displace a lighter target, and a
  * liquid never consults it anyway (room_in() refuses a cell holding any
- * other material). Between them, a steam cell under standing water had no
- * legal move in EITHER direction and sat frozen there forever - which is
- * exactly what it looked like on the device: a boiler that made steam and
- * then held onto it. */
+ * other material). Between them a steam cell under standing water has no
+ * legal move in EITHER direction - the behaviour try_bubble() exists
+ * for. */
 /* --- oil and lava ----------------------------------------------------- */
 
 /* A stone basin holding a pool of oil `depth` cells deep in columns
@@ -2129,14 +2066,12 @@ static void test_water_still_puts_fire_out(void)
         "quench on one touch - and still turn the fire to steam");
 }
 
-/* Liquids sink/float by density via float_lighter_liquids():
- * room_in() refuses a cell holding another material and a liquid never
- * consults can_enter(), so without it two liquids simply block each other
- * and the lighter one stays trapped forever. material.h's `mobility` is
- * read as buoyancy by a gas and as inverted viscosity by a liquid.
- * Measured steps for a tall column to reach the far wall: water 8, oil 28
- * - oil held to "at least twice as long" so ordinary tuning does not trip
- * it. */
+/* Liquids sink/float by density via float_lighter_liquids(): room_in()
+ * refuses a cell holding another material and a liquid never consults
+ * can_enter(), so without it two liquids block each other and the lighter
+ * stays trapped. `mobility` (material.h) is buoyancy to a gas, inverted
+ * viscosity to a liquid: a tall column reaches the far wall in 8 steps for
+ * water, 28 for oil. */
 /* --- acid ---------------------------------------------------------------- */
 
 /* count_cells_of()/acid_tank() live in suite_sand_common.{c,h} - reused far
