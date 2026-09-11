@@ -2261,6 +2261,18 @@ typedef struct {
     int  bounces;
 } ricochet_lineage_t;
 
+/* One run's whole tracker, heap-allocated by the test and handed down: this
+ * helper also runs on the device's 3584-byte main task stack, where these
+ * arrays as locals push it past check_stack_usage.py's 1024-byte ceiling,
+ * and as file statics they would sit in .bss for the life of the image. */
+typedef struct {
+    ricochet_lineage_t lin[RICOCHET_MAX_TRACK];
+    int                cand_x[RICOCHET_MAX_TRACK];
+    int                cand_y[RICOCHET_MAX_TRACK];
+    int                cand_dir[RICOCHET_MAX_TRACK];
+    bool               cand_used[RICOCHET_MAX_TRACK];
+} ricochet_tracker_t;
+
 /* One seed of the ricochet scene, folded into `hist` (hist[k] += 1 for
  * every entry that changed direction at least k times before it stopped
  * being trackable, k = 0..RICOCHET_MAX_BOUNCES) and *total_entries -
@@ -2268,9 +2280,15 @@ typedef struct {
  * matched across steps, not byte-matched - see that comment for why. */
 #define RICOCHET_MAX_BOUNCES 20
 static void ricochet_measure_seed(uint8_t *cells, impulse_t *buf,
+                                  ricochet_tracker_t *tr,
                                   uint32_t seed, long hist[RICOCHET_MAX_BOUNCES + 1],
                                   long *total_entries, int *any_unmatched_new)
 {
+    ricochet_lineage_t *const lin      = tr->lin;
+    int                *const cand_x   = tr->cand_x;
+    int                *const cand_y   = tr->cand_y;
+    int                *const cand_dir = tr->cand_dir;
+    bool               *const cand_used = tr->cand_used;
     sand_t g;
     memset(cells, 0, (size_t)RICOCHET_W * RICOCHET_H);
     sand_init(&g, cells, RICOCHET_W, RICOCHET_H, seed);
@@ -2286,11 +2304,6 @@ static void ricochet_measure_seed(uint8_t *cells, impulse_t *buf,
 
     sand_explode(&g, RICOCHET_CX, RICOCHET_CY, RICOCHET_RADIUS);
 
-    /* static, not a stack array: this helper runs on the device's 3584-byte
-     * main task stack too, and RICOCHET_MAX_TRACK copies of every array below
-     * push a stack-local version of this function past check_stack_usage.py's
-     * 1024-byte ceiling. Only one call is ever in flight. */
-    static ricochet_lineage_t lin[RICOCHET_MAX_TRACK];
     int n_lin = 0;
     for (int i = 0; i < g.impulse_count && n_lin < RICOCHET_MAX_TRACK; i++) {
         if (CELL_MATERIAL(g.impulse_buf[i].cell) != MAT_STONE) {
@@ -2310,8 +2323,6 @@ static void ricochet_measure_seed(uint8_t *cells, impulse_t *buf,
         sand_step(&g, 0, 1000, 0);
         steps++;
 
-        static int cand_x[RICOCHET_MAX_TRACK], cand_y[RICOCHET_MAX_TRACK],
-                   cand_dir[RICOCHET_MAX_TRACK];
         int n_cand = 0;
         for (int i = 0; i < g.impulse_count && n_cand < RICOCHET_MAX_TRACK; i++) {
             if (CELL_MATERIAL(g.impulse_buf[i].cell) != MAT_STONE) {
@@ -2323,8 +2334,7 @@ static void ricochet_measure_seed(uint8_t *cells, impulse_t *buf,
             cand_dir[n_cand] = g.impulse_buf[i].dir;
             n_cand++;
         }
-        static bool cand_used[RICOCHET_MAX_TRACK];
-        memset(cand_used, 0, sizeof cand_used);
+        memset(cand_used, 0, sizeof tr->cand_used);
 
         for (int li = 0; li < n_lin; li++) {
             if (!lin[li].alive) {
@@ -2385,6 +2395,9 @@ static void test_the_two_wall_explosion_scene_bounces_more_than_once_before_sett
         malloc((size_t)(RICOCHET_W * RICOCHET_H) * sizeof *ricochet_buf);
     TEST_ASSERT_NOT_NULL_MESSAGE(ricochet_buf,
         "ricochet impulse queue must fit in what the framebuffer leaves");
+    ricochet_tracker_t *ricochet_tracker = malloc(sizeof *ricochet_tracker);
+    TEST_ASSERT_NOT_NULL_MESSAGE(ricochet_tracker,
+        "ricochet tracker must fit in what the framebuffer leaves");
 
     long hist[RICOCHET_MAX_BOUNCES + 1];
     memset(hist, 0, sizeof hist);
@@ -2392,10 +2405,11 @@ static void test_the_two_wall_explosion_scene_bounces_more_than_once_before_sett
     int any_unmatched_new = 0;
 
     for (uint32_t seed = 1; seed <= (uint32_t)RICOCHET_SEEDS; seed++) {
-        ricochet_measure_seed(ricochet_cells, ricochet_buf, seed, hist,
-                              &total_entries, &any_unmatched_new);
+        ricochet_measure_seed(ricochet_cells, ricochet_buf, ricochet_tracker,
+                              seed, hist, &total_entries, &any_unmatched_new);
     }
 
+    free(ricochet_tracker);
     free(ricochet_buf);
     free(ricochet_cells);
 

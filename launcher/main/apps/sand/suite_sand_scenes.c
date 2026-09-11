@@ -166,8 +166,10 @@ static void test_the_mixed_scene_puts_every_material_pair_in_contact(void)
      * no longer MATERIAL_MAX, since an index past
      * ALL_PAIRS_ORDINARY_COUNT names an extended static or gunpowder, not
      * a material_id_t value. */
-    static bool seen[ALL_PAIRS_SPAWN_COUNT][ALL_PAIRS_SPAWN_COUNT];
-    memset(seen, 0, sizeof seen);
+    bool (*seen)[ALL_PAIRS_SPAWN_COUNT] =
+        calloc(ALL_PAIRS_SPAWN_COUNT, sizeof *seen);
+    TEST_ASSERT_NOT_NULL_MESSAGE(seen,
+        "the pair-coverage map must fit in what the framebuffer leaves");
 
     int found = 0;
     for (int y = top; y < REAL_H; y++) {
@@ -188,6 +190,7 @@ static void test_the_mixed_scene_puts_every_material_pair_in_contact(void)
         }
     }
 
+    free(seen);
     free(big);
     free(blocks);
 

@@ -381,6 +381,20 @@ before anyone tried to run it. One line, and it fails loudly:
 bash launcher/main/apps/sand/tools/perf_probe/build_probe.sh out/probe
 ```
 
+RUN THE STATIC-RAM GATE TOO, whenever a round adds a scene or a suite.
+Every scene costs `.bss` in the full-scope diagnostics build, and the
+margin between that build and the "one real grid still fits" cliff has
+been as thin as 432 bytes (beads `esp32c6-bix`). Two things make a local
+reading lie: `check_static_ram.py --self-test` tests the script, not this
+tree, and a `build.diag` left configured for `--perf-scope` compiles one
+suite instead of all of them and reports thousands of bytes of headroom
+that CI will not find. Delete the config, rebuild, read the number:
+
+```sh
+rm -f launcher/build.diag/sdkconfig
+./launcher/tools/build_diag_check.sh   # "predicted largest after POST"
+```
+
 The allowlist runs FIRST and matters most. The cheapest way to make a
 deliberately-failing budget pass is to raise the budget, and the next
 cheapest is to weaken the scene; both live in files a candidate may not

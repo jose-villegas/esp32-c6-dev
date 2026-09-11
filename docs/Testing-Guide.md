@@ -569,6 +569,24 @@ against.
    large in `fixture()` instead, as `suite_sand_liquid_depth.c` already
    does, and run `tools/build_diag_check.sh` before pushing rather than
    finding out from a pull request.
+
+   Two traps make a local measurement lie, and both cost a day in
+   September 2026 (beads `esp32c6-bix`). First, **`check_static_ram.py
+   --self-test` is not the gate** — it exercises the script's own parser
+   and arithmetic against a synthetic map, and passes on a tree the real
+   gate rejects. The gate runs inside `idf.py build`. Second, **a local
+   `build.diag` keeps whatever scope it was last configured with**: a
+   leftover `CONFIG_LAUNCHER_SELFTEST_SCOPE_PERF=y` compiles the perf
+   suite alone, which measured 22,216 bytes of `.bss` against full
+   scope's 28,960 — a comfortable-looking 48,944 bytes of headroom
+   instead of the real 41,648. CI always generates a fresh config and so
+   always sees full scope. The sequence that answers the real question
+   is:
+
+   ```sh
+   rm -f launcher/build.diag/sdkconfig
+   ./launcher/tools/build_diag_check.sh   # read "predicted largest after POST"
+   ```
 6. **Stick to ISO C in a suite.** The host runner compiles with
    `-std=c11`, which on glibc hides everything POSIX-only behind
    `__STRICT_ANSI__` - so `strnlen`, `strdup` and friends compile on a
