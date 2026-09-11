@@ -29,18 +29,13 @@
 #include "util/intmath.h"
 #include "suite_sand_common.h"
 
-/* Burying lava does not delete it.
+/* Burying lava does not delete it. smothered() clears a burning cell
+ * outright when all four neighbours are denser and solid, which is right
+ * for a FLAME - burial starves it of air - and wrong for lava, which is
+ * not burning anything. It is simply hot.
  *
- * smothered() clears a burning cell outright when all four neighbours are
- * denser and solid, which is right for a FLAME - burial starves it of air -
- * and wrong for lava, which is not burning anything. It is simply hot, and
- * burying something hot should leave something hot.
- *
- * Reported as "lava is clearly evaporating against stone, I can even see
- * bubbles up". It was, and the bubbles were its own flare going off as it
- * went. A first probe found nothing because it used a clean rectangular
- * vessel, which has no cell with four solid neighbours; every vessel drawn
- * by hand has dozens. */
+ * The vessel has to be an irregular one: a clean rectangle has no cell
+ * with four solid neighbours, so it shows nothing. */
 static void test_lava_buried_in_stone_is_not_deleted(void)
 {
     fixture();
@@ -136,17 +131,14 @@ static void test_buried_lava_bursts_into_stone_and_fire(void)
         "covering it, or nothing actually exploded outward");
 }
 
-/* A LID WITH GAPS IS NOT A LID - the test that goes green when it should
- * not if covered_at() were ever loosened from "all three" to "any two"
- * or "the middle one alone".
+/* A LID WITH GAPS IS NOT A LID - green only while covered_at() wants all
+ * three, never "any two" or "the middle one alone".
  *
- * A CEILING WITH ALTERNATING HOLES gives the structural guarantee: stone
- * at even columns, open at odd ones. A lava cell under an open column
- * sees BOTH lid diagonals (the even columns either side) covered but the
- * cell directly above it empty; a cell under a solid column sees only
- * the cell above it, both diagonals open. Every column in the scene is
- * one of the two, so no cell in the row ever has all three, regardless
- * of how the liquid itself moves. */
+ * A CEILING WITH ALTERNATING HOLES gives the structural guarantee: under
+ * an open column a cell sees both lid diagonals covered and the cell
+ * above it empty; under a solid column, only the cell above. Every column
+ * is one of the two, so no cell in the row ever has all three, however
+ * the liquid moves. */
 static void test_lava_under_a_lid_with_gaps_never_bursts(void)
 {
     fixture();
@@ -176,27 +168,15 @@ static void test_lava_under_a_lid_with_gaps_never_bursts(void)
         "is pinned or how long it runs: all three lid cells, not any two");
 }
 
-/* THE SIDES OF A BASIN ARE NOT A LID - the 2026-09-03 revision of bd
- * esp32c6-a2j's rule. A finger-drawn stone wall is never flat: each
- * brush disc bulges past the one below it, so the inner face has a
- * one-cell notch every brush step, and lava settling into that notch
- * sees wall on its side, wall on the diagonal above that side, and wall
- * directly above - three covering cells in a contiguous run. Under the
- * 5-cell semi-disc rule that sealed, so every notch on both walls of an
- * ordinary hand-drawn basin rolled the burst every step and the walls
- * blew out from the inside as the lava settled (reproduced on the host:
- * a clean one-cell wall never produced a single eligible cell, a
- * brush-drawn one did within 16 steps and breached by step 62 at natural
- * odds). The pool's surface is wide open a cell to the side, so nothing
- * is under pressure there; the sides were counting as cover.
+/* THE SIDES OF A BASIN ARE NOT A LID. A finger-drawn wall is never flat:
+ * each brush disc bulges past the one below, leaving a one-cell notch
+ * where lava sees wall beside it, on the diagonal above, and directly
+ * above. Counting those three as cover breached a hand-drawn basin by
+ * step 62 at natural odds, where a clean one-cell wall never produced a
+ * single eligible cell.
  *
- * The rule is now "lid only": the three anti-gravity cells, all of them,
- * and the two perpendiculars never count. Both notch shapes - {up-left,
- * up, left} on the left wall and {up, up-right, right} on the right -
- * must therefore never burst, however long it runs and however high the
- * chance is pinned. The walls' intact-stone count is the assertion, not
- * the notch cells' own material, because a burst that fires is what
- * takes the wall out. */
+ * The rule is lid only: the three anti-gravity cells, never the two
+ * perpendiculars. */
 static void test_lava_in_a_wall_notch_never_bursts(void)
 {
     fixture();
@@ -264,21 +244,12 @@ static void test_lava_in_a_wall_notch_never_bursts(void)
 
 /* THE EXHAUSTIVE SHAPE TABLE. A rule that rotates with gravity and is
  * only ever exercised at one rotation is not really tested, so this
- * drives cover_mask()/covered_at() (sand_priv.h) directly, at each of the
- * 8 ring directions, over every one of the 256 ways to paint the full
- * 8-neighbour ring covered or open. Every combo first checks that
- * cover_mask() equals a mask built independently from that combo's own
- * bits at the 3 lid positions (ring_of()/ring_dir(), already covered by
- * their own tests elsewhere - not cover_mask()'s own logic checked
- * against itself), proving it genuinely ignores the 5 cells gravity
- * excludes - the two PERPENDICULARS included, the cells whose counting
- * blew the sides out of hand-drawn basins (see
- * test_lava_in_a_wall_notch_never_bursts above) - and not merely that it
- * is never asked about them. Then covered_at() must be true for exactly
- * the combos with all three lid cells painted and no other: 32 of the
- * 256, the same at every gravity direction, axis-aligned or diagonal.
- * The semi-disc rule this replaced had 7 valid shapes at axis-aligned
- * gravity and 6 at diagonal; the lid rule has one, everywhere. */
+ * drives cover_mask()/covered_at() at all 8 ring directions over all 256
+ * ways to paint the 8-neighbour ring.
+ *
+ * The expected mask is built independently from the combo's own bits, so
+ * the 5 cells gravity excludes are proved IGNORED, not merely never asked
+ * about. covered_at() is true for exactly 32 of the 256, everywhere. */
 static void test_cover_primitive_matches_the_exhaustive_shape_table(void)
 {
     fixture();
@@ -394,24 +365,13 @@ static void test_a_wide_pool_under_a_crust_bursts(void)
 }
 
 /* GRAVITY-RELATIVE, NOT SCREEN-RELATIVE - the risk covered_at() inherits
- * from cover_mask() (bd esp32c6-a2j): the wide-pool-under-a-crust test
- * just above only ever exercises this under ordinary downward gravity,
- * so a regression that quietly swapped s->last_load_dx/dy for a fixed
- * screen-up direction would still pass it. This is the direct
- * descendant of the now-removed test_sealed_lava_vents_toward_gravity_
- * relative_up (bd esp32c6-0f2 retired the vent mechanism it guarded;
- * the behaviour it stopped from regressing - gravity, not the screen,
- * decides "up" - survives here against the burst instead).
+ * from cover_mask(): the wide-pool-under-a-crust test above only runs
+ * under downward gravity, so a regression swapping s->last_load_dx/dy for
+ * a fixed screen-up direction would still pass it.
  *
- * The same wide-pool-under-a-crust shape, TRANSPOSED: a pool wide along
- * screen-y instead of screen-x, sealed by a crust to its LEFT instead of
- * above it, driven by genuine sideways gravity (gx=1000, gy=0) so
- * gravity-relative "up" is screen-LEFT. Under the correct rule the
- * interior test cell's three lid cells (left, up-left, down-left,
- * gravity-relative) are all crust - a complete lid. Under a regression
- * hardcoded to screen-up, the same cell's lid would be up-left, up and
- * up-right, of which only up-left is stone (the other two are more
- * lava) - never bursts. */
+ * The same shape TRANSPOSED: crust to the LEFT, gravity sideways
+ * (gx=1000), so gravity-relative "up" is screen-left. Hardcoded to
+ * screen-up, only one of the cell's three lid cells is stone. */
 static void test_a_wide_pool_under_a_sideways_crust_bursts(void)
 {
     fixture();
@@ -494,14 +454,11 @@ static void test_an_open_lava_pool_never_bursts(void)
         "is pinned");
 }
 
-/* sand_explode() is a documented no-op without sand_enable_impulses()
- * (its own first line, sand.c) - so with impulses never enabled, a burst
- * must still convert the cell to MAT_STONE (place_reacted() does not
- * touch s->impulse_buf at all) and simply throw nothing. Not gated on
- * impulses being enabled at all - see step_one_burning_cell()'s own new
- * block for why that is correct rather than a gap: no impulses means no
- * explosions anywhere else in the simulation either, and a bare
- * conversion to stone is not a wrong answer on its own. */
+/* sand_explode() is a documented no-op without sand_enable_impulses(), so
+ * a burst with impulses off must still convert the cell to MAT_STONE and
+ * simply throw nothing. Leaving the burst itself ungated is correct
+ * rather than a gap: no impulses means no explosions anywhere else in the
+ * simulation either. */
 static void test_buried_lava_still_becomes_stone_with_impulses_off(void)
 {
     fixture();
@@ -539,18 +496,14 @@ static void test_buried_lava_still_becomes_stone_with_impulses_off(void)
     }
 }
 
-/* Nor does conducted heat boil it away.
+/* Nor does conducted heat boil it away. conduct_heat() turns whatever the
+ * heat reaches into steam if that cell is KIND_LIQUID, and lava is a
+ * liquid, so lava on the far side of a conductor boils in the heat of
+ * other lava.
  *
- * conduct_heat() turns whatever the heat reaches into steam if that cell
- * is KIND_LIQUID, and lava is a liquid - so lava on the far side of a
- * conductor was boiled into steam by the heat of other lava. A plain pool
- * never showed it, because a pool has no conductor running through it. A
- * vessel with stone in it does, and that is what a drawn one looks like.
- *
- * The measurement that found it: a pillared vessel lost 83% of its lava in
- * 200 steps where a flat-floored one lost none, and water and oil in the
- * same pillared vessel lost nothing - which is what ruled out a bug in
- * liquid movement and pointed at the burning path. */
+ * The vessel needs stone running through it, the way a drawn one has: a
+ * plain pool has no conductor and shows nothing. A pillared one lost 83%
+ * of its lava in 200 steps where a flat-floored one lost none. */
 static void test_lava_is_not_boiled_by_its_own_conducted_heat(void)
 {
     fixture();
