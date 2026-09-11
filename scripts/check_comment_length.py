@@ -40,6 +40,7 @@ import sys
 # report.
 EXCLUDED = (
     "launcher/components/",
+    "launcher/test/framework/",
     "launcher/main/boot/boot_anim_curve.h",
     "launcher/main/boot/boot_anim_image.h",
     "launcher/main/boot/boot_anim_timeline.h",
