@@ -214,31 +214,14 @@ static void scene_fire_gas(sand_t *s)
     }
 }
 
-/* Scene 5: lava sealed under a stone lid, with the lava-burst chance (bd
- * esp32c6-mqt) forced so every covered cell converts within this scene's
- * own step budget rather than waiting on its real, deliberately rare
- * production rate.
- *
- * Added after this tool FAILED to notice a deliberately broken vent scan
- * (the mechanism this scene originally exercised, removed by bd
- * esp32c6-0f2 once the burst replaced it) - the first four scenes never
- * build sealed lava, so the whole mechanism was outside what the
- * fingerprint could see, and the gate passed a real behavioural
- * regression. Rebuilt against the burst rather than dropped, so the
- * standing lesson for anyone extending this file still holds: a
- * fingerprint only covers the mechanisms its scenes actually reach, and
- * the way to find out which those are is to break a mechanism on purpose
- * and check this tool goes red.
- *
- * STALE CLAIM CORRECTED: this used to say no impulse buffer is enabled
- * anywhere in this file, making sand_explode() here a documented no-op.
- * main() (below) now calls sand_enable_impulses() unconditionally for
- * every scene, itself explicitly - "the throw paths (explosions, bursts,
- * splashes) are part of the behaviour being fingerprinted" - so a burst
- * here converts the covered cell to stone AND throws debris, same as any
- * other scene. That is still enough to exercise and hash the conversion
- * this scene exists to cover; it is simply no longer the ONLY thing this
- * scene exercises. */
+/* Scene 5: lava sealed under a stone lid, lava-burst chance (bd
+ * esp32c6-mqt) forced to 255 so every covered cell converts within this
+ * scene's step budget. Standing lesson for anyone extending this file: a
+ * fingerprint only covers the mechanisms its scenes actually reach - to
+ * find out which, break a mechanism on purpose and check this tool goes
+ * red. main() calls sand_enable_impulses() unconditionally, so a burst
+ * here converts the cell to stone AND throws debris, same as any other
+ * scene. */
 static void scene_sealed_lava(sand_t *s)
 {
     sand_set_lava_burst(s, 255);
@@ -478,14 +461,11 @@ static void scene_snow_crust(sand_t *s)
 }
 
 
-/* A KEG STANDING IN WATER. No scene reached gunpowder at all before this, so
- * every soak/dry/convert rule it owns hashed the same whether it worked or
- * not - and one of its exits is an explosive. Fifth material gap this tool
- * has been caught with.
- *
- * Walled, because a powder slides off an open ledge and loose water spreads
- * away, and a keg soaks slowly enough now that both happen first - the same
- * thing that broke a unit test's fixture when the rate dropped. */
+/* A KEG STANDING IN WATER: exercises every soak/dry/convert rule
+ * gunpowder owns, including its explosive exit - the coverage this tool
+ * otherwise misses for gunpowder entirely. Walled, because an unwalled
+ * powder slides off an open ledge and loose water spreads away faster
+ * than a keg soaks, which would leave nothing to observe. */
 static void scene_powder_keg(sand_t *s)
 {
     /* RATES FORCED, and deliberately not the shipped ones. A keg soaks at 2 in
