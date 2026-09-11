@@ -83,17 +83,14 @@ static void hold_lava_under_a_pane_again(void)
     sand_step(&s, 0, 1000, 0);
 }
 
-/* Heat ACCUMULATES in the pane rather than transforming it on contact.
+/* Heat ACCUMULATES in the pane rather than transforming it on contact -
+ * the difference between `heat_ramp` and the `heat_chance` sand uses. A
+ * per-step roll has no memory, so under it a brief fierce flame and a
+ * long slow one are the same event with different luck; banking the
+ * exposure in the cell is what makes duration a real requirement.
  *
- * This is the difference between `heat_ramp` and the `heat_chance` sand
- * uses, and it is the whole reason glass melting can mean "long exposure"
- * at all: a per-step roll has no memory, so under it a brief fierce flame
- * and a long slow one are the same event with different luck. Banking the
- * exposure in the cell is what lets duration be a real requirement.
- *
- * Asserted as "still glass, but changed" rather than on a specific level,
- * because the level is a race between the ramp and cooling and pinning it
- * would make this a test of the RNG. */
+ * Asserted as "still glass, but changed": the level is a race between the
+ * ramp and cooling, and pinning it would test the RNG. */
 static void test_glass_banks_heat_rather_than_melting_on_contact(void)
 {
     hold_lava_under_a_pane(60);
@@ -312,16 +309,12 @@ static void test_the_shock_threshold_is_exact(void)
 }
 
 /* And the biggest colour change in glass's ramp is at that same level.
- *
- * Glass is the one material whose variant the player has to be able to
- * read, because it is the only one where the variant changes what the
- * material DOES rather than how it looks. A smooth ramp hid that: a pane
- * at 5 and a pane at 6 behave completely differently and looked nearly
- * identical, so pouring snow on a basin that was not quite hot enough
- * produced no reaction and no explanation for it.
+ * Glass is the one material whose variant changes what it DOES rather
+ * than how it looks, so a pane at 5 and a pane at 6 behave completely
+ * differently and a smooth ramp made them look identical.
  *
  * Asserted as "the largest step in the ramp", not "these two colours
- * differ", because any two entries of a gradient differ. The claim worth
+ * differ" - any two entries of a gradient differ, and the claim worth
  * defending is that this break is the one you notice. */
 static void test_glass_looks_different_at_the_shock_threshold(void)
 {
@@ -401,19 +394,13 @@ static void test_snow_frosts_a_resting_pane(void)
 }
 
 /* Cold spreads THROUGH the glass, past the cells the snow is touching.
+ * One cell a single level off ambient is not something anyone spots on a
+ * 184x224 board; a patch of frost creeping outward is.
  *
- * Without this the effect was real and nearly invisible: only the single
- * cell under a flake ever changed, and it barely changed, because snow
- * melts after a chill or two and `cools` drags the cell straight back
- * towards ambient. One cell one level off ambient is not something anyone
- * spots on a 184x224 board.
- *
- * Spreading it makes a patch of frost that creeps outward from where the
- * snow landed, which is both what frost looks like and what makes the
- * state readable. It is the same `conducts` that carries a fire's heat
- * through a wall, applied within the material - scaled down hard, because
- * at its own value a pane goes isothermal in a step or two and a wall that
- * is all one temperature cannot be hot inside and cold outside. */
+ * It is the same `conducts` that carries a fire's heat through a wall,
+ * applied within the material and scaled down hard - at its own value a
+ * pane goes isothermal in a step or two, and a wall that is all one
+ * temperature cannot be hot inside and cold outside. */
 static void test_frost_spreads_beyond_the_snow_touching_it(void)
 {
     fixture();
@@ -452,18 +439,12 @@ static void test_frost_spreads_beyond_the_snow_touching_it(void)
         "can see");
 }
 
-/* Snow keeps on ordinary cold glass.
- *
- * It did not, briefly, and the report was exact: snow turned to water on
- * contact with glass when it never used to. Chilling had just been moved
- * so that it reaches panes at rest, and chilling costs the cold material
- * its own `heats_to` - so snow started paying the price tuned for standing
- * beside a FIRE in exchange for pushing a resting pane one level cooler.
- *
- * The cost now tracks what was actually absorbed: taking heat out of
- * something above room temperature melts snow, pushing cold into something
- * at or below it does not. Otherwise a snowbank cannot be kept anywhere
- * near the one building material it is meant to be used against. */
+/* Snow keeps on ordinary cold glass. Chilling costs the cold material its
+ * own `heats_to`, so that cost has to track what was actually absorbed:
+ * taking heat out of something above room temperature melts snow, pushing
+ * cold into something at or below it does not. Otherwise a snowbank
+ * cannot be kept anywhere near the one building material it is meant to
+ * be used against. */
 static void test_snow_keeps_on_ordinary_cold_glass(void)
 {
     fixture();
@@ -489,18 +470,13 @@ static void test_snow_keeps_on_ordinary_cold_glass(void)
         "up on the board");
 }
 
-/* Shock works HOT ONTO COLD as well.
- *
- * Thermal shock is a large temperature CHANGE, not a high temperature, and
- * for a while only half of it existed: cold arriving at hot glass broke it,
- * heat arriving at frosted glass did not. Nobody could have explained that
- * asymmetry to a player, and the obvious experiment - chill a vessel, then
- * pour something hot into it - quietly did nothing.
+/* Shock works HOT ONTO COLD as well: thermal shock is a large temperature
+ * CHANGE, not a high temperature.
  *
  * Kept as its own test rather than folded into the cold-onto-hot one
- * because the two run through completely different code: this direction
- * lives in try_heat_transform(), driven by the heat source, and the other
- * in step_one_cold_cell(), driven by the cold cell. They can break
+ * because the two run through completely different code - this direction
+ * lives in try_heat_transform(), driven by the heat source, the other in
+ * step_one_cold_cell(), driven by the cold cell. They can break
  * independently and have. */
 static void test_heat_arriving_at_frosted_glass_cracks_it(void)
 {
@@ -603,26 +579,15 @@ static void test_a_frosted_pane_warms_back_to_room_temperature(void)
         "other way");
 }
 
-/* Lava on one side of a wall, snow on the other: it cracks.
- *
- * The scenario the mechanism exists for, end to end and with nothing
- * pre-set - hold lava against a glass wall until it glows, then bank snow
- * on the far face. Every other shock test places a pane at a chosen
- * temperature, which tests the rule but assumes the pane can get hot at
- * all; here the heat has to arrive from a real source, through the
+/* Lava on one side of a wall, snow on the other: it cracks. Nothing is
+ * pre-set here - the heat has to arrive from a real source, through the
  * material, and reach the same cell the snow is touching.
  *
- * A vertical wall, deliberately. Laid flat with lava on top there is
- * nowhere for the snow to be except on top of the lava, where it flashes
- * off without ever meeting the hot cell - which is exactly what happens on
- * the board if you pour snow into an open basin rather than banking it
- * against the outside.
- *
- * The ORDER is the other half and the second block asserts it. Snow
- * present from the start fights the ramp instead of exploiting it:
- * chilling is faster than heating, so the wall never arrives at the
- * threshold and just sits there, warm on one face and frosted on the
- * other. Heat first, chill second. */
+ * A VERTICAL wall, because laid flat there is nowhere for the snow to be
+ * except on top of the lava, where it flashes off without ever meeting
+ * the hot cell. And heat first, chill second: chilling is faster than
+ * heating, so snow present from the start keeps the wall from ever
+ * reaching the threshold. */
 static void test_lava_one_side_snow_the_other_cracks_the_wall(void)
 {
     const int wall = W / 2;
