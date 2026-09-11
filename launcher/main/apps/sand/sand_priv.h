@@ -49,8 +49,13 @@ dest_row(const sand_t* s, int y) {
     return s->cells + (size_t)y * (size_t)s->w;
 }
 
+/* ALSO THE BOARD-CHANGED SIGNAL, not only a repaint request: a changed cell
+ * that is not repainted is a visible bug, so every writer already comes
+ * through here - the one place a content change can be seen without auditing
+ * them all. See faller_may_move in sand.h for what rests on that. */
 static inline void
 mark_rows(sand_t* s, int y0, int y1) {
+    s->faller_may_move = true;
     if (s->dirty_rows != NULL) {
         if ((unsigned)y0 < (unsigned)s->h) {
             s->dirty_rows[y0] = 1;
@@ -449,6 +454,10 @@ clear_content_flags(sand_t* s) {
     s->may_have_temperature = false;
     s->may_have_moisture = false;
     s->may_have_faller = false;
+    /* The pessimistic direction, unlike the flags around it: a board filled
+     * by writing s->cells directly latches no presence either, so this one
+     * being true changes nothing until something says a faller is there. */
+    s->faller_may_move = true;
     s->may_have_heat_holder = false;
 
     s->may_have_condenser = false;
@@ -488,6 +497,7 @@ latch_content_flags(sand_t* s, cell_t cell) {
     }
     if (r->falls != 0) {
         s->may_have_faller = true;
+        s->faller_may_move = true;
     }
     if (r->condenses != 0) {
         s->may_have_condenser = true;
@@ -677,6 +687,12 @@ void sand_step_reactions(sand_t* s);
  * can check the shipped table against a direct count, the only way that
  * table is verified. */
 int sand_disc_count(int radius);
+
+/* The fall stage's own question, minus the roll and the write. Declared here
+ * rather than left static because may_have_faller is only allowed to be clear
+ * while this answers no everywhere, and a suite cannot check that without
+ * asking the same question the pass asks. */
+bool faller_can_move(sand_t* s, int x, int y, int w, int h, const reaction_t* r);
 
 bool step_one_falling_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r);
 bool step_one_conducting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r);

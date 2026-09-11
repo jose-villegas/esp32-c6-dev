@@ -1786,6 +1786,7 @@ step_one_acid_rain_cell(sand_t* s, int x, int y, int w, int h) {
 #define FOUND_TEMPERATURE 4u
 #define FOUND_MOISTURE    8u
 #define FOUND_FALLER      16u
+#define FOUND_FALLER_MOVE 32u
 #define FOUND_CONDENSING  64u
 
 /* REACTION-STAGE DISPATCH TABLE skips PREFIX rows. Water, oil, metal traverse
@@ -1943,10 +1944,14 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
         }
     stage_fall:
         if (r->falls != 0) {
-            /* Armed by EXISTING. Landed seed clears flag, stops pass.
-             * Dissolve ground, plants hang. Bug. */
             found |= FOUND_FALLER;
+            /* THE SECOND BIT IS THE SKIP: presence keeps may_have_faller set
+             * the way it always did, while a landed or anchored plant reports
+             * no mobility, so a board where none can move stops paying for
+             * this pass. Sound only because mark_rows() re-arms mobility, and
+             * without that a dissolved plant hangs in the air. */
             if (step_one_falling_cell(s, x, y, w, h, r)) {
+                found |= FOUND_FALLER_MOVE;
                 continue;
             }
         }
@@ -2076,7 +2081,7 @@ sand_step_reactions(sand_t* s) {
     }
     /* Dissolving, not fire. Heat, condensation independent. */
     if (!s->may_have_burning && !s->may_have_dissolver && !s->may_have_temperature && !s->may_have_moisture
-        && !s->may_have_faller && !s->may_have_condenser) {
+        && !(s->may_have_faller && s->faller_may_move) && !s->may_have_condenser) {
         return;
     }
 
@@ -2116,11 +2121,20 @@ sand_step_reactions(sand_t* s) {
      * cell this pass CREATED at its own coordinates - the walk logged the old
      * material and never returns (bd esp32c6-cxx).
      *
-     * Only the mask can be cleared here. The six may_have_* bools are read
-     * per cell as live gates by stage_warm and the plant stages, so they keep
-     * the clear-at-the-end rule below. */
+     * The other five may_have_* bools are live per-cell gates for stage_warm
+     * and the plant stages, so they keep the clear-at-the-end rule below. The
+     * fall pair gates nothing inside the pass and joins the mask here. */
     s->may_have_materials = 0;
     seen_materials = 0;
+
+    /* CLEARED HERE, not with the five below, for the same reason the mask
+     * above is: this pass dissolves and burns ground, and each of those marks
+     * a row. Clearing at the end throws that arming away and leaves a plant
+     * over the hole this same pass opened under it. Presence joins it so a
+     * plant BUDDED mid-pass, into a row already walked, is not cleared away
+     * either. */
+    s->may_have_faller = false;
+    s->faller_may_move = false;
 
     const int w = s->w;
     const int h = s->h;
@@ -2142,8 +2156,11 @@ sand_step_reactions(sand_t* s) {
     if (!(found & FOUND_MOISTURE)) {
         s->may_have_moisture = false;
     }
-    if (!(found & FOUND_FALLER)) {
-        s->may_have_faller = false;
+    if ((found & FOUND_FALLER) != 0) {
+        s->may_have_faller = true;
+    }
+    if ((found & FOUND_FALLER_MOVE) != 0) {
+        s->faller_may_move = true;
     }
     if (!(found & FOUND_CONDENSING)) {
         s->may_have_condenser = false;

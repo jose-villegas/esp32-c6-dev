@@ -217,15 +217,11 @@ static void test_an_overhanging_limb_is_held_up_by_its_own_trunk(void)
 }
 
 
-/* A settled faller keeps the pass armed.
- *
- * may_have_faller gates the whole reactions pass, so a plant that sits
- * still must still set it: dissolve the ground out from under one with
- * acid and it would otherwise hang in the air, nothing left to re-arm the
- * flag. A cell with nothing to do NOW is not a cell with nothing to do
- * EVER. Asserted on the flag rather than a scene - the flag is the
- * invariant. */
-static void test_a_settled_plant_keeps_the_reaction_pass_armed(void)
+/* faller_may_move says what can MOVE, beside may_have_faller's what is there:
+ * plants that are all landed or anchored must not buy a board-wide scan.
+ * Clearing it is safe only because mark_rows() arms it again, which the four
+ * tests below take one removal mechanism at a time. */
+static void test_a_settled_plant_lets_the_reaction_pass_stand_down(void)
 {
     fixture();
     sand_clear(&s);
@@ -244,10 +240,217 @@ static void test_a_settled_plant_keeps_the_reaction_pass_armed(void)
 
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_PLANT),
         sand_at(&s, W / 2, H - 2), "the plant has to still be there");
+    TEST_ASSERT_FALSE_MESSAGE(s.faller_may_move,
+        "a plant that has been sitting on the floor for a hundred steps must "
+        "let the mobility flag clear - leaving it armed is what made one "
+        "landed seed pay for a whole-board reaction scan every step forever");
     TEST_ASSERT_TRUE_MESSAGE(s.may_have_faller,
-        "a plant on the board must keep the faller flag armed even when it "
-        "has not moved for a hundred steps - the flag says what is PRESENT, "
-        "and once it clears nothing can arm it again");
+        "presence is the other half of the pair and must NOT clear - the "
+        "plant is still standing there");
+}
+
+/* The inverse of every other faller test here, which all assert that something
+ * DOES fall and so are satisfied for free by a pass that never stands down.
+ * This one waits for the flag to clear first, so only the erase itself can
+ * arm the pass that drops the plant. */
+static void test_digging_out_a_settled_plant_drops_it(void)
+{
+    fixture();
+    sand_clear(&s);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    sand_set(&s, W / 2, H - 2, STONE);
+    sand_set(&s, W / 2, H - 3, MATX(MATX_PLANT));
+
+    for (int i = 0; i < 100; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+    TEST_ASSERT_FALSE_MESSAGE(s.faller_may_move,
+        "the plant has to be standing still before the ground goes, or this "
+        "test never exercises the re-arm at all");
+
+    sand_erase(&s, W / 2, H - 2, 0);
+    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, W / 2, H - 2)),
+        "the pillar under the plant has to actually be gone");
+
+    for (int i = 0; i < 30; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_PLANT),
+        sand_at(&s, W / 2, H - 2),
+        "a plant whose ground is dug out from under it must come down - "
+        "nothing else on the board moved, so only the erase itself can have "
+        "woken the pass that drops it");
+}
+
+/* Acid writes the hole INSIDE the reaction pass, not between two of them, so
+ * the pass that dissolves the pillar is the one deciding whether to stand
+ * down - clearing the flag at the end of the pass instead of the start throws
+ * this case away and only this case. */
+static void test_dissolving_the_ground_under_a_settled_plant_drops_it(void)
+{
+    fixture();
+    sand_clear(&s);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    sand_set(&s, W / 2, H - 2, SAND);
+    sand_set(&s, W / 2, H - 3, MATX(MATX_PLANT));
+
+    for (int i = 0; i < 100; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+    TEST_ASSERT_FALSE_MESSAGE(s.faller_may_move,
+        "the plant has to be standing still before the acid arrives");
+
+    sand_set(&s, W / 2 - 1, H - 2, CELL_MAKE(MAT_ACID, MASS_MAX));
+
+    for (int i = 0; i < 200; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(sand_at(&s, W / 2, H - 3) != MATX(MATX_PLANT),
+        "a plant standing on ground acid ate must not still be up there");
+}
+
+/* Burning is the removal that takes many steps and leaves flame in the gap on
+ * the way, so the pass has to stay armed across the whole burn rather than
+ * only on the step the fire was lit. */
+static void test_burning_the_ground_under_a_settled_plant_drops_it(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_decay(&s, SAND_DECAY_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    /* Nothing may CATCH, because the plant is flammable itself (40) and a
+     * flame that eats it passes this test for the wrong reason. The log is
+     * handed over already lit, so it still burns itself out. */
+    sand_set_flammability(&s, 0);
+    sand_set(&s, W / 2, H - 2, CELL_MAKE(MAT_WOOD, 0));
+    sand_set(&s, W / 2, H - 3, MATX(MATX_PLANT));
+
+    for (int i = 0; i < 100; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+    TEST_ASSERT_FALSE_MESSAGE(s.faller_may_move,
+        "the plant has to be standing still before the fire is lit");
+
+    sand_set(&s, W / 2, H - 2, EMBER);
+
+    for (int i = 0; i < 300; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_PLANT),
+        sand_at(&s, W / 2, H - 2),
+        "the log burns out from under the plant, and the plant has to come "
+        "down onto the floor the log was standing on");
+}
+
+/* THE INVARIANT ITSELF, rather than one scene's outcome: faller_may_move may
+ * only be clear while nothing on the board can move. The scene tests above
+ * each pass for a second reason - acid arms may_have_dissolver, fire arms
+ * may_have_burning, and either keeps the pass running whatever the fall flag
+ * says - so this is the one that fails when the flag alone is wrong. */
+static void check_the_fall_flag_is_honest(sand_t *g)
+{
+    if (g->faller_may_move) {
+        return;
+    }
+    for (int y = 0; y < g->h; y++) {
+        for (int x = 0; x < g->w; x++) {
+            const cell_t c = g->cells[(size_t)y * (size_t)g->w + (size_t)x];
+            if (CELL_IS_EMPTY(c)) {
+                continue;
+            }
+            const reaction_t *r = reaction_of(c);
+            if (r->falls == 0) {
+                continue;
+            }
+            TEST_ASSERT_FALSE_MESSAGE(
+                faller_can_move(g, x, y, g->w, g->h, r),
+                "a cell that can fall while the fall flag is clear is a cell "
+                "nothing will ever look at again - it hangs in the air until "
+                "something unrelated happens to wake the pass");
+        }
+    }
+}
+
+static void test_the_fall_flag_is_never_clear_while_a_plant_can_move(void)
+{
+    wide_cells = malloc((size_t)WIDE_W * WIDE_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(wide_cells,
+        "fall-flag honesty grid must fit in what the framebuffer leaves");
+    sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 7u);
+    sand_set_soak(&wide, SAND_SOAK_PER_MATERIAL);
+    sand_set_decay(&wide, SAND_DECAY_PER_MATERIAL);
+
+    for (int x = 0; x < WIDE_W; x++) {
+        sand_set(&wide, x, WIDE_H - 1, STONE);
+        sand_set(&wide, x, WIDE_H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+    }
+    for (int x = 3; x < WIDE_W; x += 5) {
+        sand_set(&wide, x, WIDE_H - 3, MATX(MATX_PLANT));
+        sand_set(&wide, x, WIDE_H - 6, MATX(MATX_PLANT));
+    }
+
+    /* Settled first, so the flag has actually gone quiet before anything
+     * arrives to take the ground away again. */
+    for (int i = 0; i < 120; i++) {
+        sand_step(&wide, 0, 1000, 0);
+        check_the_fall_flag_is_honest(&wide);
+    }
+
+    for (int x = 0; x < WIDE_W; x += 4) {
+        sand_set(&wide, x, 2, CELL_MAKE(MAT_ACID, MASS_MAX));
+    }
+    for (int x = 2; x < WIDE_W; x += 7) {
+        sand_set(&wide, x, 4, FIRE);
+    }
+
+    for (int i = 0; i < 400; i++) {
+        sand_step(&wide, 0, 1000, 0);
+        check_the_fall_flag_is_honest(&wide);
+    }
+
+    free(wide_cells);
+    wide_cells = NULL;
+}
+
+/* The one case where nothing is removed at all: a plant flat on the floor is
+ * held under one gravity and loose under the next with no cell written
+ * between, so no row is marked and mark_rows() cannot be what arms this. */
+static void test_turning_the_board_drops_a_settled_plant(void)
+{
+    fixture();
+    sand_clear(&s);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    sand_set(&s, W / 2, H - 2, MATX(MATX_PLANT));
+
+    for (int i = 0; i < 100; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+    TEST_ASSERT_FALSE_MESSAGE(s.faller_may_move,
+        "the plant has to be standing still before the board turns");
+
+    for (int i = 0; i < 60; i++) {
+        sand_step(&s, 1000, 0, 0);
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(sand_at(&s, W / 2, H - 2) != MATX(MATX_PLANT),
+        "turn the board and the plant that was lying on the floor is lying "
+        "against nothing - it has to slide off the way the new gravity "
+        "points");
 }
 
 /* And what a tree grows must NOT fall.
@@ -1357,7 +1560,12 @@ void run_sand_seeds_suite(void)
     RUN_TEST(test_a_brushful_of_seeds_does_not_hang_in_the_air);
     RUN_TEST(test_a_seed_in_a_shaft_does_not_stick_to_the_walls);
     RUN_TEST(test_an_overhanging_limb_is_held_up_by_its_own_trunk);
-    RUN_TEST(test_a_settled_plant_keeps_the_reaction_pass_armed);
+    RUN_TEST(test_a_settled_plant_lets_the_reaction_pass_stand_down);
+    RUN_TEST(test_digging_out_a_settled_plant_drops_it);
+    RUN_TEST(test_dissolving_the_ground_under_a_settled_plant_drops_it);
+    RUN_TEST(test_burning_the_ground_under_a_settled_plant_drops_it);
+    RUN_TEST(test_the_fall_flag_is_never_clear_while_a_plant_can_move);
+    RUN_TEST(test_turning_the_board_drops_a_settled_plant);
     RUN_TEST(test_a_growing_tree_does_not_shed_what_it_grows);
     RUN_TEST(test_a_buried_seed_comes_up_through_the_soil);
     RUN_TEST(test_a_seed_under_stone_stays_put);
