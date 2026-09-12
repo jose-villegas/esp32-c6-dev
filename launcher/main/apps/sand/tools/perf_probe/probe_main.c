@@ -57,6 +57,7 @@ tearDown(void) {}
 
 extern void sand_host_probe_run_full_step_control(void);
 extern void sand_host_probe_run_settled_flip_control(void);
+extern void sand_host_probe_run_settled_screen(void);
 extern void sand_host_probe_run_water(void);
 extern void sand_host_probe_run_mixed_flip(void);
 extern void sand_host_probe_run_settled_pool_to_landscape(void);
@@ -77,6 +78,9 @@ extern void sand_host_probe_run_snowfall(void);
 extern void sand_host_probe_run_plant_pour(void);
 extern void sand_host_probe_run_plant_idle(void);
 extern void sand_host_probe_run_mature_tree(void);
+extern void sand_host_probe_run_landscape_water(void);
+extern void sand_host_probe_run_landscape_deep_water(void);
+extern void sand_host_probe_run_landscape_sand(void);
 
 typedef struct {
     const char* name;
@@ -89,6 +93,7 @@ typedef struct {
 static const probe_scene_t SCENES[] = {
     {"full_step_control", sand_host_probe_run_full_step_control},
     {"settled_flip_control", sand_host_probe_run_settled_flip_control},
+    {"settled_screen", sand_host_probe_run_settled_screen},
     {"water", sand_host_probe_run_water},
     {"mixed_flip", sand_host_probe_run_mixed_flip},
     {"settled_pool_to_landscape", sand_host_probe_run_settled_pool_to_landscape},
@@ -109,6 +114,9 @@ static const probe_scene_t SCENES[] = {
     {"plant_pour", sand_host_probe_run_plant_pour},
     {"plant_idle", sand_host_probe_run_plant_idle},
     {"mature_tree", sand_host_probe_run_mature_tree},
+    {"landscape_water", sand_host_probe_run_landscape_water},
+    {"landscape_deep_water", sand_host_probe_run_landscape_deep_water},
+    {"landscape_sand", sand_host_probe_run_landscape_sand},
 };
 #define SCENE_COUNT (int)(sizeof(SCENES) / sizeof(SCENES[0]))
 

@@ -233,3 +233,51 @@ void build_water_over_lava_scene(sand_t *s);
 #define GUNPOWDER_BASIN_MEASURED_STEPS 90
 
 void build_gunpowder_basin_scene(sand_t *s);
+
+/* The landscape set. Every other scene here falls down grid +Y; the board
+ * is played sideways, down grid +X (bd esp32c6-1z6). The grid is 184x224,
+ * so a landscape pour drops 184 cells onto a floor 224 wide and settles
+ * into a different shape - built for that, not transposed. */
+#define LANDSCAPE_GX 1000
+
+/* The app's own brush - POUR_RADIUS_PX 10 at 2 px per cell - dragged along
+ * the landscape ceiling, column 0. The stream is about ten cells across,
+ * which is what leaves the settled-block skip anything to keep. */
+#define LANDSCAPE_POUR_RADIUS 5
+
+/* How much of the board the bed holds before anything is poured onto it.
+ * Both shares come from the interaction arena's landscape sweep, which
+ * priced sand-and-water at exactly these two depths. */
+#define LANDSCAPE_BED_PERCENT      40
+#define LANDSCAPE_DEEP_BED_PERCENT 65
+
+/* Pours the bed against the landscape floor and settles it, so the coverage
+ * test and the frame-budget row beside it open on the same board. Poured,
+ * not drawn: a drawn face is a plane at one column, where a poured one
+ * carries repose slopes that reach 15 columns further toward the ceiling,
+ * and the stream meets those, not a wall. */
+void build_landscape_bed_scene(sand_t *s);
+void build_landscape_deep_bed_scene(sand_t *s);
+
+/* One step of the pour that follows, `step` sweeping the brush along the
+ * ceiling. Separate from the builder for the reason plant_bed_rain() is. */
+void landscape_water_pour(sand_t *s, int step);
+void landscape_sand_pour(sand_t *s, int step);
+
+/* Measured: the bed reaches its share in these many steps at eight stamps
+ * apiece, and every block is asleep by the end of the settle. A dragged
+ * brush this fast lays the same bed a single-stamp drag does - front column
+ * 95 against 96 over five times the steps. */
+#define LANDSCAPE_BED_STAMPS       8
+#define LANDSCAPE_BED_STEPS      300
+#define LANDSCAPE_DEEP_BED_STEPS 490
+#define LANDSCAPE_SETTLE_STEPS   150
+
+/* The window times a pour ALREADY RUNNING, the reason the filling basin
+ * primes too: measured from first contact the cost climbs the whole way -
+ * 105 us over 60 steps against 172 over 150, on the same board - because
+ * the water is still reaching fresh bed. Past 150 steps of pour it is flat
+ * within 2% whatever window follows. */
+#define LANDSCAPE_PRIME_STEPS    150
+#define LANDSCAPE_MEASURED_STEPS  90
+#define LANDSCAPE_POUR_STAMPS      2

@@ -603,6 +603,13 @@ static const struct {
     { "snow_asleep", scene_snow_thaw,   71u, 0,    1000, 1 },
     { "pool_asleep", scene_water_pool,  11u, 0,    1000, 1 },
 
+    /* The one combination neither half above reaches: held sideways WITH
+     * the blocks awake to it. Block shape is asymmetric - 32 across by 64
+     * along - so which cells a block calls settled depends on the gravity
+     * axis, and every sleeping row here pointed the same way. A change to
+     * that shape lands here and nowhere else in this table. */
+    { "pool_land",   scene_water_pool,  11u, 1000, 0,    1 },
+
     /* And the one row where a SETTLED-gated rule actually fires - see the
      * builder for why the rate is forced. */
     { "snow_crust",  scene_snow_crust,  71u, 0,    1000, 1 },

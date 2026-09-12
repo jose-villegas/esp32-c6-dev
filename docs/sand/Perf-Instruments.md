@@ -350,6 +350,24 @@ Build fixtures with `sand_set()`. This is also why the content flags that gate
 a SKIP start `true`: a board filled by a raw write latches nothing, and a false
 negative there loses a reaction rather than merely wasting work.
 
+### A settled board is below the host clock and reads as zero
+
+`settled_screen` and `plant_idle` come back as **0 us** from the host probe —
+every candidate, every run. Their device figures are 52 and 54 us, the mean is
+an integer division over 50 and 200 steps, and on a host each step costs a
+fraction of a microsecond. `run_probe.py --compare` then prints `0 0 0 0.00%`,
+which reads as "no change" and is really "not measured".
+
+That matters more than it sounds. The settled-screen row is the one the
+block-size sweep has always been decided on: a smaller block skips a busy board
+more finely and scans more blocks on a still one, and only the still board
+carries the second half. So the half of the trade that argues AGAINST a small
+block is exactly the half the host cannot see, and a shape ranked on the host
+alone will always come back "smaller is better" (bd `esp32c6-1z6`).
+
+Any row whose device figure is in the tens of microseconds belongs on the
+device, not in a host ranking.
+
 ### When the measurement contains work you did not add
 
 Timing a loop that touches every cell measures the loop, not your change. The
