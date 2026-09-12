@@ -201,12 +201,22 @@ small: one `#undef` traded for another, so rule 20.5 is a wash.
 `misra_check.sh` now also names every file it analysed with stubs, so a
 finding count cannot be mistaken for coverage.
 
-Two smaller notes on the same commit. `__CPPCHECK__` is in the
-implementation's reserved identifier space - a name like `MISRA_SCAN` avoids
-that, in a script whose whole purpose is conformance. And passing `-D` to
-cppcheck normally restricts it to that single configuration, which would
-narrow `#ifdef` coverage across every file in the scan; worth confirming,
-with `--max-configs` as the lever if it holds.
+Two smaller notes on the same commit, both now fixed. `__CPPCHECK__` was in
+the implementation's reserved identifier space, which is a poor look in the
+file a conformance tool reads; it is `MISRA_SCAN` now.
+
+And the `-D` caveat was worth confirming, because it held. The test: a
+divide-by-zero inside `#ifdef A` is reported by plain cppcheck and
+**silently missed** the moment any unrelated `-D` is passed. So
+`-D__CPPCHECK__=1` quietly stopped cppcheck exploring `#ifdef` paths across
+the whole scan. `--force` restores them, and the pin survives it - under
+`-DA=1 --force` the A-undefined branch stays unanalysed, which is precisely
+what keeps the un-stubbed variant of a stubbed file out of the scan. The
+measured cost on the sand app is 20 s to 90 s, recovering exactly one
+finding, and that one a syntax error in a vendored LVGL header rather than
+first-party code: this project's `#ifdef`s are mostly pinned by the compile
+database already. It is on by default anyway, because what it prevents is
+silent, and `MISRA_FORCE=0` opts out when a scan needs to be quick.
 
 While fixing #4, a second silent gap in the same script - now also fixed.
 `material_palette.c` was split out of `material.c` on 2026-09-07, after every
@@ -231,10 +241,14 @@ undocumented, and in `--worktree` mode the `EXIT` trap then removes the
 worktree that holds the "partial report: ..." path the script just told the
 user to look at.
 
-Also worth tightening: the `*/main/*` guard is a substring match, not a
-root-anchored one. A checkout whose path happens to contain `/main/` matches
-every translation unit in `compile_commands.json` and reopens the 12 GB
-runaway the commit exists to fix.
+The `*/main/*` guard was also a substring match rather than a root-anchored
+one - a checkout whose path contained `/main/` satisfied any spelling of it,
+reopening the 12 GB runaway the commit exists to prevent. FIXED two ways: the
+shape check is anchored at the front now, so `*/managed_components/*/main/*`
+is refused, and the guard that actually holds is a count. The script resolves
+how many translation units the filter matches and refuses to run past
+`MISRA_MAX_UNITS` (60; the whole project under `main/` is 29). A glob cannot
+be trusted about paths it has never seen; a count can.
 
 ## 6. Smaller findings
 
