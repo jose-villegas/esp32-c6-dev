@@ -3,6 +3,7 @@
 #include <SDL.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -32,9 +33,44 @@ struct Preview {
     SDL_Texture* texture = nullptr;
 };
 
+enum class DragMode {
+    None,
+    Move,
+    Resize,
+};
+
+struct CanvasInteraction {
+    DragMode mode = DragMode::None;
+    LauncherOrientation orientation = LauncherOrientation::Landscape;
+    LauncherElement element = LauncherElement::LastPlayed;
+    LauncherRect original = {};
+    ImVec2 pointer_origin = {};
+};
+
 std::size_t
 index_of(LauncherElement element) {
     return static_cast<std::size_t>(element);
+}
+
+bool
+contains(const LauncherRect& rect, float x, float y) {
+    return x >= rect.x && y >= rect.y && x < rect.x + rect.width && y < rect.y + rect.height;
+}
+
+std::optional<LauncherElement>
+hit_test(const LauncherLayout& layout, float x, float y) {
+    for (std::size_t index = static_cast<std::size_t>(LauncherElement::Count); index > 0; index--) {
+        const LauncherElement element = static_cast<LauncherElement>(index - 1);
+        if (contains(layout.rects[index_of(element)], x, y)) {
+            return element;
+        }
+    }
+    return std::nullopt;
+}
+
+bool
+same_rect(const LauncherRect& first, const LauncherRect& second) {
+    return first.x == second.x && first.y == second.y && first.width == second.width && first.height == second.height;
 }
 
 engine_launcher_layout_t
@@ -77,8 +113,11 @@ create_preview(SDL_Renderer* renderer, Preview& preview, const LauncherLayout& l
     return render_preview(preview, layout);
 }
 
-void
-draw_preview(Preview& preview, const LauncherLayout& layout, LauncherElement selected, float available_width) {
+void constrain_rect(LauncherRect& rect, const LauncherLayout& layout);
+
+bool
+draw_preview(Preview& preview, LauncherLayout& layout, LauncherElement& selected,
+             LauncherOrientation& active_orientation, CanvasInteraction& interaction, float available_width) {
     ImGui::TextUnformatted(preview.name);
     ImGui::SameLine();
     ImGui::TextDisabled("%d x %d", preview.width, preview.height);
@@ -86,12 +125,73 @@ draw_preview(Preview& preview, const LauncherLayout& layout, LauncherElement sel
     const float scale = std::min(1.0f, available_width / static_cast<float>(preview.width));
     const ImVec2 size(preview.width * scale, preview.height * scale);
     const ImVec2 image_position = ImGui::GetCursorScreenPos();
-    ImGui::Image(reinterpret_cast<ImTextureID>(preview.texture), size);
+    const std::string canvas_id = std::string("##canvas-") + launcher_orientation_id(preview.orientation);
+    ImGui::InvisibleButton(canvas_id.c_str(), size, ImGuiButtonFlags_MouseButtonLeft);
+    ImGui::GetWindowDrawList()->AddImage(reinterpret_cast<ImTextureID>(preview.texture), image_position,
+                                         ImVec2(image_position.x + size.x, image_position.y + size.y));
+
+    bool changed = false;
+    const ImVec2 pointer = ImGui::GetIO().MousePos;
+    const float local_x = (pointer.x - image_position.x) / scale;
+    const float local_y = (pointer.y - image_position.y) / scale;
+    LauncherRect& selected_rect = layout.rects[index_of(selected)];
+    const ImVec2 selected_maximum(image_position.x + (selected_rect.x + selected_rect.width) * scale,
+                                  image_position.y + (selected_rect.y + selected_rect.height) * scale);
+    const bool over_resize_handle = pointer.x >= selected_maximum.x - 12.0f && pointer.x <= selected_maximum.x
+                                    && pointer.y >= selected_maximum.y - 12.0f && pointer.y <= selected_maximum.y;
+
+    if (ImGui::IsItemHovered()) {
+        if (over_resize_handle) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNWSE);
+        } else if (contains(selected_rect, local_x, local_y)) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        }
+    }
+
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+        const std::optional<LauncherElement> hit = hit_test(layout, local_x, local_y);
+        if (hit) {
+            const bool resize = *hit == selected && over_resize_handle;
+            selected = *hit;
+            active_orientation = preview.orientation;
+            interaction.mode = resize ? DragMode::Resize : DragMode::Move;
+            interaction.orientation = preview.orientation;
+            interaction.element = *hit;
+            interaction.original = layout.rects[index_of(*hit)];
+            interaction.pointer_origin = pointer;
+        }
+    }
+
+    if (interaction.mode != DragMode::None && interaction.orientation == preview.orientation) {
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            interaction.mode = DragMode::None;
+        } else {
+            LauncherRect next = interaction.original;
+            const int delta_x = static_cast<int>(std::lround((pointer.x - interaction.pointer_origin.x) / scale));
+            const int delta_y = static_cast<int>(std::lround((pointer.y - interaction.pointer_origin.y) / scale));
+            if (interaction.mode == DragMode::Move) {
+                next.x += delta_x;
+                next.y += delta_y;
+            } else {
+                next.width += delta_x;
+                next.height += delta_y;
+            }
+            constrain_rect(next, layout);
+            LauncherRect& target = layout.rects[index_of(interaction.element)];
+            if (!same_rect(target, next)) {
+                target = next;
+                changed = true;
+            }
+        }
+    }
 
     const LauncherRect& rect = layout.rects[index_of(selected)];
     const ImVec2 minimum(image_position.x + rect.x * scale, image_position.y + rect.y * scale);
     const ImVec2 maximum(minimum.x + rect.width * scale, minimum.y + rect.height * scale);
     ImGui::GetWindowDrawList()->AddRect(minimum, maximum, IM_COL32(91, 229, 235, 255), 2.0f, 0, 2.0f);
+    ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(maximum.x - 8.0f, maximum.y - 8.0f), maximum,
+                                              IM_COL32(91, 229, 235, 255));
+    return changed;
 }
 
 void
@@ -161,7 +261,7 @@ draw_rect_editor(LauncherRect& rect, const LauncherLayout& layout) {
 
 bool
 draw_editor(LauncherDocument& document, Preview& landscape, Preview& portrait, LauncherElement& selected,
-            LauncherOrientation& active_orientation, std::string& notice) {
+            LauncherOrientation& active_orientation, CanvasInteraction& interaction, std::string& notice) {
     bool reset_layout = false;
     bool save_requested = false;
     bool preview_changed = false;
@@ -202,17 +302,24 @@ draw_editor(LauncherDocument& document, Preview& landscape, Preview& portrait, L
 
     ImGui::SetNextWindowSize(ImVec2(950, 620), ImGuiCond_FirstUseEver);
     ImGui::Begin("Preview");
+    ImGui::TextDisabled("Click to select, drag to move, or drag the cyan corner to resize.");
     const float gap = ImGui::GetStyle().ItemSpacing.x;
     const float half = (ImGui::GetContentRegionAvail().x - gap) * 0.5f;
     ImGui::BeginChild("Landscape", ImVec2(half, 0), ImGuiChildFlags_Borders);
-    draw_preview(landscape, document.layout(LauncherOrientation::Landscape), selected,
-                 ImGui::GetContentRegionAvail().x);
+    preview_changed |= draw_preview(landscape, document.layout(LauncherOrientation::Landscape), selected,
+                                    active_orientation, interaction, ImGui::GetContentRegionAvail().x);
     ImGui::EndChild();
     ImGui::SameLine();
     ImGui::BeginChild("Portrait", ImVec2(0, 0), ImGuiChildFlags_Borders);
-    draw_preview(portrait, document.layout(LauncherOrientation::Portrait), selected, ImGui::GetContentRegionAvail().x);
+    preview_changed |= draw_preview(portrait, document.layout(LauncherOrientation::Portrait), selected,
+                                    active_orientation, interaction, ImGui::GetContentRegionAvail().x);
     ImGui::EndChild();
     ImGui::End();
+
+    if (preview_changed) {
+        document.mark_dirty();
+        notice.clear();
+    }
 
     ImGui::SetNextWindowSize(ImVec2(300, 540), ImGuiCond_FirstUseEver);
     ImGui::Begin("Inspector");
@@ -351,6 +458,7 @@ main() {
 
     LauncherElement selected = LauncherElement::LastPlayed;
     LauncherOrientation active_orientation = LauncherOrientation::Landscape;
+    CanvasInteraction interaction;
     std::string notice;
     bool running = true;
     while (running) {
@@ -367,7 +475,8 @@ main() {
         ImGui_ImplSDLRenderer2_NewFrame();
         ImGui_ImplSDL2_NewFrame();
         ImGui::NewFrame();
-        const bool preview_changed = draw_editor(document, landscape, portrait, selected, active_orientation, notice);
+        const bool preview_changed =
+            draw_editor(document, landscape, portrait, selected, active_orientation, interaction, notice);
         if (preview_changed
             && (!render_preview(landscape, document.layout(landscape.orientation))
                 || !render_preview(portrait, document.layout(portrait.orientation)))) {

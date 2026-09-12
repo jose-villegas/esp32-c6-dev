@@ -24,6 +24,10 @@ The first executable proves the durable boundary:
 - The hierarchy exposes stable launcher element IDs. Selecting one outlines it
   in both orientations, while the inspector edits its active-orientation
   rectangle and refreshes both previews immediately.
+- Each preview also supports direct manipulation: click an element to select
+  it, drag it to move, or drag its cyan corner handle to resize it. Canvas
+  bounds are enforced during the gesture; document-level problems remain
+  visible and block saving until corrected.
 
 The launcher's orientation-specific geometry is authored in
 `launcher/main/ui/launcher_layout.json` and deterministically baked into
