@@ -241,6 +241,25 @@ undocumented, and in `--worktree` mode the `EXIT` trap then removes the
 worktree that holds the "partial report: ..." path the script just told the
 user to look at.
 
+FIXED. The teardown now copies any report the run produced out to the main
+checkout's `launcher/tools/results/` before removing the worktree, suffixed
+with the branch name so it can never overwrite a report already there. A
+scan that timed out is precisely when someone wants to read its partial
+output. Verified by running the script's real `cleanup()` against a fake
+worktree: the partial report lands in the main checkout, a pre-existing
+report beside it is untouched, and the temp directory still goes.
+
+**Separately, `--worktree` does not currently work on Windows.** Forcing a
+timeout to exercise the path above, the run died before the scan, in the
+step that rewrites `compile_commands.json` for the worktree: Node
+`ENOENT` opening the worktree's own
+`launcher/build.dev/compile_commands.json` for write. One verified fact
+nearby, though not proven to be the cause: `ln -s` in this Git Bash copies
+instead of linking (`-rw-r--r--`, and the content is duplicated), so the
+"symlink everything in the build dir except compile_commands.json" strategy
+that step relies on does not do what it says here. Worth its own look; it is
+not a style-baseline finding and was not chased further.
+
 The `*/main/*` guard was also a substring match rather than a root-anchored
 one - a checkout whose path contained `/main/` satisfied any spelling of it,
 reopening the 12 GB runaway the commit exists to prevent. FIXED two ways: the

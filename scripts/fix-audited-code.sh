@@ -56,7 +56,10 @@
 # directly, worktree or not.) If nothing ends up changing, the worktree and
 # its branch are removed automatically; if something does, both are left
 # behind for you to inspect before opening
-# the PR.
+# the PR. A MISRA report the run produced is copied out to the main
+# checkout's launcher/tools/results/ before that teardown, named after the
+# branch - a scan that timed out is exactly when its partial report is worth
+# reading, and it would otherwise be deleted with the worktree.
 #
 # --exclude <prefix> drops any finding whose main/-relative path starts with
 # it (repeatable) -- e.g. --exclude main/apps/ to scan everything under
@@ -168,6 +171,19 @@ cleanup() {
   # below. A worktree that made it to real changes is left for inspection
   # even if a later step (add/commit/push) fails.
   if [ -n "$WORKTREE_DIR" ] && [ "$HAS_CHANGES" != "1" ]; then
+    # misra_check.sh writes its report inside whichever checkout it ran in,
+    # and names that path when it gives up ("partial report: ..."). In a
+    # worktree that path is about to stop existing, and a scan that timed
+    # out is exactly when someone wants to read it -- so carry it out first,
+    # under the branch name so it can never overwrite the main checkout's
+    # own report.
+    local report dest
+    for report in "$WORKTREE_DIR"/launcher/tools/results/misra_*.txt; do
+      [ -f "$report" ] || continue
+      dest="$REPO_ROOT/launcher/tools/results/$(basename "$report" .txt).$BRANCH.txt"
+      mkdir -p "$(dirname "$dest")" || continue
+      cp "$report" "$dest" 2>/dev/null && echo "Report kept: $dest" >&2
+    done
     git -C "$REPO_ROOT" worktree remove "$WORKTREE_DIR" --force 2>/dev/null || true
     git -C "$REPO_ROOT" branch -D "$BRANCH" 2>/dev/null || true
   fi
