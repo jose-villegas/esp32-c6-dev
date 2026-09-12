@@ -21,6 +21,10 @@
 #                 (pass "*/main/*" for the whole project, minus vendored
 #                 dependencies)
 #
+#   MISRA_JOBS             parallel analyses, defaults to 2 and may not
+#                          exceed 4 (each job also runs the Python addon)
+#   MISRA_TIMEOUT_SECONDS  whole-scan deadline, defaults to 900 seconds
+#
 # NEVER pass a bare "*". --file-filter controls what cppcheck actually
 # ANALYZES, not just what gets reported -- "*" matches every translation
 # unit in compile_commands.json, and on this repo that's ~1800 of them,
@@ -39,7 +43,39 @@ TOOLS_DIR="$(cd "$(dirname "$0")" && pwd)"
 LAUNCHER_DIR="$(cd "$TOOLS_DIR/.." && pwd)"
 
 BUILD_DIR="${1:-build.dev}"
-FILE_FILTER="${2:-*/apps/sand/*}"
+FILE_FILTER="${2:-*/main/apps/sand/*}"
+JOBS="${MISRA_JOBS:-2}"
+TIMEOUT_SECONDS="${MISRA_TIMEOUT_SECONDS:-900}"
+
+case "$FILE_FILTER" in
+    */main/*) ;;
+    *)
+        echo "Refusing unsafe file filter '$FILE_FILTER'. It must be scoped under main/." >&2
+        exit 2
+        ;;
+esac
+
+case "$JOBS" in
+    ''|*[!0-9]*)
+        echo "MISRA_JOBS must be an integer from 1 to 4." >&2
+        exit 2
+        ;;
+esac
+if [ "$JOBS" -lt 1 ] || [ "$JOBS" -gt 4 ]; then
+    echo "MISRA_JOBS must be from 1 to 4; each job also runs the Python addon." >&2
+    exit 2
+fi
+
+case "$TIMEOUT_SECONDS" in
+    ''|*[!0-9]*)
+        echo "MISRA_TIMEOUT_SECONDS must be a positive integer." >&2
+        exit 2
+        ;;
+esac
+if [ "$TIMEOUT_SECONDS" -lt 1 ]; then
+    echo "MISRA_TIMEOUT_SECONDS must be a positive integer." >&2
+    exit 2
+fi
 
 COMPILE_COMMANDS="$LAUNCHER_DIR/$BUILD_DIR/compile_commands.json"
 if [ ! -f "$COMPILE_COMMANDS" ]; then
@@ -77,20 +113,41 @@ mkdir -p "$RESULTS_DIR"
 safe_name="$(echo "$FILE_FILTER" | tr -c 'A-Za-z0-9_' '_')"
 REPORT="$RESULTS_DIR/misra_${safe_name}.txt"
 
-jobs="$(nproc 2>/dev/null || echo "${NUMBER_OF_PROCESSORS:-4}")"
+if command -v timeout >/dev/null 2>&1; then
+    TIMEOUT=timeout
+elif command -v gtimeout >/dev/null 2>&1; then
+    TIMEOUT=gtimeout
+else
+    echo "GNU timeout is required so a bad addon rule cannot run indefinitely." >&2
+    echo "  macOS: brew install coreutils" >&2
+    exit 1
+fi
 
-echo "Scanning '$FILE_FILTER' against $BUILD_DIR/compile_commands.json ($jobs jobs)..."
+echo "Scanning '$FILE_FILTER' against $BUILD_DIR/compile_commands.json ($JOBS jobs, ${TIMEOUT_SECONDS}s timeout)..."
 cd "$LAUNCHER_DIR"
-cppcheck \
+set +e
+"$TIMEOUT" --signal=TERM --kill-after=10s "${TIMEOUT_SECONDS}s" cppcheck \
     --project="$BUILD_DIR/compile_commands.json" \
     --file-filter="$FILE_FILTER" \
-    -j "$jobs" \
+    -D__CPPCHECK__=1 \
+    -j "$JOBS" \
     --enable=warning,style,performance,portability \
     --addon="$ADDON" \
     --inline-suppr \
     --suppress=missingIncludeSystem \
     -q \
-    --output-file="$REPORT" 2>&1 || true
+    --output-file="$REPORT" 2>&1
+scan_status=$?
+set -e
+
+if [ "$scan_status" -eq 124 ] || [ "$scan_status" -eq 137 ]; then
+    echo "Cppcheck exceeded the ${TIMEOUT_SECONDS}s deadline; partial report: $REPORT" >&2
+    exit 2
+fi
+if [ "$scan_status" -ne 0 ]; then
+    echo "Cppcheck failed with exit $scan_status; partial report: $REPORT" >&2
+    exit "$scan_status"
+fi
 
 total="$(wc -l <"$REPORT" | tr -d ' ')"
 misra_count="$(grep -c 'misra-c2012-' "$REPORT" 2>/dev/null || true)"
