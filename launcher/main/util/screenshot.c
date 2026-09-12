@@ -35,7 +35,7 @@
 #include "gfx/gfx.h"
 #include "util/device_state.h"
 
-static const char *TAG = "screenshot";
+static const char* TAG = "screenshot";
 
 #define SCREENSHOT_TRIGGER "SCREENSHOT"
 
@@ -67,8 +67,8 @@ static volatile bool s_runsuite_pending;
 static char s_runsuite_name[SCREENSHOT_LINE_MAX];
 #endif
 
-static void screenshot_task(void *arg)
-{
+static void
+screenshot_task(void* arg) {
     (void)arg;
     char line[SCREENSHOT_LINE_MAX];
     int len = 0;
@@ -97,9 +97,8 @@ static void screenshot_task(void *arg)
                     ESP_LOGI(TAG, "trigger received");
                     s_request_pending = true;
 #if CONFIG_LAUNCHER_SELFTEST
-                } else if (strncmp(line, RUNSUITE_TRIGGER,
-                                   strlen(RUNSUITE_TRIGGER)) == 0) {
-                    const char *name = line + strlen(RUNSUITE_TRIGGER);
+                } else if (strncmp(line, RUNSUITE_TRIGGER, strlen(RUNSUITE_TRIGGER)) == 0) {
+                    const char* name = line + strlen(RUNSUITE_TRIGGER);
                     ESP_LOGI(TAG, "RUNSUITE %s", name);
                     strncpy(s_runsuite_name, name, sizeof(s_runsuite_name) - 1);
                     s_runsuite_name[sizeof(s_runsuite_name) - 1] = '\0';
@@ -121,8 +120,8 @@ static void screenshot_task(void *arg)
     }
 }
 
-void screenshot_start(void)
-{
+void
+screenshot_start(void) {
     usb_serial_jtag_driver_config_t cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
     const esp_err_t err = usb_serial_jtag_driver_install(&cfg);
     if (err != ESP_OK) {
@@ -132,8 +131,7 @@ void screenshot_start(void)
          * leaving the console on its default non-blocking reader, which
          * looks from the host exactly like a request that vanished into
          * nothing rather than a boot-time failure. */
-        ESP_LOGE(TAG, "usb_serial_jtag_driver_install failed: %s - listener not started",
-                 esp_err_to_name(err));
+        ESP_LOGE(TAG, "usb_serial_jtag_driver_install failed: %s - listener not started", esp_err_to_name(err));
         return;
     }
 
@@ -154,23 +152,21 @@ void screenshot_start(void)
      * all its time blocked waiting on bytes nobody is usually sending;
      * when a line does arrive there is nothing time-critical about
      * noticing it a frame or two later. */
-    const BaseType_t created =
-        xTaskCreate(screenshot_task, "screenshot", 3072, NULL, 4, NULL);
+    const BaseType_t created = xTaskCreate(screenshot_task, "screenshot", 3072, NULL, 4, NULL);
     if (created != pdPASS) {
         ESP_LOGE(TAG, "xTaskCreate failed (out of memory?) - listener not started");
         return;
     }
 
 #if CONFIG_LAUNCHER_SELFTEST
-    ESP_LOGI(TAG, "listening for '%s' and '%s<name>' on the console",
-             SCREENSHOT_TRIGGER, RUNSUITE_TRIGGER);
+    ESP_LOGI(TAG, "listening for '%s' and '%s<name>' on the console", SCREENSHOT_TRIGGER, RUNSUITE_TRIGGER);
 #else
     ESP_LOGI(TAG, "listening for '%s' on the console", SCREENSHOT_TRIGGER);
 #endif
 }
 
-bool screenshot_take_request(void)
-{
+bool
+screenshot_take_request(void) {
     if (!s_request_pending) {
         return false;
     }
@@ -179,8 +175,8 @@ bool screenshot_take_request(void)
 }
 
 #if CONFIG_LAUNCHER_SELFTEST
-bool screenshot_take_runsuite_request(char *name_out, size_t name_out_size)
-{
+bool
+screenshot_take_runsuite_request(char* name_out, size_t name_out_size) {
     if (!s_runsuite_pending) {
         return false;
     }
@@ -196,8 +192,8 @@ bool screenshot_take_runsuite_request(char *name_out, size_t name_out_size)
  * budget on top of printf/ESP_LOG's own use. Not permanently static either -
  * held only for the duration of a capture, because static here competes for
  * the largest contiguous heap block an app may need at runtime. */
-static uint8_t *row;
-static char    *row_b64;   /* +1: NUL, for printf("%s") */
+static uint8_t* row;
+static char* row_b64; /* +1: NUL, for printf("%s") */
 
 /* How much room an app's diagnostic_json() fragment is given - see
  * app_t's own comment in app.h for what it may contain. Generous
@@ -215,8 +211,8 @@ static char    *row_b64;   /* +1: NUL, for printf("%s") */
  * device_state_format_json() produces a complete object - by
  * overwriting its closing `}` with `,"app":<fragment>}` rather than
  * teaching device_state.h about apps. */
-static void dump_state(const input_t *input, const app_t *current_app)
-{
+static void
+dump_state(const input_t* input, const app_t* current_app) {
     device_state_t state;
     device_state_read(&state);
 
@@ -237,20 +233,17 @@ static void dump_state(const input_t *input, const app_t *current_app)
          * rejects outright, losing the WHOLE line (device state
          * included, not just the app part) rather than only the
          * addition. */
-        if (len > 0 && json[len - 1] == '}' &&
-            len - 1 + strlen(",\"app\":") + strlen(app_json) + 1
-                < sizeof json) {
-            snprintf(json + len - 1, sizeof(json) - (len - 1),
-                     ",\"app\":%s}", app_json);
+        if (len > 0 && json[len - 1] == '}' && len - 1 + strlen(",\"app\":") + strlen(app_json) + 1 < sizeof json) {
+            snprintf(json + len - 1, sizeof(json) - (len - 1), ",\"app\":%s}", app_json);
         }
     }
 
     printf("SCREENSHOT_STATE:%s\n", json);
 }
 
-void screenshot_dump(const input_t *input, const app_t *current_app)
-{
-    const int32_t  stride      = screenshot_bmp_row_stride(GFX_WIDTH);
+void
+screenshot_dump(const input_t* input, const app_t* current_app) {
+    const int32_t stride = screenshot_bmp_row_stride(GFX_WIDTH);
     const uint32_t pixel_bytes = (uint32_t)(stride * GFX_HEIGHT);
     const uint32_t total_bytes = SCREENSHOT_BMP_HEADER_SIZE + pixel_bytes;
 
@@ -258,14 +251,15 @@ void screenshot_dump(const input_t *input, const app_t *current_app)
      * below: row/row_b64 are pointers now (see their own declaration
      * comment), so sizeof on them would give the pointer's own size, not
      * the buffer's. */
-    const size_t row_bytes     = (size_t)GFX_WIDTH * 3;
+    const size_t row_bytes = (size_t)GFX_WIDTH * 3;
     const size_t row_b64_bytes = (size_t)GFX_WIDTH * 4 + 1;
 
     row = malloc(row_bytes);
     row_b64 = malloc(row_b64_bytes);
     if (row == NULL || row_b64 == NULL) {
-        ESP_LOGE(TAG, "could not allocate %u+%u-byte row buffers - "
-                      "screenshot skipped; largest free block is %u",
+        ESP_LOGE(TAG,
+                 "could not allocate %u+%u-byte row buffers - "
+                 "screenshot skipped; largest free block is %u",
                  (unsigned)row_bytes, (unsigned)row_b64_bytes,
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
         free(row);
@@ -296,12 +290,12 @@ void screenshot_dump(const input_t *input, const app_t *current_app)
     header_b64[sizeof(header_b64) - 1] = '\0';
     printf("SCREENSHOT_DATA:%s\n", header_b64);
 
-    const gfx_color_t *fb = gfx_framebuffer();
+    const gfx_color_t* fb = gfx_framebuffer();
 
     /* Bottom-to-top, matching the bottom-up rows screenshot_bmp_header()
      * declares (positive biHeight) - see that function's own comment. */
     for (int32_t y = GFX_HEIGHT - 1; y >= 0; y--) {
-        const gfx_color_t *src_row = fb + (size_t)y * GFX_WIDTH;
+        const gfx_color_t* src_row = fb + (size_t)y * GFX_WIDTH;
         for (int32_t x = 0; x < GFX_WIDTH; x++) {
             /* gfx_color_rgb888() is the panel-format-to-0xRRGGBB conversion
              * gfx_color.h already carries and tests (suite_gfx_color.c) -

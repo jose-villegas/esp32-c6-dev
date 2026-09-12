@@ -22,4 +22,4 @@
 /* Runs the test exactly as RUN_TEST always has (same file:line:name:PASS
  * line, byte for byte - see timing.c), then logs a separate line with how
  * long it took. */
-void suite_run_test_timed(void (*func)(void), const char *name, int line);
+void suite_run_test_timed(void (*func)(void), const char* name, int line);

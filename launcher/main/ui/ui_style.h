@@ -56,7 +56,7 @@ typedef enum {
 /* One flat rectangle of a styled frame, in paint order - later spans draw
  * over earlier ones, which is what decides how the corners meet. */
 typedef struct {
-    mu_Rect  rect;
+    mu_Rect rect;
     mu_Color color;
 } ui_span_t;
 
@@ -89,19 +89,16 @@ typedef struct {
  * (a*(255-t) + b*t + 127)/255 mix, so the ends land exactly on the
  * input and target. Alpha is carried through untouched - the edges of a
  * frame are exactly as opaque as its face. */
-static inline uint8_t ui_shade_channel(uint8_t v, int t)
-{
+static inline uint8_t
+ui_shade_channel(uint8_t v, int t) {
     const int target = (t >= 0) ? 255 : 0;
     const int amount = (t >= 0) ? t : -t;
     return (uint8_t)((v * (255 - amount) + target * amount + 127) / 255);
 }
 
-static inline mu_Color ui_shade(mu_Color c, int t)
-{
-    return (mu_Color){ ui_shade_channel(c.r, t),
-                       ui_shade_channel(c.g, t),
-                       ui_shade_channel(c.b, t),
-                       c.a };
+static inline mu_Color
+ui_shade(mu_Color c, int t) {
+    return (mu_Color){ui_shade_channel(c.r, t), ui_shade_channel(c.g, t), ui_shade_channel(c.b, t), c.a};
 }
 
 /* The rects making one bezelled frame, back to front. `sunken` swaps
@@ -112,31 +109,30 @@ static inline mu_Color ui_shade(mu_Color c, int t)
  * corner pixels that read as chipped. Thickness is clamped so edges
  * never cross; with no room, the result is one flat face span, same as
  * UI_BUTTON_FLAT. */
-static inline int ui_bezel_spans(mu_Rect r, mu_Color face, bool sunken,
-                                 ui_span_t *out, int max)
-{
+static inline int
+ui_bezel_spans(mu_Rect r, mu_Color face, bool sunken, ui_span_t* out, int max) {
     if (max < UI_BEZEL_MAX_SPANS || r.w <= 0 || r.h <= 0) {
         return 0;
     }
 
-    out[0] = (ui_span_t){ r, face };
+    out[0] = (ui_span_t){r, face};
 
     /* Leave at least one pixel of face visible between the two edges. */
     const int room = (mu_min(r.w, r.h) - 1) / 2;
-    const int t    = mu_min(UI_BEZEL_THICKNESS, room);
+    const int t = mu_min(UI_BEZEL_THICKNESS, room);
     if (t < 1) {
         return 1;
     }
 
-    const mu_Color lit    = ui_shade(face,  UI_BEZEL_HIGHLIGHT);
+    const mu_Color lit = ui_shade(face, UI_BEZEL_HIGHLIGHT);
     const mu_Color shadow = ui_shade(face, -UI_BEZEL_SHADOW);
-    const mu_Color top_left     = sunken ? shadow : lit;
-    const mu_Color bottom_right = sunken ? lit    : shadow;
+    const mu_Color top_left = sunken ? shadow : lit;
+    const mu_Color bottom_right = sunken ? lit : shadow;
 
-    out[1] = (ui_span_t){ (mu_Rect){ r.x, r.y, r.w, t }, top_left };
-    out[2] = (ui_span_t){ (mu_Rect){ r.x, r.y, t, r.h }, top_left };
-    out[3] = (ui_span_t){ (mu_Rect){ r.x, r.y + r.h - t, r.w, t }, bottom_right };
-    out[4] = (ui_span_t){ (mu_Rect){ r.x + r.w - t, r.y, t, r.h }, bottom_right };
+    out[1] = (ui_span_t){(mu_Rect){r.x, r.y, r.w, t}, top_left};
+    out[2] = (ui_span_t){(mu_Rect){r.x, r.y, t, r.h}, top_left};
+    out[3] = (ui_span_t){(mu_Rect){r.x, r.y + r.h - t, r.w, t}, bottom_right};
+    out[4] = (ui_span_t){(mu_Rect){r.x + r.w - t, r.y, t, r.h}, bottom_right};
     return UI_BEZEL_MAX_SPANS;
 }
 
@@ -151,13 +147,16 @@ static inline int ui_bezel_spans(mu_Rect r, mu_Color face, bool sunken,
  */
 
 typedef enum {
-    UI_TEXT_PLAIN = 0,   /* one pass, exactly as today */
-    UI_TEXT_OUTLINED,    /* a halo at all eight neighbouring offsets */
-    UI_TEXT_SHADOWED,    /* a single offset halo, down-right */
+    UI_TEXT_PLAIN = 0, /* one pass, exactly as today */
+    UI_TEXT_OUTLINED,  /* a halo at all eight neighbouring offsets */
+    UI_TEXT_SHADOWED,  /* a single offset halo, down-right */
 } ui_text_style_t;
 
 /* One drawing pass of a styled string, in paint order. */
-typedef struct { int dx, dy; bool ink; } ui_text_pass_t;
+typedef struct {
+    int dx, dy;
+    bool ink;
+} ui_text_pass_t;
 
 /* PLAIN is 1, SHADOWED is 2, OUTLINED is 9 (8 halo offsets + the ink) - the
  * largest of the three sizes the buffer for all of them. */
@@ -170,30 +169,29 @@ typedef struct { int dx, dy; bool ink; } ui_text_pass_t;
  * LAST. Every other pass paints the halo, which has to sit *behind* the
  * glyph it is haloing - draw the halo first and the glyph on top, or
  * the glyph disappears under its own halo. */
-static inline int ui_text_passes(ui_text_style_t style, ui_text_pass_t *out,
-                                 int max)
-{
+static inline int
+ui_text_passes(ui_text_style_t style, ui_text_pass_t* out, int max) {
     switch (style) {
-    case UI_TEXT_PLAIN:
-        if (max < 1) {
-            return 0;
-        }
-        out[0] = (ui_text_pass_t){ 0, 0, true };
-        return 1;
+        case UI_TEXT_PLAIN:
+            if (max < 1) {
+                return 0;
+            }
+            out[0] = (ui_text_pass_t){0, 0, true};
+            return 1;
 
-    case UI_TEXT_SHADOWED:
-        if (max < 2) {
-            return 0;
-        }
-        out[0] = (ui_text_pass_t){ 1, 1, false };
-        out[1] = (ui_text_pass_t){ 0, 0, true };
-        return 2;
+        case UI_TEXT_SHADOWED:
+            if (max < 2) {
+                return 0;
+            }
+            out[0] = (ui_text_pass_t){1, 1, false};
+            out[1] = (ui_text_pass_t){0, 0, true};
+            return 2;
 
-    case UI_TEXT_OUTLINED: {
-        if (max < UI_TEXT_MAX_PASSES) {
-            return 0;
-        }
-        /* One pixel each way, in screen space. This mirrors an app's own
+        case UI_TEXT_OUTLINED: {
+            if (max < UI_TEXT_MAX_PASSES) {
+                return 0;
+            }
+            /* One pixel each way, in screen space. This mirrors an app's own
          * hand-rolled label-outline code exactly, including the order -
          * that code is the precedent this style generalises, and it is
          * worth staying a recognisably identical list rather than an
@@ -201,20 +199,17 @@ static inline int ui_text_passes(ui_text_style_t style, ui_text_pass_t *out,
          * four cardinals: at GFX_GLYPH_SCALE 2 each
          * font pixel is a 2x2 block, so skipping the diagonals leaves a
          * notch at every block corner rather than a clean edge. */
-        static const int offsets[8][2] = {
-            { -1, -1 }, { 0, -1 }, { 1, -1 },
-            { -1,  0 },            { 1,  0 },
-            { -1,  1 }, { 0,  1 }, { 1,  1 },
-        };
-        for (int i = 0; i < 8; i++) {
-            out[i] = (ui_text_pass_t){ offsets[i][0], offsets[i][1], false };
+            static const int offsets[8][2] = {
+                {-1, -1}, {0, -1}, {1, -1}, {-1, 0}, {1, 0}, {-1, 1}, {0, 1}, {1, 1},
+            };
+            for (int i = 0; i < 8; i++) {
+                out[i] = (ui_text_pass_t){offsets[i][0], offsets[i][1], false};
+            }
+            out[8] = (ui_text_pass_t){0, 0, true};
+            return UI_TEXT_MAX_PASSES;
         }
-        out[8] = (ui_text_pass_t){ 0, 0, true };
-        return UI_TEXT_MAX_PASSES;
-    }
 
-    default:
-        return 0;
+        default: return 0;
     }
 }
 
@@ -227,7 +222,7 @@ static inline int ui_text_passes(ui_text_style_t style, ui_text_pass_t *out,
  */
 
 /* Face, plus four border edges. */
-#define UI_PANEL_MAX_SPANS 5
+#define UI_PANEL_MAX_SPANS        5
 
 /* 2px: thinner than UI_BEZEL_THICKNESS on purpose - a panel outlines a
  * whole screen section, not a single tap target, so a hairline reads as a
@@ -239,26 +234,25 @@ static inline int ui_text_passes(ui_text_style_t style, ui_text_pass_t *out,
  * does. Returns spans written, or 0 if `max` can't hold a panel - same
  * all-or-nothing rule. Border thickness is clamped so opposite edges can
  * never cross; with no room, the result is one flat face span. */
-static inline int ui_panel_spans(mu_Rect r, mu_Color face, mu_Color border,
-                                 ui_span_t *out, int max)
-{
+static inline int
+ui_panel_spans(mu_Rect r, mu_Color face, mu_Color border, ui_span_t* out, int max) {
     if (max < UI_PANEL_MAX_SPANS || r.w <= 0 || r.h <= 0) {
         return 0;
     }
 
-    out[0] = (ui_span_t){ r, face };
+    out[0] = (ui_span_t){r, face};
 
     /* Leave at least one pixel of face visible between opposite edges. */
     const int room = (mu_min(r.w, r.h) - 1) / 2;
-    const int t    = mu_min(UI_PANEL_BORDER_THICKNESS, room);
+    const int t = mu_min(UI_PANEL_BORDER_THICKNESS, room);
     if (t < 1) {
         return 1;
     }
 
-    out[1] = (ui_span_t){ (mu_Rect){ r.x, r.y, r.w, t }, border };
-    out[2] = (ui_span_t){ (mu_Rect){ r.x, r.y, t, r.h }, border };
-    out[3] = (ui_span_t){ (mu_Rect){ r.x, r.y + r.h - t, r.w, t }, border };
-    out[4] = (ui_span_t){ (mu_Rect){ r.x + r.w - t, r.y, t, r.h }, border };
+    out[1] = (ui_span_t){(mu_Rect){r.x, r.y, r.w, t}, border};
+    out[2] = (ui_span_t){(mu_Rect){r.x, r.y, t, r.h}, border};
+    out[3] = (ui_span_t){(mu_Rect){r.x, r.y + r.h - t, r.w, t}, border};
+    out[4] = (ui_span_t){(mu_Rect){r.x + r.w - t, r.y, t, r.h}, border};
     return UI_PANEL_MAX_SPANS;
 }
 
@@ -267,8 +261,8 @@ static inline int ui_panel_spans(mu_Rect r, mu_Color face, mu_Color border,
  * against whichever ink matches it. A badge sitting on a known pair can pick
  * the contrasting one; a general halo has no such pair, so it goes to the
  * opposite extreme via ui_shade() - a partial mix can still wash out. */
-static inline mu_Color ui_text_halo(mu_Color ink)
-{
+static inline mu_Color
+ui_text_halo(mu_Color ink) {
     /* Same weights as a standard perceptual luma (~0.30/0.59/0.11 scaled to
      * whole numbers as 2:5:1), just enough to tell a dark ink from a light
      * one - it does not need to be exact, only decisive. Range is

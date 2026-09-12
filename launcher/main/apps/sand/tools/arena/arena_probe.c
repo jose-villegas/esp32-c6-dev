@@ -18,22 +18,22 @@
  * Usage: ratio_probe <matA> <pctA> <matB> <pctB>
  *        ratio_probe Sand 65 Water 10
  */
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdbool.h>
 #include <time.h>
 
-#include "apps/sand/sand.h"
 #include "apps/sand/material.h"
+#include "apps/sand/sand.h"
 
-#define GW 184
-#define GH 224
-#define CELLS (GW * GH)
+#define GW           184
+#define GH           224
+#define CELLS        (GW * GH)
 #define SETTLE_STEPS 400
-#define POUR_WINDOW 300
-#define POUR_GUARD 20000
-#define POUR_STALL 250
+#define POUR_WINDOW  300
+#define POUR_GUARD   20000
+#define POUR_STALL   250
 
 typedef struct {
     double mean_us;
@@ -42,18 +42,18 @@ typedef struct {
     double moving_cells;
 } timing_t;
 
-#define CENSUS_EVERY 10
+#define CENSUS_EVERY    10
 #define PER_STEP_STAMPS 2
 
-static double now_us(void)
-{
+static double
+now_us(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (double)ts.tv_sec * 1e6 + (double)ts.tv_nsec / 1e3;
 }
 
-static int count_of(const sand_t *g, cell_t want)
-{
+static int
+count_of(const sand_t* g, cell_t want) {
     int n = 0;
     for (int y = 0; y < GH; y++) {
         for (int x = 0; x < GW; x++) {
@@ -68,8 +68,8 @@ static int count_of(const sand_t *g, cell_t want)
 
 /* The variant nibble means different things per kind: mass for a liquid,
  * temperature for a static solid. */
-static cell_t spawn_variant_for(material_id_t id)
-{
+static cell_t
+spawn_variant_for(material_id_t id) {
     if (material_by_id(id)->kind == KIND_STATIC) {
         return CELL_MAKE(id, SAND_AMBIENT_HEAT);
     }
@@ -80,8 +80,8 @@ static cell_t spawn_variant_for(material_id_t id)
  * ice, plant, leaf, metal, root and gunpowder are materials to the player and
  * to the reaction table, and only an accident of encoding keeps them out of
  * materials[]. material_name() is the one identity that spans both halves. */
-static int all_spawn_cells(cell_t *out, int max)
-{
+static int
+all_spawn_cells(cell_t* out, int max) {
     int n = 0;
     for (int m = 1; m < MAT_COUNT && n < max; m++) {
         if (m == MAT_EXTENDED) {
@@ -98,12 +98,12 @@ static int all_spawn_cells(cell_t *out, int max)
     return n;
 }
 
-static cell_t resolve_material(const char *name)
-{
+static cell_t
+resolve_material(const char* name) {
     cell_t cells[MAT_COUNT + 16];
     const int n = all_spawn_cells(cells, (int)(sizeof cells / sizeof cells[0]));
     for (int i = 0; i < n; i++) {
-        const char *nm = material_name(cells[i]);
+        const char* nm = material_name(cells[i]);
         if (nm != NULL && _stricmp(nm, name) == 0) {
             return cells[i];
         }
@@ -111,12 +111,12 @@ static cell_t resolve_material(const char *name)
     return 0;
 }
 
-static void list_materials(void)
-{
+static void
+list_materials(void) {
     cell_t cells[MAT_COUNT + 16];
     const int n = all_spawn_cells(cells, (int)(sizeof cells / sizeof cells[0]));
     for (int i = 0; i < n; i++) {
-        const char *nm = material_name(cells[i]);
+        const char* nm = material_name(cells[i]);
         printf("%s%s", (nm != NULL) ? nm : "?", (i + 1 < n) ? " " : "");
     }
     putchar(10);
@@ -127,17 +127,17 @@ static void list_materials(void)
  * poured from the top and falls; a gas released at the top is already at its
  * destination and disperses off the ceiling, so it enters at the floor and
  * rises. A static never moves at all - see place_static(). */
-static int entry_row_for(cell_t cell)
-{
-    const material_t *m = material_of(cell);
+static int
+entry_row_for(cell_t cell) {
+    const material_t* m = material_of(cell);
     if (m->kind == KIND_GAS) {
         return GH - 2;
     }
     return 1;
 }
 
-static bool is_static(cell_t cell)
-{
+static bool
+is_static(cell_t cell) {
     return material_of(cell)->kind == KIND_STATIC;
 }
 
@@ -146,18 +146,18 @@ static bool is_static(cell_t cell)
  * - the same call the brush makes - and a player drags it left to right and
  * back. Scattering single cells across the full width instead produced a
  * rain, which piles and wets quite differently from a moving column. */
-#define POUR_RADIUS 5
+#define POUR_RADIUS  5
 #define SWEEP_MARGIN (POUR_RADIUS + 2)
 
-static int sweep_x(int step)
-{
+static int
+sweep_x(int step) {
     const int span = GW - 2 * SWEEP_MARGIN;
     const int cycle = step % (2 * span);
     return SWEEP_MARGIN + ((cycle < span) ? cycle : (2 * span - cycle - 1));
 }
 
-static int stamp_column(sand_t *g, cell_t cell, int x, int from, int dir)
-{
+static int
+stamp_column(sand_t* g, cell_t cell, int x, int from, int dir) {
     for (int probe = 0; probe < GH / 2; probe += POUR_RADIUS) {
         const int y = from + dir * probe;
         if (y < 1 || y > GH - 2) {
@@ -179,8 +179,8 @@ static int stamp_column(sand_t *g, cell_t cell, int x, int from, int dir)
  * The search is both ways because a player moves both ways - inward from the
  * entry row for headroom, and sideways when the column under the brush is
  * packed. Only a genuinely full arena places nothing. */
-static int pour_stamp(sand_t *g, cell_t cell, int step)
-{
+static int
+pour_stamp(sand_t* g, cell_t cell, int step) {
     const int x0 = sweep_x(step);
     const int from = entry_row_for(cell);
     const int dir = (from < GH / 2) ? 1 : -1;
@@ -207,8 +207,8 @@ static int pour_stamp(sand_t *g, cell_t cell, int step)
  * the floor up, which is the shape stone and glass actually take in play.
  * Pouring them was the first tournament's bug - Stone and Glass won the
  * fastest bracket at 0.3 us because only 176 cells of 16,486 ever existed. */
-static int place_static(sand_t *g, cell_t cell, int target)
-{
+static int
+place_static(sand_t* g, cell_t cell, int target) {
     int placed = 0;
     for (int y = GH - 2; y >= 1 && placed < target; y--) {
         for (int x = 0; x < GW && placed < target; x++) {
@@ -225,8 +225,8 @@ static int place_static(sand_t *g, cell_t cell, int target)
  * settled if its block does. That is the same test every settled-gated rule
  * in the simulation makes, so the ratio reported here is the one the skips
  * actually see. */
-static void census_mass(const sand_t *g, double *settled, double *moving)
-{
+static void
+census_mass(const sand_t* g, double* settled, double* moving) {
     for (int y = 0; y < GH; y++) {
         for (int x = 0; x < GW; x++) {
             if (CELL_IS_EMPTY(sand_at(g, x, y))) {
@@ -241,8 +241,8 @@ static void census_mass(const sand_t *g, double *settled, double *moving)
     }
 }
 
-static void settle(sand_t *g, int steps)
-{
+static void
+settle(sand_t* g, int steps) {
     for (int i = 0; i < steps; i++) {
         sand_step(g, 0, 1000, 0);
     }
@@ -252,8 +252,8 @@ static void settle(sand_t *g, int steps)
  * out, and neither will ever reach a settled share. The stall guard is what
  * makes those materials answerable rather than an infinite loop, and the
  * shortfall is itself a result worth printing. */
-static int pour_until_share(sand_t *g, cell_t cell, int target)
-{
+static int
+pour_until_share(sand_t* g, cell_t cell, int target) {
     int phase = 4;
     int best = 0;
     int stalled = 0;
@@ -279,16 +279,15 @@ static int pour_until_share(sand_t *g, cell_t cell, int target)
     return count_of(g, cell);
 }
 
-static timing_t pour_timed(sand_t *g, cell_t cell, int target)
-{
+static timing_t
+pour_timed(sand_t* g, cell_t cell, int target) {
     const int per_step = (target + POUR_WINDOW - 1) / POUR_WINDOW;
-    timing_t t = { 0.0, 0.0, 0.0, 0.0 };
+    timing_t t = {0.0, 0.0, 0.0, 0.0};
     int spawned = 0;
     int samples = 0;
 
     for (int i = 0; i < POUR_WINDOW; i++) {
-        const int want = (target - spawned < per_step) ? target - spawned
-                                                       : per_step;
+        const int want = (target - spawned < per_step) ? target - spawned : per_step;
         const int n = (want > 0) ? want : 0;
         if (is_static(cell)) {
             spawned += place_static(g, cell, n);
@@ -320,8 +319,8 @@ static timing_t pour_timed(sand_t *g, cell_t cell, int target)
     return t;
 }
 
-int main(int argc, char **argv)
-{
+int
+main(int argc, char** argv) {
     if (argc == 2 && strcmp(argv[1], "--list") == 0) {
         list_materials();
         return 0;
@@ -339,9 +338,8 @@ int main(int argc, char **argv)
         return 2;
     }
 
-    uint8_t *cells = calloc(CELLS, 1);
-    uint8_t *blocks = calloc(((GW + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
-                           * ((GH + SAND_BLOCK_H - 1) / SAND_BLOCK_H), 1);
+    uint8_t* cells = calloc(CELLS, 1);
+    uint8_t* blocks = calloc(((GW + SAND_BLOCK_W - 1) / SAND_BLOCK_W) * ((GH + SAND_BLOCK_H - 1) / SAND_BLOCK_H), 1);
     sand_t g;
     memset(&g, 0, sizeof g);
     sand_init(&g, cells, GW, GH, 12345u);
@@ -357,8 +355,7 @@ int main(int argc, char **argv)
     printf("a=%s a_pct=%d b=%s b_pct=%d a_n=%d a_want=%d b_n=%d "
            "settled=%.0f moving=%.0f "
            "mean_us=%.1f worst_us=%.1f\n",
-           argv[1], a_pct, argv[3], b_pct, a_n, a_target, count_of(&g, b_cell),
-           t.settled_cells, t.moving_cells,
+           argv[1], a_pct, argv[3], b_pct, a_n, a_target, count_of(&g, b_cell), t.settled_cells, t.moving_cells,
            t.mean_us, t.worst_us);
 
     free(cells);

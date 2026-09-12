@@ -15,31 +15,31 @@
 #include "driver/i2c_master.h"
 #include "esp_log.h"
 
-static const char *TAG = "imu";
+static const char* TAG = "imu";
 
-#define QMI8658_ADDR        0x6B
-#define QMI8658_I2C_HZ      400000
-#define QMI8658_TIMEOUT_MS  100
+#define QMI8658_ADDR            0x6B
+#define QMI8658_I2C_HZ          400000
+#define QMI8658_TIMEOUT_MS      100
 
 /* Registers */
-#define REG_WHO_AM_I        0x00
-#define REG_REVISION        0x01
-#define REG_CTRL1           0x02
-#define REG_CTRL2           0x03
-#define REG_CTRL3           0x04
-#define REG_CTRL7           0x08
-#define REG_STATUS0         0x2E
-#define REG_AX_L            0x35   /* 12 contiguous bytes: accel then gyro */
+#define REG_WHO_AM_I            0x00
+#define REG_REVISION            0x01
+#define REG_CTRL1               0x02
+#define REG_CTRL2               0x03
+#define REG_CTRL3               0x04
+#define REG_CTRL7               0x08
+#define REG_STATUS0             0x2E
+#define REG_AX_L                0x35 /* 12 contiguous bytes: accel then gyro */
 
-#define WHO_AM_I_VALUE      0x05
+#define WHO_AM_I_VALUE          0x05
 
 /* CTRL1: auto-increment the register address on a burst read, which is what
  * makes the single twelve-byte read below legal. */
-#define CTRL1_ADDR_AUTO_INC 0x60
+#define CTRL1_ADDR_AUTO_INC     0x60
 
 /* CTRL2: accelerometer, +/-8 g at ~235 Hz.
  * +/-8 g over a signed 16-bit range is where 4096 counts per g comes from. */
-#define CTRL2_ACCEL_8G_235HZ 0x23
+#define CTRL2_ACCEL_8G_235HZ    0x23
 
 /* CTRL3: gyroscope, +/-512 dps at ~235 Hz -> 64 counts per dps. */
 #define CTRL3_GYRO_512DPS_235HZ 0x43
@@ -47,25 +47,24 @@ static const char *TAG = "imu";
 /* CTRL7: enable the accelerometer and the gyroscope. */
 #define CTRL7_ENABLE_ACCEL_GYRO 0x03
 
-#define STATUS0_DATA_READY 0x03
+#define STATUS0_DATA_READY      0x03
 
 static i2c_master_dev_handle_t dev;
 static bool ready;
 
-static bool write_reg(uint8_t reg, uint8_t value)
-{
-    const uint8_t buf[2] = { reg, value };
+static bool
+write_reg(uint8_t reg, uint8_t value) {
+    const uint8_t buf[2] = {reg, value};
     return i2c_master_transmit(dev, buf, sizeof(buf), QMI8658_TIMEOUT_MS) == ESP_OK;
 }
 
-static bool read_regs(uint8_t reg, uint8_t *out, size_t len)
-{
-    return i2c_master_transmit_receive(dev, &reg, 1, out, len,
-                                       QMI8658_TIMEOUT_MS) == ESP_OK;
+static bool
+read_regs(uint8_t reg, uint8_t* out, size_t len) {
+    return i2c_master_transmit_receive(dev, &reg, 1, out, len, QMI8658_TIMEOUT_MS) == ESP_OK;
 }
 
-bool imu_init(void)
-{
+bool
+imu_init(void) {
     if (ready) {
         return true;
     }
@@ -79,8 +78,8 @@ bool imu_init(void)
     if (dev == NULL) {
         const i2c_device_config_t config = {
             .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-            .device_address  = QMI8658_ADDR,
-            .scl_speed_hz    = QMI8658_I2C_HZ,
+            .device_address = QMI8658_ADDR,
+            .scl_speed_hz = QMI8658_I2C_HZ,
         };
         if (i2c_master_bus_add_device(bus, &config, &dev) != ESP_OK) {
             ESP_LOGE(TAG, "Could not add the QMI8658 to the bus");
@@ -96,16 +95,13 @@ bool imu_init(void)
         return false;
     }
     if (who != WHO_AM_I_VALUE) {
-        ESP_LOGE(TAG, "0x%02x answered WHO_AM_I 0x%02x, expected 0x%02x",
-                 QMI8658_ADDR, who, WHO_AM_I_VALUE);
+        ESP_LOGE(TAG, "0x%02x answered WHO_AM_I 0x%02x, expected 0x%02x", QMI8658_ADDR, who, WHO_AM_I_VALUE);
         return false;
     }
 
-    const bool configured =
-        write_reg(REG_CTRL1, CTRL1_ADDR_AUTO_INC) &&
-        write_reg(REG_CTRL2, CTRL2_ACCEL_8G_235HZ) &&
-        write_reg(REG_CTRL3, CTRL3_GYRO_512DPS_235HZ) &&
-        write_reg(REG_CTRL7, CTRL7_ENABLE_ACCEL_GYRO);
+    const bool configured = write_reg(REG_CTRL1, CTRL1_ADDR_AUTO_INC) && write_reg(REG_CTRL2, CTRL2_ACCEL_8G_235HZ)
+                            && write_reg(REG_CTRL3, CTRL3_GYRO_512DPS_235HZ)
+                            && write_reg(REG_CTRL7, CTRL7_ENABLE_ACCEL_GYRO);
 
     if (!configured) {
         ESP_LOGE(TAG, "Configuration write failed");
@@ -120,13 +116,13 @@ bool imu_init(void)
     return true;
 }
 
-bool imu_ready(void)
-{
+bool
+imu_ready(void) {
     return ready;
 }
 
-bool imu_read(imu_sample_t *out)
-{
+bool
+imu_read(imu_sample_t* out) {
     if (!ready) {
         return false;
     }
@@ -140,9 +136,9 @@ bool imu_read(imu_sample_t *out)
         return false;
     }
 
-    /* Little-endian pairs. The cast through uint16_t then int16_t is what makes
+/* Little-endian pairs. The cast through uint16_t then int16_t is what makes
      * the sign extension well defined. */
-    #define AXIS(i) ((int16_t)((uint16_t)raw[(i)] | ((uint16_t)raw[(i) + 1] << 8)))
+#define AXIS(i) ((int16_t)((uint16_t)raw[(i)] | ((uint16_t)raw[(i) + 1] << 8)))
 
     out->ax = AXIS(0);
     out->ay = AXIS(2);
@@ -151,13 +147,13 @@ bool imu_read(imu_sample_t *out)
     out->gy = AXIS(8);
     out->gz = AXIS(10);
 
-    #undef AXIS
+#undef AXIS
 
     return true;
 }
 
-int imu_rotation_level(const imu_sample_t *s)
-{
+int
+imu_rotation_level(const imu_sample_t* s) {
     /* Sum of absolute rates rather than a true vector magnitude: it needs no
      * square root, and for "how fast is this turning" the difference is not
      * perceptible. */

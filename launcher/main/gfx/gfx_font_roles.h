@@ -25,7 +25,7 @@
  * naming `&gfx_font_8x8` by hand would have - the role's NAME appears in the
  * source, but nothing about how the reference resolves at compile time
  * changes from naming the font directly. */
-static inline const gfx_font_t *gfx_font_ui(void)
-{
+static inline const gfx_font_t*
+gfx_font_ui(void) {
     return &gfx_font_8x8;
 }

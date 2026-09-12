@@ -23,8 +23,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "unity.h"
 #include "suites.h"
+#include "unity.h"
 
 #include "boot/boot_anim.h"
 #include "gfx/fonts/font_lmroman_40.h"
@@ -36,34 +36,32 @@
 #define PANEL_H 448
 
 /* |zeta|^2 in Q24, so nothing here needs a square root. */
-static int32_t mag_sq(const boot_anim_sample_t *s)
-{
+static int32_t
+mag_sq(const boot_anim_sample_t* s) {
     return (int32_t)s->re * s->re + (int32_t)s->im * s->im;
 }
 
 /* A Q12 magnitude, squared - what mag_sq() is compared against. */
-static int32_t threshold_sq(int32_t q12)
-{
+static int32_t
+threshold_sq(int32_t q12) {
     return q12 * q12;
 }
 
 /* The curve */
 
-static void test_the_curve_climbs_from_zero_to_the_top(void)
-{
+static void
+test_the_curve_climbs_from_zero_to_the_top(void) {
     TEST_ASSERT_EQUAL_INT(0, boot_anim_curve[0].t);
-    TEST_ASSERT_EQUAL_INT(BOOT_ANIM_T_MAX << BOOT_ANIM_TQ,
-                          boot_anim_curve[BOOT_ANIM_CURVE_POINTS - 1].t);
+    TEST_ASSERT_EQUAL_INT(BOOT_ANIM_T_MAX << BOOT_ANIM_TQ, boot_anim_curve[BOOT_ANIM_CURVE_POINTS - 1].t);
 }
 
 /* t only ever increases. The picture is a climb, and a sample out of order
  * would draw a segment going back down through everything above it. */
-static void test_the_curve_never_descends(void)
-{
+static void
+test_the_curve_never_descends(void) {
     for (int i = 1; i < BOOT_ANIM_CURVE_POINTS; i++) {
-        TEST_ASSERT_TRUE_MESSAGE(boot_anim_curve[i].t >=
-                                 boot_anim_curve[i - 1].t,
-            "the curve went back down - the table is out of order");
+        TEST_ASSERT_TRUE_MESSAGE(boot_anim_curve[i].t >= boot_anim_curve[i - 1].t,
+                                 "the curve went back down - the table is out of order");
     }
 }
 
@@ -74,10 +72,10 @@ static void test_the_curve_never_descends(void)
  * crossing sits a little to one side of it. The measured worst case is 0.084,
  * and the check below that this never happens away from a zero is what stops
  * the tolerance being meaningless. */
-static void test_the_curve_meets_the_axis_at_every_known_zero(void)
-{
-    const int32_t window = 1 << BOOT_ANIM_TQ;    /* +/- 1.0 in t */
-    const int32_t close  = threshold_sq((int32_t)(0.15 * BOOT_ANIM_ONE));
+static void
+test_the_curve_meets_the_axis_at_every_known_zero(void) {
+    const int32_t window = 1 << BOOT_ANIM_TQ; /* +/- 1.0 in t */
+    const int32_t close = threshold_sq((int32_t)(0.15 * BOOT_ANIM_ONE));
 
     for (int z = 0; z < BOOT_ANIM_ZEROS; z++) {
         int32_t best = INT32_MAX;
@@ -90,19 +88,18 @@ static void test_the_curve_meets_the_axis_at_every_known_zero(void)
                 }
             }
         }
-        TEST_ASSERT_TRUE_MESSAGE(best <= close,
-            "the curve does not reach the t axis at one of the heights where "
-            "zeta is known to vanish");
+        TEST_ASSERT_TRUE_MESSAGE(best <= close, "the curve does not reach the t axis at one of the heights where "
+                                                "zeta is known to vanish");
     }
 }
 
 /* The other half, and the one that gives the test above its teeth: away from
  * a zero the curve must stay well clear of the axis. Measured minimum is
  * 0.527, so 0.35 leaves room without letting a flat or collapsed table pass. */
-static void test_the_curve_keeps_away_from_the_axis_everywhere_else(void)
-{
-    const int32_t window = 2 << BOOT_ANIM_TQ;    /* +/- 2.0 in t */
-    const int32_t clear  = threshold_sq((int32_t)(0.35 * BOOT_ANIM_ONE));
+static void
+test_the_curve_keeps_away_from_the_axis_everywhere_else(void) {
+    const int32_t window = 2 << BOOT_ANIM_TQ; /* +/- 2.0 in t */
+    const int32_t clear = threshold_sq((int32_t)(0.35 * BOOT_ANIM_ONE));
 
     for (int i = 0; i < BOOT_ANIM_CURVE_POINTS; i++) {
         bool near_a_zero = false;
@@ -116,13 +113,13 @@ static void test_the_curve_keeps_away_from_the_axis_everywhere_else(void)
             continue;
         }
         TEST_ASSERT_TRUE_MESSAGE(mag_sq(&boot_anim_curve[i]) > clear,
-            "the curve came close to the t axis at a height where zeta does "
-            "not vanish");
+                                 "the curve came close to the t axis at a height where zeta does "
+                                 "not vanish");
     }
 }
 
-static void test_every_listed_zero_is_on_the_climb_and_in_order(void)
-{
+static void
+test_every_listed_zero_is_on_the_climb_and_in_order(void) {
     for (int z = 0; z < BOOT_ANIM_ZEROS; z++) {
         TEST_ASSERT_TRUE(boot_anim_zero_t[z] > 0);
         TEST_ASSERT_TRUE(boot_anim_zero_t[z] < (BOOT_ANIM_T_MAX << BOOT_ANIM_TQ));
@@ -130,38 +127,36 @@ static void test_every_listed_zero_is_on_the_climb_and_in_order(void)
             /* draw_zeros() stops at the first zero above the pen, which is
              * only correct while the table is sorted. */
             TEST_ASSERT_TRUE_MESSAGE(boot_anim_zero_t[z] > boot_anim_zero_t[z - 1],
-                "the zeros must be in increasing order");
+                                     "the zeros must be in increasing order");
         }
     }
 }
 
-static void test_samples_are_clamped_rather_than_read_out_of_range(void)
-{
+static void
+test_samples_are_clamped_rather_than_read_out_of_range(void) {
     const boot_anim_pt_t first = boot_anim_sample(0);
-    const boot_anim_pt_t last  = boot_anim_sample(BOOT_ANIM_CURVE_POINTS - 1);
+    const boot_anim_pt_t last = boot_anim_sample(BOOT_ANIM_CURVE_POINTS - 1);
 
     TEST_ASSERT_EQUAL_INT32(first.t, boot_anim_sample(-1).t);
     TEST_ASSERT_EQUAL_INT32(first.re, boot_anim_sample(-99).re);
     TEST_ASSERT_EQUAL_INT32(last.t, boot_anim_sample(BOOT_ANIM_CURVE_POINTS).t);
-    TEST_ASSERT_EQUAL_INT32(last.im,
-                            boot_anim_sample(BOOT_ANIM_CURVE_POINTS + 99).im);
+    TEST_ASSERT_EQUAL_INT32(last.im, boot_anim_sample(BOOT_ANIM_CURVE_POINTS + 99).im);
 }
 
 /* The camera */
 
-static void test_the_quarter_wave_starts_at_zero_and_ends_at_one(void)
-{
+static void
+test_the_quarter_wave_starts_at_zero_and_ends_at_one(void) {
     TEST_ASSERT_EQUAL_INT(0, boot_anim_sin_quarter[0]);
     TEST_ASSERT_EQUAL_INT(32767, boot_anim_sin_quarter[64]);
 }
 
-static void test_the_quarter_wave_rises_all_the_way(void)
-{
+static void
+test_the_quarter_wave_rises_all_the_way(void) {
     for (int i = 1; i < 65; i++) {
-        TEST_ASSERT_TRUE_MESSAGE(boot_anim_sin_quarter[i] >
-                                 boot_anim_sin_quarter[i - 1],
-            "the quarter wave must increase at every step - a dip means a "
-            "transposed or mistyped entry");
+        TEST_ASSERT_TRUE_MESSAGE(boot_anim_sin_quarter[i] > boot_anim_sin_quarter[i - 1],
+                                 "the quarter wave must increase at every step - a dip means a "
+                                 "transposed or mistyped entry");
     }
 }
 
@@ -169,8 +164,8 @@ static void test_the_quarter_wave_rises_all_the_way(void)
  * turn rather than just the arc the camera actually uses - a general-purpose
  * table should hold everywhere, and this is what makes boot_anim_sin()/cos()
  * safe to reuse for anything else that turns up needing one. */
-static void test_sin_squared_plus_cos_squared_is_one(void)
-{
+static void
+test_sin_squared_plus_cos_squared_is_one(void) {
     for (uint32_t phase = 0; phase < 65536; phase += 7) {
         const int64_t s = boot_anim_sin((uint16_t)phase);
         const int64_t c = boot_anim_cos((uint16_t)phase);
@@ -178,12 +173,12 @@ static void test_sin_squared_plus_cos_squared_is_one(void)
         const int64_t one = (int64_t)32767 * 32767;
 
         TEST_ASSERT_TRUE_MESSAGE(sum > one - one / 300 && sum < one + one / 300,
-            "sin^2 + cos^2 left the neighbourhood of 1");
+                                 "sin^2 + cos^2 left the neighbourhood of 1");
     }
 }
 
-static void test_the_quarter_points_are_exact(void)
-{
+static void
+test_the_quarter_points_are_exact(void) {
     TEST_ASSERT_EQUAL_INT(0, boot_anim_sin(0));
     TEST_ASSERT_EQUAL_INT(32767, boot_anim_sin(16384));
     TEST_ASSERT_EQUAL_INT(0, boot_anim_sin(32768));
@@ -202,8 +197,8 @@ static void test_the_quarter_points_are_exact(void)
  * directly rather than through boot_anim_view()/the keyframe table, so
  * these tests can check boot_anim_project()'s own arithmetic in isolation
  * from whatever the CURRENT seed keyframes happen to say. */
-static boot_anim_view_t identity_view(S3L_Unit focal)
-{
+static boot_anim_view_t
+identity_view(S3L_Unit focal) {
     boot_anim_view_t v;
     S3L_mat4Init(v.matrix);
     v.focal = focal;
@@ -215,18 +210,18 @@ static boot_anim_view_t identity_view(S3L_Unit focal)
  * offset, no rotation, no depth-dependent scale to reason about, just
  * small3dlib's own S3L_mapProjectionPlaneToScreen() centring a (0,0) point.
  * The most basic thing boot_anim_project() has to get right. */
-static void test_identity_transform_leaves_the_origin_at_screen_centre(void)
-{
+static void
+test_identity_transform_leaves_the_origin_at_screen_centre(void) {
     const boot_anim_view_t view = identity_view(0);
     int x, y;
     boot_anim_project(0, 0, 0, &view, &x, &y);
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(PANEL_W / 2, x,
-        "the origin should land exactly on screen centre under an "
-        "identity transform");
+                                  "the origin should land exactly on screen centre under an "
+                                  "identity transform");
     TEST_ASSERT_EQUAL_INT_MESSAGE(PANEL_H / 2, y,
-        "the origin should land exactly on screen centre under an "
-        "identity transform");
+                                  "the origin should land exactly on screen centre under an "
+                                  "identity transform");
 }
 
 /* The property that distinguishes a real perspective projection: a point
@@ -234,12 +229,12 @@ static void test_identity_transform_leaves_the_origin_at_screen_centre(void)
  * than the same point nearer the camera, for a real focal length. re/im
  * map to X/Z (see boot_anim_project()'s axis-mapping comment) - im is
  * depth, re is the offset compared at two depths. */
-static void test_a_point_further_from_the_camera_projects_smaller(void)
-{
+static void
+test_a_point_further_from_the_camera_projects_smaller(void) {
     const boot_anim_view_t view = identity_view(S3L_F);
     const int32_t re = 2 * BOOT_ANIM_ONE;
     const int32_t near_im = 1 * BOOT_ANIM_ONE;
-    const int32_t far_im  = 4 * BOOT_ANIM_ONE;
+    const int32_t far_im = 4 * BOOT_ANIM_ONE;
     int x_near, y_near, x_far, y_far;
 
     boot_anim_project(re, near_im, 0, &view, &x_near, &y_near);
@@ -247,11 +242,11 @@ static void test_a_point_further_from_the_camera_projects_smaller(void)
 
     const int centre = PANEL_W / 2;
     const int near_offset = (x_near > centre) ? x_near - centre : centre - x_near;
-    const int far_offset  = (x_far  > centre) ? x_far  - centre : centre - x_far;
+    const int far_offset = (x_far > centre) ? x_far - centre : centre - x_far;
 
     TEST_ASSERT_TRUE_MESSAGE(far_offset < near_offset,
-        "a point further from the camera should project closer to screen "
-        "centre than the same point nearer the camera");
+                             "a point further from the camera should project closer to screen "
+                             "centre than the same point nearer the camera");
 }
 
 /* boot_anim_project_point()'s entire reason to exist over plain
@@ -261,20 +256,17 @@ static void test_a_point_further_from_the_camera_projects_smaller(void)
  * ON the boundary - under an identity transform
  * BOOT_ANIM_ZETA_TO_S3L(408) = 51 = BOOT_ANIM_NEAR_Z - so this exercises
  * the `<=`, which a `<` typo would still pass anywhere further back. */
-static void test_project_point_rejects_a_point_at_the_near_plane(void)
-{
+static void
+test_project_point_rejects_a_point_at_the_near_plane(void) {
     const boot_anim_view_t view = identity_view(S3L_F);
     int x = -1, y = -1;
 
     const bool ok = boot_anim_project_point(0, 408, 0, &view, &x, &y);
 
-    TEST_ASSERT_FALSE_MESSAGE(ok,
-        "a point exactly at the near plane must be rejected, not "
-        "projected to a nonsense screen position");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(-1, x,
-        "a rejected point's output x must be left untouched");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(-1, y,
-        "a rejected point's output y must be left untouched");
+    TEST_ASSERT_FALSE_MESSAGE(ok, "a point exactly at the near plane must be rejected, not "
+                                  "projected to a nonsense screen position");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(-1, x, "a rejected point's output x must be left untouched");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(-1, y, "a rejected point's output y must be left untouched");
 }
 
 /* The OTHER early-out in boot_anim_project_segment_cs() besides the clip
@@ -282,19 +274,17 @@ static void test_project_point_rejects_a_point_at_the_near_plane(void)
  * for that branch): a segment with BOTH endpoints at or behind the near
  * plane has nothing in front of the camera to draw at all, and must
  * return false outright rather than clip against itself. */
-static void test_project_segment_cs_rejects_a_segment_entirely_behind(void)
-{
+static void
+test_project_segment_cs_rejects_a_segment_entirely_behind(void) {
     const boot_anim_view_t view = identity_view(S3L_F);
-    const S3L_Vec4 p0 = { 100, 200, 0, S3L_F };
-    const S3L_Vec4 p1 = { -100, -200, BOOT_ANIM_NEAR_Z, S3L_F };
+    const S3L_Vec4 p0 = {100, 200, 0, S3L_F};
+    const S3L_Vec4 p1 = {-100, -200, BOOT_ANIM_NEAR_Z, S3L_F};
     int ax, ay, bx, by;
 
-    const bool ok =
-        boot_anim_project_segment_cs(p0, p1, &view, &ax, &ay, &bx, &by);
+    const bool ok = boot_anim_project_segment_cs(p0, p1, &view, &ax, &ay, &bx, &by);
 
-    TEST_ASSERT_FALSE_MESSAGE(ok,
-        "a segment with both endpoints at or behind the near plane "
-        "should be rejected entirely, not clipped against itself");
+    TEST_ASSERT_FALSE_MESSAGE(ok, "a segment with both endpoints at or behind the near plane "
+                                  "should be rejected entirely, not clipped against itself");
 }
 
 /* boot_anim_project_segment_cs()'s near-plane clip at asymmetric,
@@ -305,38 +295,35 @@ static void test_project_segment_cs_rejects_a_segment_entirely_behind(void)
  *   clip fraction = 86/496 = 0.17338...
  *   tolerance (20px) contains the Q16 error (7px, 0px) while rejecting
  *   S3L_F(512)'s result for the same inputs (3831px, 2352px off). */
-static void test_project_segment_cs_clips_asymmetric_coordinates(void)
-{
+static void
+test_project_segment_cs_clips_asymmetric_coordinates(void) {
     const boot_anim_view_t view = identity_view(S3L_F);
-    const S3L_Vec4 p0 = { -300123,  250009, BOOT_ANIM_NEAR_Z - 86, S3L_F };
-    const S3L_Vec4 p1 = {  401777, -180321, BOOT_ANIM_NEAR_Z + 410, S3L_F };
+    const S3L_Vec4 p0 = {-300123, 250009, BOOT_ANIM_NEAR_Z - 86, S3L_F};
+    const S3L_Vec4 p1 = {401777, -180321, BOOT_ANIM_NEAR_Z + 410, S3L_F};
 
     int ax, ay, bx, by;
-    TEST_ASSERT_TRUE_MESSAGE(
-        boot_anim_project_segment_cs(p0, p1, &view, &ax, &ay, &bx, &by),
-        "a segment with one endpoint in front of the near plane should "
-        "always project");
+    TEST_ASSERT_TRUE_MESSAGE(boot_anim_project_segment_cs(p0, p1, &view, &ax, &ay, &bx, &by),
+                             "a segment with one endpoint in front of the near plane should "
+                             "always project");
 
     /* Double-precision reference for the clip itself: p0 is BEHIND, so
      * IT is what gets replaced by the near-plane crossing point. */
-    const double frac =
-        (double)(BOOT_ANIM_NEAR_Z - p0.z) / (double)(p1.z - p0.z);
+    const double frac = (double)(BOOT_ANIM_NEAR_Z - p0.z) / (double)(p1.z - p0.z);
     const double exact_x = p0.x + (p1.x - p0.x) * frac;
     const double exact_y = p0.y + (p1.y - p0.y) * frac;
     int ex, ey;
-    const S3L_Vec4 exact_clip = {
-        (S3L_Unit)exact_x, (S3L_Unit)exact_y, BOOT_ANIM_NEAR_Z, S3L_F };
+    const S3L_Vec4 exact_clip = {(S3L_Unit)exact_x, (S3L_Unit)exact_y, BOOT_ANIM_NEAR_Z, S3L_F};
     boot_anim_camera_to_screen(exact_clip, view.focal, &ex, &ey);
 
     const int tolerance = 20;
     TEST_ASSERT_INT_WITHIN_MESSAGE(tolerance, ex, ax,
-        "the clipped endpoint's screen x should be close to a "
-        "double-precision reference - a wide miss here is exactly the "
-        "S3L_F-precision rounding this test guards against");
+                                   "the clipped endpoint's screen x should be close to a "
+                                   "double-precision reference - a wide miss here is exactly the "
+                                   "S3L_F-precision rounding this test guards against");
     TEST_ASSERT_INT_WITHIN_MESSAGE(tolerance, ey, ay,
-        "the clipped endpoint's screen y should be close to a "
-        "double-precision reference - a wide miss here is exactly the "
-        "S3L_F-precision rounding this test guards against");
+                                   "the clipped endpoint's screen y should be close to a "
+                                   "double-precision reference - a wide miss here is exactly the "
+                                   "S3L_F-precision rounding this test guards against");
 
     /* p1 was already in front - not clipped at all, so it must match
      * projecting it directly, independent of whatever the clip branch
@@ -345,11 +332,11 @@ static void test_project_segment_cs_clips_asymmetric_coordinates(void)
     S3L_Vec4 p1_copy = p1;
     boot_anim_camera_to_screen(p1_copy, view.focal, &fx, &fy);
     TEST_ASSERT_EQUAL_INT_MESSAGE(fx, bx,
-        "the untouched (already in front) endpoint should project "
-        "identically whether reached through the clipping path or not");
+                                  "the untouched (already in front) endpoint should project "
+                                  "identically whether reached through the clipping path or not");
     TEST_ASSERT_EQUAL_INT_MESSAGE(fy, by,
-        "the untouched (already in front) endpoint should project "
-        "identically whether reached through the clipping path or not");
+                                  "the untouched (already in front) endpoint should project "
+                                  "identically whether reached through the clipping path or not");
 }
 
 /* boot_anim_spoke_reveal_target()'s own two guaranteed endpoints,
@@ -359,14 +346,13 @@ static void test_project_segment_cs_clips_asymmetric_coordinates(void)
  * `far` (a spoke actually finishes where it was told to, not asymptotic-
  * ally close). Both are relied on directly by draw_grid_spoke() in
  * boot_anim.c - see its own comment on `near_target`/`target`. */
-static void test_spoke_reveal_target_hits_its_endpoints_exactly(void)
-{
+static void
+test_spoke_reveal_target_hits_its_endpoints_exactly(void) {
     const int32_t near = 10 * BOOT_ANIM_ONE;
-    const int32_t far  = 500 * BOOT_ANIM_ONE;
+    const int32_t far = 500 * BOOT_ANIM_ONE;
 
     TEST_ASSERT_EQUAL_INT32(0, boot_anim_spoke_reveal_target(near, far, 0));
-    TEST_ASSERT_EQUAL_INT32(far,
-        boot_anim_spoke_reveal_target(near, far, 255));
+    TEST_ASSERT_EQUAL_INT32(far, boot_anim_spoke_reveal_target(near, far, 255));
 }
 
 /* Reciprocal interpolation exists to keep ON-SCREEN growth roughly even,
@@ -378,10 +364,10 @@ static void test_spoke_reveal_target_hits_its_endpoints_exactly(void)
  *
  * Bounded as a difference-of-differences rather than by exact equality:
  * the reach-to-r0 knot and integer rounding both perturb it. */
-static void test_spoke_reveal_target_advances_evenly_in_screen_space(void)
-{
+static void
+test_spoke_reveal_target_advances_evenly_in_screen_space(void) {
     const int32_t near = 10 * BOOT_ANIM_ONE;
-    const int32_t far  = 500 * BOOT_ANIM_ONE;
+    const int32_t far = 500 * BOOT_ANIM_ONE;
     const int steps = 10;
 
     /* Starts at i=1 (reach>0), not 0 - reach=0's own target=0 is already
@@ -392,26 +378,22 @@ static void test_spoke_reveal_target_advances_evenly_in_screen_space(void)
     double prev_delta = 0.0;
     for (int i = 1; i <= steps; i++) {
         const uint8_t reach = (uint8_t)((255 * i) / steps);
-        const int32_t target =
-            boot_anim_spoke_reveal_target(near, far, reach);
-        TEST_ASSERT_TRUE_MESSAGE(target > 0,
-            "every non-zero reach should produce a positive target");
+        const int32_t target = boot_anim_spoke_reveal_target(near, far, reach);
+        TEST_ASSERT_TRUE_MESSAGE(target > 0, "every non-zero reach should produce a positive target");
         const double inv = 1.0 / (double)target;
         if (prev_inv >= 0.0) {
             const double delta = prev_inv - inv;
-            TEST_ASSERT_TRUE_MESSAGE(delta >= 0.0,
-                "1/target should never increase as reach climbs - the "
-                "target itself must be monotonically non-decreasing");
+            TEST_ASSERT_TRUE_MESSAGE(delta >= 0.0, "1/target should never increase as reach climbs - the "
+                                                   "target itself must be monotonically non-decreasing");
             if (i > 2) {
                 /* prev_delta == 0 would mean the PRIOR step had zero
                  * shrinkage - a plateau, not something these constants
                  * produce, but an explicit message beats an inf/NaN
                  * ratio silently failing the comparison below for a
                  * reason this test's own output does not explain. */
-                TEST_ASSERT_TRUE_MESSAGE(prev_delta > 0.0,
-                    "the previous reach step had zero shrinkage in "
-                    "1/target - a plateau these test constants should "
-                    "never actually produce");
+                TEST_ASSERT_TRUE_MESSAGE(prev_delta > 0.0, "the previous reach step had zero shrinkage in "
+                                                           "1/target - a plateau these test constants should "
+                                                           "never actually produce");
                 /* Consecutive per-step shrinkages should stay within 25%
                  * of each other - loose on purpose (a fixed-point
                  * approximation, not exact reciprocal interpolation), but
@@ -419,9 +401,9 @@ static void test_spoke_reveal_target_advances_evenly_in_screen_space(void)
                  * first step alone covers ~90% of the span. */
                 const double ratio = delta / prev_delta;
                 TEST_ASSERT_TRUE_MESSAGE(ratio > 0.75 && ratio < 1.25,
-                    "consecutive reach steps should shrink 1/target by "
-                    "roughly the same amount - a front-loaded reveal "
-                    "would fail this");
+                                         "consecutive reach steps should shrink 1/target by "
+                                         "roughly the same amount - a front-loaded reveal "
+                                         "would fail this");
             }
             prev_delta = delta;
         }
@@ -434,17 +416,16 @@ static void test_spoke_reveal_target_advances_evenly_in_screen_space(void)
  * untouched keyframe's space scale has to read back as S3L_F (small3dlib's
  * own 1.0), on every axis, not some other number that happens to look
  * right today. */
-static void test_an_untouched_keyframes_scale_reads_back_as_identity(void)
-{
-    const boot_anim_timeline_state_t st =
-        boot_anim_timeline_sample(boot_anim_keyframes[0].ms);
+static void
+test_an_untouched_keyframes_scale_reads_back_as_identity(void) {
+    const boot_anim_timeline_state_t st = boot_anim_timeline_sample(boot_anim_keyframes[0].ms);
 
     TEST_ASSERT_EQUAL_INT32_MESSAGE(S3L_F, st.space.scale.x,
-        "an unscaled keyframe's space.scale.x should read back as 1.0");
+                                    "an unscaled keyframe's space.scale.x should read back as 1.0");
     TEST_ASSERT_EQUAL_INT32_MESSAGE(S3L_F, st.space.scale.y,
-        "an unscaled keyframe's space.scale.y should read back as 1.0");
+                                    "an unscaled keyframe's space.scale.y should read back as 1.0");
     TEST_ASSERT_EQUAL_INT32_MESSAGE(S3L_F, st.space.scale.z,
-        "an unscaled keyframe's space.scale.z should read back as 1.0");
+                                    "an unscaled keyframe's space.scale.z should read back as 1.0");
 }
 
 /*
@@ -459,8 +440,8 @@ static void test_an_untouched_keyframes_scale_reads_back_as_identity(void)
 
 #define BOOT_ANIM_TEST_MAX_PANEL_MULTIPLE 3
 
-static void test_the_seeds_curve_stays_near_the_panel_throughout(void)
-{
+static void
+test_the_seeds_curve_stays_near_the_panel_throughout(void) {
     for (uint32_t t = 0; t <= BOOT_ANIM_MS; t += 100) {
         const boot_anim_view_t view = boot_anim_view(PANEL_W, PANEL_H, t);
         const int32_t progress = boot_anim_pen(t);
@@ -478,16 +459,14 @@ static void test_the_seeds_curve_stays_near_the_panel_throughout(void)
         int x, y;
         boot_anim_project(p.re, p.im, p.t, &view, &x, &y);
 
-        TEST_ASSERT_TRUE_MESSAGE(
-            x > -PANEL_W * BOOT_ANIM_TEST_MAX_PANEL_MULTIPLE &&
-            x <  PANEL_W * (BOOT_ANIM_TEST_MAX_PANEL_MULTIPLE + 1),
-            "the seed's camera has drifted wildly off in X - not just "
-            "off-panel, off by panel-widths");
-        TEST_ASSERT_TRUE_MESSAGE(
-            y > -PANEL_H * BOOT_ANIM_TEST_MAX_PANEL_MULTIPLE &&
-            y <  PANEL_H * (BOOT_ANIM_TEST_MAX_PANEL_MULTIPLE + 1),
-            "the seed's camera has drifted wildly off in Y - not just "
-            "off-panel, off by panel-heights");
+        TEST_ASSERT_TRUE_MESSAGE(x > -PANEL_W * BOOT_ANIM_TEST_MAX_PANEL_MULTIPLE
+                                     && x < PANEL_W * (BOOT_ANIM_TEST_MAX_PANEL_MULTIPLE + 1),
+                                 "the seed's camera has drifted wildly off in X - not just "
+                                 "off-panel, off by panel-widths");
+        TEST_ASSERT_TRUE_MESSAGE(y > -PANEL_H * BOOT_ANIM_TEST_MAX_PANEL_MULTIPLE
+                                     && y < PANEL_H * (BOOT_ANIM_TEST_MAX_PANEL_MULTIPLE + 1),
+                                 "the seed's camera has drifted wildly off in Y - not just "
+                                 "off-panel, off by panel-heights");
     }
 }
 
@@ -498,8 +477,8 @@ static void test_the_seeds_curve_stays_near_the_panel_throughout(void)
  * purpose: it is not this test's job to say WHERE the axes should point
  * (that is a creative choice made through the editor now), only that they
  * are not degenerate. */
-static void test_the_seeds_three_axes_project_to_distinct_directions(void)
-{
+static void
+test_the_seeds_three_axes_project_to_distinct_directions(void) {
     const boot_anim_view_t view = boot_anim_view(PANEL_W, PANEL_H, 0);
     const int32_t one = BOOT_ANIM_ONE;
     int ox, oy, rx, ry, ix, iy, tx, ty;
@@ -509,14 +488,10 @@ static void test_the_seeds_three_axes_project_to_distinct_directions(void)
     boot_anim_project(0, one, 0, &view, &ix, &iy);
     boot_anim_project(0, 0, 1 << BOOT_ANIM_TQ, &view, &tx, &ty);
 
-    TEST_ASSERT_FALSE_MESSAGE(rx == ix && ry == iy,
-        "the real and imaginary axes should not project to the same point");
-    TEST_ASSERT_FALSE_MESSAGE(rx == tx && ry == ty,
-        "the real and t axes should not project to the same point");
-    TEST_ASSERT_FALSE_MESSAGE(ix == tx && iy == ty,
-        "the imaginary and t axes should not project to the same point");
-    TEST_ASSERT_FALSE_MESSAGE(rx == ox && ry == oy,
-        "the real axis should not collapse onto the origin");
+    TEST_ASSERT_FALSE_MESSAGE(rx == ix && ry == iy, "the real and imaginary axes should not project to the same point");
+    TEST_ASSERT_FALSE_MESSAGE(rx == tx && ry == ty, "the real and t axes should not project to the same point");
+    TEST_ASSERT_FALSE_MESSAGE(ix == tx && iy == ty, "the imaginary and t axes should not project to the same point");
+    TEST_ASSERT_FALSE_MESSAGE(rx == ox && ry == oy, "the real axis should not collapse onto the origin");
 }
 
 /* The wave */
@@ -528,18 +503,15 @@ static void test_the_seeds_three_axes_project_to_distinct_directions(void)
  * test_the_seeds_wave_is_coherently_authored() below is what actually
  * checks that), which at 0 would make every one of these assertions trivially
  * true for the wrong reason. */
-static void test_wave_height_is_zero_when_the_amplitude_is_zero(void)
-{
-    TEST_ASSERT_EQUAL_INT32(0, boot_anim_wave_height(
-        BOOT_ANIM_ONE, 0, 0, BOOT_ANIM_ONE, 1000));
+static void
+test_wave_height_is_zero_when_the_amplitude_is_zero(void) {
+    TEST_ASSERT_EQUAL_INT32(0, boot_anim_wave_height(BOOT_ANIM_ONE, 0, 0, BOOT_ANIM_ONE, 1000));
 }
 
-static void test_wave_height_is_zero_when_the_wavelength_is_not_positive(void)
-{
-    TEST_ASSERT_EQUAL_INT32(0, boot_anim_wave_height(
-        BOOT_ANIM_ONE, 0, BOOT_ANIM_ONE, 0, 1000));
-    TEST_ASSERT_EQUAL_INT32(0, boot_anim_wave_height(
-        BOOT_ANIM_ONE, 0, BOOT_ANIM_ONE, -1, 1000));
+static void
+test_wave_height_is_zero_when_the_wavelength_is_not_positive(void) {
+    TEST_ASSERT_EQUAL_INT32(0, boot_anim_wave_height(BOOT_ANIM_ONE, 0, BOOT_ANIM_ONE, 0, 1000));
+    TEST_ASSERT_EQUAL_INT32(0, boot_anim_wave_height(BOOT_ANIM_ONE, 0, BOOT_ANIM_ONE, -1, 1000));
 }
 
 /* sin() is exactly periodic in r for a fixed t - a vertex a full
@@ -548,38 +520,35 @@ static void test_wave_height_is_zero_when_the_wavelength_is_not_positive(void)
  * own crests/troughs at once, all from the one formula, rather than
  * needing a moving front to explain which rings are "lit" yet (see
  * boot_anim.h's "The wave" section). */
-static void test_wave_height_is_periodic_in_radius(void)
-{
+static void
+test_wave_height_is_periodic_in_radius(void) {
     const int32_t wavelength = 3 * BOOT_ANIM_ONE;
     const int32_t amp_q12 = BOOT_ANIM_ONE;
     const int32_t r = 2 * BOOT_ANIM_ONE;
 
     const int32_t a = boot_anim_wave_height(r, 0, amp_q12, wavelength, 0);
-    const int32_t b = boot_anim_wave_height(r + wavelength, 0, amp_q12,
-                                            wavelength, 0);
+    const int32_t b = boot_anim_wave_height(r + wavelength, 0, amp_q12, wavelength, 0);
 
     TEST_ASSERT_EQUAL_INT32_MESSAGE(a, b,
-        "a vertex a full wavelength further out should be at the exact "
-        "same point in the same crest/trough cycle");
+                                    "a vertex a full wavelength further out should be at the exact "
+                                    "same point in the same crest/trough cycle");
 }
 
 /* Also exactly periodic in TIME, for a fixed r - one full period_ms
  * brings the pattern back to where it started. */
-static void test_wave_height_is_periodic_in_time(void)
-{
+static void
+test_wave_height_is_periodic_in_time(void) {
     const int32_t wavelength = 3 * BOOT_ANIM_ONE;
     const int32_t amp_q12 = BOOT_ANIM_ONE;
     const int32_t r = 2 * BOOT_ANIM_ONE;
     const uint32_t period_ms = 1000;
 
-    const int32_t a = boot_anim_wave_height(r, 250, amp_q12, wavelength,
-                                            period_ms);
-    const int32_t b = boot_anim_wave_height(r, 250 + period_ms, amp_q12,
-                                            wavelength, period_ms);
+    const int32_t a = boot_anim_wave_height(r, 250, amp_q12, wavelength, period_ms);
+    const int32_t b = boot_anim_wave_height(r, 250 + period_ms, amp_q12, wavelength, period_ms);
 
     TEST_ASSERT_EQUAL_INT32_MESSAGE(a, b,
-        "a full period later, the same vertex should be back at the same "
-        "height");
+                                    "a full period later, the same vertex should be back at the same "
+                                    "height");
 }
 
 /* The travelling look itself: the same point in the crest/trough cycle
@@ -588,41 +557,37 @@ static void test_wave_height_is_periodic_in_time(void)
  * boot_anim_wave_height()'s own comment on why subtracting the time term
  * is what makes a crest's own radius grow with time, the pattern moving
  * outward rather than inward. */
-static void test_wave_height_travels_outward_with_time(void)
-{
+static void
+test_wave_height_travels_outward_with_time(void) {
     const int32_t wavelength = 4 * BOOT_ANIM_ONE;
     const int32_t amp_q12 = BOOT_ANIM_ONE;
     const uint32_t period_ms = 4000;
     const int32_t r = 10 * BOOT_ANIM_ONE;
 
-    const int32_t at_r_a_quarter_period_later = boot_anim_wave_height(
-        r, period_ms / 4, amp_q12, wavelength, period_ms);
+    const int32_t at_r_a_quarter_period_later = boot_anim_wave_height(r, period_ms / 4, amp_q12, wavelength, period_ms);
     const int32_t a_quarter_wavelength_closer_right_now =
-        boot_anim_wave_height(r - wavelength / 4, 0, amp_q12, wavelength,
-                              period_ms);
+        boot_anim_wave_height(r - wavelength / 4, 0, amp_q12, wavelength, period_ms);
 
-    TEST_ASSERT_EQUAL_INT32_MESSAGE(
-        at_r_a_quarter_period_later, a_quarter_wavelength_closer_right_now,
-        "a quarter period from now, this vertex should read the way a "
-        "vertex a quarter wavelength closer to the origin reads right now "
-        "- the pattern travels OUTWARD as time advances");
+    TEST_ASSERT_EQUAL_INT32_MESSAGE(at_r_a_quarter_period_later, a_quarter_wavelength_closer_right_now,
+                                    "a quarter period from now, this vertex should read the way a "
+                                    "vertex a quarter wavelength closer to the origin reads right now "
+                                    "- the pattern travels OUTWARD as time advances");
 }
 
 /* period_ms of 0 is a legitimate, if unusual, choice - a static ripple
  * that never travels - not a division by zero. */
-static void test_wave_height_is_frozen_when_the_period_is_zero(void)
-{
+static void
+test_wave_height_is_frozen_when_the_period_is_zero(void) {
     const int32_t wavelength = 3 * BOOT_ANIM_ONE;
     const int32_t amp_q12 = BOOT_ANIM_ONE;
     const int32_t r = 2 * BOOT_ANIM_ONE;
 
     const int32_t at_t0 = boot_anim_wave_height(r, 0, amp_q12, wavelength, 0);
-    const int32_t at_t_later =
-        boot_anim_wave_height(r, 999999, amp_q12, wavelength, 0);
+    const int32_t at_t_later = boot_anim_wave_height(r, 999999, amp_q12, wavelength, 0);
 
     TEST_ASSERT_EQUAL_INT32_MESSAGE(at_t0, at_t_later,
-        "a period of 0 should freeze the pattern's own time term rather "
-        "than crash or drift");
+                                    "a period of 0 should freeze the pattern's own time term rather "
+                                    "than crash or drift");
 }
 
 /* A seed value an author is expected to change is not a fact worth
@@ -632,18 +597,18 @@ static void test_wave_height_is_frozen_when_the_period_is_zero(void)
  * wavelength or period is the combination that silently draws nothing
  * (see that function's own early-out). Holds whether the ripple is
  * authored on or off. */
-static void test_the_seeds_wave_is_coherently_authored(void)
-{
+static void
+test_the_seeds_wave_is_coherently_authored(void) {
     TEST_ASSERT_TRUE_MESSAGE(BOOT_ANIM_WAVE_HEIGHT_Q12 >= 0,
-        "a negative wave height would flip every crest into a trough");
+                             "a negative wave height would flip every crest into a trough");
     if (BOOT_ANIM_WAVE_HEIGHT_Q12 != 0) {
         TEST_ASSERT_TRUE_MESSAGE(BOOT_ANIM_WAVE_WAVELENGTH_Q12 > 0,
-            "the seed authors a wave height but no wavelength - "
-            "boot_anim_wave_height() would return flat and the ripple "
-            "would silently never appear");
+                                 "the seed authors a wave height but no wavelength - "
+                                 "boot_anim_wave_height() would return flat and the ripple "
+                                 "would silently never appear");
         TEST_ASSERT_TRUE_MESSAGE(BOOT_ANIM_WAVE_PERIOD_MS > 0,
-            "the seed authors a wave height but no period - the ripple "
-            "would be frozen rather than travelling");
+                                 "the seed authors a wave height but no period - the ripple "
+                                 "would be frozen rather than travelling");
     }
 }
 
@@ -653,8 +618,8 @@ static void test_the_seeds_wave_is_coherently_authored(void)
  * FADE_MS directly rather than taking them as arguments - so these test
  * against the seed's own real generated values (BOOT_ANIM_WAVE_IN_MS,
  * BOOT_ANIM_WAVE_OUT_MS, BOOT_ANIM_MS). */
-static void test_wave_envelope_is_zero_at_the_very_start(void)
-{
+static void
+test_wave_envelope_is_zero_at_the_very_start(void) {
     TEST_ASSERT_EQUAL_UINT8(0, boot_anim_wave_envelope(0));
 }
 
@@ -662,21 +627,19 @@ static void test_wave_envelope_is_zero_at_the_very_start(void)
  * the ripple stays muted right up to and including that moment itself -
  * an author controls exactly when it is allowed to start, not merely how
  * long a ramp beginning at frame 0 takes. */
-static void test_wave_envelope_is_still_muted_at_wave_in_ms_itself(void)
-{
+static void
+test_wave_envelope_is_still_muted_at_wave_in_ms_itself(void) {
     TEST_ASSERT_EQUAL_UINT8(0, boot_anim_wave_envelope(BOOT_ANIM_WAVE_IN_MS));
 }
 
-static void test_wave_envelope_reaches_full_strength_after_the_ramp(void)
-{
-    TEST_ASSERT_EQUAL_UINT8(255, boot_anim_wave_envelope(
-        BOOT_ANIM_WAVE_IN_MS + BOOT_ANIM_WAVE_ENVELOPE_RAMP_MS));
+static void
+test_wave_envelope_reaches_full_strength_after_the_ramp(void) {
+    TEST_ASSERT_EQUAL_UINT8(255, boot_anim_wave_envelope(BOOT_ANIM_WAVE_IN_MS + BOOT_ANIM_WAVE_ENVELOPE_RAMP_MS));
 }
 
-static void test_wave_envelope_plateaus_between_in_and_out(void)
-{
-    const uint32_t midpoint =
-        (BOOT_ANIM_WAVE_IN_MS + BOOT_ANIM_WAVE_OUT_MS) / 2;
+static void
+test_wave_envelope_plateaus_between_in_and_out(void) {
+    const uint32_t midpoint = (BOOT_ANIM_WAVE_IN_MS + BOOT_ANIM_WAVE_OUT_MS) / 2;
 
     TEST_ASSERT_EQUAL_UINT8(255, boot_anim_wave_envelope(midpoint));
 }
@@ -684,10 +647,9 @@ static void test_wave_envelope_plateaus_between_in_and_out(void)
 /* Symmetric with test_wave_envelope_is_still_muted_at_wave_in_ms_itself
  * above: still at FULL strength right at wave_out_ms itself - that moment
  * is when the fade-out ramp starts, not when it has already finished. */
-static void test_wave_envelope_is_still_full_at_wave_out_ms_itself(void)
-{
-    TEST_ASSERT_EQUAL_UINT8(255,
-        boot_anim_wave_envelope(BOOT_ANIM_WAVE_OUT_MS));
+static void
+test_wave_envelope_is_still_full_at_wave_out_ms_itself(void) {
+    TEST_ASSERT_EQUAL_UINT8(255, boot_anim_wave_envelope(BOOT_ANIM_WAVE_OUT_MS));
 }
 
 /* The title's idle wave calming down - a different wave entirely from the
@@ -696,17 +658,15 @@ static void test_wave_envelope_is_still_full_at_wave_out_ms_itself(void)
  * swing before it starts, still full AT the start (that instant is when
  * the ramp begins, not when it has finished), and nothing left once the
  * fade window has passed. */
-static void test_the_title_wave_is_at_full_swing_before_it_calms(void)
-{
+static void
+test_the_title_wave_is_at_full_swing_before_it_calms(void) {
     TEST_ASSERT_EQUAL_UINT8(255, boot_anim_title_wave_reach(0));
-    TEST_ASSERT_EQUAL_UINT8(255,
-        boot_anim_title_wave_reach(BOOT_ANIM_TITLE_WAVE_OUT_MS));
+    TEST_ASSERT_EQUAL_UINT8(255, boot_anim_title_wave_reach(BOOT_ANIM_TITLE_WAVE_OUT_MS));
 }
 
-static void test_the_title_wave_reaches_stillness_after_its_fade(void)
-{
-    TEST_ASSERT_EQUAL_UINT8(0, boot_anim_title_wave_reach(
-        BOOT_ANIM_TITLE_WAVE_OUT_MS + BOOT_ANIM_TITLE_WAVE_FADE_MS));
+static void
+test_the_title_wave_reaches_stillness_after_its_fade(void) {
+    TEST_ASSERT_EQUAL_UINT8(0, boot_anim_title_wave_reach(BOOT_ANIM_TITLE_WAVE_OUT_MS + BOOT_ANIM_TITLE_WAVE_FADE_MS));
 }
 
 /* The point of scaling the AMPLITUDE rather than gating the wave off: the
@@ -714,17 +674,16 @@ static void test_the_title_wave_reaches_stillness_after_its_fade(void)
  * caught mid-bob rides its own arc down instead of snapping straight. The
  * envelope is what carries that, so it is what gets swept - the wave
  * itself keeps oscillating underneath and would not be monotonic. */
-static void test_the_title_wave_never_swings_wider_as_it_calms(void)
-{
+static void
+test_the_title_wave_never_swings_wider_as_it_calms(void) {
     const uint32_t out = BOOT_ANIM_TITLE_WAVE_OUT_MS;
     const uint32_t fade = BOOT_ANIM_TITLE_WAVE_FADE_MS;
     int prev = 256;
 
     for (uint32_t t = out; t <= out + fade; t += (fade / 32) + 1) {
         const int now = boot_anim_title_wave_reach(t);
-        TEST_ASSERT_TRUE_MESSAGE(now <= prev,
-            "the title wave's own envelope grew back while it was "
-            "supposed to be calming");
+        TEST_ASSERT_TRUE_MESSAGE(now <= prev, "the title wave's own envelope grew back while it was "
+                                              "supposed to be calming");
         prev = now;
     }
 }
@@ -737,10 +696,9 @@ static void test_the_title_wave_never_swings_wider_as_it_calms(void)
  * strength on the last frame - fine, since boot_anim_ink() has been
  * taking the whole picture to black since fade_start_ms long before
  * then. */
-static void test_wave_envelope_fades_back_to_zero_after_its_ramp(void)
-{
-    TEST_ASSERT_EQUAL_UINT8(0, boot_anim_wave_envelope(
-        BOOT_ANIM_WAVE_OUT_MS + BOOT_ANIM_WAVE_ENVELOPE_RAMP_MS));
+static void
+test_wave_envelope_fades_back_to_zero_after_its_ramp(void) {
+    TEST_ASSERT_EQUAL_UINT8(0, boot_anim_wave_envelope(BOOT_ANIM_WAVE_OUT_MS + BOOT_ANIM_WAVE_ENVELOPE_RAMP_MS));
 }
 
 /* The reach's own endpoints, read off whatever the seed authors: a start
@@ -751,36 +709,34 @@ static void test_wave_envelope_fades_back_to_zero_after_its_ramp(void)
  * assertion exact at the boundary rather than merely close - see its own
  * comment on reaching 255 AT start + duration, not one millisecond
  * after. */
-static void test_the_seeds_spokes_reach_their_full_length(void)
-{
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(0,
-        boot_anim_grid_spoke_reach(BOOT_ANIM_GRID_SPOKE_START_MS),
-        "a spoke should have no length at all before its own draw begins");
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(255,
-        boot_anim_grid_spoke_reach(BOOT_ANIM_GRID_SPOKE_START_MS +
-                                   BOOT_ANIM_GRID_SPOKE_DRAW_MS + 1),
+static void
+test_the_seeds_spokes_reach_their_full_length(void) {
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(0, boot_anim_grid_spoke_reach(BOOT_ANIM_GRID_SPOKE_START_MS),
+                                    "a spoke should have no length at all before its own draw begins");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(
+        255, boot_anim_grid_spoke_reach(BOOT_ANIM_GRID_SPOKE_START_MS + BOOT_ANIM_GRID_SPOKE_DRAW_MS + 1),
         "a spoke should be at full length once its own draw window has "
         "passed");
 }
 
 /* Smoothing */
 
-static boot_anim_pt_t pt(int32_t re, int32_t im, int32_t t)
-{
-    boot_anim_pt_t p = { re, im, t };
+static boot_anim_pt_t
+pt(int32_t re, int32_t im, int32_t t) {
+    boot_anim_pt_t p = {re, im, t};
     return p;
 }
 
 /* A span runs from the midpoint of the first two control points to the
  * midpoint of the last two, which is what makes consecutive spans join. */
-static void test_a_span_starts_and_ends_halfway_between_its_points(void)
-{
+static void
+test_a_span_starts_and_ends_halfway_between_its_points(void) {
     const boot_anim_pt_t a = pt(0, 0, 0);
     const boot_anim_pt_t b = pt(4096, 2048, 512);
     const boot_anim_pt_t c = pt(8192, -2048, 1024);
 
     const boot_anim_pt_t start = boot_anim_spline(a, b, c, 0);
-    const boot_anim_pt_t end   = boot_anim_spline(a, b, c, BOOT_ANIM_ONE);
+    const boot_anim_pt_t end = boot_anim_spline(a, b, c, BOOT_ANIM_ONE);
 
     TEST_ASSERT_INT32_WITHIN(1, (a.re + b.re) / 2, start.re);
     TEST_ASSERT_INT32_WITHIN(1, (a.im + b.im) / 2, start.im);
@@ -793,8 +749,8 @@ static void test_a_span_starts_and_ends_halfway_between_its_points(void)
 
 /* Repeating a control point pins the curve to it, which is how the first and
  * last samples end up actually being drawn rather than half a span in. */
-static void test_a_repeated_point_pins_the_end_of_the_curve(void)
-{
+static void
+test_a_repeated_point_pins_the_end_of_the_curve(void) {
     const boot_anim_pt_t a = pt(1000, -2000, 300);
     const boot_anim_pt_t b = pt(5000, 1500, 900);
 
@@ -808,8 +764,8 @@ static void test_a_repeated_point_pins_the_end_of_the_curve(void)
  * not a Catmull-Rom: no point of the curve may leave the box its control
  * points span. An interpolating spline would overshoot here, and the picture
  * would bulge exactly where the curve turns hardest. */
-static void test_a_span_never_leaves_its_control_points_behind(void)
-{
+static void
+test_a_span_never_leaves_its_control_points_behind(void) {
     const boot_anim_pt_t a = pt(-3000, 500, 0);
     const boot_anim_pt_t b = pt(4000, -2500, 400);
     const boot_anim_pt_t c = pt(-2500, 3000, 800);
@@ -820,17 +776,16 @@ static void test_a_span_never_leaves_its_control_points_behind(void)
     for (int32_t t = 0; t <= BOOT_ANIM_ONE; t += 37) {
         const boot_anim_pt_t p = boot_anim_spline(a, b, c, t);
         TEST_ASSERT_TRUE_MESSAGE(p.re >= lo_re - 1 && p.re <= hi_re + 1,
-            "the spline overshot its control points - that is a Catmull-Rom "
-            "failure mode and this is supposed to be a B-spline");
-        TEST_ASSERT_TRUE_MESSAGE(p.im >= lo_im - 1 && p.im <= hi_im + 1,
-            "the spline overshot its control points");
+                                 "the spline overshot its control points - that is a Catmull-Rom "
+                                 "failure mode and this is supposed to be a B-spline");
+        TEST_ASSERT_TRUE_MESSAGE(p.im >= lo_im - 1 && p.im <= hi_im + 1, "the spline overshot its control points");
     }
 }
 
 /* Height must not wobble across a span either: the whole curve climbs, so a
  * span between two rising samples has to rise all the way through. */
-static void test_a_span_climbs_steadily_when_its_points_do(void)
-{
+static void
+test_a_span_climbs_steadily_when_its_points_do(void) {
     const boot_anim_pt_t a = pt(0, 0, 100);
     const boot_anim_pt_t b = pt(3000, 1000, 200);
     const boot_anim_pt_t c = pt(-1000, 2000, 300);
@@ -850,8 +805,8 @@ static void test_a_span_climbs_steadily_when_its_points_do(void)
  * Checked against a real rotated, translated, perspective view - an
  * identity transform would not catch a bug that only shows up once
  * translation and rotation are mixed in. */
-static void test_spline_cs_matches_transforming_the_world_space_spline(void)
-{
+static void
+test_spline_cs_matches_transforming_the_world_space_spline(void) {
     const boot_anim_view_t view = boot_anim_view(PANEL_W, PANEL_H, CURVE_DONE_MS);
     const boot_anim_pt_t a = pt(-3000, 1500, 200);
     const boot_anim_pt_t b = pt(2500, -1800, 900);
@@ -863,19 +818,18 @@ static void test_spline_cs_matches_transforming_the_world_space_spline(void)
 
     for (int32_t t = 0; t <= BOOT_ANIM_ONE; t += 197) {
         const boot_anim_pt_t world = boot_anim_spline(a, b, c, t);
-        const S3L_Vec4 want =
-            boot_anim_to_camera_space(world.re, world.im, world.t, &view);
+        const S3L_Vec4 want = boot_anim_to_camera_space(world.re, world.im, world.t, &view);
         const S3L_Vec4 got = boot_anim_spline_cs(ta, tb, tc, t);
 
         TEST_ASSERT_INT32_WITHIN_MESSAGE(2, want.x, got.x,
-            "transform-then-interpolate must match interpolate-then-"
-            "transform, up to fixed-point rounding order");
+                                         "transform-then-interpolate must match interpolate-then-"
+                                         "transform, up to fixed-point rounding order");
         TEST_ASSERT_INT32_WITHIN_MESSAGE(2, want.y, got.y,
-            "transform-then-interpolate must match interpolate-then-"
-            "transform, up to fixed-point rounding order");
+                                         "transform-then-interpolate must match interpolate-then-"
+                                         "transform, up to fixed-point rounding order");
         TEST_ASSERT_INT32_WITHIN_MESSAGE(2, want.z, got.z,
-            "transform-then-interpolate must match interpolate-then-"
-            "transform, up to fixed-point rounding order");
+                                         "transform-then-interpolate must match interpolate-then-"
+                                         "transform, up to fixed-point rounding order");
     }
 }
 
@@ -885,16 +839,15 @@ static void test_spline_cs_matches_transforming_the_world_space_spline(void)
  * must not shortcut - an identity, orthographic view (focal 0) so the
  * points' own x/y ARE their screen offset from centre, no projection math
  * to work back through by hand. */
-static void test_curve_lod_steps_keeps_full_detail_for_a_wide_chord(void)
-{
+static void
+test_curve_lod_steps_keeps_full_detail_for_a_wide_chord(void) {
     const boot_anim_view_t view = identity_view(0);
-    const S3L_Vec4 a = { -100, 0, 5 * S3L_F, S3L_F };
-    const S3L_Vec4 c = {  100, 0, 5 * S3L_F, S3L_F };
+    const S3L_Vec4 a = {-100, 0, 5 * S3L_F, S3L_F};
+    const S3L_Vec4 c = {100, 0, 5 * S3L_F, S3L_F};
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(BOOT_ANIM_SPLINE_STEPS,
-        boot_anim_curve_lod_steps(a, c, &view),
-        "a span whose two ends land well apart on screen must keep full "
-        "detail, not be shortcut");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(BOOT_ANIM_SPLINE_STEPS, boot_anim_curve_lod_steps(a, c, &view),
+                                  "a span whose two ends land well apart on screen must keep full "
+                                  "detail, not be shortcut");
 }
 
 /* The actual point of the LOD shortcut: two points that already land on
@@ -902,16 +855,15 @@ static void test_curve_lod_steps_keeps_full_detail_for_a_wide_chord(void)
  * subdividing - see boot_anim_curve_lod_steps()'s own comment on the
  * convex-hull argument for why the two OUTER points are enough to decide
  * this without looking at anything in between. */
-static void test_curve_lod_steps_collapses_a_tiny_chord_to_one_step(void)
-{
+static void
+test_curve_lod_steps_collapses_a_tiny_chord_to_one_step(void) {
     const boot_anim_view_t view = identity_view(0);
-    const S3L_Vec4 a = { 40, 40, 5 * S3L_F, S3L_F };
-    const S3L_Vec4 c = { 41, 40, 5 * S3L_F, S3L_F };
+    const S3L_Vec4 a = {40, 40, 5 * S3L_F, S3L_F};
+    const S3L_Vec4 c = {41, 40, 5 * S3L_F, S3L_F};
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(1,
-        boot_anim_curve_lod_steps(a, c, &view),
-        "two points landing within a pixel of each other should collapse "
-        "to a single straight step");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, boot_anim_curve_lod_steps(a, c, &view),
+                                  "two points landing within a pixel of each other should collapse "
+                                  "to a single straight step");
 }
 
 /* boot_anim_screen_chord_lt()'s whole point over projecting the points for
@@ -921,39 +873,33 @@ static void test_curve_lod_steps_collapses_a_tiny_chord_to_one_step(void)
  * off with z. dx=100 S3L units with focal=S3L_F: at z of one unit it spans
  * ~36 screen px (well over the 3px bar); pushed a hundred units out it
  * spans well under one. */
-static void test_screen_chord_shrinks_with_distance(void)
-{
+static void
+test_screen_chord_shrinks_with_distance(void) {
     const boot_anim_view_t view = identity_view(S3L_F);
-    const S3L_Vec4 near_a = { 0, 0, S3L_F, S3L_F };
-    const S3L_Vec4 near_c = { 100, 0, S3L_F, S3L_F };
-    const S3L_Vec4 far_a = { 0, 0, 100 * S3L_F, S3L_F };
-    const S3L_Vec4 far_c = { 100, 0, 100 * S3L_F, S3L_F };
+    const S3L_Vec4 near_a = {0, 0, S3L_F, S3L_F};
+    const S3L_Vec4 near_c = {100, 0, S3L_F, S3L_F};
+    const S3L_Vec4 far_a = {0, 0, 100 * S3L_F, S3L_F};
+    const S3L_Vec4 far_c = {100, 0, 100 * S3L_F, S3L_F};
 
-    TEST_ASSERT_FALSE_MESSAGE(
-        boot_anim_screen_chord_lt(near_a, near_c, &view, 3),
-        "a pair spanning tens of pixels near the camera must not read as "
-        "a tiny chord");
-    TEST_ASSERT_TRUE_MESSAGE(
-        boot_anim_screen_chord_lt(far_a, far_c, &view, 3),
-        "the same pair a hundred units out spans under a pixel and must "
-        "read as tiny - apparent size falls off with z");
+    TEST_ASSERT_FALSE_MESSAGE(boot_anim_screen_chord_lt(near_a, near_c, &view, 3),
+                              "a pair spanning tens of pixels near the camera must not read as "
+                              "a tiny chord");
+    TEST_ASSERT_TRUE_MESSAGE(boot_anim_screen_chord_lt(far_a, far_c, &view, 3),
+                             "the same pair a hundred units out spans under a pixel and must "
+                             "read as tiny - apparent size falls off with z");
 }
 
 /* The pure decision half of the whole-curve sample decimation - see
  * boot_anim_curve_stride()'s own comment. Full detail while the curve is
  * anywhere near panel-sized; samples only start dropping once the whole
  * thing has shrunk to a fraction of it. */
-static void test_lod_stride_tiers_by_extent(void)
-{
+static void
+test_lod_stride_tiers_by_extent(void) {
     TEST_ASSERT_EQUAL_INT(1, boot_anim_lod_stride_for_extent(500));
-    TEST_ASSERT_EQUAL_INT(1, boot_anim_lod_stride_for_extent(
-        BOOT_ANIM_LOD_STRIDE2_PX));
-    TEST_ASSERT_EQUAL_INT(2, boot_anim_lod_stride_for_extent(
-        BOOT_ANIM_LOD_STRIDE2_PX - 1));
-    TEST_ASSERT_EQUAL_INT(2, boot_anim_lod_stride_for_extent(
-        BOOT_ANIM_LOD_STRIDE4_PX));
-    TEST_ASSERT_EQUAL_INT(4, boot_anim_lod_stride_for_extent(
-        BOOT_ANIM_LOD_STRIDE4_PX - 1));
+    TEST_ASSERT_EQUAL_INT(1, boot_anim_lod_stride_for_extent(BOOT_ANIM_LOD_STRIDE2_PX));
+    TEST_ASSERT_EQUAL_INT(2, boot_anim_lod_stride_for_extent(BOOT_ANIM_LOD_STRIDE2_PX - 1));
+    TEST_ASSERT_EQUAL_INT(2, boot_anim_lod_stride_for_extent(BOOT_ANIM_LOD_STRIDE4_PX));
+    TEST_ASSERT_EQUAL_INT(4, boot_anim_lod_stride_for_extent(BOOT_ANIM_LOD_STRIDE4_PX - 1));
     TEST_ASSERT_EQUAL_INT(4, boot_anim_lod_stride_for_extent(0));
 }
 
@@ -962,16 +908,15 @@ static void test_lod_stride_tiers_by_extent(void)
  * boot_anim_curve_lod_steps() has no idea how big it actually is on
  * screen in that case, so it has to default to full detail rather than
  * guess low. */
-static void test_curve_lod_steps_keeps_full_detail_when_the_probe_cannot_project(void)
-{
+static void
+test_curve_lod_steps_keeps_full_detail_when_the_probe_cannot_project(void) {
     const boot_anim_view_t view = identity_view(S3L_F);
-    const S3L_Vec4 a = { 40, 40, 0, S3L_F };
-    const S3L_Vec4 c = { 41, 40, BOOT_ANIM_NEAR_Z - 1, S3L_F };
+    const S3L_Vec4 a = {40, 40, 0, S3L_F};
+    const S3L_Vec4 c = {41, 40, BOOT_ANIM_NEAR_Z - 1, S3L_F};
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(BOOT_ANIM_SPLINE_STEPS,
-        boot_anim_curve_lod_steps(a, c, &view),
-        "a span the probe cannot project at all must default to full "
-        "detail, not be assumed tiny");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(BOOT_ANIM_SPLINE_STEPS, boot_anim_curve_lod_steps(a, c, &view),
+                                  "a span the probe cannot project at all must default to full "
+                                  "detail, not be assumed tiny");
 }
 
 /*
@@ -986,12 +931,11 @@ static void test_curve_lod_steps_keeps_full_detail_when_the_probe_cannot_project
  * BOOT_ANIM_CURVE_PHASE1_FRACTION, not BOOT_ANIM_ONE, at the end of
  * BOOT_ANIM_PEN_MS now; test_the_curve_is_finished_by_pen_finish_ms()
  * covers phase 2's own end. */
-static void test_the_pen_runs_from_nothing_to_phase_ones_end(void)
-{
+static void
+test_the_pen_runs_from_nothing_to_phase_ones_end(void) {
     TEST_ASSERT_EQUAL_INT32(0, boot_anim_pen(0));
     TEST_ASSERT_EQUAL_INT32(0, boot_anim_pen(BOOT_ANIM_PEN_START_MS));
-    TEST_ASSERT_EQUAL_INT32(BOOT_ANIM_CURVE_PHASE1_FRACTION,
-        boot_anim_pen(BOOT_ANIM_PEN_START_MS + BOOT_ANIM_PEN_MS));
+    TEST_ASSERT_EQUAL_INT32(BOOT_ANIM_CURVE_PHASE1_FRACTION, boot_anim_pen(BOOT_ANIM_PEN_START_MS + BOOT_ANIM_PEN_MS));
 }
 
 /* Phase 2: continues past phase 1's end rather than sitting still, and
@@ -1001,40 +945,36 @@ static void test_the_pen_runs_from_nothing_to_phase_ones_end(void)
  * test_the_curve_is_finished_by_pen_finish_ms() for that half, kept as its
  * own test since it is really a claim about PEN_FINISH_MS, not about the
  * pen's climb in general. */
-static void test_the_pen_keeps_climbing_through_phase_two(void)
-{
-    const uint32_t phase1_end_ms =
-        BOOT_ANIM_PEN_START_MS + BOOT_ANIM_PEN_MS;
-    const uint32_t mid_ms =
-        (phase1_end_ms + BOOT_ANIM_PEN_FINISH_MS) / 2;
+static void
+test_the_pen_keeps_climbing_through_phase_two(void) {
+    const uint32_t phase1_end_ms = BOOT_ANIM_PEN_START_MS + BOOT_ANIM_PEN_MS;
+    const uint32_t mid_ms = (phase1_end_ms + BOOT_ANIM_PEN_FINISH_MS) / 2;
 
-    TEST_ASSERT_TRUE_MESSAGE(
-        boot_anim_pen(mid_ms) > BOOT_ANIM_CURVE_PHASE1_FRACTION,
-        "the pen should have climbed past where phase 1 left it");
+    TEST_ASSERT_TRUE_MESSAGE(boot_anim_pen(mid_ms) > BOOT_ANIM_CURVE_PHASE1_FRACTION,
+                             "the pen should have climbed past where phase 1 left it");
     TEST_ASSERT_TRUE_MESSAGE(boot_anim_pen(mid_ms) < BOOT_ANIM_ONE,
-        "the pen should not have reached the end of the curve yet");
+                             "the pen should not have reached the end of the curve yet");
 }
 
-static void test_the_curve_is_finished_by_pen_finish_ms(void)
-{
-    TEST_ASSERT_EQUAL_INT32_MESSAGE(BOOT_ANIM_ONE,
-        boot_anim_pen(BOOT_ANIM_PEN_FINISH_MS),
-        "the curve should have reached its full extent by pen_finish_ms");
+static void
+test_the_curve_is_finished_by_pen_finish_ms(void) {
+    TEST_ASSERT_EQUAL_INT32_MESSAGE(BOOT_ANIM_ONE, boot_anim_pen(BOOT_ANIM_PEN_FINISH_MS),
+                                    "the curve should have reached its full extent by pen_finish_ms");
 }
 
 /* Not a claim boot_anim_pen() itself makes - see its own comment on why
  * PEN_FINISH_MS landing after FADE_START_MS is only ever a generator
  * warning, not a refusal - but true of the SEED this repo ships, and worth
  * catching if a future edit to the committed timeline quietly breaks it. */
-static void test_the_seed_finishes_the_curve_before_the_dissolve_starts(void)
-{
+static void
+test_the_seed_finishes_the_curve_before_the_dissolve_starts(void) {
     TEST_ASSERT_TRUE_MESSAGE(BOOT_ANIM_PEN_FINISH_MS <= BOOT_ANIM_FADE_START_MS,
-        "the shipped seed's curve is still being drawn when the picture "
-        "begins fading");
+                             "the shipped seed's curve is still being drawn when the picture "
+                             "begins fading");
 }
 
-static void test_the_picture_is_lit_until_the_dissolve_and_dark_at_the_end(void)
-{
+static void
+test_the_picture_is_lit_until_the_dissolve_and_dark_at_the_end(void) {
     TEST_ASSERT_EQUAL_UINT8(255, boot_anim_ink(0));
     TEST_ASSERT_EQUAL_UINT8(255, boot_anim_ink(BOOT_ANIM_FADE_START_MS));
     TEST_ASSERT_EQUAL_UINT8(0, boot_anim_ink(BOOT_ANIM_MS));
@@ -1045,14 +985,12 @@ static void test_the_picture_is_lit_until_the_dissolve_and_dark_at_the_end(void)
  * has not started at or before BOOT_ANIM_IMAGE_START_MS, and it is fully
  * arrived (and stays arrived) once BOOT_ANIM_IMAGE_FADE_MS has passed
  * since. */
-static void test_the_photograph_arrives_over_its_own_window(void)
-{
+static void
+test_the_photograph_arrives_over_its_own_window(void) {
     TEST_ASSERT_EQUAL_UINT8(0, boot_anim_image_reveal(0));
     TEST_ASSERT_EQUAL_UINT8(0, boot_anim_image_reveal(BOOT_ANIM_IMAGE_START_MS));
-    TEST_ASSERT_EQUAL_UINT8(255, boot_anim_image_reveal(
-        BOOT_ANIM_IMAGE_START_MS + BOOT_ANIM_IMAGE_FADE_MS));
-    TEST_ASSERT_EQUAL_UINT8(255, boot_anim_image_reveal(
-        BOOT_ANIM_IMAGE_START_MS + BOOT_ANIM_IMAGE_FADE_MS + 1000));
+    TEST_ASSERT_EQUAL_UINT8(255, boot_anim_image_reveal(BOOT_ANIM_IMAGE_START_MS + BOOT_ANIM_IMAGE_FADE_MS));
+    TEST_ASSERT_EQUAL_UINT8(255, boot_anim_image_reveal(BOOT_ANIM_IMAGE_START_MS + BOOT_ANIM_IMAGE_FADE_MS + 1000));
 }
 
 /* The whole point of the pair (see boot_anim_scene_reach()'s own comment
@@ -1060,22 +998,19 @@ static void test_the_photograph_arrives_over_its_own_window(void)
  * picture. If these ever stopped summing to 255 the crossfade would
  * visibly dip or bloom partway through - exactly the artefact plain, not
  * eased, tween_ramp() is chosen to avoid. */
-static void test_the_scene_leaves_exactly_as_fast_as_the_photograph_arrives(void)
-{
-    const uint32_t from = BOOT_ANIM_IMAGE_START_MS > 200 ?
-        BOOT_ANIM_IMAGE_START_MS - 200 : 0;
+static void
+test_the_scene_leaves_exactly_as_fast_as_the_photograph_arrives(void) {
+    const uint32_t from = BOOT_ANIM_IMAGE_START_MS > 200 ? BOOT_ANIM_IMAGE_START_MS - 200 : 0;
     const uint32_t to = BOOT_ANIM_IMAGE_START_MS + BOOT_ANIM_IMAGE_FADE_MS + 200;
 
     for (uint32_t ms = from; ms <= to; ms += 5) {
-        TEST_ASSERT_EQUAL_UINT16_MESSAGE(255,
-            (uint16_t)boot_anim_image_reveal(ms) + boot_anim_scene_reach(ms),
-            "the photograph and the scene did not sum to one whole "
-            "picture - the crossfade would visibly dip or bloom");
+        TEST_ASSERT_EQUAL_UINT16_MESSAGE(255, (uint16_t)boot_anim_image_reveal(ms) + boot_anim_scene_reach(ms),
+                                         "the photograph and the scene did not sum to one whole "
+                                         "picture - the crossfade would visibly dip or bloom");
     }
 
     TEST_ASSERT_EQUAL_UINT8(255, boot_anim_scene_reach(BOOT_ANIM_IMAGE_START_MS));
-    TEST_ASSERT_EQUAL_UINT8(0, boot_anim_scene_reach(
-        BOOT_ANIM_IMAGE_START_MS + BOOT_ANIM_IMAGE_FADE_MS));
+    TEST_ASSERT_EQUAL_UINT8(0, boot_anim_scene_reach(BOOT_ANIM_IMAGE_START_MS + BOOT_ANIM_IMAGE_FADE_MS));
 }
 
 /* The two clocks (ink and the crossfade) are independent by design, but
@@ -1084,21 +1019,19 @@ static void test_the_scene_leaves_exactly_as_fast_as_the_photograph_arrives(void
  * dimmed. The generator only WARNS if the two windows overlap, so this is
  * asserted for the timeline this repo actually ships. Ignored while
  * image_start_ms sits at its inert default (== BOOT_ANIM_MS). */
-static void test_the_seed_finishes_the_crossfade_before_the_dissolve_starts(void)
-{
+static void
+test_the_seed_finishes_the_crossfade_before_the_dissolve_starts(void) {
     if (BOOT_ANIM_IMAGE_START_MS >= BOOT_ANIM_MS) {
         TEST_IGNORE_MESSAGE("this seed authors no photograph crossfade");
     }
     TEST_ASSERT_EQUAL_UINT8(255, boot_anim_ink(BOOT_ANIM_IMAGE_START_MS));
-    TEST_ASSERT_TRUE_MESSAGE(
-        BOOT_ANIM_IMAGE_START_MS + BOOT_ANIM_IMAGE_FADE_MS <=
-            BOOT_ANIM_FADE_START_MS,
-        "the shipped seed is still crossing to the photograph when the "
-        "picture begins dissolving");
+    TEST_ASSERT_TRUE_MESSAGE(BOOT_ANIM_IMAGE_START_MS + BOOT_ANIM_IMAGE_FADE_MS <= BOOT_ANIM_FADE_START_MS,
+                             "the shipped seed is still crossing to the photograph when the "
+                             "picture begins dissolving");
 }
 
-static void test_the_floor_fades_in_from_the_origin_outward(void)
-{
+static void
+test_the_floor_fades_in_from_the_origin_outward(void) {
     const uint32_t t = BOOT_ANIM_GRID_START_MS + 2 * BOOT_ANIM_GRID_RING_MS + 1;
 
     TEST_ASSERT_TRUE(boot_anim_grid_alpha(t, 1) > boot_anim_grid_alpha(t, 2));
@@ -1112,29 +1045,24 @@ static void test_the_floor_fades_in_from_the_origin_outward(void)
  * level and adjacent pairs land on the same integer (63, 63, 62, 62,
  * ...) - arithmetic, not a regression, invisible on the panel since the
  * eye reads the overall gradient. */
-static void test_the_floor_fades_out_with_distance_rather_than_stopping(void)
-{
+static void
+test_the_floor_fades_out_with_distance_rather_than_stopping(void) {
     const uint32_t settled = BOOT_ANIM_MS;
     const int span = BOOT_ANIM_GRID_FADE / 8;
 
     for (int ring = 2; ring < BOOT_ANIM_GRID_FADE; ring++) {
-        TEST_ASSERT_TRUE_MESSAGE(
-            boot_anim_grid_alpha(settled, ring) <=
-            boot_anim_grid_alpha(settled, ring - 1),
-            "a floor ring was BRIGHTER than the one inside it - the grid "
-            "would read as lit from the far edge inward");
+        TEST_ASSERT_TRUE_MESSAGE(boot_anim_grid_alpha(settled, ring) <= boot_anim_grid_alpha(settled, ring - 1),
+                                 "a floor ring was BRIGHTER than the one inside it - the grid "
+                                 "would read as lit from the far edge inward");
     }
     for (int ring = span; ring < BOOT_ANIM_GRID_FADE; ring += span) {
-        TEST_ASSERT_TRUE_MESSAGE(
-            boot_anim_grid_alpha(settled, ring) <
-            boot_anim_grid_alpha(settled, ring - span),
-            "the floor stopped dimming across a whole eighth of its own "
-            "reach - it would read as a tile with an edge rather than as "
-            "a plane");
+        TEST_ASSERT_TRUE_MESSAGE(boot_anim_grid_alpha(settled, ring) < boot_anim_grid_alpha(settled, ring - span),
+                                 "the floor stopped dimming across a whole eighth of its own "
+                                 "reach - it would read as a tile with an edge rather than as "
+                                 "a plane");
     }
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(0,
-        boot_anim_grid_alpha(settled, BOOT_ANIM_GRID_FADE),
-        "the floor should be completely gone by the end of its fade");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(0, boot_anim_grid_alpha(settled, BOOT_ANIM_GRID_FADE),
+                                    "the floor should be completely gone by the end of its fade");
 }
 
 /* Backdrop, not subject - the floor covers far more of the screen than the
@@ -1143,13 +1071,12 @@ static void test_the_floor_fades_out_with_distance_rather_than_stopping(void)
  * comment for why alpha has to climb alongside the whitening, not stay
  * fixed while only the colour moves) - so the bound checked here is the
  * per-moment BOOT_ANIM_GRID_CEILING_MAX, not the starting BOOT_ANIM_GRID_MAX. */
-static void test_the_floor_stays_dim_enough_to_be_a_backdrop(void)
-{
+static void
+test_the_floor_stays_dim_enough_to_be_a_backdrop(void) {
     for (uint32_t t = 0; t <= BOOT_ANIM_MS; t += 25) {
         for (int ring = 1; ring <= BOOT_ANIM_GRID_RINGS; ring++) {
-            TEST_ASSERT_TRUE_MESSAGE(
-                boot_anim_grid_alpha(t, ring) <= BOOT_ANIM_GRID_CEILING_MAX,
-                "the floor got brighter than its cap");
+            TEST_ASSERT_TRUE_MESSAGE(boot_anim_grid_alpha(t, ring) <= BOOT_ANIM_GRID_CEILING_MAX,
+                                     "the floor got brighter than its cap");
         }
     }
 }
@@ -1157,8 +1084,8 @@ static void test_the_floor_stays_dim_enough_to_be_a_backdrop(void)
 /* The clock boot_anim_grid_alpha()'s own ceiling and boot_anim_grid_whiten()
  * both ride - starts flat at 0 before the floor appears, climbs steadily
  * and monotonically, and reaches its top exactly at BOOT_ANIM_MS. */
-static void test_the_grid_climb_runs_the_whole_animation(void)
-{
+static void
+test_the_grid_climb_runs_the_whole_animation(void) {
     TEST_ASSERT_EQUAL_UINT8(0, boot_anim_grid_climb(0));
     TEST_ASSERT_EQUAL_UINT8(0, boot_anim_grid_climb(BOOT_ANIM_GRID_START_MS));
     TEST_ASSERT_EQUAL_UINT8(255, boot_anim_grid_climb(BOOT_ANIM_MS));
@@ -1166,8 +1093,7 @@ static void test_the_grid_climb_runs_the_whole_animation(void)
     uint8_t last = 0;
     for (uint32_t t = 0; t <= BOOT_ANIM_MS; t += 25) {
         const uint8_t v = boot_anim_grid_climb(t);
-        TEST_ASSERT_TRUE_MESSAGE(v >= last,
-            "the climb must never step backwards as time moves forward");
+        TEST_ASSERT_TRUE_MESSAGE(v >= last, "the climb must never step backwards as time moves forward");
         last = v;
     }
 }
@@ -1180,68 +1106,59 @@ static void test_the_grid_climb_runs_the_whole_animation(void)
  * brightness while only hue climbs. What must hold either way: opacity
  * never goes BACKWARDS. Strict-climb is still asserted where the seed
  * asks for one. */
-static void test_the_floor_opacity_never_falls_back(void)
-{
+static void
+test_the_floor_opacity_never_falls_back(void) {
     /* Ring 1's own fade-in (BOOT_ANIM_GRID_RING_MS + BOOT_ANIM_GRID_FADE_MS
      * after BOOT_ANIM_GRID_START_MS) is long done by either of these, plus
      * a little slack - so the only thing left changing its alpha between
      * them is the ceiling itself climbing, not "arrived" still ramping. */
-    const uint32_t early_ms = BOOT_ANIM_GRID_START_MS +
-        BOOT_ANIM_GRID_RING_MS + BOOT_ANIM_GRID_FADE_MS + 50;
+    const uint32_t early_ms = BOOT_ANIM_GRID_START_MS + BOOT_ANIM_GRID_RING_MS + BOOT_ANIM_GRID_FADE_MS + 50;
     const uint8_t early = boot_anim_grid_alpha(early_ms, 1);
-    const uint8_t late  = boot_anim_grid_alpha(BOOT_ANIM_MS, 1);
+    const uint8_t late = boot_anim_grid_alpha(BOOT_ANIM_MS, 1);
 
-    TEST_ASSERT_TRUE_MESSAGE(late >= early,
-        "the floor's own opacity fell back over the animation - a settled "
-        "ring should never gutter once it has arrived");
+    TEST_ASSERT_TRUE_MESSAGE(late >= early, "the floor's own opacity fell back over the animation - a settled "
+                                            "ring should never gutter once it has arrived");
 
     if (BOOT_ANIM_GRID_CEILING_MAX > BOOT_ANIM_GRID_MAX) {
-        TEST_ASSERT_TRUE_MESSAGE(late > early,
-            "the seed authors a ceiling above the floor's starting max, "
-            "so its opacity should visibly climb over the animation and "
-            "not just its colour");
+        TEST_ASSERT_TRUE_MESSAGE(late > early, "the seed authors a ceiling above the floor's starting max, "
+                                               "so its opacity should visibly climb over the animation and "
+                                               "not just its colour");
     }
 }
 
 /* Starts at 0 the moment the floor itself appears, climbs steadily, never
  * doubles back, and reaches its cap by the time everything else has faded
  * away. */
-static void test_the_floor_whitens_steadily_from_its_own_start_to_a_cap(void)
-{
+static void
+test_the_floor_whitens_steadily_from_its_own_start_to_a_cap(void) {
     TEST_ASSERT_EQUAL_UINT8(0, boot_anim_grid_whiten(BOOT_ANIM_GRID_START_MS));
-    TEST_ASSERT_EQUAL_UINT8(BOOT_ANIM_GRID_WHITEN_MAX,
-                            boot_anim_grid_whiten(BOOT_ANIM_MS));
+    TEST_ASSERT_EQUAL_UINT8(BOOT_ANIM_GRID_WHITEN_MAX, boot_anim_grid_whiten(BOOT_ANIM_MS));
 
     uint8_t last = 0;
     for (uint32_t t = BOOT_ANIM_GRID_START_MS; t <= BOOT_ANIM_MS; t += 25) {
         const uint8_t w = boot_anim_grid_whiten(t);
-        TEST_ASSERT_TRUE_MESSAGE(w >= last,
-            "whitening must never step backwards as time moves forward");
+        TEST_ASSERT_TRUE_MESSAGE(w >= last, "whitening must never step backwards as time moves forward");
         last = w;
     }
 }
 
-static void test_the_floor_colour_travels_with_time_and_distance(void)
-{
-    TEST_ASSERT_TRUE_MESSAGE(
-        boot_anim_grid_hue(BOOT_ANIM_GRID_HUE_MS / 4, 1) >
-        boot_anim_grid_hue(0, 1),
-        "the floor colour should move on as time passes");
-    TEST_ASSERT_TRUE_MESSAGE(
-        boot_anim_grid_hue(0, 2) > boot_anim_grid_hue(0, 1),
-        "rings should not all change together - the drift travels outward");
+static void
+test_the_floor_colour_travels_with_time_and_distance(void) {
+    TEST_ASSERT_TRUE_MESSAGE(boot_anim_grid_hue(BOOT_ANIM_GRID_HUE_MS / 4, 1) > boot_anim_grid_hue(0, 1),
+                             "the floor colour should move on as time passes");
+    TEST_ASSERT_TRUE_MESSAGE(boot_anim_grid_hue(0, 2) > boot_anim_grid_hue(0, 1),
+                             "rings should not all change together - the drift travels outward");
 
     /* A whole period brings it back round to where it started. */
-    TEST_ASSERT_EQUAL_UINT32(
-        boot_anim_hue_rgb(boot_anim_grid_hue(0, 1)),
-        boot_anim_hue_rgb(boot_anim_grid_hue(BOOT_ANIM_GRID_HUE_MS, 1)));
+    TEST_ASSERT_EQUAL_UINT32(boot_anim_hue_rgb(boot_anim_grid_hue(0, 1)),
+                             boot_anim_hue_rgb(boot_anim_grid_hue(BOOT_ANIM_GRID_HUE_MS, 1)));
 }
 
-static void test_the_axes_are_there_before_the_curve_starts_climbing(void)
-{
+static void
+test_the_axes_are_there_before_the_curve_starts_climbing(void) {
     TEST_ASSERT_EQUAL_UINT8(255, boot_anim_axis_reach(BOOT_ANIM_AXES_MS));
     TEST_ASSERT_TRUE_MESSAGE(BOOT_ANIM_AXES_MS <= BOOT_ANIM_PEN_START_MS,
-        "the axes should be drawn before anything is plotted against them");
+                             "the axes should be drawn before anything is plotted against them");
 }
 
 /* Colour */
@@ -1250,8 +1167,8 @@ static void test_the_axes_are_there_before_the_curve_starts_climbing(void)
  * at the bottom, the third somewhere between. That is what makes it a hue
  * wheel rather than a set of pastels, and it is what the panel is being shown
  * off with. */
-static void test_every_hue_is_fully_saturated(void)
-{
+static void
+test_every_hue_is_fully_saturated(void) {
     for (int hue = 0; hue < BOOT_ANIM_HUE_TURN; hue++) {
         const uint32_t rgb = boot_anim_hue_rgb(hue);
         const int r = (int)((rgb >> 16) & 0xFF);
@@ -1265,19 +1182,17 @@ static void test_every_hue_is_fully_saturated(void)
     }
 }
 
-static void test_the_hue_wheel_joins_up(void)
-{
-    TEST_ASSERT_EQUAL_UINT32(boot_anim_hue_rgb(0),
-                             boot_anim_hue_rgb(BOOT_ANIM_HUE_TURN));
-    TEST_ASSERT_EQUAL_UINT32(boot_anim_hue_rgb(5),
-                             boot_anim_hue_rgb(-BOOT_ANIM_HUE_TURN + 5));
+static void
+test_the_hue_wheel_joins_up(void) {
+    TEST_ASSERT_EQUAL_UINT32(boot_anim_hue_rgb(0), boot_anim_hue_rgb(BOOT_ANIM_HUE_TURN));
+    TEST_ASSERT_EQUAL_UINT32(boot_anim_hue_rgb(5), boot_anim_hue_rgb(-BOOT_ANIM_HUE_TURN + 5));
 }
 
 /* No step round the wheel may jump: a discontinuity at a sector boundary is
  * the classic mistake in this conversion, and it shows up as a hard band
  * across the middle of a gradient. */
-static void test_the_hue_wheel_has_no_seams(void)
-{
+static void
+test_the_hue_wheel_has_no_seams(void) {
     for (int hue = 0; hue < BOOT_ANIM_HUE_TURN; hue++) {
         const uint32_t a = boot_anim_hue_rgb(hue);
         const uint32_t b = boot_anim_hue_rgb(hue + 1);
@@ -1286,129 +1201,119 @@ static void test_the_hue_wheel_has_no_seams(void)
             const int ca = (int)((a >> shift) & 0xFF);
             const int cb = (int)((b >> shift) & 0xFF);
             const int step = ca > cb ? ca - cb : cb - ca;
-            TEST_ASSERT_TRUE_MESSAGE(step <= 1,
-                "a channel jumped between neighbouring hues - the wheel has a "
-                "seam at a sector boundary");
+            TEST_ASSERT_TRUE_MESSAGE(step <= 1, "a channel jumped between neighbouring hues - the wheel has a "
+                                                "seam at a sector boundary");
         }
     }
 }
 
-static void test_height_changes_the_hue(void)
-{
+static void
+test_height_changes_the_hue(void) {
     const boot_anim_stroke_t foot = boot_anim_stroke(0, 0);
-    const boot_anim_stroke_t top  = boot_anim_stroke(BOOT_ANIM_ONE, 0);
+    const boot_anim_stroke_t top = boot_anim_stroke(BOOT_ANIM_ONE, 0);
 
     TEST_ASSERT_TRUE_MESSAGE(top.hue - foot.hue > BOOT_ANIM_HUE_TURN / 2,
-        "the climb should turn most of the way round the wheel, so that "
-        "height reads as colour");
+                             "the climb should turn most of the way round the wheel, so that "
+                             "height reads as colour");
 }
 
 /* One pen's trail, sampled within the gap before the next pen contributes
  * anything - so this is that pen alone, fading. */
-static void test_a_pens_trail_fades_behind_it(void)
-{
+static void
+test_a_pens_trail_fades_behind_it(void) {
     const int32_t pen = BOOT_ANIM_ONE / 2;
     const int32_t step = BOOT_ANIM_TRAIL_GAP / 4;
 
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(255, boot_anim_stroke(pen, pen).glow,
-        "the stroke under the leading pen should be at full brightness");
+                                    "the stroke under the leading pen should be at full brightness");
 
     uint8_t last = 255;
     for (int32_t back = step; back < BOOT_ANIM_TRAIL_GAP; back += step) {
         const uint8_t glow = boot_anim_stroke(pen - back, pen).glow;
-        TEST_ASSERT_TRUE_MESSAGE(glow < last,
-            "the trail should fade with distance behind its pen");
+        TEST_ASSERT_TRUE_MESSAGE(glow < last, "the trail should fade with distance behind its pen");
         last = glow;
     }
 }
 
 /* Every pen is a bright point of its own, spaced back along the curve. That
  * is the whole difference from a single trail: several live bands at once. */
-static void test_every_pen_is_lit_at_its_own_position(void)
-{
+static void
+test_every_pen_is_lit_at_its_own_position(void) {
     const int32_t pen = BOOT_ANIM_ONE;
 
     for (int k = 0; k < BOOT_ANIM_TRAILS; k++) {
         const int32_t at = boot_anim_trail_pos(pen, k);
-        TEST_ASSERT_TRUE_MESSAGE(at > 0,
-            "a pen never sets off before the curve is finished");
+        TEST_ASSERT_TRUE_MESSAGE(at > 0, "a pen never sets off before the curve is finished");
         TEST_ASSERT_EQUAL_UINT8_MESSAGE(255, boot_anim_stroke(at, pen).glow,
-            "a pen was not at full brightness at its own position");
+                                        "a pen was not at full brightness at its own position");
     }
 }
 
 /* And each carries a different part of the wheel, which is what puts most of
  * the gamut on screen at once. */
-static void test_the_pens_carry_different_colours(void)
-{
+static void
+test_the_pens_carry_different_colours(void) {
     for (int a = 0; a < BOOT_ANIM_TRAILS; a++) {
         for (int b = a + 1; b < BOOT_ANIM_TRAILS; b++) {
-            TEST_ASSERT_TRUE_MESSAGE(
-                boot_anim_trail_hue(a) != boot_anim_trail_hue(b),
-                "two pens carry the same hue - they would read as one band");
+            TEST_ASSERT_TRUE_MESSAGE(boot_anim_trail_hue(a) != boot_anim_trail_hue(b),
+                                     "two pens carry the same hue - they would read as one band");
         }
     }
 
-    const int spread = boot_anim_trail_hue(BOOT_ANIM_TRAILS - 1) -
-                       boot_anim_trail_hue(0);
+    const int spread = boot_anim_trail_hue(BOOT_ANIM_TRAILS - 1) - boot_anim_trail_hue(0);
     TEST_ASSERT_TRUE_MESSAGE(spread > BOOT_ANIM_HUE_TURN / 2,
-        "the pens should be spread round the wheel, not bunched on one side");
+                             "the pens should be spread round the wheel, not bunched on one side");
 }
 
 /* A pen's hue is mixed in BY STRENGTH rather than switched to, so a piece of
  * curve part way behind a pen is part way toward that pen's colour. Without
  * this the bands snap between colours as the nearest pen changes. */
-static void test_a_pens_colour_arrives_gradually(void)
-{
+static void
+test_a_pens_colour_arrives_gradually(void) {
     const int32_t pen = BOOT_ANIM_ONE / 2;
 
     const int under = boot_anim_stroke(pen, pen).hue;
-    const int half  = boot_anim_stroke(pen - BOOT_ANIM_TRAIL_GAP / 2, pen).hue;
-    const int base  = boot_anim_stroke(pen - BOOT_ANIM_TRAIL_GAP + 1, pen).hue;
+    const int half = boot_anim_stroke(pen - BOOT_ANIM_TRAIL_GAP / 2, pen).hue;
+    const int base = boot_anim_stroke(pen - BOOT_ANIM_TRAIL_GAP + 1, pen).hue;
 
     TEST_ASSERT_TRUE_MESSAGE(under > half && half > base,
-        "a pen's hue should fade in with its trail rather than switch on");
+                             "a pen's hue should fade in with its trail rather than switch on");
 }
 
 /* Beyond the trail's reach, only the base is left - which is what the
  * finished picture is made of, and it must still be lit and still be
  * coloured. */
-static void test_settled_curve_keeps_its_colour(void)
-{
+static void
+test_settled_curve_keeps_its_colour(void) {
     const int32_t pen = BOOT_ANIM_ONE;
     const boot_anim_stroke_t settled = boot_anim_stroke(0, pen);
 
-    TEST_ASSERT_TRUE_MESSAGE(settled.glow > 96,
-        "the settled part of the curve should still be clearly lit");
-    TEST_ASSERT_TRUE_MESSAGE(settled.bloom < 64,
-        "the settled part should keep its hue rather than wash toward white");
+    TEST_ASSERT_TRUE_MESSAGE(settled.glow > 96, "the settled part of the curve should still be clearly lit");
+    TEST_ASSERT_TRUE_MESSAGE(settled.bloom < 64, "the settled part should keep its hue rather than wash toward white");
     TEST_ASSERT_EQUAL_UINT8(1, settled.width);
 }
 
 /* The bloom is capped well short of white on purpose - see boot_anim.h. A
  * trail that reaches white has no colour left exactly where it is brightest. */
-static void test_the_trail_never_washes_out_to_white(void)
-{
+static void
+test_the_trail_never_washes_out_to_white(void) {
     for (int32_t along = 0; along <= BOOT_ANIM_ONE; along += 64) {
         const boot_anim_stroke_t s = boot_anim_stroke(along, along);
-        TEST_ASSERT_TRUE_MESSAGE(s.bloom <= 128,
-            "the trail bloomed far enough toward white to lose its hue");
+        TEST_ASSERT_TRUE_MESSAGE(s.bloom <= 128, "the trail bloomed far enough toward white to lose its hue");
     }
 }
 
-static void test_the_live_end_of_the_curve_is_drawn_thicker(void)
-{
+static void
+test_the_live_end_of_the_curve_is_drawn_thicker(void) {
     const int32_t pen = BOOT_ANIM_ONE / 2;
 
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(BOOT_ANIM_FAT_WIDTH,
-        boot_anim_stroke(pen, pen).width,
-        "the stroke at the pen should be the fat one");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(BOOT_ANIM_FAT_WIDTH, boot_anim_stroke(pen, pen).width,
+                                    "the stroke at the pen should be the fat one");
 
     /* Just short of the next pen's position, where the leading pen's trail
      * has faded below the threshold and the next one has not arrived. */
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1,
-        boot_anim_stroke(pen - BOOT_ANIM_TRAIL_GAP + 1, pen).width,
-        "a stroke between two pens should be thin again");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1, boot_anim_stroke(pen - BOOT_ANIM_TRAIL_GAP + 1, pen).width,
+                                    "a stroke between two pens should be thin again");
 }
 
 /*
@@ -1427,11 +1332,10 @@ static void test_the_live_end_of_the_curve_is_drawn_thicker(void)
  * title_font and title_scale are a pair, and pinning the font while the
  * seed tunes the scale for a different one tests a combination that
  * never ships (e.g. a 51px cell at 5x, off the panel). */
-#define TITLE_FONT ((BOOT_ANIM_TITLE_FONT == BOOT_ANIM_TITLE_FONT_8X8) \
-                        ? &gfx_font_8x8 : &gfx_font_lmroman_40)
+#define TITLE_FONT ((BOOT_ANIM_TITLE_FONT == BOOT_ANIM_TITLE_FONT_8X8) ? &gfx_font_8x8 : &gfx_font_lmroman_40)
 
-static void test_the_wobble_is_exactly_flat_once_a_letter_has_arrived(void)
-{
+static void
+test_the_wobble_is_exactly_flat_once_a_letter_has_arrived(void) {
     TEST_ASSERT_EQUAL_INT(0, boot_anim_title_wobble(0));
     TEST_ASSERT_EQUAL_INT(0, boot_anim_title_wobble(-100));
 }
@@ -1444,8 +1348,8 @@ static void test_the_wobble_is_exactly_flat_once_a_letter_has_arrived(void)
  * total phase and the second half only the remaining quarter - comparing
  * the two halves measures exactly that, and needs just one crossing to
  * do it. */
-static void test_the_wobbles_oscillation_slows_as_it_lands(void)
-{
+static void
+test_the_wobbles_oscillation_slows_as_it_lands(void) {
     int early = 0, late = 0, prev_sign = 0;
 
     for (int32_t d = BOOT_ANIM_ONE; d >= 0; d -= 4) {
@@ -1463,12 +1367,10 @@ static void test_the_wobbles_oscillation_slows_as_it_lands(void)
         }
     }
 
-    TEST_ASSERT_TRUE_MESSAGE(early + late >= 1,
-        "the seed authors no wobble oscillation at all - "
-        "BOOT_ANIM_TITLE_TURNS_PHASE would have to be under half a turn");
-    TEST_ASSERT_TRUE_MESSAGE(early > late,
-        "the wobble should oscillate faster early in the flight than as "
-        "it lands - a chirp, not a constant vibration fading out");
+    TEST_ASSERT_TRUE_MESSAGE(early + late >= 1, "the seed authors no wobble oscillation at all - "
+                                                "BOOT_ANIM_TITLE_TURNS_PHASE would have to be under half a turn");
+    TEST_ASSERT_TRUE_MESSAGE(early > late, "the wobble should oscillate faster early in the flight than as "
+                                           "it lands - a chirp, not a constant vibration fading out");
 }
 
 /* "on its final position" now means the ARRIVAL wobble (see
@@ -1476,28 +1378,25 @@ static void test_the_wobbles_oscillation_slows_as_it_lands(void)
  * dead still - boot_anim_title_wave() keeps a small idle motion going
  * forever, by design, so a landed letter's y is BOOT_ANIM_TITLE_VIEW_Y plus
  * whatever that wave says at this instant, not VIEW_Y alone. */
-static void test_a_letter_lands_exactly_on_its_final_position(void)
-{
-    const uint32_t arrived = BOOT_ANIM_TITLE_START_MS +
-                             BOOT_ANIM_TITLE_FLIGHT_MS + 1000;
+static void
+test_a_letter_lands_exactly_on_its_final_position(void) {
+    const uint32_t arrived = BOOT_ANIM_TITLE_START_MS + BOOT_ANIM_TITLE_FLIGHT_MS + 1000;
 
     for (int i = 0; i < BOOT_ANIM_TITLE_LEN; i++) {
-        const boot_anim_title_pos_t p =
-            boot_anim_title_letter(TITLE_FONT, i, arrived);
-        const int expected_y = BOOT_ANIM_TITLE_VIEW_Y +
-                               boot_anim_title_wave(i, arrived);
+        const boot_anim_title_pos_t p = boot_anim_title_letter(TITLE_FONT, i, arrived);
+        const int expected_y = BOOT_ANIM_TITLE_VIEW_Y + boot_anim_title_wave(i, arrived);
         TEST_ASSERT_EQUAL_INT_MESSAGE(expected_y, p.y,
-            "a fully arrived letter should sit on the baseline plus "
-            "whatever the idle wave says, with no residual ARRIVAL wobble "
-            "left over");
+                                      "a fully arrived letter should sit on the baseline plus "
+                                      "whatever the idle wave says, with no residual ARRIVAL wobble "
+                                      "left over");
     }
 }
 
 /* Each letter starts later than the one before it - "one after another",
  * not all six arriving as a block. */
-static void test_letters_are_staggered_left_to_right(void)
-{
-    const uint32_t never = 0;   /* well before any letter has set off */
+static void
+test_letters_are_staggered_left_to_right(void) {
+    const uint32_t never = 0; /* well before any letter has set off */
 
     /* Not -1: an off-panel starting position is legitimately a large
      * negative number (BOOT_ANIM_TITLE_ENTRY_PX or so to the left of the
@@ -1505,11 +1404,9 @@ static void test_letters_are_staggered_left_to_right(void)
      * very first letter. */
     int last_x = -100000;
     for (int i = 0; i < BOOT_ANIM_TITLE_LEN; i++) {
-        const boot_anim_title_pos_t here =
-            boot_anim_title_letter(TITLE_FONT, i, never);
-        TEST_ASSERT_TRUE_MESSAGE(here.x > last_x,
-            "letters should be laid out left to right in their resting "
-            "row, whatever moment they are drawn at");
+        const boot_anim_title_pos_t here = boot_anim_title_letter(TITLE_FONT, i, never);
+        TEST_ASSERT_TRUE_MESSAGE(here.x > last_x, "letters should be laid out left to right in their resting "
+                                                  "row, whatever moment they are drawn at");
         last_x = here.x;
 
         if (i > 0) {
@@ -1519,27 +1416,21 @@ static void test_letters_are_staggered_left_to_right(void)
              * its own start, so checking AT i's start catches neither
              * letter moving - checking here is what actually exercises "an
              * earlier letter is further along"). */
-            const uint32_t mid = BOOT_ANIM_TITLE_START_MS +
-                                 (uint32_t)i * BOOT_ANIM_TITLE_STAGGER_MS -
-                                 BOOT_ANIM_TITLE_STAGGER_MS / 2;
-            const boot_anim_title_pos_t at =
-                boot_anim_title_letter(TITLE_FONT, i, mid);
-            const boot_anim_title_pos_t prev_at =
-                boot_anim_title_letter(TITLE_FONT, i - 1, mid);
-            TEST_ASSERT_TRUE_MESSAGE(prev_at.x >= at.x,
-                "an earlier letter should be at least as far along as a "
-                "later one at the same moment");
+            const uint32_t mid =
+                BOOT_ANIM_TITLE_START_MS + (uint32_t)i * BOOT_ANIM_TITLE_STAGGER_MS - BOOT_ANIM_TITLE_STAGGER_MS / 2;
+            const boot_anim_title_pos_t at = boot_anim_title_letter(TITLE_FONT, i, mid);
+            const boot_anim_title_pos_t prev_at = boot_anim_title_letter(TITLE_FONT, i - 1, mid);
+            TEST_ASSERT_TRUE_MESSAGE(prev_at.x >= at.x, "an earlier letter should be at least as far along as a "
+                                                        "later one at the same moment");
         }
     }
 }
 
-static void test_a_letter_starts_off_panel_to_the_left(void)
-{
-    const boot_anim_title_pos_t p =
-        boot_anim_title_letter(TITLE_FONT, 0, BOOT_ANIM_TITLE_START_MS);
-    TEST_ASSERT_TRUE_MESSAGE(p.x < 0,
-        "a letter should begin off the left edge of the panel, not merely "
-        "at it");
+static void
+test_a_letter_starts_off_panel_to_the_left(void) {
+    const boot_anim_title_pos_t p = boot_anim_title_letter(TITLE_FONT, 0, BOOT_ANIM_TITLE_START_MS);
+    TEST_ASSERT_TRUE_MESSAGE(p.x < 0, "a letter should begin off the left edge of the panel, not merely "
+                                      "at it");
 }
 
 /* Regression guard for the bug boot_anim_title_letter()'s own comment in
@@ -1549,28 +1440,23 @@ static void test_a_letter_starts_off_panel_to_the_left(void)
  * function gfx_font.h's own suite already pins against a synthetic
  * proportional font - rather than a second, hand-derived copy of the
  * arithmetic that could make the same mistake twice. */
-static void test_final_x_matches_the_advance_sum(void)
-{
+static void
+test_final_x_matches_the_advance_sum(void) {
     /* Any moment past every letter's own flight is fine: only the FINAL
      * resting x matters here, and test_a_letter_lands_exactly_on_its_final_
      * position() already covers y/wobble/wave separately. */
-    const uint32_t arrived = BOOT_ANIM_TITLE_START_MS +
-                             (uint32_t)BOOT_ANIM_TITLE_LEN *
-                                 BOOT_ANIM_TITLE_STAGGER_MS +
-                             BOOT_ANIM_TITLE_FLIGHT_MS + 1000;
+    const uint32_t arrived = BOOT_ANIM_TITLE_START_MS + (uint32_t)BOOT_ANIM_TITLE_LEN * BOOT_ANIM_TITLE_STAGGER_MS
+                             + BOOT_ANIM_TITLE_FLIGHT_MS + 1000;
 
     for (int i = 0; i < BOOT_ANIM_TITLE_LEN; i++) {
-        const boot_anim_title_pos_t p =
-            boot_anim_title_letter(TITLE_FONT, i, arrived);
-        const int prefix_w = gfx_font_text_width(TITLE_FONT, BOOT_ANIM_TITLE,
-                                                 i, BOOT_ANIM_TITLE_SCALE);
-        const int expected_x = BOOT_ANIM_TITLE_VIEW_X + prefix_w +
-                               i * BOOT_ANIM_TITLE_GAP;
+        const boot_anim_title_pos_t p = boot_anim_title_letter(TITLE_FONT, i, arrived);
+        const int prefix_w = gfx_font_text_width(TITLE_FONT, BOOT_ANIM_TITLE, i, BOOT_ANIM_TITLE_SCALE);
+        const int expected_x = BOOT_ANIM_TITLE_VIEW_X + prefix_w + i * BOOT_ANIM_TITLE_GAP;
         TEST_ASSERT_EQUAL_INT_MESSAGE(expected_x, p.x,
-            "a landed letter's x must be VIEW_X plus the ADVANCE SUM of "
-            "every letter before it (gfx_font_text_width(), proportional) "
-            "plus i*GAP of tracking - not a fixed per-letter cell, which "
-            "is only correct for a monospace font");
+                                      "a landed letter's x must be VIEW_X plus the ADVANCE SUM of "
+                                      "every letter before it (gfx_font_text_width(), proportional) "
+                                      "plus i*GAP of tracking - not a fixed per-letter cell, which "
+                                      "is only correct for a monospace font");
     }
 }
 
@@ -1581,8 +1467,8 @@ static void test_final_x_matches_the_advance_sum(void)
  * - BOOT_ANIM_TITLE_VIEW_W/H, not PANEL_W/PANEL_H, since
  * boot_anim_title_letter() lays the word out in that frame and a letter
  * kept inside it stays on the panel by construction. */
-static void test_the_title_stays_on_the_panel_once_visible(void)
-{
+static void
+test_the_title_stays_on_the_panel_once_visible(void) {
     /* The full glyph cell, not just its anchor corner - (x, y) is where a
      * glyph's cell BEGINS, so the cell's far edge is what actually has to
      * stay on the panel. cell_w and cell_h separately, not one shared
@@ -1593,21 +1479,17 @@ static void test_the_title_stays_on_the_panel_once_visible(void)
     const int cell_h = TITLE_FONT->cell_h * BOOT_ANIM_TITLE_SCALE;
 
     for (int i = 0; i < BOOT_ANIM_TITLE_LEN; i++) {
-        const uint32_t start = BOOT_ANIM_TITLE_START_MS +
-                               (uint32_t)i * BOOT_ANIM_TITLE_STAGGER_MS;
-        for (uint32_t t = start; t <= start + BOOT_ANIM_TITLE_FLIGHT_MS;
-             t += 15) {
-            const boot_anim_title_pos_t p =
-                boot_anim_title_letter(TITLE_FONT, i, t);
+        const uint32_t start = BOOT_ANIM_TITLE_START_MS + (uint32_t)i * BOOT_ANIM_TITLE_STAGGER_MS;
+        for (uint32_t t = start; t <= start + BOOT_ANIM_TITLE_FLIGHT_MS; t += 15) {
+            const boot_anim_title_pos_t p = boot_anim_title_letter(TITLE_FONT, i, t);
             if (p.x + cell_w < 0) {
-                continue;   /* still off-panel to the left - not visible yet */
+                continue; /* still off-panel to the left - not visible yet */
             }
             TEST_ASSERT_TRUE_MESSAGE(p.x + cell_w <= BOOT_ANIM_TITLE_VIEW_W,
-                "a letter drifted off the right edge of the viewer's frame");
-            TEST_ASSERT_TRUE_MESSAGE(
-                p.y >= 0 && p.y + cell_h < BOOT_ANIM_TITLE_VIEW_H,
-                "a letter's wobble carried it off the top or bottom of "
-                "the viewer's frame");
+                                     "a letter drifted off the right edge of the viewer's frame");
+            TEST_ASSERT_TRUE_MESSAGE(p.y >= 0 && p.y + cell_h < BOOT_ANIM_TITLE_VIEW_H,
+                                     "a letter's wobble carried it off the top or bottom of "
+                                     "the viewer's frame");
         }
     }
 }
@@ -1618,18 +1500,19 @@ static void test_the_title_stays_on_the_panel_once_visible(void)
  * also the only test standing between a future edit here and the exact
  * "up-right instead of down-right" bug this function was extracted to fix
  * (see its own comment in boot_anim.h for the panel-space derivation). */
-static void test_title_shadow_offset_turns_reader_frame_into_panel_frame(void)
-{
+static void
+test_title_shadow_offset_turns_reader_frame_into_panel_frame(void) {
     int dx, dy;
 
     /* The shipped default: 1 right, 1 down in the reader's frame. */
     boot_anim_title_shadow_offset(1, 1, &dx, &dy);
     TEST_ASSERT_EQUAL_INT_MESSAGE(-1, dx,
-        "1 pixel right in the reader's frame must turn into -1 on the "
-        "panel's own X - a +1 here is the up-right regression this "
-        "function exists to prevent");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(1, dy, "1 pixel down must turn into +1 "
-        "on the panel's own Y");
+                                  "1 pixel right in the reader's frame must turn into -1 on the "
+                                  "panel's own X - a +1 here is the up-right regression this "
+                                  "function exists to prevent");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, dy,
+                                  "1 pixel down must turn into +1 "
+                                  "on the panel's own Y");
 
     /* Pure right (no vertical component) must not move the panel X at
      * all - panel_x tracks -view_y, so it is only the DOWN component that
@@ -1649,8 +1532,8 @@ static void test_title_shadow_offset_turns_reader_frame_into_panel_frame(void)
     TEST_ASSERT_EQUAL_INT(0, dy);
 }
 
-void run_boot_anim_suite(void)
-{
+void
+run_boot_anim_suite(void) {
     RUN_TEST(test_the_curve_climbs_from_zero_to_the_top);
     RUN_TEST(test_the_curve_never_descends);
     RUN_TEST(test_the_curve_meets_the_axis_at_every_known_zero);

@@ -6,7 +6,7 @@
  * past 32,000 lines across 500+ tests. Shared fixtures and assertion helpers
  * live in suite_sand_common.{c,h} - see that header.
  */
-#include <math.h>   /* not every file in the split still needs atan2()/M_PI,
+#include <math.h> /* not every file in the split still needs atan2()/M_PI,
                      * but every file inherited suite_sand.c's own include
                      * block rather than being pruned by hand, to keep the
                      * split itself mechanical and low-risk */
@@ -21,13 +21,13 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-#include "unity.h"
 #include "suites.h"
+#include "unity.h"
 
 #include "sand.h"
 #include "sand_priv.h"
-#include "util/intmath.h"
 #include "suite_sand_common.h"
+#include "util/intmath.h"
 
 /* ===================================================================
  * Metal: dirt smelted by sustained heat - see
@@ -47,22 +47,22 @@
  * stone and dirt are denser than lava - see MAT_LAVA's own density
  * comment in material.c). A floor across the whole width means neither
  * powder cell has anywhere to fall. */
-static void lava_beside_dirt(uint8_t moisture)
-{
+static void
+lava_beside_dirt(uint8_t moisture) {
     fixture();
     for (int x = 0; x < W; x++) {
         sand_set(&s, x, H - 1, STONE);
     }
-    sand_set(&s, 2, H - 2, STONE);          /* boxes the lava on its left */
-    sand_set(&s, 3, H - 3, STONE);          /* and above */
+    sand_set(&s, 2, H - 2, STONE); /* boxes the lava on its left */
+    sand_set(&s, 3, H - 3, STONE); /* and above */
     sand_set(&s, 3, H - 2, CELL_MAKE(MAT_LAVA, MASS_MAX));
     sand_set(&s, 4, H - 2, CELL_SOIL(MAT_DIRT, 1, moisture));
 }
 
 /* Whether the dirt cell in lava_beside_dirt()'s scene has smelted into
  * metal specifically. */
-static bool dirt_cell_is_metal(void)
-{
+static bool
+dirt_cell_is_metal(void) {
     const cell_t c = sand_at(&s, 4, H - 2);
     return cell_is_extended(c) && CELL_VARIANT(c) == MATX_METAL;
 }
@@ -70,8 +70,8 @@ static bool dirt_cell_is_metal(void)
 /* Whether it has smelted at all - metal OR stone, reaction_t.flaw_to's
  * two possible dry-path outcomes (material.h). A bone-dry cell has no
  * moisture to spoil, so these are the only two a dry smelt can reach. */
-static bool dirt_cell_is_smelted(void)
-{
+static bool
+dirt_cell_is_smelted(void) {
     const cell_t c = sand_at(&s, 4, H - 2);
     return dirt_cell_is_metal() || CELL_MATERIAL(c) == MAT_STONE;
 }
@@ -81,8 +81,8 @@ static bool dirt_cell_is_smelted(void)
  * resolved, whichever of the three ways" check the wet-earth tests below
  * want: they exist to pin down the MOISTURE sequencing, not which of the
  * now three possible outcomes one particular seed happens to land on. */
-static bool dirt_cell_resolved(void)
-{
+static bool
+dirt_cell_resolved(void) {
     return CELL_MATERIAL(sand_at(&s, 4, H - 2)) != MAT_DIRT;
 }
 
@@ -90,14 +90,13 @@ static bool dirt_cell_resolved(void)
  * scenes below that scatter dirt across a row rather than pinning it to
  * lava_beside_dirt()'s one fixed cell. See dirt_cell_is_smelted()'s own
  * comment for why a dry smelt can land on either. */
-static int count_smelted_cells(void)
-{
+static int
+count_smelted_cells(void) {
     int n = 0;
     for (int y = 0; y < H; y++) {
         for (int x = 0; x < W; x++) {
             const cell_t c = sand_at(&s, x, y);
-            if ((cell_is_extended(c) && CELL_VARIANT(c) == MATX_METAL) ||
-                CELL_MATERIAL(c) == MAT_STONE) {
+            if ((cell_is_extended(c) && CELL_VARIANT(c) == MATX_METAL) || CELL_MATERIAL(c) == MAT_STONE) {
                 n++;
             }
         }
@@ -107,8 +106,8 @@ static int count_smelted_cells(void)
 
 /* Steps until lava_beside_dirt()'s dirt cell smelts (metal or stone), or
  * `budget` if it never does within that many steps. */
-static int steps_to_smelt(uint8_t moisture, int budget)
-{
+static int
+steps_to_smelt(uint8_t moisture, int budget) {
     lava_beside_dirt(moisture);
     for (int i = 0; i < budget; i++) {
         sand_step(&s, 0, 1000, 0);
@@ -119,16 +118,16 @@ static int steps_to_smelt(uint8_t moisture, int budget)
     return budget;
 }
 
-static void test_dry_dirt_beside_lava_smelts_into_metal_or_stone(void)
-{
+static void
+test_dry_dirt_beside_lava_smelts_into_metal_or_stone(void) {
     const int budget = 3000;
     const int steps = steps_to_smelt(0, budget);
 
     TEST_ASSERT_LESS_THAN_MESSAGE(budget, steps,
-        "dirt with no moisture in it, held against lava, must smelt into "
-        "metal or stone - the one reaction lava and dirt have, and the "
-        "whole reason MATX_METAL exists. Which of the two is "
-        "reaction_t.flaw_to's call (material.h); either counts here");
+                                  "dirt with no moisture in it, held against lava, must smelt into "
+                                  "metal or stone - the one reaction lava and dirt have, and the "
+                                  "whole reason MATX_METAL exists. Which of the two is "
+                                  "reaction_t.flaw_to's call (material.h); either counts here");
 }
 
 /* Saturated dirt must lose all SOIL_MOISTURE_MAX levels, one at a time,
@@ -138,11 +137,11 @@ static void test_dry_dirt_beside_lava_smelts_into_metal_or_stone(void)
  * independent RNG-driven rates drive the drying (heat and reaction_t.dries),
  * so a step-count comparison is a race that lands either side of even a
  * generous margin. */
-static void test_saturated_dirt_smelts_roughly_eight_times_slower(void)
-{
+static void
+test_saturated_dirt_smelts_roughly_eight_times_slower(void) {
     lava_beside_dirt(SOIL_MOISTURE_MAX);
 
-    int distinct_moisture_levels_seen = 1;   /* SOIL_MOISTURE_MAX itself */
+    int distinct_moisture_levels_seen = 1; /* SOIL_MOISTURE_MAX itself */
     int last_moisture = SOIL_MOISTURE_MAX;
     bool resolved = false;
     for (int i = 0; i < 8000 && !resolved; i++) {
@@ -162,9 +161,8 @@ static void test_saturated_dirt_smelts_roughly_eight_times_slower(void)
         }
     }
 
-    TEST_ASSERT_TRUE_MESSAGE(resolved,
-        "fixture check: saturated dirt must eventually resolve - smelt "
-        "into metal or stone, or spoil into sand - within the budget");
+    TEST_ASSERT_TRUE_MESSAGE(resolved, "fixture check: saturated dirt must eventually resolve - smelt "
+                                       "into metal or stone, or spoil into sand - within the budget");
 
     if (dirt_cell_is_smelted()) {
         /* SOIL_MOISTURE_MAX, not +1: moisture is sampled once per step, so
@@ -173,14 +171,13 @@ static void test_saturated_dirt_smelts_roughly_eight_times_slower(void)
          * Only checked on the smelted path; a cell that spoils
          * (reaction_t.spoils_to, material.h) leaves off partway by
          * design. */
-        TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(SOIL_MOISTURE_MAX,
-            distinct_moisture_levels_seen,
-            "saturated dirt that smelts (rather than spoiling) must pass "
-            "through very nearly every one of its SOIL_MOISTURE_MAX + 1 "
-            "moisture values - SOIL_MOISTURE_MAX itself down to bone dry "
-            "- one level at a time, before it can smelt at all. That is "
-            "what makes it roughly SOIL_MOISTURE_MAX + 1 times as much "
-            "work as bone-dry dirt's single conversion");
+        TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(SOIL_MOISTURE_MAX, distinct_moisture_levels_seen,
+                                                 "saturated dirt that smelts (rather than spoiling) must pass "
+                                                 "through very nearly every one of its SOIL_MOISTURE_MAX + 1 "
+                                                 "moisture values - SOIL_MOISTURE_MAX itself down to bone dry "
+                                                 "- one level at a time, before it can smelt at all. That is "
+                                                 "what makes it roughly SOIL_MOISTURE_MAX + 1 times as much "
+                                                 "work as bone-dry dirt's single conversion");
     } else {
         /* Spoiled instead - the common path at spoils_chance 77/256,
          * unconditional (material.h). No lower bound here: a cell can spoil
@@ -199,8 +196,8 @@ static void test_saturated_dirt_smelts_roughly_eight_times_slower(void)
  * whenever steam does happen: it can never land on the same step the cell
  * resolves, nor after (spoiling and steaming-while-draining are mutually
  * exclusive - try_heat_transform()). */
-static void test_watered_dirt_steaming_precedes_resolving_when_it_happens(void)
-{
+static void
+test_watered_dirt_steaming_precedes_resolving_when_it_happens(void) {
     lava_beside_dirt(SOIL_MOISTURE_MAX);
 
     int steamed_at = -1, resolved_at = -1;
@@ -218,10 +215,9 @@ static void test_watered_dirt_steaming_precedes_resolving_when_it_happens(void)
         }
     }
 
-    TEST_ASSERT_TRUE_MESSAGE(resolved_at >= 0,
-        "fixture check: it must eventually resolve");
+    TEST_ASSERT_TRUE_MESSAGE(resolved_at >= 0, "fixture check: it must eventually resolve");
     if (steamed_at < 0) {
-        return;   /* did not steam this run - still a common outcome at
+        return; /* did not steam this run - still a common outcome at
                    * spoils_chance 77/256, though no longer the majority one,
                    * and there is nothing left to assert an ORDER over */
     }
@@ -229,10 +225,10 @@ static void test_watered_dirt_steaming_precedes_resolving_when_it_happens(void)
      * function's own top comment) - resolving strictly later, whichever
      * of the three ways this cell eventually resolves. */
     TEST_ASSERT_LESS_THAN_MESSAGE(resolved_at, steamed_at,
-        "when watered dirt against lava does steam, that must happen "
-        "strictly BEFORE the cell resolves - spoiling and steaming are "
-        "mutually exclusive outcomes of the same roll, and a resolved "
-        "cell is no longer dirt so it can never steam again afterward");
+                                  "when watered dirt against lava does steam, that must happen "
+                                  "strictly BEFORE the cell resolves - spoiling and steaming are "
+                                  "mutually exclusive outcomes of the same roll, and a resolved "
+                                  "cell is no longer dirt so it can never steam again afterward");
 }
 
 /* Proves the steam path is still live - a single-cell scene is too likely
@@ -242,25 +238,25 @@ static void test_watered_dirt_steaming_precedes_resolving_when_it_happens(void)
  * P(never steams before resolving) is the chance its first roll spoils
  * outright, ~=0.918, so P(none of STEAM_TEST_PODS ever steam) is
  * 0.918^STEAM_TEST_PODS - with 200 pods, about 1 in 27 million. */
-#define STEAM_TEST_PODS 200
+#define STEAM_TEST_PODS    200
 #define STEAM_TEST_SPACING 4
-#define STEAM_TEST_W (2 + STEAM_TEST_SPACING * STEAM_TEST_PODS + 2)
-#define STEAM_TEST_H 6
-static void test_wet_dirt_can_still_steam_before_spoiling_at_least_sometimes(void)
-{
+#define STEAM_TEST_W       (2 + STEAM_TEST_SPACING * STEAM_TEST_PODS + 2)
+#define STEAM_TEST_H       6
+
+static void
+test_wet_dirt_can_still_steam_before_spoiling_at_least_sometimes(void) {
     /* HEAP, not static file scope - see drop_impulse_buf's own comment
      * above for why this file's static test fixtures cannot share the
      * framebuffer's memory budget. */
-    uint8_t *steam_cells = malloc((size_t)STEAM_TEST_W * STEAM_TEST_H);
-    TEST_ASSERT_NOT_NULL_MESSAGE(steam_cells,
-        "wet-dirt steam-pods grid must fit in what the framebuffer leaves");
+    uint8_t* steam_cells = malloc((size_t)STEAM_TEST_W * STEAM_TEST_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(steam_cells, "wet-dirt steam-pods grid must fit in what the framebuffer leaves");
     sand_t st;
     sand_init(&st, steam_cells, STEAM_TEST_W, STEAM_TEST_H, 3u);
     sand_set_mobility(&st, 0);
 
     const int y = 2;
     for (int x = 0; x < STEAM_TEST_W; x++) {
-        sand_set(&st, x, y + 1, STONE);        /* one shared floor */
+        sand_set(&st, x, y + 1, STONE); /* one shared floor */
     }
     for (int k = 0; k < STEAM_TEST_PODS; k++) {
         const int lava_x = 2 + STEAM_TEST_SPACING * k;
@@ -290,14 +286,13 @@ static void test_wet_dirt_can_still_steam_before_spoiling_at_least_sometimes(voi
      * above. */
     free(steam_cells);
 
-    TEST_ASSERT_TRUE_MESSAGE(steamed_any,
-        "at least one of many saturated dirt cells against lava must "
-        "still steam before spoiling - the drain-then-steam path in "
-        "try_heat_transform() must still be reachable even though "
-        "spoils_chance 77/256 leaves it common but not guaranteed; if this "
-        "never fires across STEAM_TEST_PODS independent attempts, either "
-        "spoils_chance regressed to 255 (unconditional, path dead) or the "
-        "steam emit itself broke");
+    TEST_ASSERT_TRUE_MESSAGE(steamed_any, "at least one of many saturated dirt cells against lava must "
+                                          "still steam before spoiling - the drain-then-steam path in "
+                                          "try_heat_transform() must still be reachable even though "
+                                          "spoils_chance 77/256 leaves it common but not guaranteed; if this "
+                                          "never fires across STEAM_TEST_PODS independent attempts, either "
+                                          "spoils_chance regressed to 255 (unconditional, path dead) or the "
+                                          "steam emit itself broke");
 }
 
 /* reaction_t.spoils_to (material.h) actually fires rather than being a field
@@ -305,25 +300,24 @@ static void test_wet_dirt_can_still_steam_before_spoiling_at_least_sometimes(voi
  * several independent pockets keep the result from hanging on which exact
  * cell it happened to be. */
 #define SPOILS_TEST_PODS 6
-static void test_wet_dirt_can_spoil_into_sand_instead_of_smelting(void)
-{
+
+static void
+test_wet_dirt_can_spoil_into_sand_instead_of_smelting(void) {
     wide_cells = malloc((size_t)WIDE_W * WIDE_H);
-    TEST_ASSERT_NOT_NULL_MESSAGE(wide_cells,
-        "wet-dirt-spoils grid must fit in what the framebuffer leaves");
+    TEST_ASSERT_NOT_NULL_MESSAGE(wide_cells, "wet-dirt-spoils grid must fit in what the framebuffer leaves");
     sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 3u);
     sand_set_mobility(&wide, 0);
 
     const int y = 2;
     for (int x = 0; x < WIDE_W; x++) {
-        sand_set(&wide, x, y + 1, STONE);     /* one shared floor */
+        sand_set(&wide, x, y + 1, STONE); /* one shared floor */
     }
     for (int k = 0; k < SPOILS_TEST_PODS; k++) {
         const int lava_x = 2 + 4 * k;
         sand_set(&wide, lava_x - 1, y, STONE);
         sand_set(&wide, lava_x, y - 1, STONE);
         sand_set(&wide, lava_x, y, CELL_MAKE(MAT_LAVA, MASS_MAX));
-        sand_set(&wide, lava_x + 1, y,
-                 CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+        sand_set(&wide, lava_x + 1, y, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
     }
 
     bool spoiled = false;
@@ -340,12 +334,11 @@ static void test_wet_dirt_can_spoil_into_sand_instead_of_smelting(void)
      * above. */
     free(wide_cells);
 
-    TEST_ASSERT_TRUE_MESSAGE(spoiled,
-        "at least one of several saturated dirt cells against lava must "
-        "spoil into sand instead of smelting - reaction_t.spoils_to "
-        "(material.h) exists precisely so watering ore before it fires is "
-        "a real risk; if this never fires, spoils_to/spoils_chance "
-        "regressed to zero or the gate is wrong");
+    TEST_ASSERT_TRUE_MESSAGE(spoiled, "at least one of several saturated dirt cells against lava must "
+                                      "spoil into sand instead of smelting - reaction_t.spoils_to "
+                                      "(material.h) exists precisely so watering ore before it fires is "
+                                      "a real risk; if this never fires, spoils_to/spoils_chance "
+                                      "regressed to zero or the gate is wrong");
 }
 
 /* reaction_t.flaw_to (material.h) fires at all, and so does metal itself,
@@ -356,25 +349,25 @@ static void test_wet_dirt_can_spoil_into_sand_instead_of_smelting(void)
  * HEAT_FLAW_CLUMP_TEST reroll opportunities; at flaw_chance 220/256 the
  * chance none ever flaws, or all do, is vanishingly small either way - a
  * real regression, not bad luck. */
-#define FLAW_TEST_PODS 400
+#define FLAW_TEST_PODS    400
 #define FLAW_TEST_SPACING 4
-#define FLAW_TEST_W (2 + FLAW_TEST_SPACING * FLAW_TEST_PODS + 2)
-#define FLAW_TEST_H 6
-static void test_dry_dirt_smelting_reaches_both_metal_and_stone(void)
-{
+#define FLAW_TEST_W       (2 + FLAW_TEST_SPACING * FLAW_TEST_PODS + 2)
+#define FLAW_TEST_H       6
+
+static void
+test_dry_dirt_smelting_reaches_both_metal_and_stone(void) {
     /* HEAP, not static file scope - see drop_impulse_buf's own comment
      * above for why this file's static test fixtures cannot share the
      * framebuffer's memory budget. */
-    uint8_t *flaw_cells = malloc((size_t)FLAW_TEST_W * FLAW_TEST_H);
-    TEST_ASSERT_NOT_NULL_MESSAGE(flaw_cells,
-        "dry-dirt flaw-pods grid must fit in what the framebuffer leaves");
+    uint8_t* flaw_cells = malloc((size_t)FLAW_TEST_W * FLAW_TEST_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(flaw_cells, "dry-dirt flaw-pods grid must fit in what the framebuffer leaves");
     sand_t flaw;
     sand_init(&flaw, flaw_cells, FLAW_TEST_W, FLAW_TEST_H, 3u);
     sand_set_mobility(&flaw, 0);
 
     const int y = 2;
     for (int x = 0; x < FLAW_TEST_W; x++) {
-        sand_set(&flaw, x, y + 1, STONE);     /* one shared floor */
+        sand_set(&flaw, x, y + 1, STONE); /* one shared floor */
     }
     for (int k = 0; k < FLAW_TEST_PODS; k++) {
         const int lava_x = 2 + FLAW_TEST_SPACING * k;
@@ -405,17 +398,17 @@ static void test_dry_dirt_smelting_reaches_both_metal_and_stone(void)
     free(flaw_cells);
 
     TEST_ASSERT_GREATER_THAN_MESSAGE(0, stone_count,
-        "at least one of many bone-dry dirt cells against lava must come "
-        "out as stone instead of metal - reaction_t.flaw_to/flaw_chance "
-        "(material.h) exists precisely so a smelt is not a guaranteed "
-        "clean bar; if this never fires across FLAW_TEST_PODS independent "
-        "attempts, flaw_to/flaw_chance regressed to zero");
+                                     "at least one of many bone-dry dirt cells against lava must come "
+                                     "out as stone instead of metal - reaction_t.flaw_to/flaw_chance "
+                                     "(material.h) exists precisely so a smelt is not a guaranteed "
+                                     "clean bar; if this never fires across FLAW_TEST_PODS independent "
+                                     "attempts, flaw_to/flaw_chance regressed to zero");
     TEST_ASSERT_GREATER_THAN_MESSAGE(0, metal_count,
-        "at least one of many bone-dry dirt cells against lava must still "
-        "come out as metal - flaw_chance 220/256 makes it the RARE "
-        "outcome, not an impossible one; if this never fires across "
-        "FLAW_TEST_PODS independent attempts, flaw_chance is effectively "
-        "255 (metal can no longer exist) rather than merely high");
+                                     "at least one of many bone-dry dirt cells against lava must still "
+                                     "come out as metal - flaw_chance 220/256 makes it the RARE "
+                                     "outcome, not an impossible one; if this never fires across "
+                                     "FLAW_TEST_PODS independent attempts, flaw_chance is effectively "
+                                     "255 (metal can no longer exist) rather than merely high");
 }
 
 /* Smelting is keyed on cell_is_burning() (reaction_t.burns), not on
@@ -425,13 +418,13 @@ static void test_dry_dirt_smelting_reaches_both_metal_and_stone(void)
  *
  * Fire rises and burns out in around forty steps (MAT_FIRE's decay), so it
  * has to be re-placed every step rather than dropped once. */
-static void test_a_held_flame_smelts_dirt_as_lava_does(void)
-{
+static void
+test_a_held_flame_smelts_dirt_as_lava_does(void) {
     fixture();
     for (int x = 0; x < W; x++) {
         sand_set(&s, x, H - 1, STONE);
     }
-    sand_set(&s, 4, H - 2, CELL_SOIL(MAT_DIRT, 1, 0));   /* bone dry */
+    sand_set(&s, 4, H - 2, CELL_SOIL(MAT_DIRT, 1, 0)); /* bone dry */
 
     const int budget = 3000;
     int smelted = 0;
@@ -443,12 +436,11 @@ static void test_a_held_flame_smelts_dirt_as_lava_does(void)
         smelted = count_smelted_cells() > 0;
     }
 
-    TEST_ASSERT_TRUE_MESSAGE(smelted,
-        "an ordinary flame held against dirt must smelt it into metal or "
-        "stone exactly as lava does - the reaction is keyed on "
-        "cell_is_burning(), not on CELL_MATERIAL(n) == MAT_LAVA, and "
-        "every other smelting test in this file only ever reaches for "
-        "lava as its heat source");
+    TEST_ASSERT_TRUE_MESSAGE(smelted, "an ordinary flame held against dirt must smelt it into metal or "
+                                      "stone exactly as lava does - the reaction is keyed on "
+                                      "cell_is_burning(), not on CELL_MATERIAL(n) == MAT_LAVA, and "
+                                      "every other smelting test in this file only ever reaches for "
+                                      "lava as its heat source");
 }
 
 /* The conducted path is as general as the contact path: dirt on the far
@@ -459,18 +451,18 @@ static void test_a_held_flame_smelts_dirt_as_lava_does(void)
  *
  * Real per-material `conducts` applies, so this is stone's own 220-in-256
  * figure attenuating across a one-cell wall, not a forced 255. */
-static void test_heat_through_a_stone_wall_smelts_the_dirt_beyond_it(void)
-{
+static void
+test_heat_through_a_stone_wall_smelts_the_dirt_beyond_it(void) {
     fixture();
     sand_clear(&s);
     sand_set_conduction(&s, SAND_CONDUCTION_PER_MATERIAL);
 
     for (int x = 0; x < W; x++) {
         sand_set(&s, x, H - 1, STONE);
-        sand_set(&s, x, H - 3, STONE);             /* the wall */
+        sand_set(&s, x, H - 3, STONE); /* the wall */
     }
     for (int x = 1; x < W - 1; x++) {
-        sand_set(&s, x, H - 4, CELL_SOIL(MAT_DIRT, 1, 0));   /* bone dry,
+        sand_set(&s, x, H - 4, CELL_SOIL(MAT_DIRT, 1, 0)); /* bone dry,
                                                                * far side */
     }
 
@@ -494,24 +486,22 @@ static void test_heat_through_a_stone_wall_smelts_the_dirt_beyond_it(void)
          * the fire and the dirt) staying MAT_STONE means dirt's one
          * downward neighbour was stone on every step, never flame. */
         for (int x = 0; x < W; x++) {
-            TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STONE,
-                CELL_MATERIAL(sand_at(&s, x, H - 3)),
-                "the wall must stay intact and unlit - if it changes, "
-                "either the fire reached it directly or the far-side hit "
-                "is landing on the conductor instead of past it, and "
-                "either way this test can no longer tell a conducted "
-                "smelt from a contact one");
+            TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STONE, CELL_MATERIAL(sand_at(&s, x, H - 3)),
+                                          "the wall must stay intact and unlit - if it changes, "
+                                          "either the fire reached it directly or the far-side hit "
+                                          "is landing on the conductor instead of past it, and "
+                                          "either way this test can no longer tell a conducted "
+                                          "smelt from a contact one");
         }
     }
 
-    TEST_ASSERT_TRUE_MESSAGE(smelted,
-        "dirt behind a plain stone wall must smelt into metal or stone "
-        "from conducted heat alone - conduct_heat() (sand_reactions.c) "
-        "applies "
-        "try_heat_transform() to whatever it finds past the far side of "
-        "a conductor run exactly as contact does, and that path has "
-        "otherwise only ever been proven for a metal conductor grown by "
-        "smelting itself, never for an ordinary wall");
+    TEST_ASSERT_TRUE_MESSAGE(smelted, "dirt behind a plain stone wall must smelt into metal or stone "
+                                      "from conducted heat alone - conduct_heat() (sand_reactions.c) "
+                                      "applies "
+                                      "try_heat_transform() to whatever it finds past the far side of "
+                                      "a conductor run exactly as contact does, and that path has "
+                                      "otherwise only ever been proven for a metal conductor grown by "
+                                      "smelting itself, never for an ordinary wall");
 }
 
 /* Guards conduct_heat()'s depth-0 re-test of `conducts`. All sixteen extended
@@ -521,12 +511,12 @@ static void test_heat_through_a_stone_wall_smelts_the_dirt_beyond_it(void)
  *
  * Fire and root are re-placed each step so burn-out cannot end the scene
  * early and retire the assertion quietly. */
-static void test_a_non_conducting_extended_cell_passes_no_heat_beyond_itself(void)
-{
+static void
+test_a_non_conducting_extended_cell_passes_no_heat_beyond_itself(void) {
     fixture();
     sand_clear(&s);
     sand_set_conduction(&s, 255);
-    sand_set_mobility(&s, 0);   /* fire is a gas - pin it beside the root */
+    sand_set_mobility(&s, 0); /* fire is a gas - pin it beside the root */
 
     const int y = H / 2;
     sand_set(&s, 4, y, WOOD);
@@ -537,17 +527,17 @@ static void test_a_non_conducting_extended_cell_passes_no_heat_beyond_itself(voi
         sand_step(&s, 0, 1000, 0);
 
         TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_ROOT), sand_at(&s, 3, y),
-            "the root must survive each step - if it burns away the fire is "
-            "touching the wood directly and this test can no longer tell a "
-            "conducted ignition from a contact one");
+                                        "the root must survive each step - if it burns away the fire is "
+                                        "touching the wood directly and this test can no longer tell a "
+                                        "conducted ignition from a contact one");
         /* Byte-exact, not CELL_MATERIAL: wood's `ignites_to` is MAT_WOOD, so
          * lit wood keeps its own material nibble and only the code changes -
          * a material-only assertion here reads PASS on an ignited cell. */
         TEST_ASSERT_EQUAL_UINT8_MESSAGE(WOOD, sand_at(&s, 4, y),
-            "wood two cells from the fire, behind a root that conducts "
-            "nothing, must never ignite - conduct_heat() reaching it means "
-            "the PAIR_CONDUCTS reject let an extended cell through and "
-            "nothing re-tested its real `conducts` before the roll");
+                                        "wood two cells from the fire, behind a root that conducts "
+                                        "nothing, must never ignite - conduct_heat() reaching it means "
+                                        "the PAIR_CONDUCTS reject let an extended cell through and "
+                                        "nothing re-tested its real `conducts` before the roll");
     }
 }
 
@@ -556,8 +546,8 @@ static void test_a_non_conducting_extended_cell_passes_no_heat_beyond_itself(voi
  * must gate the new branch out entirely and sand -> glass must be
  * completely unaffected by it - see material.h's own comment on `dries`
  * for why that field, and not a new one, is what the branch tests. */
-static void test_sand_still_becomes_glass_beside_the_new_dirt_branch(void)
-{
+static void
+test_sand_still_becomes_glass_beside_the_new_dirt_branch(void) {
     fixture();
     for (int x = 0; x < W; x++) {
         sand_set(&s, x, H - 1, STONE);
@@ -577,10 +567,9 @@ static void test_sand_still_becomes_glass_beside_the_new_dirt_branch(void)
         made = count_cells_of(MAT_GLASS) > 0;
     }
 
-    TEST_ASSERT_TRUE_MESSAGE(made,
-        "sand -> glass must still work after the wet-dirt branch was "
-        "added to try_heat_transform() - sand has no `dries`, so the new "
-        "branch must never catch it");
+    TEST_ASSERT_TRUE_MESSAGE(made, "sand -> glass must still work after the wet-dirt branch was "
+                                   "added to try_heat_transform() - sand has no `dries`, so the new "
+                                   "branch must never catch it");
 }
 
 /* Steps until MAT_STEAM appears past a `wall_len`-cell wall of `wall_cell`.
@@ -588,15 +577,14 @@ static void test_sand_still_becomes_glass_beside_the_new_dirt_branch(void)
  * would cap how many attempts a slow conductor gets and confuse "does it
  * conduct" with "did the fire last long enough to find out". Lava never
  * decays, so the only variable left is the per-material `conducts` figure. */
-static int steps_to_boil_through(int wall_len, cell_t wall_cell, int budget)
-{
+static int
+steps_to_boil_through(int wall_len, cell_t wall_cell, int budget) {
     /* Self-contained, like steps_to_boil() above: malloc, use, free, all
      * within one call - the test below calls this twice and gets a
      * fresh grid each time. */
     wide_cells = malloc((size_t)WIDE_W * WIDE_H);
-    TEST_ASSERT_NOT_NULL_MESSAGE(wide_cells,
-        "steps-to-boil-through grid must fit in what the framebuffer "
-        "leaves");
+    TEST_ASSERT_NOT_NULL_MESSAGE(wide_cells, "steps-to-boil-through grid must fit in what the framebuffer "
+                                             "leaves");
     sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 3u);
     sand_set_mobility(&wide, 0);
     /* This measures CONDUCTION speed, not water's own new resistance to
@@ -605,12 +593,12 @@ static int steps_to_boil_through(int wall_len, cell_t wall_cell, int budget)
     sand_set_boils(&wide, 255);
 
     const int y = 2;
-    const int lava_x  = 1;
+    const int lava_x = 1;
     const int wall_x0 = lava_x + 1;
     const int water_x = wall_x0 + wall_len;
 
     sand_set(&wide, water_x - 1, y + 1, STONE);
-    sand_set(&wide, water_x,     y + 1, STONE);
+    sand_set(&wide, water_x, y + 1, STONE);
     sand_set(&wide, water_x + 1, y + 1, STONE);
 
     /* Boxes the lava on every side but the one facing the wall - INCLUDING
@@ -650,24 +638,23 @@ static int steps_to_boil_through(int wall_len, cell_t wall_cell, int budget)
  * CONDUCT_REACH cells on average, against stone and glass's 220 - see
  * Metal.md's attenuation table. Extended materials appear in no benchmark
  * scene, so this shared short budget is the only guard on that cost. */
-static void test_a_metal_run_conducts_further_than_a_stone_one(void)
-{
+static void
+test_a_metal_run_conducts_further_than_a_stone_one(void) {
     const int wall_len = 20;
     const int budget = 10;
 
-    const int metal = steps_to_boil_through(wall_len, MATX(MATX_METAL),
-                                            budget);
+    const int metal = steps_to_boil_through(wall_len, MATX(MATX_METAL), budget);
     const int stone = steps_to_boil_through(wall_len, STONE, budget);
 
     TEST_ASSERT_LESS_THAN_MESSAGE(budget, metal,
-        "a 20-cell metal wall must conduct well within a ten-step "
-        "budget - conducts 248 puts the mean walk at roughly "
-        "CONDUCT_REACH (32), well past this depth");
+                                  "a 20-cell metal wall must conduct well within a ten-step "
+                                  "budget - conducts 248 puts the mean walk at roughly "
+                                  "CONDUCT_REACH (32), well past this depth");
     TEST_ASSERT_EQUAL_INT_MESSAGE(budget, stone,
-        "a 20-cell stone wall must NOT conduct within the same ten-step "
-        "budget - at conducts 220 the walk needs on the order of twenty "
-        "steps on average to get through this depth, an order of "
-        "magnitude slower than metal");
+                                  "a 20-cell stone wall must NOT conduct within the same ten-step "
+                                  "budget - at conducts 220 the walk needs on the order of twenty "
+                                  "steps on average to get through this depth, an order of "
+                                  "magnitude slower than metal");
 }
 
 /* A lava source grows its own metal rod out of a dirt bed and stops
@@ -677,15 +664,15 @@ static void test_a_metal_run_conducts_further_than_a_stone_one(void)
  * long so a capped-out rod is caught. Conduction forced to 255 so only
  * dirt's heat_chance gates growth. Measured at 33, not 32 cells: the walk
  * can complete one more cell after a run already hits the cap. */
-static void test_the_rod_terminates_at_conduct_reach_not_the_far_wall(void)
-{
+static void
+test_the_rod_terminates_at_conduct_reach_not_the_far_wall(void) {
     enum { ROD_W = CONDUCT_REACH_TEST * 2, ROD_H = 6 };
+
     /* HEAP, not static file scope - see drop_impulse_buf's own comment
      * above for why this file's static test fixtures cannot share the
      * framebuffer's memory budget. */
-    uint8_t *rod_cells = malloc((size_t)ROD_W * ROD_H);
-    TEST_ASSERT_NOT_NULL_MESSAGE(rod_cells,
-        "metal-rod grid must fit in what the framebuffer leaves");
+    uint8_t* rod_cells = malloc((size_t)ROD_W * ROD_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(rod_cells, "metal-rod grid must fit in what the framebuffer leaves");
     sand_t rod;
     sand_init(&rod, rod_cells, ROD_W, ROD_H, 3u);
     sand_set_mobility(&rod, 0);
@@ -755,18 +742,18 @@ static void test_the_rod_terminates_at_conduct_reach_not_the_far_wall(void)
     free(rod_cells);
 
     TEST_ASSERT_GREATER_THAN_MESSAGE(CONDUCT_REACH_TEST - 4, smelted_len,
-        "the rod must actually reach close to CONDUCT_REACH - if this "
-        "fails the growth mechanism itself is broken, not merely capped "
-        "in the wrong place");
+                                     "the rod must actually reach close to CONDUCT_REACH - if this "
+                                     "fails the growth mechanism itself is broken, not merely capped "
+                                     "in the wrong place");
     TEST_ASSERT_LESS_OR_EQUAL_INT_MESSAGE(CONDUCT_REACH_TEST + 2, smelted_len,
-        "the rod must stop at (approximately) CONDUCT_REACH - a lava "
-        "source growing its own metal-or-stone bar out of a dirt bed is "
-        "meant to be self-limiting, not to run until it hits whatever "
-        "wall the player happened to draw");
+                                          "the rod must stop at (approximately) CONDUCT_REACH - a lava "
+                                          "source growing its own metal-or-stone bar out of a dirt bed is "
+                                          "meant to be self-limiting, not to run until it hits whatever "
+                                          "wall the player happened to draw");
     TEST_ASSERT_LESS_THAN_MESSAGE(bed_len, smelted_len,
-        "and it must stop well short of the far end of the bed - this "
-        "bed is twice CONDUCT_REACH long specifically so a rod that "
-        "failed to cap would be caught reaching the far wall instead");
+                                  "and it must stop well short of the far end of the bed - this "
+                                  "bed is twice CONDUCT_REACH long specifically so a rod that "
+                                  "failed to cap would be caught reaching the far wall instead");
 
     /* No stone_count > 0 assertion, on purpose: the clump mechanism re-rolls
      * only once per HEAT_FLAW_CLUMP_TEST triggers, so a ~30-cell rod gets
@@ -786,22 +773,21 @@ static void test_the_rod_terminates_at_conduct_reach_not_the_far_wall(void)
             runs++;
         }
     }
-    const int max_runs =
-        (smelted_len + HEAT_FLAW_CLUMP_TEST - 1) / HEAT_FLAW_CLUMP_TEST;
+    const int max_runs = (smelted_len + HEAT_FLAW_CLUMP_TEST - 1) / HEAT_FLAW_CLUMP_TEST;
     TEST_ASSERT_LESS_OR_EQUAL_INT_MESSAGE(max_runs, runs,
-        "stone must appear in CLUMPED runs along the rod, not scattered "
-        "one cell at a time - the number of maximal metal/stone stretches "
-        "cannot exceed ceil(smelted_len / HEAT_FLAW_CLUMP), which is what "
-        "the rolling-modulo mechanism in try_heat_transform() guarantees "
-        "by construction");
+                                          "stone must appear in CLUMPED runs along the rod, not scattered "
+                                          "one cell at a time - the number of maximal metal/stone stretches "
+                                          "cannot exceed ceil(smelted_len / HEAT_FLAW_CLUMP), which is what "
+                                          "the rolling-modulo mechanism in try_heat_transform() guarantees "
+                                          "by construction");
 }
 
 /* A GLASS-walled vat with `floor_rows` of `floor_cell` sitting on a
  * GLASS floor, topped with `acid_rows` of acid - the same box
  * acid_tank() builds above, generalised over what is being eaten so it
  * can compare materials rather than always eating sand. */
-static void acid_over(cell_t floor_cell, int floor_rows, int acid_rows)
-{
+static void
+acid_over(cell_t floor_cell, int floor_rows, int acid_rows) {
     fixture();
     sand_set_mobility(&s, SAND_MOBILITY_PER_MATERIAL);
     for (int x = 1; x < W - 1; x++) {
@@ -825,9 +811,8 @@ static void acid_over(cell_t floor_cell, int floor_rows, int acid_rows)
 
 /* Steps until every cell counted by `counted_id` is gone from
  * acid_over()'s scene, or `budget` if some survive that long. */
-static int steps_for_acid_to_clear(uint8_t counted_id, cell_t floor_cell,
-                                   int budget)
-{
+static int
+steps_for_acid_to_clear(uint8_t counted_id, cell_t floor_cell, int budget) {
     acid_over(floor_cell, 1, 4);
     for (int i = 0; i < budget; i++) {
         sand_step(&s, 0, 1000, 0);
@@ -842,36 +827,34 @@ static int steps_for_acid_to_clear(uint8_t counted_id, cell_t floor_cell,
  * comment) rather than countering it; see Metal.md's numbers table. This
  * test's name is backwards from what it now checks; left as-is pending a
  * rename rather than touched here alongside the value. */
-static void test_acid_eats_metal_between_stone_and_sand(void)
-{
+static void
+test_acid_eats_metal_between_stone_and_sand(void) {
     const int budget = 5000;
     const int stone = steps_for_acid_to_clear(MAT_STONE, STONE, budget);
-    const int metal = steps_for_acid_to_clear(MAT_EXTENDED,
-                                              MATX(MATX_METAL), budget);
-    const int sand  = steps_for_acid_to_clear(MAT_SAND,
-                                              CELL_MAKE(MAT_SAND, 8), budget);
+    const int metal = steps_for_acid_to_clear(MAT_EXTENDED, MATX(MATX_METAL), budget);
+    const int sand = steps_for_acid_to_clear(MAT_SAND, CELL_MAKE(MAT_SAND, 8), budget);
 
     TEST_ASSERT_LESS_THAN_MESSAGE(budget, sand,
-        "fixture check: acid must fully clear a floor of sand within the "
-        "budget");
+                                  "fixture check: acid must fully clear a floor of sand within the "
+                                  "budget");
     TEST_ASSERT_LESS_THAN_MESSAGE(budget, metal,
-        "fixture check: acid must fully clear a floor of metal within "
-        "the same budget");
+                                  "fixture check: acid must fully clear a floor of metal within "
+                                  "the same budget");
     TEST_ASSERT_LESS_THAN_MESSAGE(budget, stone,
-        "fixture check: acid must fully clear a floor of stone within "
-        "the same budget too");
+                                  "fixture check: acid must fully clear a floor of stone within "
+                                  "the same budget too");
 
     TEST_ASSERT_LESS_THAN_MESSAGE(metal, stone,
-        "acid must eat metal SLOWER than stone - dissolvable 1 against "
-        "stone's 60. Metal now resists acid rather than being its "
-        "counter (balance revision 2026-08-30)");
+                                  "acid must eat metal SLOWER than stone - dissolvable 1 against "
+                                  "stone's 60. Metal now resists acid rather than being its "
+                                  "counter (balance revision 2026-08-30)");
     TEST_ASSERT_LESS_THAN_MESSAGE(stone, sand,
-        "and stone slower than sand - dissolvable 60 against 200, the "
-        "obviously softest target on the board");
+                                  "and stone slower than sand - dissolvable 60 against 200, the "
+                                  "obviously softest target on the board");
 }
 
-static void test_wood_and_steam_grain_count_is_conserved(void)
-{
+static void
+test_wood_and_steam_grain_count_is_conserved(void) {
     fixture();
     /* Condensation forced off: reaction_t.condenses is not one-for-one - a
      * 2x2 patch of steam collapsing to one water cell loses three grains by
@@ -894,14 +877,14 @@ static void test_wood_and_steam_grain_count_is_conserved(void)
     TEST_ASSERT_EQUAL_INT(12, expected);
 
     static const int dirs[8][2] = {
-        {0,1}, {1,1}, {1,0}, {1,-1}, {0,-1}, {-1,-1}, {-1,0}, {-1,1},
+        {0, 1}, {1, 1}, {1, 0}, {1, -1}, {0, -1}, {-1, -1}, {-1, 0}, {-1, 1},
     };
     for (int d = 0; d < 8; d++) {
         for (int i = 0; i < 20; i++) {
             sand_step(&s, dirs[d][0], dirs[d][1], 0);
             TEST_ASSERT_EQUAL_INT_MESSAGE(expected, sand_count(&s),
-                "a step must conserve wood and steam grains in every "
-                "gravity direction, the same as every other material");
+                                          "a step must conserve wood and steam grains in every "
+                                          "gravity direction, the same as every other material");
         }
     }
 }
@@ -911,8 +894,8 @@ static void test_wood_and_steam_grain_count_is_conserved(void)
  * every side sand_step_gas() could move a cell out of - it runs before
  * sand_step_reactions() within one sand_step(), so otherwise a step's own
  * gas movement scatters the block before the condensation check sees it. */
-static void test_a_2x2_block_of_steam_condenses_into_one_water_cell(void)
-{
+static void
+test_a_2x2_block_of_steam_condenses_into_one_water_cell(void) {
     fixture();
     sand_set_condenses(&s, 255);
     sand_set_mobility(&s, 0);
@@ -932,14 +915,11 @@ static void test_a_2x2_block_of_steam_condenses_into_one_water_cell(void)
     sand_step(&s, 0, 1000, 0);
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER, CELL_MATERIAL(sand_at(&s, 3, 3)),
-        "a forced roll must condense the square into water at its own "
-        "top-left corner");
-    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 4, 3)),
-        "and clear the other three corners of the square");
-    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 3, 4)),
-        "and clear the other three corners of the square");
-    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 4, 4)),
-        "and clear the other three corners of the square");
+                                  "a forced roll must condense the square into water at its own "
+                                  "top-left corner");
+    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 4, 3)), "and clear the other three corners of the square");
+    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 3, 4)), "and clear the other three corners of the square");
+    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 4, 4)), "and clear the other three corners of the square");
 }
 
 /* Three matching corners and a fourth cell that is NOT steam (stone,
@@ -948,8 +928,8 @@ static void test_a_2x2_block_of_steam_condenses_into_one_water_cell(void)
  * reactions pass ever gets to look, which would turn this into an
  * accidental positive instead of the negative it is meant to be) must
  * never condense, no matter how the roll would have gone. */
-static void test_condensation_needs_a_genuine_2x2_square(void)
-{
+static void
+test_condensation_needs_a_genuine_2x2_square(void) {
     fixture();
     sand_set_condenses(&s, 255);
     sand_set_mobility(&s, 0);
@@ -969,8 +949,8 @@ static void test_condensation_needs_a_genuine_2x2_square(void)
     sand_step(&s, 0, 1000, 0);
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STEAM, CELL_MATERIAL(sand_at(&s, 3, 3)),
-        "three steam cells beside one that is not steam must never "
-        "condense, even with the roll forced to succeed every time");
+                                  "three steam cells beside one that is not steam must never "
+                                  "condense, even with the roll forced to succeed every time");
 }
 
 /* Acid rain - SAND_ACID_RAIN_CHANCE (sand.h), step_one_acid_rain_cell()
@@ -980,8 +960,8 @@ static void test_condensation_needs_a_genuine_2x2_square(void)
  * gas) so no arrangement can accidentally satisfy condensation, which
  * needs all four cells identical. Does NOT assert which of Acid or Water
  * survives - a 50/50 flip; this test is only the collapse shape. */
-static void test_a_qualifying_gas_steam_pocket_collapses_into_one_cell(void)
-{
+static void
+test_a_qualifying_gas_steam_pocket_collapses_into_one_cell(void) {
     fixture();
     sand_set_acid_rain(&s, 255);
     sand_set_condenses(&s, 0);
@@ -1003,15 +983,12 @@ static void test_a_qualifying_gas_steam_pocket_collapses_into_one_cell(void)
 
     const uint8_t corner_mat = CELL_MATERIAL(sand_at(&s, 3, 3));
     TEST_ASSERT_TRUE_MESSAGE(corner_mat == MAT_ACID || corner_mat == MAT_WATER,
-        "a forced roll must collapse the pocket at its own top-left "
-        "corner into either Acid or Water - the 50/50 coin flip - not "
-        "leave it as gas/steam or anything else");
-    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 4, 3)),
-        "and clear the other three corners of the square");
-    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 3, 4)),
-        "and clear the other three corners of the square");
-    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 4, 4)),
-        "and clear the other three corners of the square");
+                             "a forced roll must collapse the pocket at its own top-left "
+                             "corner into either Acid or Water - the 50/50 coin flip - not "
+                             "leave it as gas/steam or anything else");
+    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 4, 3)), "and clear the other three corners of the square");
+    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 3, 4)), "and clear the other three corners of the square");
+    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 4, 4)), "and clear the other three corners of the square");
 }
 
 /* Guards step_one_reacting_row()'s found |= FOUND_DISSOLVER report at its
@@ -1021,8 +998,8 @@ static void test_a_qualifying_gas_steam_pocket_collapses_into_one_cell(void)
  * the new acid is created inert. A full sealed 4x4 room, not just its
  * neighbours, since sand_set_mobility(0) means it drifts rather than
  * sitting still. Seeded to land the coin flip on Acid. */
-static void test_a_rained_acid_cell_keeps_dissolving_after_the_collapse(void)
-{
+static void
+test_a_rained_acid_cell_keeps_dissolving_after_the_collapse(void) {
     bool found_acid_seed = false;
     for (unsigned seed = 1u; seed < 64u && !found_acid_seed; seed++) {
         sand_init(&s, cells, W, H, seed);
@@ -1052,9 +1029,9 @@ static void test_a_rained_acid_cell_keeps_dissolving_after_the_collapse(void)
         found_acid_seed = true;
 
         TEST_ASSERT_TRUE_MESSAGE(s.may_have_dissolver,
-            "the acid a collapse just produced must leave may_have_dissolver "
-            "armed - it was created behind the row walk's own scan pointer, "
-            "so nothing else this same pass reports it");
+                                 "the acid a collapse just produced must leave may_have_dissolver "
+                                 "armed - it was created behind the row walk's own scan pointer, "
+                                 "so nothing else this same pass reports it");
 
         int stone_left = 12;
         for (int i = 0; i < 120 && stone_left == 12; i++) {
@@ -1062,23 +1039,20 @@ static void test_a_rained_acid_cell_keeps_dissolving_after_the_collapse(void)
             stone_left = 0;
             for (int yy = 2; yy <= 5; yy++) {
                 for (int xx = 2; xx <= 5; xx++) {
-                    if ((xx == 2 || xx == 5 || yy == 2 || yy == 5)
-                        && CELL_MATERIAL(sand_at(&s, xx, yy)) == MAT_STONE) {
+                    if ((xx == 2 || xx == 5 || yy == 2 || yy == 5) && CELL_MATERIAL(sand_at(&s, xx, yy)) == MAT_STONE) {
                         stone_left++;
                     }
                 }
             }
         }
-        TEST_ASSERT_TRUE_MESSAGE(stone_left < 12,
-            "a rained acid cell sealed in a stone room must go on to "
-            "dissolve some of that room's walls within 120 further steps - "
-            "if may_have_dissolver silently cleared at the end of the "
-            "collapse's own pass, the acid is created inert and never eats "
-            "anything again");
+        TEST_ASSERT_TRUE_MESSAGE(stone_left < 12, "a rained acid cell sealed in a stone room must go on to "
+                                                  "dissolve some of that room's walls within 120 further steps - "
+                                                  "if may_have_dissolver silently cleared at the end of the "
+                                                  "collapse's own pass, the acid is created inert and never eats "
+                                                  "anything again");
     }
-    TEST_ASSERT_TRUE_MESSAGE(found_acid_seed,
-        "setup: none of the first 64 seeds landed the coin flip on Acid - "
-        "widen the seed range, this test never exercised its own scenario");
+    TEST_ASSERT_TRUE_MESSAGE(found_acid_seed, "setup: none of the first 64 seeds landed the coin flip on Acid - "
+                                              "widen the seed range, this test never exercised its own scenario");
 }
 
 /* One cell short of the two-of-each requirement (one steam, three gas -
@@ -1087,8 +1061,8 @@ static void test_a_rained_acid_cell_keeps_dissolving_after_the_collapse(void)
  * genuine match, not almost one" property
  * test_condensation_needs_a_genuine_2x2_square just above already
  * checks for its own sibling mechanic. */
-static void test_acid_rain_needs_at_least_two_of_each_species(void)
-{
+static void
+test_acid_rain_needs_at_least_two_of_each_species(void) {
     fixture();
     sand_set_acid_rain(&s, 255);
     sand_set_condenses(&s, 0);
@@ -1116,14 +1090,14 @@ static void test_acid_rain_needs_at_least_two_of_each_species(void)
      * placing a residue - or picked the wrong corner - would pass the
      * weaker check and fail this one. */
     TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STEAM, CELL_MATERIAL(sand_at(&s, 3, 3)),
-        "one steam cell short of the two-steam/two-gas requirement must "
-        "never collapse, even with the roll forced to succeed every time");
+                                  "one steam cell short of the two-steam/two-gas requirement must "
+                                  "never collapse, even with the roll forced to succeed every time");
     TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_GAS, CELL_MATERIAL(sand_at(&s, 4, 3)),
-        "and must leave the rest of the pocket exactly as it was");
+                                  "and must leave the rest of the pocket exactly as it was");
     TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_GAS, CELL_MATERIAL(sand_at(&s, 3, 4)),
-        "and must leave the rest of the pocket exactly as it was");
+                                  "and must leave the rest of the pocket exactly as it was");
     TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_GAS, CELL_MATERIAL(sand_at(&s, 4, 4)),
-        "and must leave the rest of the pocket exactly as it was");
+                                  "and must leave the rest of the pocket exactly as it was");
 }
 
 /* SAND_ACID_RAIN_CHANCE's own comment (sand.h): the surviving cell is a
@@ -1133,8 +1107,9 @@ static void test_acid_rain_needs_at_least_two_of_each_species(void)
  * trials. One shared sealed pocket, repainted and re-stepped rather than
  * side-by-side pockets: the trials stay independent either way. */
 #define ACID_RAIN_TRIALS 40
-static void test_acid_rain_resolves_to_both_acid_and_water(void)
-{
+
+static void
+test_acid_rain_resolves_to_both_acid_and_water(void) {
     fixture();
     sand_set_acid_rain(&s, 255);
     sand_set_condenses(&s, 0);
@@ -1167,16 +1142,16 @@ static void test_acid_rain_resolves_to_both_acid_and_water(void)
     }
 
     TEST_ASSERT_GREATER_THAN_MESSAGE(0, acid_seen,
-        "expected at least one acid-rain collapse to resolve to Acid "
-        "across ACID_RAIN_TRIALS independent trials");
+                                     "expected at least one acid-rain collapse to resolve to Acid "
+                                     "across ACID_RAIN_TRIALS independent trials");
     TEST_ASSERT_GREATER_THAN_MESSAGE(0, water_seen,
-        "expected at least one acid-rain collapse to resolve to Water "
-        "across ACID_RAIN_TRIALS independent trials - always Acid would "
-        "mean the coin flip is not actually being rolled");
+                                     "expected at least one acid-rain collapse to resolve to Water "
+                                     "across ACID_RAIN_TRIALS independent trials - always Acid would "
+                                     "mean the coin flip is not actually being rolled");
 }
 
-void run_sand_metal_suite(void)
-{
+void
+run_sand_metal_suite(void) {
     RUN_TEST(test_dry_dirt_beside_lava_smelts_into_metal_or_stone);
     RUN_TEST(test_saturated_dirt_smelts_roughly_eight_times_slower);
     RUN_TEST(test_watered_dirt_steaming_precedes_resolving_when_it_happens);

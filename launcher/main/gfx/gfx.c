@@ -9,13 +9,13 @@
 #ifdef ESP_PLATFORM
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
-#include "esp_lcd_panel_ops.h"
-#include "esp_lcd_panel_io.h"
-#include "esp_lcd_sh8601.h"
-#include "esp_timer.h"
 #include "esp_check.h"
 #include "esp_heap_caps.h"
+#include "esp_lcd_panel_io.h"
+#include "esp_lcd_panel_ops.h"
+#include "esp_lcd_sh8601.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #endif
@@ -23,13 +23,13 @@
 /* Carries GFX_DIRTY_WIDTH/HEIGHT for ESP-IDF independence and aligns with
  * gfx.h's BSP values. */
 _Static_assert(GFX_WIDTH == GFX_DIRTY_WIDTH && GFX_HEIGHT == GFX_DIRTY_HEIGHT,
-              "gfx_dirty.h's screen dimensions must match gfx.h's");
+               "gfx_dirty.h's screen dimensions must match gfx.h's");
 
 #ifdef ESP_PLATFORM
-static const char *TAG = "gfx";
+static const char* TAG = "gfx";
 #endif
 
-static gfx_color_t *fb;
+static gfx_color_t* fb;
 
 #ifdef ESP_PLATFORM
 static esp_lcd_panel_handle_t panel;
@@ -58,12 +58,14 @@ static const sh8601_lcd_init_cmd_t lcd_init_cmds[] = {
 #endif
 
 /* Current clip rectangle, as inclusive-exclusive bounds. */
-static struct { int x0, y0, x1, y1; } clip;
+static struct {
+    int x0, y0, x1, y1;
+} clip;
 
 #ifdef ESP_PLATFORM
 /* Scratch space for gather_and_send(), bounded by GATHER_MAX_PIXELS,
  * allocated with MALLOC_CAP_DMA. Misalignment causes DMA errors. */
-static gfx_color_t *gather_buf;
+static gfx_color_t* gather_buf;
 #endif
 
 /*
@@ -73,10 +75,8 @@ static gfx_color_t *gather_buf;
  */
 
 #ifdef ESP_PLATFORM
-static bool IRAM_ATTR on_strip_sent(esp_lcd_panel_io_handle_t io,
-                                    esp_lcd_panel_io_event_data_t *event,
-                                    void *user_context)
-{
+static bool IRAM_ATTR
+on_strip_sent(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data_t* event, void* user_context) {
     BaseType_t woken = pdFALSE;
     xSemaphoreGiveFromISR(strip_sent, &woken);
     return woken == pdTRUE;
@@ -84,11 +84,11 @@ static bool IRAM_ATTR on_strip_sent(esp_lcd_panel_io_handle_t io,
 
 /* SPI2 panel. `send_init` chooses full init or re-attach, skipping command
  * sequence to avoid 120 ms wait. */
-static esp_err_t panel_bring_up(bool send_init)
-{
-    const spi_bus_config_t bus = SH8601_PANEL_BUS_QSPI_CONFIG(
-        BSP_LCD_PCLK, BSP_LCD_DATA0, BSP_LCD_DATA1, BSP_LCD_DATA2,
-        BSP_LCD_DATA3, GFX_WIDTH * STRIP_HEIGHT * sizeof(gfx_color_t));
+static esp_err_t
+panel_bring_up(bool send_init) {
+    const spi_bus_config_t bus =
+        SH8601_PANEL_BUS_QSPI_CONFIG(BSP_LCD_PCLK, BSP_LCD_DATA0, BSP_LCD_DATA1, BSP_LCD_DATA2, BSP_LCD_DATA3,
+                                     GFX_WIDTH * STRIP_HEIGHT * sizeof(gfx_color_t));
 
     esp_err_t err = spi_bus_initialize(BSP_LCD_SPI_NUM, &bus, SPI_DMA_CH_AUTO);
     if (err != ESP_OK) {
@@ -103,28 +103,23 @@ static esp_err_t panel_bring_up(bool send_init)
      * help text for why edge rate is the suspect at 80 MHz. */
     {
         static const gpio_num_t qspi_pads[] = {
-            BSP_LCD_PCLK, BSP_LCD_DATA0, BSP_LCD_DATA1,
-            BSP_LCD_DATA2, BSP_LCD_DATA3,
+            BSP_LCD_PCLK, BSP_LCD_DATA0, BSP_LCD_DATA1, BSP_LCD_DATA2, BSP_LCD_DATA3,
         };
         for (size_t i = 0; i < sizeof(qspi_pads) / sizeof(qspi_pads[0]); i++) {
-            const esp_err_t derr =
-                gpio_set_drive_capability(qspi_pads[i], GPIO_DRIVE_CAP_3);
+            const esp_err_t derr = gpio_set_drive_capability(qspi_pads[i], GPIO_DRIVE_CAP_3);
             if (derr != ESP_OK) {
-                ESP_LOGW(TAG, "drive capability on pad %d: %s",
-                         (int)qspi_pads[i], esp_err_to_name(derr));
+                ESP_LOGW(TAG, "drive capability on pad %d: %s", (int)qspi_pads[i], esp_err_to_name(derr));
             }
         }
     }
 #endif
     ESP_LOGI(TAG, "panel QSPI at %d MHz", (int)(GFX_QSPI_HZ / 1000000));
 
-    esp_lcd_panel_io_spi_config_t io_config =
-        SH8601_PANEL_IO_QSPI_CONFIG(BSP_LCD_CS, on_strip_sent, NULL);
+    esp_lcd_panel_io_spi_config_t io_config = SH8601_PANEL_IO_QSPI_CONFIG(BSP_LCD_CS, on_strip_sent, NULL);
 
     /* Defaults to 40 MHz, 17.6 ms frame, 94% bus-bound. See GFX_QSPI_HZ. */
     io_config.pclk_hz = GFX_QSPI_HZ;
-    err = esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)BSP_LCD_SPI_NUM,
-                                   &io_config, &panel_io);
+    err = esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)BSP_LCD_SPI_NUM, &io_config, &panel_io);
     if (err != ESP_OK) {
         return err;
     }
@@ -132,13 +127,13 @@ static esp_err_t panel_bring_up(bool send_init)
     sh8601_vendor_config_t vendor = {
         .init_cmds = lcd_init_cmds,
         .init_cmds_size = sizeof(lcd_init_cmds) / sizeof(lcd_init_cmds[0]),
-        .flags = { .use_qspi_interface = 1 },
+        .flags = {.use_qspi_interface = 1},
     };
     const esp_lcd_panel_dev_config_t panel_config = {
-        .reset_gpio_num = GPIO_NUM_NC,   /* reset is on the IO expander */
-        .rgb_ele_order  = LCD_RGB_ELEMENT_ORDER_RGB,
+        .reset_gpio_num = GPIO_NUM_NC, /* reset is on the IO expander */
+        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
         .bits_per_pixel = 16,
-        .vendor_config  = &vendor,
+        .vendor_config = &vendor,
     };
     err = esp_lcd_new_panel_sh8601(panel_io, &panel_config, &panel);
     if (err != ESP_OK) {
@@ -154,8 +149,8 @@ static esp_err_t panel_bring_up(bool send_init)
 }
 
 /* Releases SPI2 for other use. Framebuffer is ordinary RAM, not bus-related. */
-static void panel_tear_down(void)
-{
+static void
+panel_tear_down(void) {
     if (panel != NULL) {
         esp_lcd_panel_del(panel);
         panel = NULL;
@@ -169,18 +164,18 @@ static void panel_tear_down(void)
         spi_bus_up = false;
     }
 }
-#endif   /* ESP_PLATFORM - panel plumbing */
+#endif /* ESP_PLATFORM - panel plumbing */
 
-bool gfx_suspend(void)
-{
+bool
+gfx_suspend(void) {
 #ifdef ESP_PLATFORM
     panel_tear_down();
 #endif
     return true;
 }
 
-bool gfx_resume(bool full_init)
-{
+bool
+gfx_resume(bool full_init) {
 #ifdef ESP_PLATFORM
     /* GRAM unknown after re-init; assume screen cleared. One frame after
      * resume. */
@@ -194,13 +189,12 @@ bool gfx_resume(bool full_init)
 #endif
 }
 
-bool gfx_init(void)
-{
+bool
+gfx_init(void) {
 #ifdef ESP_PLATFORM
     /* Sized for STRIP_COUNT * GRID_COLS: see send_one_row(). Undersizing
      * blocks gfx_present() forever. */
-    strip_sent = xSemaphoreCreateCounting(
-        STRIP_COUNT * GRID_COLS + 2, 0);
+    strip_sent = xSemaphoreCreateCounting(STRIP_COUNT * GRID_COLS + 2, 0);
     if (strip_sent == NULL) {
         ESP_LOGE(TAG, "Could not create the strip-transfer semaphore");
         return false;
@@ -228,28 +222,27 @@ bool gfx_init(void)
     const size_t bytes = (size_t)GFX_WIDTH * GFX_HEIGHT * sizeof(gfx_color_t);
     fb = heap_caps_malloc(bytes, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
     if (fb == NULL) {
-        ESP_LOGE(TAG, "Could not allocate %u byte framebuffer "
-                      "(largest free DMA block is %u bytes)",
-                 (unsigned)bytes,
-                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
+        ESP_LOGE(TAG,
+                 "Could not allocate %u byte framebuffer "
+                 "(largest free DMA block is %u bytes)",
+                 (unsigned)bytes, (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
         return false;
     }
 
     const size_t gather_bytes = (size_t)GATHER_MAX_PIXELS * sizeof(gfx_color_t);
     gather_buf = heap_caps_malloc(gather_bytes, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
     if (gather_buf == NULL) {
-        ESP_LOGE(TAG, "Could not allocate %u byte gather buffer",
-                 (unsigned)gather_bytes);
+        ESP_LOGE(TAG, "Could not allocate %u byte gather buffer", (unsigned)gather_bytes);
         return false;
     }
 
     gfx_clear_clip();
     gfx_mark_all_dirty();
 
-    ESP_LOGI(TAG, "%dx%d framebuffer at %p, %u bytes; heap free %u, "
-                  "largest DMA block %u",
-             GFX_WIDTH, GFX_HEIGHT, (void *)fb, (unsigned)bytes,
-             (unsigned)esp_get_free_heap_size(),
+    ESP_LOGI(TAG,
+             "%dx%d framebuffer at %p, %u bytes; heap free %u, "
+             "largest DMA block %u",
+             GFX_WIDTH, GFX_HEIGHT, (void*)fb, (unsigned)bytes, (unsigned)esp_get_free_heap_size(),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
     return true;
 #else
@@ -264,8 +257,8 @@ bool gfx_init(void)
 #endif
 }
 
-gfx_color_t *gfx_framebuffer(void)
-{
+gfx_color_t*
+gfx_framebuffer(void) {
     /* gfx can't guess intent. "Everything" wastes resources. Raw writers use
      * gfx_mark_dirty(). Be cautious. */
     return fb;
@@ -281,64 +274,80 @@ static int prev_bbox_x0, prev_bbox_y0, prev_bbox_x1, prev_bbox_y1;
 static bool drawn_bbox_valid;
 static int drawn_bbox_x0, drawn_bbox_y0, drawn_bbox_x1, drawn_bbox_y1;
 
-void gfx_set_partial_clear(bool on)
-{
+void
+gfx_set_partial_clear(bool on) {
     if (!on) {
         prev_bbox_valid = false;
     }
     partial_clear_on = on;
 }
 
-bool gfx_partial_clear_enabled(void)
-{
+bool
+gfx_partial_clear_enabled(void) {
     return partial_clear_on;
 }
 
-void gfx_set_interlace(bool on)
-{
+void
+gfx_set_interlace(bool on) {
     interlace_on = on;
 }
 
-bool gfx_interlace_enabled(void)
-{
+bool
+gfx_interlace_enabled(void) {
     return interlace_on;
 }
 
-void gfx_invalidate(void)
-{
+void
+gfx_invalidate(void) {
     prev_bbox_valid = false;
 }
 
 /* gfx_dirty.h header-only for inlining mark_band(); thin wrappers for gfx.h
  * API. */
-void gfx_mark_all_dirty(void)
-{
+void
+gfx_mark_all_dirty(void) {
     dirty_mark_all();
     drawn_bbox_valid = false;
     prev_bbox_valid = false;
 }
 
-void gfx_mark_dirty(int x, int y, int w, int h)
-{
+void
+gfx_mark_dirty(int x, int y, int w, int h) {
     dirty_mark(x, y, w, h);
 
     if (w <= 0 || h <= 0) {
         return;
     }
     int x0 = x, y0 = y, x1 = x + w, y1 = y + h;
-    if (x0 < 0) x0 = 0;
-    if (y0 < 0) y0 = 0;
-    if (x1 > GFX_WIDTH) x1 = GFX_WIDTH;
-    if (y1 > GFX_HEIGHT) y1 = GFX_HEIGHT;
+    if (x0 < 0) {
+        x0 = 0;
+    }
+    if (y0 < 0) {
+        y0 = 0;
+    }
+    if (x1 > GFX_WIDTH) {
+        x1 = GFX_WIDTH;
+    }
+    if (y1 > GFX_HEIGHT) {
+        y1 = GFX_HEIGHT;
+    }
     if (x0 >= x1 || y0 >= y1) {
         return;
     }
 
     if (drawn_bbox_valid) {
-        if (x0 < drawn_bbox_x0) drawn_bbox_x0 = x0;
-        if (y0 < drawn_bbox_y0) drawn_bbox_y0 = y0;
-        if (x1 > drawn_bbox_x1) drawn_bbox_x1 = x1;
-        if (y1 > drawn_bbox_y1) drawn_bbox_y1 = y1;
+        if (x0 < drawn_bbox_x0) {
+            drawn_bbox_x0 = x0;
+        }
+        if (y0 < drawn_bbox_y0) {
+            drawn_bbox_y0 = y0;
+        }
+        if (x1 > drawn_bbox_x1) {
+            drawn_bbox_x1 = x1;
+        }
+        if (y1 > drawn_bbox_y1) {
+            drawn_bbox_y1 = y1;
+        }
     } else {
         drawn_bbox_x0 = x0;
         drawn_bbox_y0 = y0;
@@ -348,9 +357,10 @@ void gfx_mark_dirty(int x, int y, int w, int h)
     }
 }
 
-bool gfx_region_dirty(int x, int y, int w, int h)
-{
-    (void)x; (void)w;
+bool
+gfx_region_dirty(int x, int y, int w, int h) {
+    (void)x;
+    (void)w;
     return dirty_region_dirty(y, h);
 }
 
@@ -358,26 +368,26 @@ bool gfx_region_dirty(int x, int y, int w, int h)
 
 /* Pack 0xRRGGBB to RGB565, byte-swapped. QSPI needs high and low bytes
  * swapped, but LVGL's port doesn't handle it. */
-gfx_color_t gfx_rgb(uint32_t rgb)
-{
+gfx_color_t
+gfx_rgb(uint32_t rgb) {
     return GFX_RGB(rgb);
 }
 
 /* Clipping */
 
-void gfx_set_clip(int x, int y, int w, int h)
-{
+void
+gfx_set_clip(int x, int y, int w, int h) {
     int x1 = x + w;
     int y1 = y + h;
 
-    clip.x0 = x  < 0 ? 0 : x;
-    clip.y0 = y  < 0 ? 0 : y;
-    clip.x1 = x1 > GFX_WIDTH  ? GFX_WIDTH  : x1;
+    clip.x0 = x < 0 ? 0 : x;
+    clip.y0 = y < 0 ? 0 : y;
+    clip.x1 = x1 > GFX_WIDTH ? GFX_WIDTH : x1;
     clip.y1 = y1 > GFX_HEIGHT ? GFX_HEIGHT : y1;
 }
 
-void gfx_clear_clip(void)
-{
+void
+gfx_clear_clip(void) {
     clip.x0 = 0;
     clip.y0 = 0;
     clip.x1 = GFX_WIDTH;
@@ -387,24 +397,22 @@ void gfx_clear_clip(void)
 /* Primitives */
 
 /* Ignores clip rect; clears whole-screen or bounding box; marks box dirty. */
-void gfx_clear(gfx_color_t color)
-{
+void
+gfx_clear(gfx_color_t color) {
     if (partial_clear_on && prev_bbox_valid) {
         for (int y = prev_bbox_y0; y < prev_bbox_y1; y++) {
-            gfx_color_t *dst = fb + (size_t)y * GFX_WIDTH + prev_bbox_x0;
+            gfx_color_t* dst = fb + (size_t)y * GFX_WIDTH + prev_bbox_x0;
             for (int x = prev_bbox_x0; x < prev_bbox_x1; x++) {
                 *dst++ = color;
             }
         }
-        dirty_mark(prev_bbox_x0, prev_bbox_y0,
-                   prev_bbox_x1 - prev_bbox_x0,
-                   prev_bbox_y1 - prev_bbox_y0);
+        dirty_mark(prev_bbox_x0, prev_bbox_y0, prev_bbox_x1 - prev_bbox_x0, prev_bbox_y1 - prev_bbox_y0);
         drawn_bbox_valid = false;
         return;
     }
 
     const uint32_t pair = ((uint32_t)color << 16) | color;
-    uint32_t *words = (uint32_t *)fb;
+    uint32_t* words = (uint32_t*)fb;
     const int count = (GFX_WIDTH * GFX_HEIGHT) / 2;
 
     for (int i = 0; i < count; i++) {
@@ -414,8 +422,8 @@ void gfx_clear(gfx_color_t color)
     gfx_mark_all_dirty();
 }
 
-void gfx_pixel(int x, int y, gfx_color_t color)
-{
+void
+gfx_pixel(int x, int y, gfx_color_t color) {
     if (x < clip.x0 || x >= clip.x1 || y < clip.y0 || y >= clip.y1) {
         return;
     }
@@ -426,29 +434,35 @@ void gfx_pixel(int x, int y, gfx_color_t color)
 /* Cohen-Sutherland outcodes: one bit per edge the point lies outside of. */
 enum { OUT_LEFT = 1, OUT_RIGHT = 2, OUT_TOP = 4, OUT_BOTTOM = 8 };
 
-static int outcode(int x, int y)
-{
+static int
+outcode(int x, int y) {
     int code = 0;
-    if (x < clip.x0)       { code |= OUT_LEFT; }
-    else if (x >= clip.x1) { code |= OUT_RIGHT; }
-    if (y < clip.y0)       { code |= OUT_TOP; }
-    else if (y >= clip.y1) { code |= OUT_BOTTOM; }
+    if (x < clip.x0) {
+        code |= OUT_LEFT;
+    } else if (x >= clip.x1) {
+        code |= OUT_RIGHT;
+    }
+    if (y < clip.y0) {
+        code |= OUT_TOP;
+    } else if (y >= clip.y1) {
+        code |= OUT_BOTTOM;
+    }
     return code;
 }
 
 /* Clipping affects error term, differs by pixel. Caller takes fast path if
  * both ends inside. */
-static bool clip_line(int *x0, int *y0, int *x1, int *y1)
-{
+static bool
+clip_line(int* x0, int* y0, int* x1, int* y1) {
     int c0 = outcode(*x0, *y0);
     int c1 = outcode(*x1, *y1);
 
     for (int pass = 0; pass < 8; pass++) {
         if ((c0 | c1) == 0) {
-            return true;              /* both ends inside */
+            return true; /* both ends inside */
         }
         if ((c0 & c1) != 0) {
-            return false;             /* both beyond the same edge */
+            return false; /* both beyond the same edge */
         }
 
         const int out = c0 ? c0 : c1;
@@ -470,29 +484,32 @@ static bool clip_line(int *x0, int *y0, int *x1, int *y1)
         }
 
         if (out == c0) {
-            *x0 = x; *y0 = y; c0 = outcode(x, y);
+            *x0 = x;
+            *y0 = y;
+            c0 = outcode(x, y);
         } else {
-            *x1 = x; *y1 = y; c1 = outcode(x, y);
+            *x1 = x;
+            *y1 = y;
+            c1 = outcode(x, y);
         }
     }
     return false;
 }
 
 /* One pixel of a line. */
-static void plot(int x, int y, gfx_color_t color, unsigned flags)
-{
+static void
+plot(int x, int y, gfx_color_t color, unsigned flags) {
     if (x < clip.x0 || x >= clip.x1 || y < clip.y0 || y >= clip.y1) {
         return;
     }
-    gfx_color_t *const dst = &fb[(size_t)y * GFX_WIDTH + x];
+    gfx_color_t* const dst = &fb[(size_t)y * GFX_WIDTH + x];
 
     *dst = (flags & GFX_LINE_ADD) ? gfx_color_add(*dst, color) : color;
 }
 
 /* Bresenham, treats both axes alike, no case analysis. */
-static void walk(int x0, int y0, int x1, int y1, gfx_color_t color,
-                 unsigned flags)
-{
+static void
+walk(int x0, int y0, int x1, int y1, gfx_color_t color, unsigned flags) {
     const int dx = im_abs(x1 - x0);
     const int dy = -im_abs(y1 - y0);
     const int sx = x0 < x1 ? 1 : -1;
@@ -510,16 +527,21 @@ static void walk(int x0, int y0, int x1, int y1, gfx_color_t color,
             break;
         }
         const int e2 = 2 * err;
-        if (e2 >= dy) { err += dy; x0 += sx; }
-        if (e2 <= dx) { err += dx; y0 += sy; }
+        if (e2 >= dy) {
+            err += dy;
+            x0 += sx;
+        }
+        if (e2 <= dx) {
+            err += dx;
+            y0 += sy;
+        }
     }
 }
 
 /* Box intersects clip, marked once. Overestimating costs bus time;
  * underestimating leaves stale. */
-static void draw_line(int x0, int y0, int x1, int y1, gfx_color_t color,
-                      unsigned flags)
-{
+static void
+draw_line(int x0, int y0, int x1, int y1, gfx_color_t color, unsigned flags) {
     /* Only pay for clipping when some of the line is actually outside. */
     if (outcode(x0, y0) | outcode(x1, y1)) {
         if (!clip_line(&x0, &y0, &x1, &y1)) {
@@ -530,10 +552,18 @@ static void draw_line(int x0, int y0, int x1, int y1, gfx_color_t color,
     int bx0 = im_min(x0, x1), bx1 = im_max(x0, x1) + 1;
     int by0 = im_min(y0, y1), by1 = im_max(y0, y1) + 1;
 
-    if (bx0 < clip.x0) bx0 = clip.x0;
-    if (by0 < clip.y0) by0 = clip.y0;
-    if (bx1 > clip.x1) bx1 = clip.x1;
-    if (by1 > clip.y1) by1 = clip.y1;
+    if (bx0 < clip.x0) {
+        bx0 = clip.x0;
+    }
+    if (by0 < clip.y0) {
+        by0 = clip.y0;
+    }
+    if (bx1 > clip.x1) {
+        bx1 = clip.x1;
+    }
+    if (by1 > clip.y1) {
+        by1 = clip.y1;
+    }
 
     walk(x0, y0, x1, y1, color, flags);
 
@@ -542,34 +572,41 @@ static void draw_line(int x0, int y0, int x1, int y1, gfx_color_t color,
     }
 }
 
-void gfx_line(int x0, int y0, int x1, int y1, gfx_color_t color)
-{
+void
+gfx_line(int x0, int y0, int x1, int y1, gfx_color_t color) {
     draw_line(x0, y0, x1, y1, color, 0);
 }
 
-void gfx_line_ex(int x0, int y0, int x1, int y1, gfx_color_t color,
-                 unsigned flags)
-{
+void
+gfx_line_ex(int x0, int y0, int x1, int y1, gfx_color_t color, unsigned flags) {
     draw_line(x0, y0, x1, y1, color, flags);
 }
 
-void gfx_fill_rect(int x, int y, int w, int h, gfx_color_t color)
-{
+void
+gfx_fill_rect(int x, int y, int w, int h, gfx_color_t color) {
     int x0 = x, y0 = y, x1 = x + w, y1 = y + h;
 
-    if (x0 < clip.x0) x0 = clip.x0;
-    if (y0 < clip.y0) y0 = clip.y0;
-    if (x1 > clip.x1) x1 = clip.x1;
-    if (y1 > clip.y1) y1 = clip.y1;
+    if (x0 < clip.x0) {
+        x0 = clip.x0;
+    }
+    if (y0 < clip.y0) {
+        y0 = clip.y0;
+    }
+    if (x1 > clip.x1) {
+        x1 = clip.x1;
+    }
+    if (y1 > clip.y1) {
+        y1 = clip.y1;
+    }
 
     for (int row = y0; row < y1; row++) {
-        gfx_color_t *dst = fb + (size_t)row * GFX_WIDTH + x0;
+        gfx_color_t* dst = fb + (size_t)row * GFX_WIDTH + x0;
         for (int col = x0; col < x1; col++) {
             *dst++ = color;
         }
     }
 
-    mark_band(y0, y1);   /* already clipped above */
+    mark_band(y0, y1); /* already clipped above */
 }
 
 /*
@@ -584,22 +621,29 @@ void gfx_fill_rect(int x, int y, int w, int h, gfx_color_t color)
 
 /* gfx_fill_rect() uses `alpha` (0-255) for coverage, avoiding framebuffer
  * reads. gfx_dither_covers() in gfx_color.h. Returns if 0. */
-void gfx_fill_rect_dither(int x, int y, int w, int h, gfx_color_t color,
-                          uint8_t alpha)
-{
+void
+gfx_fill_rect_dither(int x, int y, int w, int h, gfx_color_t color, uint8_t alpha) {
     if (alpha == 0) {
         return;
     }
 
     int x0 = x, y0 = y, x1 = x + w, y1 = y + h;
 
-    if (x0 < clip.x0) x0 = clip.x0;
-    if (y0 < clip.y0) y0 = clip.y0;
-    if (x1 > clip.x1) x1 = clip.x1;
-    if (y1 > clip.y1) y1 = clip.y1;
+    if (x0 < clip.x0) {
+        x0 = clip.x0;
+    }
+    if (y0 < clip.y0) {
+        y0 = clip.y0;
+    }
+    if (x1 > clip.x1) {
+        x1 = clip.x1;
+    }
+    if (y1 > clip.y1) {
+        y1 = clip.y1;
+    }
 
     for (int row = y0; row < y1; row++) {
-        gfx_color_t *dst = fb + (size_t)row * GFX_WIDTH;
+        gfx_color_t* dst = fb + (size_t)row * GFX_WIDTH;
         for (int col = x0; col < x1; col++) {
             if (gfx_dither_covers(col, row, alpha)) {
                 dst[col] = color;
@@ -612,22 +656,29 @@ void gfx_fill_rect_dither(int x, int y, int w, int h, gfx_color_t color,
 
 /* Per-pixel blend, reads framebuffer. Efficient for glyphs, not full-frame.
  * Alpha 0 no-op, 255 matches gfx_fill_rect(). */
-void gfx_fill_rect_blend(int x, int y, int w, int h, gfx_color_t color,
-                         uint8_t alpha)
-{
+void
+gfx_fill_rect_blend(int x, int y, int w, int h, gfx_color_t color, uint8_t alpha) {
     if (alpha == 0) {
         return;
     }
 
     int x0 = x, y0 = y, x1 = x + w, y1 = y + h;
 
-    if (x0 < clip.x0) x0 = clip.x0;
-    if (y0 < clip.y0) y0 = clip.y0;
-    if (x1 > clip.x1) x1 = clip.x1;
-    if (y1 > clip.y1) y1 = clip.y1;
+    if (x0 < clip.x0) {
+        x0 = clip.x0;
+    }
+    if (y0 < clip.y0) {
+        y0 = clip.y0;
+    }
+    if (x1 > clip.x1) {
+        x1 = clip.x1;
+    }
+    if (y1 > clip.y1) {
+        y1 = clip.y1;
+    }
 
     for (int row = y0; row < y1; row++) {
-        gfx_color_t *dst = fb + (size_t)row * GFX_WIDTH;
+        gfx_color_t* dst = fb + (size_t)row * GFX_WIDTH;
         for (int col = x0; col < x1; col++) {
             dst[col] = gfx_color_mix(dst[col], color, alpha);
         }
@@ -644,19 +695,26 @@ void gfx_fill_rect_blend(int x, int y, int w, int h, gfx_color_t color,
  * overlapping dithered shapes stay in register with each other. First
  * user: the boot animation's photograph crossfade (boot_anim.c's
  * draw_image()). */
-void gfx_blit_dither(int x, int y, int w, int h, const gfx_color_t *src,
-                     int src_stride, uint8_t alpha)
-{
+void
+gfx_blit_dither(int x, int y, int w, int h, const gfx_color_t* src, int src_stride, uint8_t alpha) {
     if (alpha == 0) {
         return;
     }
 
     int x0 = x, y0 = y, x1 = x + w, y1 = y + h;
 
-    if (x0 < clip.x0) x0 = clip.x0;
-    if (y0 < clip.y0) y0 = clip.y0;
-    if (x1 > clip.x1) x1 = clip.x1;
-    if (y1 > clip.y1) y1 = clip.y1;
+    if (x0 < clip.x0) {
+        x0 = clip.x0;
+    }
+    if (y0 < clip.y0) {
+        y0 = clip.y0;
+    }
+    if (x1 > clip.x1) {
+        x1 = clip.x1;
+    }
+    if (y1 > clip.y1) {
+        y1 = clip.y1;
+    }
     if (x0 >= x1 || y0 >= y1) {
         return;
     }
@@ -664,17 +722,15 @@ void gfx_blit_dither(int x, int y, int w, int h, const gfx_color_t *src,
     const int level = gfx_dither_level(alpha);
 
     for (int row = y0; row < y1; row++) {
-        const uint8_t *cells = gfx_dither4x4[row & 3];
-        const bool p[4] = { level > cells[0], level > cells[1],
-                            level > cells[2], level > cells[3] };
+        const uint8_t* cells = gfx_dither4x4[row & 3];
+        const bool p[4] = {level > cells[0], level > cells[1], level > cells[2], level > cells[3]};
 
         if (!p[0] && !p[1] && !p[2] && !p[3]) {
             continue;
         }
 
-        gfx_color_t *dst = fb + (size_t)row * GFX_WIDTH;
-        const gfx_color_t *s =
-            src + (size_t)(row - y) * (size_t)src_stride + (x0 - x);
+        gfx_color_t* dst = fb + (size_t)row * GFX_WIDTH;
+        const gfx_color_t* s = src + (size_t)(row - y) * (size_t)src_stride + (x0 - x);
 
         if (p[0] && p[1] && p[2] && p[3]) {
             memcpy(dst + x0, s, (size_t)(x1 - x0) * sizeof *dst);
@@ -682,18 +738,26 @@ void gfx_blit_dither(int x, int y, int w, int h, const gfx_color_t *src,
         }
 
         int col = x0;
-        gfx_color_t *dp = dst + col;
-        const gfx_color_t *sp = s;
+        gfx_color_t* dp = dst + col;
+        const gfx_color_t* sp = s;
         for (; col < x1 && (col & 3) != 0; col++, dp++, sp++) {
             if (p[col & 3]) {
                 *dp = *sp;
             }
         }
         for (; col + 4 <= x1; col += 4, dp += 4, sp += 4) {
-            if (p[0]) dp[0] = sp[0];
-            if (p[1]) dp[1] = sp[1];
-            if (p[2]) dp[2] = sp[2];
-            if (p[3]) dp[3] = sp[3];
+            if (p[0]) {
+                dp[0] = sp[0];
+            }
+            if (p[1]) {
+                dp[1] = sp[1];
+            }
+            if (p[2]) {
+                dp[2] = sp[2];
+            }
+            if (p[3]) {
+                dp[3] = sp[3];
+            }
         }
         for (; col < x1; col++, dp++, sp++) {
             if (p[col & 3]) {
@@ -715,80 +779,95 @@ void gfx_blit_dither(int x, int y, int w, int h, const gfx_color_t *src,
  * public-domain bitmap data (gfx_font_8x8's comment, gfx_font.h).
  */
 
-int gfx_font_width(const gfx_font_t *font, const char *text, int len,
-                   int scale)
-{
+int
+gfx_font_width(const gfx_font_t* font, const char* text, int len, int scale) {
     return gfx_font_text_width(font, text, len, scale);
 }
 
-int gfx_text_width(const char *text, int len)
-{
+int
+gfx_text_width(const char* text, int len) {
     return gfx_font_width(gfx_font_ui(), text, len, GFX_GLYPH_SCALE);
 }
 
-int gfx_text_height(void)
-{
+int
+gfx_text_height(void) {
     return gfx_font_height(gfx_font_ui(), GFX_GLYPH_SCALE);
 }
 
-void gfx_text(int x, int y, const char *text, gfx_color_t color)
-{
+void
+gfx_text(int x, int y, const char* text, gfx_color_t color) {
     gfx_text_scaled(x, y, text, color, GFX_GLYPH_SCALE);
 }
 
-void gfx_text_scaled(int x, int y, const char *text, gfx_color_t color,
-                     int scale)
-{
+void
+gfx_text_scaled(int x, int y, const char* text, gfx_color_t color, int scale) {
     gfx_text_turned(x, y, text, color, scale, 0);
 }
 
 /* Generalised to variable cell size. 1bpp path only for 8x8. Used by 8bpp
  * path too. */
-static void draw_rotated_font_pixel(const gfx_font_t *font, int x, int y,
-                                    int row, int col, int scale, int turn,
-                                    gfx_color_t color)
-{
+static void
+draw_rotated_font_pixel(const gfx_font_t* font, int x, int y, int row, int col, int scale, int turn,
+                        gfx_color_t color) {
     int px, py;
     switch (turn) {
-    case 1:  px = font->cell_h - 1 - row; py = col;                   break;
-    case 2:  px = font->cell_w - 1 - col; py = font->cell_h - 1 - row; break;
-    case 3:  px = row;                    py = font->cell_w - 1 - col; break;
-    default: px = col;                    py = row;                   break;
+        case 1:
+            px = font->cell_h - 1 - row;
+            py = col;
+            break;
+        case 2:
+            px = font->cell_w - 1 - col;
+            py = font->cell_h - 1 - row;
+            break;
+        case 3:
+            px = row;
+            py = font->cell_w - 1 - col;
+            break;
+        default:
+            px = col;
+            py = row;
+            break;
     }
     gfx_fill_rect(x + px * scale, y + py * scale, scale, scale, color);
 }
 
 /* 8bpp atlas; 0-255 coverage; blends via gfx_fill_rect_blend() instead of
  * solid. */
-static void draw_rotated_font_pixel_blend(const gfx_font_t *font, int x,
-                                          int y, int row, int col, int scale,
-                                          int turn, gfx_color_t color,
-                                          uint8_t coverage)
-{
+static void
+draw_rotated_font_pixel_blend(const gfx_font_t* font, int x, int y, int row, int col, int scale, int turn,
+                              gfx_color_t color, uint8_t coverage) {
     int px, py;
     switch (turn) {
-    case 1:  px = font->cell_h - 1 - row; py = col;                   break;
-    case 2:  px = font->cell_w - 1 - col; py = font->cell_h - 1 - row; break;
-    case 3:  px = row;                    py = font->cell_w - 1 - col; break;
-    default: px = col;                    py = row;                   break;
+        case 1:
+            px = font->cell_h - 1 - row;
+            py = col;
+            break;
+        case 2:
+            px = font->cell_w - 1 - col;
+            py = font->cell_h - 1 - row;
+            break;
+        case 3:
+            px = row;
+            py = font->cell_w - 1 - col;
+            break;
+        default:
+            px = col;
+            py = row;
+            break;
     }
-    gfx_fill_rect_blend(x + px * scale, y + py * scale, scale, scale, color,
-                        coverage);
+    gfx_fill_rect_blend(x + px * scale, y + py * scale, scale, scale, color, coverage);
 }
 
 /* Draws `font` glyph or nothing if `ch` is out of range or `font->bpp`
  * unsupported. Use separate loops for layouts. */
-static void draw_glyph_font(const gfx_font_t *font, int x, int y,
-                            unsigned char ch, gfx_color_t color, int scale,
-                            int turn)
-{
+static void
+draw_glyph_font(const gfx_font_t* font, int x, int y, unsigned char ch, gfx_color_t color, int scale, int turn) {
     if (ch < font->first || (unsigned)(ch - font->first) >= font->count) {
         return;
     }
 
     if (font->bpp == 1) {
-        const uint8_t *glyph =
-            font->atlas + (size_t)(ch - font->first) * font->cell_h;
+        const uint8_t* glyph = font->atlas + (size_t)(ch - font->first) * font->cell_h;
 
         for (int row = 0; row < font->cell_h; row++) {
             const uint8_t bits = glyph[row];
@@ -806,27 +885,24 @@ static void draw_glyph_font(const gfx_font_t *font, int x, int y,
 
     if (font->bpp == 8) {
         const size_t cell_pixels = (size_t)font->cell_w * font->cell_h;
-        const uint8_t *glyph =
-            font->atlas + (size_t)(ch - font->first) * cell_pixels;
+        const uint8_t* glyph = font->atlas + (size_t)(ch - font->first) * cell_pixels;
 
         for (int row = 0; row < font->cell_h; row++) {
-            const uint8_t *glyph_row = glyph + (size_t)row * font->cell_w;
+            const uint8_t* glyph_row = glyph + (size_t)row * font->cell_w;
             for (int col = 0; col < font->cell_w; col++) {
                 const uint8_t coverage = glyph_row[col];
                 if (coverage == 0) {
                     continue;
                 }
-                draw_rotated_font_pixel_blend(font, x, y, row, col, scale,
-                                              turn, color, coverage);
+                draw_rotated_font_pixel_blend(font, x, y, row, col, scale, turn, color, coverage);
             }
         }
         return;
     }
 }
 
-void gfx_text_font(int x, int y, const char *text, gfx_color_t color,
-                   int scale, int quarter_turns, const gfx_font_t *font)
-{
+void
+gfx_text_font(int x, int y, const char* text, gfx_color_t color, int scale, int quarter_turns, const gfx_font_t* font) {
     if (scale < 1) {
         scale = 1;
     }
@@ -834,13 +910,13 @@ void gfx_text_font(int x, int y, const char *text, gfx_color_t color,
     const int turn = ((quarter_turns % 4) + 4) % 4;
 
     static const int step[4][2] = {
-        {  1,  0 },   /* upright:        left to right */
-        {  0,  1 },   /* quarter turn:   top to bottom */
-        { -1,  0 },   /* upside down:    right to left */
-        {  0, -1 },   /* three quarters: bottom to top */
+        {1, 0},  /* upright:        left to right */
+        {0, 1},  /* quarter turn:   top to bottom */
+        {-1, 0}, /* upside down:    right to left */
+        {0, -1}, /* three quarters: bottom to top */
     };
 
-    for (const char *p = text; *p != '\0'; p++) {
+    for (const char* p = text; *p != '\0'; p++) {
         const unsigned char ch = (unsigned char)*p;
         draw_glyph_font(font, x, y, ch, color, scale, turn);
         const int adv = gfx_font_advance(font, ch, scale);
@@ -849,9 +925,8 @@ void gfx_text_font(int x, int y, const char *text, gfx_color_t color,
     }
 }
 
-void gfx_text_turned(int x, int y, const char *text, gfx_color_t color,
-                     int scale, int quarter_turns)
-{
+void
+gfx_text_turned(int x, int y, const char* text, gfx_color_t color, int scale, int quarter_turns) {
     gfx_text_font(x, y, text, color, scale, quarter_turns, gfx_font_ui());
 }
 
@@ -863,33 +938,40 @@ void gfx_text_turned(int x, int y, const char *text, gfx_color_t color,
  * check back out of it at every call site forever.
  */
 
-static void draw_rotated_font_pixel_dither(const gfx_font_t *font, int x,
-                                           int y, int row, int col,
-                                           int scale, int turn,
-                                           gfx_color_t color, uint8_t alpha)
-{
+static void
+draw_rotated_font_pixel_dither(const gfx_font_t* font, int x, int y, int row, int col, int scale, int turn,
+                               gfx_color_t color, uint8_t alpha) {
     int px, py;
     switch (turn) {
-    case 1:  px = font->cell_h - 1 - row; py = col;                   break;
-    case 2:  px = font->cell_w - 1 - col; py = font->cell_h - 1 - row; break;
-    case 3:  px = row;                    py = font->cell_w - 1 - col; break;
-    default: px = col;                    py = row;                   break;
+        case 1:
+            px = font->cell_h - 1 - row;
+            py = col;
+            break;
+        case 2:
+            px = font->cell_w - 1 - col;
+            py = font->cell_h - 1 - row;
+            break;
+        case 3:
+            px = row;
+            py = font->cell_w - 1 - col;
+            break;
+        default:
+            px = col;
+            py = row;
+            break;
     }
-    gfx_fill_rect_dither(x + px * scale, y + py * scale, scale, scale,
-                         color, alpha);
+    gfx_fill_rect_dither(x + px * scale, y + py * scale, scale, scale, color, alpha);
 }
 
-static void draw_glyph_font_dither(const gfx_font_t *font, int x, int y,
-                                   unsigned char ch, gfx_color_t color,
-                                   int scale, int turn, uint8_t alpha)
-{
+static void
+draw_glyph_font_dither(const gfx_font_t* font, int x, int y, unsigned char ch, gfx_color_t color, int scale, int turn,
+                       uint8_t alpha) {
     if (ch < font->first || (unsigned)(ch - font->first) >= font->count) {
         return;
     }
 
     if (font->bpp == 1) {
-        const uint8_t *glyph =
-            font->atlas + (size_t)(ch - font->first) * font->cell_h;
+        const uint8_t* glyph = font->atlas + (size_t)(ch - font->first) * font->cell_h;
 
         for (int row = 0; row < font->cell_h; row++) {
             const uint8_t bits = glyph[row];
@@ -898,8 +980,7 @@ static void draw_glyph_font_dither(const gfx_font_t *font, int x, int y,
             }
             for (int col = 0; col < font->cell_w; col++) {
                 if (bits & (1 << col)) {
-                    draw_rotated_font_pixel_dither(font, x, y, row, col, scale,
-                                                   turn, color, alpha);
+                    draw_rotated_font_pixel_dither(font, x, y, row, col, scale, turn, color, alpha);
                 }
             }
         }
@@ -908,19 +989,17 @@ static void draw_glyph_font_dither(const gfx_font_t *font, int x, int y,
 
     if (font->bpp == 8) {
         const size_t cell_pixels = (size_t)font->cell_w * font->cell_h;
-        const uint8_t *glyph =
-            font->atlas + (size_t)(ch - font->first) * cell_pixels;
+        const uint8_t* glyph = font->atlas + (size_t)(ch - font->first) * cell_pixels;
 
         for (int row = 0; row < font->cell_h; row++) {
-            const uint8_t *glyph_row = glyph + (size_t)row * font->cell_w;
+            const uint8_t* glyph_row = glyph + (size_t)row * font->cell_w;
             for (int col = 0; col < font->cell_w; col++) {
                 const uint8_t coverage = glyph_row[col];
                 if (coverage == 0) {
                     continue;
                 }
                 const uint8_t folded = coverage < alpha ? coverage : alpha;
-                draw_rotated_font_pixel_dither(font, x, y, row, col, scale,
-                                               turn, color, folded);
+                draw_rotated_font_pixel_dither(font, x, y, row, col, scale, turn, color, folded);
             }
         }
         return;
@@ -929,10 +1008,9 @@ static void draw_glyph_font_dither(const gfx_font_t *font, int x, int y,
 
 /* gfx_text_font() with dithered glyphs for translucent effect. Used in
  * boot_anim.c for title shadow. */
-void gfx_text_font_dither(int x, int y, const char *text, gfx_color_t color,
-                          int scale, int quarter_turns,
-                          const gfx_font_t *font, uint8_t alpha)
-{
+void
+gfx_text_font_dither(int x, int y, const char* text, gfx_color_t color, int scale, int quarter_turns,
+                     const gfx_font_t* font, uint8_t alpha) {
     if (scale < 1) {
         scale = 1;
     }
@@ -940,13 +1018,13 @@ void gfx_text_font_dither(int x, int y, const char *text, gfx_color_t color,
     const int turn = ((quarter_turns % 4) + 4) % 4;
 
     static const int step[4][2] = {
-        {  1,  0 },
-        {  0,  1 },
-        { -1,  0 },
-        {  0, -1 },
+        {1, 0},
+        {0, 1},
+        {-1, 0},
+        {0, -1},
     };
 
-    for (const char *p = text; *p != '\0'; p++) {
+    for (const char* p = text; *p != '\0'; p++) {
         const unsigned char ch = (unsigned char)*p;
         draw_glyph_font_dither(font, x, y, ch, color, scale, turn, alpha);
         const int adv = gfx_font_advance(font, ch, scale);
@@ -961,12 +1039,23 @@ void gfx_text_font_dither(int x, int y, const char *text, gfx_color_t color,
 /* See gfx.h for "why not always compiled". Used by gfx_set_debug_overlay()
  * below. */
 static bool debug_overlay_on;
-bool gfx_debug_overlay(void) { return debug_overlay_on; }
+
+bool
+gfx_debug_overlay(void) {
+    return debug_overlay_on;
+}
 
 static bool leaf_overlay_on;
-bool gfx_debug_leaf_overlay(void) { return leaf_overlay_on; }
 
-static inline bool overlay_any_on(void) { return debug_overlay_on || leaf_overlay_on; }
+bool
+gfx_debug_leaf_overlay(void) {
+    return leaf_overlay_on;
+}
+
+static inline bool
+overlay_any_on(void) {
+    return debug_overlay_on || leaf_overlay_on;
+}
 
 /* See send_partial_band() for third path. Exists for device test. Not reset
  * by gfx_present(). */
@@ -974,24 +1063,28 @@ static int dev_strips_sent_full;
 static int dev_strips_sent_gathered;
 static int dev_strips_sent_partial;
 
-void gfx_reset_strip_send_counts(void)
-{
+void
+gfx_reset_strip_send_counts(void) {
     dev_strips_sent_full = 0;
     dev_strips_sent_gathered = 0;
     dev_strips_sent_partial = 0;
 }
 
-void gfx_get_strip_send_counts(int *full_bands, int *gathered,
-                               int *partial_bands)
-{
-    if (full_bands)     { *full_bands     = dev_strips_sent_full; }
-    if (gathered)       { *gathered       = dev_strips_sent_gathered; }
-    if (partial_bands)  { *partial_bands  = dev_strips_sent_partial; }
+void
+gfx_get_strip_send_counts(int* full_bands, int* gathered, int* partial_bands) {
+    if (full_bands) {
+        *full_bands = dev_strips_sent_full;
+    }
+    if (gathered) {
+        *gathered = dev_strips_sent_gathered;
+    }
+    if (partial_bands) {
+        *partial_bands = dev_strips_sent_partial;
+    }
 }
 
-static void mark_rect_border(gfx_color_t *buf, int stride, int w, int h,
-                             gfx_color_t colour)
-{
+static void
+mark_rect_border(gfx_color_t* buf, int stride, int w, int h, gfx_color_t colour) {
     for (int col = 0; col < w; col++) {
         buf[col] = colour;
         buf[(size_t)(h - 1) * stride + col] = colour;
@@ -1004,13 +1097,12 @@ static void mark_rect_border(gfx_color_t *buf, int stride, int w, int h,
 
 /* Used for full-width send border. No scratch copy - direct to fb. Inverse
  * save/restore. */
-#define BORDER_PIXELS (2 * (COL_WIDTH + STRIP_HEIGHT))
+#define BORDER_PIXELS      (2 * (COL_WIDTH + STRIP_HEIGHT))
 
 #define LEAF_BORDER_PIXELS (2 * (LEAF_W + LEAF_H))
 
-static void save_border(const gfx_color_t *buf, int stride, int w, int h,
-                        gfx_color_t *out)
-{
+static void
+save_border(const gfx_color_t* buf, int stride, int w, int h, gfx_color_t* out) {
     int i = 0;
     for (int col = 0; col < w; col++) {
         out[i++] = buf[col];
@@ -1022,9 +1114,8 @@ static void save_border(const gfx_color_t *buf, int stride, int w, int h,
     }
 }
 
-static void restore_border(gfx_color_t *buf, int stride, int w, int h,
-                           const gfx_color_t *saved)
-{
+static void
+restore_border(gfx_color_t* buf, int stride, int w, int h, const gfx_color_t* saved) {
     int i = 0;
     for (int col = 0; col < w; col++) {
         buf[col] = saved[i++];
@@ -1046,19 +1137,15 @@ static void restore_border(gfx_color_t *buf, int stride, int w, int h,
  * silent DMA overflow. */
 #define OVERLAY_CELL_SAVE_PIXELS (GRID_COLS * BORDER_PIXELS)
 #define OVERLAY_LEAF_SAVE_PIXELS (LEAF_RECTS_PER_ROW_MAX * LEAF_BORDER_PIXELS)
-_Static_assert(OVERLAY_CELL_SAVE_PIXELS + OVERLAY_LEAF_SAVE_PIXELS <=
-              GATHER_MAX_PIXELS,
-              "overlay save/restore scratch must fit inside gather_buf");
+_Static_assert(OVERLAY_CELL_SAVE_PIXELS + OVERLAY_LEAF_SAVE_PIXELS <= GATHER_MAX_PIXELS,
+               "overlay save/restore scratch must fit inside gather_buf");
 
-static inline gfx_color_t (*overlay_cell_save(void))[BORDER_PIXELS]
-{
-    return (gfx_color_t (*)[BORDER_PIXELS])gather_buf;
+static inline gfx_color_t (*overlay_cell_save(void))[BORDER_PIXELS] {
+    return (gfx_color_t(*)[BORDER_PIXELS])gather_buf;
 }
 
-static inline gfx_color_t (*overlay_leaf_save(void))[LEAF_BORDER_PIXELS]
-{
-    return (gfx_color_t (*)[LEAF_BORDER_PIXELS])
-        (gather_buf + OVERLAY_CELL_SAVE_PIXELS);
+static inline gfx_color_t (*overlay_leaf_save(void))[LEAF_BORDER_PIXELS] {
+    return (gfx_color_t(*)[LEAF_BORDER_PIXELS])(gather_buf + OVERLAY_CELL_SAVE_PIXELS);
 }
 
 /* Shared by send_full_row() and gather_and_send(), never live at once:
@@ -1069,24 +1156,23 @@ static inline gfx_color_t (*overlay_leaf_save(void))[LEAF_BORDER_PIXELS]
  * rather than static: too big for app_main()'s stack, and a permanent
  * .bss reservation fares no better given this repo's history of
  * static-growth OOMs. */
-static dirty_leaf_rect_t *leaf_rect_scratch;
+static dirty_leaf_rect_t* leaf_rect_scratch;
 
-void gfx_set_debug_overlay(bool on)
-{
+void
+gfx_set_debug_overlay(bool on) {
     debug_overlay_on = on;
 }
 
-void gfx_set_leaf_overlay(bool on)
-{
+void
+gfx_set_leaf_overlay(bool on) {
     if (on) {
         if (leaf_rect_scratch == NULL) {
-            leaf_rect_scratch = malloc(sizeof(*leaf_rect_scratch) *
-                                       LEAF_RECTS_PER_ROW_MAX);
+            leaf_rect_scratch = malloc(sizeof(*leaf_rect_scratch) * LEAF_RECTS_PER_ROW_MAX);
             if (leaf_rect_scratch == NULL) {
-                ESP_LOGE(TAG, "overlay: could not allocate %u-byte leaf "
-                              "rect scratch - staying off",
-                         (unsigned)(sizeof(*leaf_rect_scratch) *
-                                    LEAF_RECTS_PER_ROW_MAX));
+                ESP_LOGE(TAG,
+                         "overlay: could not allocate %u-byte leaf "
+                         "rect scratch - staying off",
+                         (unsigned)(sizeof(*leaf_rect_scratch) * LEAF_RECTS_PER_ROW_MAX));
                 return;
             }
         }
@@ -1110,10 +1196,9 @@ void gfx_set_leaf_overlay(bool on)
  * empties the queue, so the one Take() after this draw_bitmap()
  * unambiguously waits for it - SPI transactions on one device complete
  * in queued order. */
-static void gather_and_send(int x0, int y0, int x1, int y1, int row,
-                            int run_start, int run_end, bool refined,
-                            int *queued, gfx_color_t border)
-{
+static void
+gather_and_send(int x0, int y0, int x1, int y1, int row, int run_start, int run_end, bool refined, int* queued,
+                gfx_color_t border) {
     const int w = x1 - x0;
     const int h = y1 - y0;
 
@@ -1123,9 +1208,7 @@ static void gather_and_send(int x0, int y0, int x1, int y1, int row,
     *queued = 0;
 
     for (int r = 0; r < h; r++) {
-        memcpy(gather_buf + (size_t)r * w,
-              fb + (size_t)(y0 + r) * GFX_WIDTH + x0,
-              (size_t)w * sizeof(gfx_color_t));
+        memcpy(gather_buf + (size_t)r * w, fb + (size_t)(y0 + r) * GFX_WIDTH + x0, (size_t)w * sizeof(gfx_color_t));
     }
 #if CONFIG_LAUNCHER_DEVELOPMENT
     if (debug_overlay_on && refined) {
@@ -1134,41 +1217,38 @@ static void gather_and_send(int x0, int y0, int x1, int y1, int row,
     } else if (debug_overlay_on) {
         for (int col = run_start; col < run_end; col++) {
             const int idx = row * GRID_COLS + col;
-            gfx_color_t *at = gather_buf +
-                             (size_t)(cell_y0[idx] - y0) * w +
-                             (cell_x0[idx] - x0);
-            mark_rect_border(at, w, cell_x1[idx] - cell_x0[idx],
-                             cell_y1[idx] - cell_y0[idx], border);
+            gfx_color_t* at = gather_buf + (size_t)(cell_y0[idx] - y0) * w + (cell_x0[idx] - x0);
+            mark_rect_border(at, w, cell_x1[idx] - cell_x0[idx], cell_y1[idx] - cell_y0[idx], border);
         }
     }
     if (leaf_overlay_on) {
-        const int n = dirty_leaf_rects(row, x0, y0, x1, y1, leaf_rect_scratch,
-                                       LEAF_RECTS_PER_ROW_MAX);
+        const int n = dirty_leaf_rects(row, x0, y0, x1, y1, leaf_rect_scratch, LEAF_RECTS_PER_ROW_MAX);
         for (int i = 0; i < n; i++) {
-            const dirty_leaf_rect_t *r = &leaf_rect_scratch[i];
-            gfx_color_t *at =
-                gather_buf + (size_t)(r->y0 - y0) * w + (r->x0 - x0);
-            mark_rect_border(at, w, r->x1 - r->x0, r->y1 - r->y0,
-                             gfx_rgb(0x00FF00));
+            const dirty_leaf_rect_t* r = &leaf_rect_scratch[i];
+            gfx_color_t* at = gather_buf + (size_t)(r->y0 - y0) * w + (r->x0 - x0);
+            mark_rect_border(at, w, r->x1 - r->x0, r->y1 - r->y0, gfx_rgb(0x00FF00));
         }
     }
 #else
-    (void)row; (void)run_start; (void)run_end; (void)refined; (void)border;
+    (void)row;
+    (void)run_start;
+    (void)run_end;
+    (void)refined;
+    (void)border;
 #endif
     esp_lcd_panel_draw_bitmap(panel, x0, y0, x1, y1, gather_buf);
     xSemaphoreTake(strip_sent, portMAX_DELAY);
 }
 
-static void send_full_row(int row, int *queued)
-{
+static void
+send_full_row(int row, int* queued) {
     const int y = row * STRIP_HEIGHT;
 
 #if CONFIG_LAUNCHER_DEVELOPMENT
     /* leaf_rect_scratch never NULL: gfx_set_leaf_overlay() allocates */
     int leaf_n = 0;
     if (leaf_overlay_on) {
-        leaf_n = dirty_leaf_rects(row, 0, y, GFX_WIDTH, y + STRIP_HEIGHT,
-                                  leaf_rect_scratch, LEAF_RECTS_PER_ROW_MAX);
+        leaf_n = dirty_leaf_rects(row, 0, y, GFX_WIDTH, y + STRIP_HEIGHT, leaf_rect_scratch, LEAF_RECTS_PER_ROW_MAX);
     }
 
     /* Cyan borders, green leaves, or both. Skip if leaf_overlay_on and no
@@ -1177,59 +1257,48 @@ static void send_full_row(int row, int *queued)
         /* Save phase: prevent overwriting shared pixels. */
         if (debug_overlay_on) {
             for (int col = 0; col < GRID_COLS; col++) {
-                gfx_color_t *cell =
-                    fb + (size_t)y * GFX_WIDTH + col * COL_WIDTH;
-                save_border(cell, GFX_WIDTH, COL_WIDTH, STRIP_HEIGHT,
-                           overlay_cell_save()[col]);
+                gfx_color_t* cell = fb + (size_t)y * GFX_WIDTH + col * COL_WIDTH;
+                save_border(cell, GFX_WIDTH, COL_WIDTH, STRIP_HEIGHT, overlay_cell_save()[col]);
             }
         }
         for (int i = 0; i < leaf_n; i++) {
-            const dirty_leaf_rect_t *r = &leaf_rect_scratch[i];
-            gfx_color_t *at = fb + (size_t)r->y0 * GFX_WIDTH + r->x0;
-            save_border(at, GFX_WIDTH, r->x1 - r->x0, r->y1 - r->y0,
-                       overlay_leaf_save()[i]);
+            const dirty_leaf_rect_t* r = &leaf_rect_scratch[i];
+            gfx_color_t* at = fb + (size_t)r->y0 * GFX_WIDTH + r->x0;
+            save_border(at, GFX_WIDTH, r->x1 - r->x0, r->y1 - r->y0, overlay_leaf_save()[i]);
         }
 
         if (debug_overlay_on) {
             for (int col = 0; col < GRID_COLS; col++) {
-                gfx_color_t *cell =
-                    fb + (size_t)y * GFX_WIDTH + col * COL_WIDTH;
-                mark_rect_border(cell, GFX_WIDTH, COL_WIDTH, STRIP_HEIGHT,
-                                gfx_rgb(0x00FFFF));
+                gfx_color_t* cell = fb + (size_t)y * GFX_WIDTH + col * COL_WIDTH;
+                mark_rect_border(cell, GFX_WIDTH, COL_WIDTH, STRIP_HEIGHT, gfx_rgb(0x00FFFF));
             }
         }
         for (int i = 0; i < leaf_n; i++) {
-            const dirty_leaf_rect_t *r = &leaf_rect_scratch[i];
-            gfx_color_t *at = fb + (size_t)r->y0 * GFX_WIDTH + r->x0;
-            mark_rect_border(at, GFX_WIDTH, r->x1 - r->x0, r->y1 - r->y0,
-                            gfx_rgb(0x00FF00));
+            const dirty_leaf_rect_t* r = &leaf_rect_scratch[i];
+            gfx_color_t* at = fb + (size_t)r->y0 * GFX_WIDTH + r->x0;
+            mark_rect_border(at, GFX_WIDTH, r->x1 - r->x0, r->y1 - r->y0, gfx_rgb(0x00FF00));
         }
 
-        esp_lcd_panel_draw_bitmap(panel, 0, y, GFX_WIDTH, y + STRIP_HEIGHT,
-                                  fb + (size_t)y * GFX_WIDTH);
+        esp_lcd_panel_draw_bitmap(panel, 0, y, GFX_WIDTH, y + STRIP_HEIGHT, fb + (size_t)y * GFX_WIDTH);
         xSemaphoreTake(strip_sent, portMAX_DELAY);
 
         /* Restore in the reverse order of saving. */
         for (int i = leaf_n - 1; i >= 0; i--) {
-            const dirty_leaf_rect_t *r = &leaf_rect_scratch[i];
-            gfx_color_t *at = fb + (size_t)r->y0 * GFX_WIDTH + r->x0;
-            restore_border(at, GFX_WIDTH, r->x1 - r->x0, r->y1 - r->y0,
-                          overlay_leaf_save()[i]);
+            const dirty_leaf_rect_t* r = &leaf_rect_scratch[i];
+            gfx_color_t* at = fb + (size_t)r->y0 * GFX_WIDTH + r->x0;
+            restore_border(at, GFX_WIDTH, r->x1 - r->x0, r->y1 - r->y0, overlay_leaf_save()[i]);
         }
         if (debug_overlay_on) {
             for (int col = GRID_COLS - 1; col >= 0; col--) {
-                gfx_color_t *cell =
-                    fb + (size_t)y * GFX_WIDTH + col * COL_WIDTH;
-                restore_border(cell, GFX_WIDTH, COL_WIDTH, STRIP_HEIGHT,
-                              overlay_cell_save()[col]);
+                gfx_color_t* cell = fb + (size_t)y * GFX_WIDTH + col * COL_WIDTH;
+                restore_border(cell, GFX_WIDTH, COL_WIDTH, STRIP_HEIGHT, overlay_cell_save()[col]);
             }
         }
         return;
     }
 #endif
 
-    esp_lcd_panel_draw_bitmap(panel, 0, y, GFX_WIDTH, y + STRIP_HEIGHT,
-                              fb + (size_t)y * GFX_WIDTH);
+    esp_lcd_panel_draw_bitmap(panel, 0, y, GFX_WIDTH, y + STRIP_HEIGHT, fb + (size_t)y * GFX_WIDTH);
     (*queued)++;
 }
 
@@ -1240,15 +1309,14 @@ static void send_full_row(int row, int *queued)
  * dirty many short spans, 0% where strips are genuinely full-height.
  * Declines whenever either overlay layer is on: their save/restore
  * machinery assumes send_full_row()'s full STRIP_HEIGHT box. */
-static bool send_partial_band(int y0, int y1, int *queued)
-{
+static bool
+send_partial_band(int y0, int y1, int* queued) {
 #if CONFIG_LAUNCHER_DEVELOPMENT
     if (overlay_any_on()) {
         return false;
     }
 #endif
-    esp_lcd_panel_draw_bitmap(panel, 0, y0, GFX_WIDTH, y1,
-                              fb + (size_t)y0 * GFX_WIDTH);
+    esp_lcd_panel_draw_bitmap(panel, 0, y0, GFX_WIDTH, y1, fb + (size_t)y0 * GFX_WIDTH);
     (*queued)++;
     return true;
 }
@@ -1256,26 +1324,24 @@ static bool send_partial_band(int y0, int y1, int *queued)
 /* See gfx_dirty.h file comment */
 
 /* Yellow; see gather_and_send()'s comment */
-static void send_run(int row, int run_start, int run_end, int box_x0,
-                     int box_x1, int box_y0, int box_y1, int split_n,
-                     const int *split_x0, const int *split_x1, int *queued)
-{
+static void
+send_run(int row, int run_start, int run_end, int box_x0, int box_x1, int box_y0, int box_y1, int split_n,
+         const int* split_x0, const int* split_x1, int* queued) {
     if (split_n == 0) {
-        gather_and_send(box_x0, box_y0, box_x1, box_y1, row, run_start,
-                        run_end, false, queued, gfx_rgb(0xFFFF00));
+        gather_and_send(box_x0, box_y0, box_x1, box_y1, row, run_start, run_end, false, queued, gfx_rgb(0xFFFF00));
         return;
     }
 
     for (int i = 0; i < split_n; i++) {
-        gather_and_send(split_x0[i], box_y0, split_x1[i], box_y1, row,
-                        run_start, run_end, true, queued, gfx_rgb(0xFFFF00));
+        gather_and_send(split_x0[i], box_y0, split_x1[i], box_y1, row, run_start, run_end, true, queued,
+                        gfx_rgb(0xFFFF00));
     }
 }
 
 /* Cells merge into transactions; gaps remain. Falls back to full row for
  * large parts. */
-static void send_one_row(int row, int *queued)
-{
+static void
+send_one_row(int row, int* queued) {
     int run_start[GRID_COLS], run_end[GRID_COLS];
     int box_x0[GRID_COLS], box_x1[GRID_COLS];
     int box_y0[GRID_COLS], box_y1[GRID_COLS];
@@ -1285,20 +1351,16 @@ static void send_one_row(int row, int *queued)
     const int n = collect_dirty_runs(row, run_start, run_end);
 
     for (int r = 0; r < n; r++) {
-        run_box(row, run_start[r], run_end[r], &box_x0[r], &box_x1[r],
-               &box_y0[r], &box_y1[r]);
-        split_n[r] = plan_run(row, run_start[r], run_end[r], box_y0[r],
-                              box_y1[r], split_x0[r], split_x1[r]);
+        run_box(row, run_start[r], run_end[r], &box_x0[r], &box_x1[r], &box_y0[r], &box_y1[r]);
+        split_n[r] = plan_run(row, run_start[r], run_end[r], box_y0[r], box_y1[r], split_x0[r], split_x1[r]);
 
         if (split_n[r] == 0) {
-            const size_t area = (size_t)(box_x1[r] - box_x0[r]) *
-                                (size_t)(box_y1[r] - box_y0[r]);
+            const size_t area = (size_t)(box_x1[r] - box_x0[r]) * (size_t)(box_y1[r] - box_y0[r]);
             if (area > GATHER_MAX_PIXELS) {
                 /* See send_partial_band(). Full-width box means row's only
                  * run - safe to return. */
-                if (box_x0[r] == 0 && box_x1[r] == GFX_WIDTH &&
-                    box_y1[r] - box_y0[r] < STRIP_HEIGHT &&
-                    send_partial_band(box_y0[r], box_y1[r], queued)) {
+                if (box_x0[r] == 0 && box_x1[r] == GFX_WIDTH && box_y1[r] - box_y0[r] < STRIP_HEIGHT
+                    && send_partial_band(box_y0[r], box_y1[r], queued)) {
 #if CONFIG_LAUNCHER_DEVELOPMENT
                     dev_strips_sent_partial++;
 #endif
@@ -1319,14 +1381,13 @@ static void send_one_row(int row, int *queued)
     }
 #endif
     for (int r = 0; r < n; r++) {
-        send_run(row, run_start[r], run_end[r], box_x0[r], box_x1[r],
-                box_y0[r], box_y1[r], split_n[r], split_x0[r], split_x1[r],
-                queued);
+        send_run(row, run_start[r], run_end[r], box_x0[r], box_x1[r], box_y0[r], box_y1[r], split_n[r], split_x0[r],
+                 split_x1[r], queued);
     }
 }
 
-void gfx_present(void)
-{
+void
+gfx_present(void) {
     int queued = 0;
     if (interlace_on) {
         frame_parity = !frame_parity;
@@ -1336,12 +1397,11 @@ void gfx_present(void)
 
     for (int row = 0; row < STRIP_COUNT; row++) {
         if (!dirty_row_is_dirty(row)) {
-            continue;   /* unchanged - the panel is still showing it */
+            continue; /* unchanged - the panel is still showing it */
         }
 
         if (interlace_on && (row % 2) != frame_parity) {
-            remaining_cell_dirty |= cell_dirty &
-                (((1u << GRID_COLS) - 1u) << (row * GRID_COLS));
+            remaining_cell_dirty |= cell_dirty & (((1u << GRID_COLS) - 1u) << (row * GRID_COLS));
             continue;
         }
 
@@ -1371,20 +1431,20 @@ void gfx_present(void)
     }
 }
 
-#else   /* !ESP_PLATFORM */
+#else /* !ESP_PLATFORM */
 
-void gfx_present(void)
-{
+void
+gfx_present(void) {
     /* No panel on a host build - see this section's own top comment. */
 }
 
-#endif   /* ESP_PLATFORM - the presentation pipeline */
+#endif /* ESP_PLATFORM - the presentation pipeline */
 
 #if CONFIG_LAUNCHER_DEVELOPMENT
 /* Bypasses gfx_present() for raw QSPI. SPI driver splits into chunks, one
  * strip_sent means full frame. */
-void gfx_present_raw_full_frame_for_test(void)
-{
+void
+gfx_present_raw_full_frame_for_test(void) {
     esp_lcd_panel_draw_bitmap(panel, 0, 0, GFX_WIDTH, GFX_HEIGHT, fb);
     xSemaphoreTake(strip_sent, portMAX_DELAY);
 }

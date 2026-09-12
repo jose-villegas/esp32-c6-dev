@@ -30,15 +30,13 @@
  * ACROSS flow, so it cannot disturb the main sweep. Falling water does
  * not spread: a cell able to fall THIS step leaves cross-flow nothing
  * to decide. */
-static inline bool has_room_below(const uint8_t *below_row, int w, int fx,
-                                  uint8_t id)
-{
+static inline bool
+has_room_below(const uint8_t* below_row, int w, int fx, uint8_t id) {
     if (below_row == NULL || (unsigned)fx >= (unsigned)w) {
         return false;
     }
     const cell_t below = below_row[fx];
-    return CELL_IS_EMPTY(below) ||
-           (CELL_MATERIAL(below) == id && CELL_VARIANT(below) < MASS_MAX);
+    return CELL_IS_EMPTY(below) || (CELL_MATERIAL(below) == id && CELL_VARIANT(below) < MASS_MAX);
 }
 
 /* `there < MASS_MAX` must stay part of the test, not just the level
@@ -46,26 +44,23 @@ static inline bool has_room_below(const uint8_t *below_row, int w, int fx,
  * legitimately read as lower, so "is it lower" alone would send every
  * interior cell of a full pool on a full sight walk - the exact cost
  * this function exists to avoid. */
-static inline bool neighbour_is_lower(const uint8_t *n_row, int w, int nx,
-                                      uint8_t id, int mass, int bias_q8)
-{
+static inline bool
+neighbour_is_lower(const uint8_t* n_row, int w, int nx, uint8_t id, int mass, int bias_q8) {
     if (n_row == NULL || (unsigned)nx >= (unsigned)w) {
         return false;
     }
     const cell_t n = n_row[nx];
     /* Rejects OTHER material as full using same comparison. One branch for
      * both. */
-    const int there = CELL_IS_EMPTY(n) ? 0
-                    : (CELL_MATERIAL(n) == id ? CELL_VARIANT(n) : MASS_MAX);
+    const int there = CELL_IS_EMPTY(n) ? 0 : (CELL_MATERIAL(n) == id ? CELL_VARIANT(n) : MASS_MAX);
     return there < MASS_MAX && (there << 8) - bias_q8 < (mass << 8);
 }
 
 /* Shallowest cell by level, steps away, 1/256 mass drop. Flow stops at
  * different liquid. */
-static inline int find_shallowest(const sand_t *s, int x, int y, int px,
-                                  int py, int sight, uint8_t id, int mass,
-                                  int bias_q8, int *lowest, int *at)
-{
+static inline int
+find_shallowest(const sand_t* s, int x, int y, int px, int py, int sight, uint8_t id, int mass, int bias_q8,
+                int* lowest, int* at) {
     const int mine = mass << 8;
     int best = mine;
     int carried = 0;
@@ -94,11 +89,11 @@ static inline int find_shallowest(const sand_t *s, int x, int y, int px,
         const int level = (there << 8) + carried;
         if (level < best) {
             best = level;
-            low  = there;
+            low = there;
             k_at = k;
         }
         if (there == 0) {
-            break;          /* nothing is lower than dry */
+            break; /* nothing is lower than dry */
         }
     }
 
@@ -112,14 +107,9 @@ static inline int find_shallowest(const sand_t *s, int x, int y, int px,
  * for the whole row walk. Deriving them here cost a multiply and a reload of
  * s->w, s->h and s->cells per probe, which the compiler cannot hoist because
  * the transfer below writes through s->cells and may alias those fields. */
-static inline bool equalise_one_cell(sand_t *s, uint8_t *row, int x, int y,
-                                     const uint8_t *below_row,
-                                     const uint8_t *n_row, int w,
-                                     int px, int py, int dx,
-                                     int sight, uint8_t id, int mass,
-                                     int bias_q8,
-                                     bool *stayed_in_row, int *touched_x)
-{
+static inline bool
+equalise_one_cell(sand_t* s, uint8_t* row, int x, int y, const uint8_t* below_row, const uint8_t* n_row, int w, int px,
+                  int py, int dx, int sight, uint8_t id, int mass, int bias_q8, bool* stayed_in_row, int* touched_x) {
     if (has_room_below(below_row, w, x + dx, id)) {
         return false;
     }
@@ -127,13 +117,12 @@ static inline bool equalise_one_cell(sand_t *s, uint8_t *row, int x, int y,
         return false;
     }
     if (s->may_have_viscous_liquid && !liquid_may_move(s, id)) {
-        return false;   /* viscosity affects levelling; syrupy liquid would
+        return false; /* viscosity affects levelling; syrupy liquid would
                          * level instantly sideways, resembling "runny" */
     }
 
     int lowest, at;
-    const int drop_q8 = find_shallowest(s, x, y, px, py, sight, id, mass,
-                                        bias_q8, &lowest, &at);
+    const int drop_q8 = find_shallowest(s, x, y, px, py, sight, id, mass, bias_q8, &lowest, &at);
 
     /* Avoids trading mass imbalance - `>> 9` halves and converts q8 to whole
      * mass. */
@@ -158,8 +147,7 @@ static inline bool equalise_one_cell(sand_t *s, uint8_t *row, int x, int y,
     const int tx = x + px * at;
     const int ty = y + py * at;
 
-    const bool was_empty =
-        pour_into(&s->cells[(size_t)ty * (size_t)w + (size_t)tx], id, give);
+    const bool was_empty = pour_into(&s->cells[(size_t)ty * (size_t)w + (size_t)tx], id, give);
     row[x] = (mass - give > 0) ? CELL_MAKE(id, mass - give) : CELL_EMPTY;
     if (was_empty) {
         mark_depth_band(s, ty);
@@ -174,9 +162,8 @@ static inline bool equalise_one_cell(sand_t *s, uint8_t *row, int x, int y,
     return true;
 }
 
-static inline void union_touched_x(bool *touched, int *x0, int *x1,
-                                   int lo, int hi)
-{
+static inline void
+union_touched_x(bool* touched, int* x0, int* x1, int lo, int hi) {
     if (!*touched || lo < *x0) {
         *x0 = lo;
     }
@@ -188,15 +175,10 @@ static inline void union_touched_x(bool *touched, int *x0, int *x1,
 
 /* One cell's cross-flow contribution: tracked liquid, fold same-row transfer.
  * Split for complexity. */
-static inline bool equalise_one_row_cell(sand_t *s, uint8_t *row, int x, int y,
-                                         const uint8_t *ax_row,
-                                         const uint8_t *dg_row,
-                                         const uint8_t *below_row, int w,
-                                         const xflow_t *r, int dx,
-                                         int sight, uint16_t is_liquid,
-                                         bool *touched, int *touched_x0,
-                                         int *touched_x1)
-{
+static inline bool
+equalise_one_row_cell(sand_t* s, uint8_t* row, int x, int y, const uint8_t* ax_row, const uint8_t* dg_row,
+                      const uint8_t* below_row, int w, const xflow_t* r, int dx, int sight, uint16_t is_liquid,
+                      bool* touched, int* touched_x0, int* touched_x1) {
     const cell_t c = row[x];
     if (CELL_IS_EMPTY(c)) {
         return false;
@@ -214,7 +196,7 @@ static inline bool equalise_one_row_cell(sand_t *s, uint8_t *row, int x, int y,
      * stepped by +/-q_q8 per cell, which telescopes to (q_q8 * x) & 255 in
      * either direction. Off the major axis it never advanced at all. */
     const int q_q8 = r->q_q8;
-    const int pat  = (r->ax[0] != 0) ? ((q_q8 * x) & 255) : ((q_q8 * y) & 255);
+    const int pat = (r->ax[0] != 0) ? ((q_q8 * x) & 255) : ((q_q8 * y) & 255);
     const bool diagonal = (pat < q_q8);
 
     const int px = diagonal ? r->dg[0] : r->ax[0];
@@ -222,42 +204,32 @@ static inline bool equalise_one_row_cell(sand_t *s, uint8_t *row, int x, int y,
     const int bias_q8 = diagonal ? r->bias_dg_q8 : r->bias_ax_q8;
     /* The ray's own row, already resolved once for the whole row walk - the
      * two rays are the only rows a neighbour probe can land in. */
-    const uint8_t *const n_row = diagonal ? dg_row : ax_row;
+    const uint8_t* const n_row = diagonal ? dg_row : ax_row;
 
     bool stayed_in_row = false;
-    int  tx = 0;
-    if (equalise_one_cell(s, row, x, y, below_row, n_row, w,
-                              px, py, dx, sight, id,
-                              CELL_VARIANT(c), bias_q8, &stayed_in_row, &tx) &&
-            stayed_in_row) {
+    int tx = 0;
+    if (equalise_one_cell(s, row, x, y, below_row, n_row, w, px, py, dx, sight, id, CELL_VARIANT(c), bias_q8,
+                          &stayed_in_row, &tx)
+        && stayed_in_row) {
         /* Marking deferred for gravity-free orientations. mark_rows() impact.
          * Narrow x range for wake. */
-        union_touched_x(touched, touched_x0, touched_x1,
-                       x < tx ? x : tx, x > tx ? x : tx);
+        union_touched_x(touched, touched_x0, touched_x1, x < tx ? x : tx, x > tx ? x : tx);
     }
     return true;
 }
 
-static inline bool equalise_one_block(sand_t *s, uint8_t *row, int y,
-                                      int cx_from, int cx_to, int x_step,
-                                      const uint8_t *ax_row,
-                                      const uint8_t *dg_row,
-                                      const uint8_t *below_row, int w,
-                                      const xflow_t *r, int dx,
-                                      int sight, uint16_t is_liquid,
-                                      bool *touched, int *touched_x0,
-                                      int *touched_x1)
-{
+static inline bool
+equalise_one_block(sand_t* s, uint8_t* row, int y, int cx_from, int cx_to, int x_step, const uint8_t* ax_row,
+                   const uint8_t* dg_row, const uint8_t* below_row, int w, const xflow_t* r, int dx, int sight,
+                   uint16_t is_liquid, bool* touched, int* touched_x0, int* touched_x1) {
     bool any_liquid = false;
 
     /* The diagonal-ray phase this loop used to walk per cell now lives in
      * equalise_one_row_cell(), derived from x once a cell is known to be
      * liquid - see its own comment. */
     for (int x = cx_from; x != cx_to; x += x_step) {
-        if (equalise_one_row_cell(s, row, x, y, ax_row, dg_row, below_row, w,
-                                  r, dx, sight,
-                                  is_liquid, touched, touched_x0,
-                                  touched_x1)) {
+        if (equalise_one_row_cell(s, row, x, y, ax_row, dg_row, below_row, w, r, dx, sight, is_liquid, touched,
+                                  touched_x0, touched_x1)) {
             any_liquid = true;
         }
     }
@@ -268,8 +240,8 @@ static inline bool equalise_one_block(sand_t *s, uint8_t *row, int y,
  * of a band a pool merely touches, and half of those rows hold nothing at
  * all. Worth its own scan rather than the walk's: one induction variable and
  * an empty test, against the walk's four and a spilled reload per cell. */
-static inline bool span_is_empty(const uint8_t *row, int x0, int x1)
-{
+static inline bool
+span_is_empty(const uint8_t* row, int x0, int x1) {
     for (int x = x0; x < x1; x++) {
         if (!CELL_IS_EMPTY(row[x])) {
             return false;
@@ -280,9 +252,8 @@ static inline bool span_is_empty(const uint8_t *row, int x0, int x1)
 
 /* The answer a skipped span still owes equalise_liquids(): found_any is what
  * clears may_have_liquid. */
-static inline bool span_has_liquid(const uint8_t *row, int x0, int x1,
-                                   uint16_t is_liquid)
-{
+static inline bool
+span_has_liquid(const uint8_t* row, int x0, int x1, uint16_t is_liquid) {
     for (int x = x0; x < x1; x++) {
         if (((is_liquid >> CELL_MATERIAL(row[x])) & 1u) != 0) {
             return true;
@@ -294,9 +265,8 @@ static inline bool span_has_liquid(const uint8_t *row, int x0, int x1,
 /* The columns a span's rays can reach: both rays step x by -1, 0 or +1, so the
  * span's own width plus one cell of margin either side, clipped to the grid.
  * A ray leaving the grid sideways is already a reject. */
-static inline bool rays_blocked(const uint8_t *ax_row, const uint8_t *dg_row,
-                                int x0, int x1, int w, uint16_t is_liquid)
-{
+static inline bool
+rays_blocked(const uint8_t* ax_row, const uint8_t* dg_row, int x0, int x1, int w, uint16_t is_liquid) {
     const int sx0 = (x0 > 0) ? x0 - 1 : 0;
     const int sx1 = (x1 < w) ? x1 + 1 : w;
 
@@ -316,33 +286,27 @@ static inline bool rays_blocked(const uint8_t *ax_row, const uint8_t *dg_row,
  * only when `pat < q_q8`, and pat is a multiple of q_q8, so a lean of zero
  * tangent reads `0 < 0`. Saying so lets rays_blocked() short-circuit on
  * `dg_row == ax_row` and skip a block on one span. */
-static inline const uint8_t *diagonal_row(const sand_t *s, int y,
-                                          const xflow_t *r,
-                                          const uint8_t *ax_row)
-{
+static inline const uint8_t*
+diagonal_row(const sand_t* s, int y, const xflow_t* r, const uint8_t* ax_row) {
     return (r->q_q8 != 0) ? dest_row(s, y + r->dg[1]) : ax_row;
 }
 
-static bool equalise_one_row(sand_t *s, int y, int w, int x_step,
-                             const xflow_t *r, int dx, int dy, int sight,
-                             uint16_t is_liquid)
-{
-    uint8_t *row = s->cells + (size_t)y * (size_t)w;
+static bool
+equalise_one_row(sand_t* s, int y, int w, int x_step, const xflow_t* r, int dx, int dy, int sight, uint16_t is_liquid) {
+    uint8_t* row = s->cells + (size_t)y * (size_t)w;
 
-    const uint8_t *const ax_row = dest_row(s, y + r->ax[1]);
-    const uint8_t *const dg_row = diagonal_row(s, y, r, ax_row);
-    const uint8_t *const below_row = dest_row(s, y + dy);
+    const uint8_t* const ax_row = dest_row(s, y + r->ax[1]);
+    const uint8_t* const dg_row = diagonal_row(s, y, r, ax_row);
+    const uint8_t* const below_row = dest_row(s, y + dy);
 
     bool any_liquid = false;
     bool touched = false;
-    int  touched_x0 = 0, touched_x1 = 0;
+    int touched_x0 = 0, touched_x1 = 0;
 
-    const uint8_t *brow = (s->block_state != NULL)
-        ? s->block_state + (size_t)((unsigned)y / SAND_BLOCK_H) *
-                           (size_t)s->block_cols
-        : NULL;
+    const uint8_t* brow =
+        (s->block_state != NULL) ? s->block_state + (size_t)((unsigned)y / SAND_BLOCK_H) * (size_t)s->block_cols : NULL;
     const int bx_from = (x_step > 0) ? 0 : s->block_cols - 1;
-    const int bx_to   = (x_step > 0) ? s->block_cols : -1;
+    const int bx_to = (x_step > 0) ? s->block_cols : -1;
 
     for (int bx = bx_from; bx != bx_to; bx += x_step) {
         if (brow != NULL && (brow[bx] & BLOCK_LIQUID_NEAR) == 0) {
@@ -371,12 +335,8 @@ static bool equalise_one_row(sand_t *s, int y, int w, int x_step,
             continue;
         }
 
-        if (equalise_one_block(s, row, y,
-                               (x_step > 0) ? lo : hi - 1,
-                               (x_step > 0) ? hi : lo - 1,
-                               x_step, ax_row, dg_row, below_row, w,
-                               r, dx, sight, is_liquid,
-                               &touched, &touched_x0, &touched_x1)) {
+        if (equalise_one_block(s, row, y, (x_step > 0) ? lo : hi - 1, (x_step > 0) ? hi : lo - 1, x_step, ax_row,
+                               dg_row, below_row, w, r, dx, sight, is_liquid, &touched, &touched_x0, &touched_x1)) {
             any_liquid = true;
         }
     }
@@ -386,8 +346,8 @@ static bool equalise_one_row(sand_t *s, int y, int w, int x_step,
         /* Unsigned cast needed for shift instead of signed division
          * correction. */
         const int by = (int)((unsigned)y / SAND_BLOCK_H);
-        wake_blocks_range(s, (int)((unsigned)touched_x0 / SAND_BLOCK_W), by,
-                   (int)((unsigned)touched_x1 / SAND_BLOCK_W), by);
+        wake_blocks_range(s, (int)((unsigned)touched_x0 / SAND_BLOCK_W), by, (int)((unsigned)touched_x1 / SAND_BLOCK_W),
+                          by);
     }
 
     return any_liquid;
@@ -395,21 +355,19 @@ static bool equalise_one_row(sand_t *s, int y, int w, int x_step,
 
 /* BLOCK_LIQUID_NEAR checks blocks/neighbours with liquid; O(blocks). Expanded
  * for liquid movement. See sand_priv.h for BLOCK_HAS_LIQUID. */
-static void mark_liquid_neighbourhoods(sand_t *s)
-{
+static void
+mark_liquid_neighbourhoods(sand_t* s) {
     for (int by = 0; by < s->block_rows; by++) {
         for (int bx = 0; bx < s->block_cols; bx++) {
-            uint8_t *slot = &s->block_state[by * s->block_cols + bx];
-            *slot = block_or_neighbour_has_liquid(s, bx, by)
-                  ? (uint8_t)(*slot | BLOCK_LIQUID_NEAR)
-                  : (uint8_t)(*slot & ~BLOCK_LIQUID_NEAR);
+            uint8_t* slot = &s->block_state[by * s->block_cols + bx];
+            *slot = block_or_neighbour_has_liquid(s, bx, by) ? (uint8_t)(*slot | BLOCK_LIQUID_NEAR)
+                                                             : (uint8_t)(*slot & ~BLOCK_LIQUID_NEAR);
         }
     }
 }
 
-static void equalise_liquids(sand_t *s, const xflow_t *f, int sight,
-                             int dx, int dy)
-{
+static void
+equalise_liquids(sand_t* s, const xflow_t* f, int sight, int dx, int dy) {
     bool found_any = false;
 
     if (s->block_state != NULL) {
@@ -418,23 +376,22 @@ static void equalise_liquids(sand_t *s, const xflow_t *f, int sight,
 
     const int px = f->dg[0];
     const int py = f->dg[1];
-    const int w  = s->w;
-    const int h  = s->h;
+    const int w = s->w;
+    const int h = s->h;
 
     const uint16_t is_liquid = liquid_mask();
 
     /* Swept so that whatever is being given to has already been visited. */
     const int y_from = (py > 0) ? h - 1 : 0;
-    const int y_to   = (py > 0) ? -1    : h;
-    const int y_step = (py > 0) ? -1    : 1;
+    const int y_to = (py > 0) ? -1 : h;
+    const int y_step = (py > 0) ? -1 : 1;
 
     const int x_step = (px > 0) ? -1 : 1;
 
     /* See equalise_one_row(). BLOCK_HAS_LIQUID → BLOCK_LIQUID_NEAR. No move
      * cost. Docs/Sand/Performance-Tuning-Attempts.md. */
     for (int y = y_from; y != y_to; y += y_step) {
-        if (equalise_one_row(s, y, w, x_step, f, dx, dy,
-                             sight, is_liquid)) {
+        if (equalise_one_row(s, y, w, x_step, f, dx, dy, sight, is_liquid)) {
             found_any = true;
         }
     }
@@ -447,7 +404,6 @@ static void equalise_liquids(sand_t *s, const xflow_t *f, int sight,
         s->may_have_liquid = false;
     }
 }
-
 
 /* Every other step. A whole extra traversal measured 22% of the boiler scene;
  * halving how often it runs halved that, and 0.5 rows a step is still a drift
@@ -466,8 +422,8 @@ static void equalise_liquids(sand_t *s, const xflow_t *f, int sight,
  * sixteen rows in a step. Gas has always risen in its own pass.
  */
 
-static bool float_lighter_liquids(sand_t *s, int dx, int dy)
-{
+static bool
+float_lighter_liquids(sand_t* s, int dx, int dy) {
     const int w = s->w, h = s->h;
     const uint16_t is_liquid = liquid_mask();
     bool moved = false;
@@ -486,90 +442,92 @@ static bool float_lighter_liquids(sand_t *s, int dx, int dy)
      *
      * Chunked by column so any width fits 32 bytes of stack. */
     enum { RISE_COLS = 256 };
+
     uint8_t swapped[RISE_COLS / 8];
 
     for (int xbase = 0; xbase < w; xbase += RISE_COLS) {
-    memset(swapped, 0, sizeof swapped);
-    for (int yi = 0; yi < h; yi++) {
-        const int y = y0 + yi * ystep;
-        const int uy = y - dy;
-        if ((unsigned)uy >= (unsigned)h) {
-            continue;
-        }
-        uint8_t *const row = &s->cells[(size_t)y * (size_t)w];
-        uint8_t *const urow = &s->cells[(size_t)uy * (size_t)w];
+        memset(swapped, 0, sizeof swapped);
+        for (int yi = 0; yi < h; yi++) {
+            const int y = y0 + yi * ystep;
+            const int uy = y - dy;
+            if ((unsigned)uy >= (unsigned)h) {
+                continue;
+            }
+            uint8_t* const row = &s->cells[(size_t)y * (size_t)w];
+            uint8_t* const urow = &s->cells[(size_t)uy * (size_t)w];
 
-
-        for (int xi = 0; xi < w; xi++) {
-            const int x = x0 + xi * xstep;
-            if (x < xbase || x - xbase >= RISE_COLS) {
-                continue;
-            }
-            const int col = x - xbase;
-            if (((swapped[col >> 3] >> (col & 7)) & 1u) != 0u) {
-                continue;   /* this column has had its one move */
-            }
-            const int ux = x - dx;
-            if ((unsigned)ux >= (unsigned)w) {
-                continue;
-            }
-            const cell_t me = row[x];
-            if (CELL_IS_EMPTY(me)) {
-                continue;
-            }
-            const uint8_t mine = CELL_MATERIAL(me);
-            if (((is_liquid >> mine) & 1u) == 0) {
-                continue;
-            }
-            const cell_t above = urow[ux];
-            if (CELL_IS_EMPTY(above)) {
-                continue;   /* open space - the ordinary fall owns that */
-            }
-            const uint8_t theirs = CELL_MATERIAL(above);
-            if (theirs == mine || ((is_liquid >> theirs) & 1u) == 0) {
-                continue;
-            }
-            if (material_by_id((material_id_t)theirs)->density
-                <= material_by_id((material_id_t)mine)->density) {
-                continue;   /* nothing to sort: already the right way up */
-            }
-            /* Viscosity, the same roll the ordinary move pays and the same
+            for (int xi = 0; xi < w; xi++) {
+                const int x = x0 + xi * xstep;
+                if (x < xbase || x - xbase >= RISE_COLS) {
+                    continue;
+                }
+                const int col = x - xbase;
+                if (((swapped[col >> 3] >> (col & 7)) & 1u) != 0u) {
+                    continue; /* this column has had its one move */
+                }
+                const int ux = x - dx;
+                if ((unsigned)ux >= (unsigned)w) {
+                    continue;
+                }
+                const cell_t me = row[x];
+                if (CELL_IS_EMPTY(me)) {
+                    continue;
+                }
+                const uint8_t mine = CELL_MATERIAL(me);
+                if (((is_liquid >> mine) & 1u) == 0) {
+                    continue;
+                }
+                const cell_t above = urow[ux];
+                if (CELL_IS_EMPTY(above)) {
+                    continue; /* open space - the ordinary fall owns that */
+                }
+                const uint8_t theirs = CELL_MATERIAL(above);
+                if (theirs == mine || ((is_liquid >> theirs) & 1u) == 0) {
+                    continue;
+                }
+                if (material_by_id((material_id_t)theirs)->density <= material_by_id((material_id_t)mine)->density) {
+                    continue; /* nothing to sort: already the right way up */
+                }
+                /* Viscosity, the same roll the ordinary move pays and the same
              * idea as gas's mobility gate - a rise should be a lazy drift,
              * not a guaranteed cell every step. Without it this pass sorts
              * harder than the sinking swap it replaced ever did. */
-            if (s->may_have_viscous_liquid
-                && !liquid_may_move(s, mine)) {
-                continue;
-            }
+                if (s->may_have_viscous_liquid && !liquid_may_move(s, mine)) {
+                    continue;
+                }
 
-            urow[ux] = me;
-            row[x]   = above;
-            swapped[col >> 3] |= (uint8_t)(1u << (col & 7));
-            mark_rows(s, y, uy);
-            wake_block_and_neighbors(s, x, y);
-            wake_block_and_neighbors(s, ux, uy);
-            moved = true;
+                urow[ux] = me;
+                row[x] = above;
+                swapped[col >> 3] |= (uint8_t)(1u << (col & 7));
+                mark_rows(s, y, uy);
+                wake_block_and_neighbors(s, x, y);
+                wake_block_and_neighbors(s, ux, uy);
+                moved = true;
+            }
         }
-    }
     }
     return moved;
 }
 
-void sand_step_liquids(sand_t *s, const xflow_t *flow, int dx, int dy)
-{
+void
+sand_step_liquids(sand_t* s, const xflow_t* flow, int dx, int dy) {
     if (!s->may_have_liquid) {
         return;
     }
 
     xflow_t run;
     if (s->liquid_flip) {
-        run.ax[0] =  flow->ax[0]; run.ax[1] =  flow->ax[1];
-        run.dg[0] =  flow->dg[0]; run.dg[1] =  flow->dg[1];
-        run.bias_ax_q8 =  flow->bias_ax_q8;
-        run.bias_dg_q8 =  flow->bias_dg_q8;
+        run.ax[0] = flow->ax[0];
+        run.ax[1] = flow->ax[1];
+        run.dg[0] = flow->dg[0];
+        run.dg[1] = flow->dg[1];
+        run.bias_ax_q8 = flow->bias_ax_q8;
+        run.bias_dg_q8 = flow->bias_dg_q8;
     } else {
-        run.ax[0] = -flow->ax[0]; run.ax[1] = -flow->ax[1];
-        run.dg[0] = -flow->dg[0]; run.dg[1] = -flow->dg[1];
+        run.ax[0] = -flow->ax[0];
+        run.ax[1] = -flow->ax[1];
+        run.dg[0] = -flow->dg[0];
+        run.dg[1] = -flow->dg[1];
         run.bias_ax_q8 = -flow->bias_ax_q8;
         run.bias_dg_q8 = -flow->bias_dg_q8;
     }
@@ -584,8 +542,7 @@ void sand_step_liquids(sand_t *s, const xflow_t *flow, int dx, int dy)
      * and the answer is the same for all of them. A screen of water - what a
      * liquid scene usually is - therefore pays a popcount, not a pass. */
     const uint16_t liquids_here = s->may_have_materials & liquid_mask();
-    if ((liquids_here & (uint16_t)(liquids_here - 1u)) != 0u
-        && (s->step_phase & (LIQUID_SORT_PERIOD - 1u)) == 0u) {
+    if ((liquids_here & (uint16_t)(liquids_here - 1u)) != 0u && (s->step_phase & (LIQUID_SORT_PERIOD - 1u)) == 0u) {
         (void)float_lighter_liquids(s, dx, dy);
     }
 }

@@ -19,21 +19,24 @@
 
 #include <stdio.h>
 
-#include "unity.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "unity.h"
 
 #include "../test/suites.h"
 
-static const char *TAG = "selftest";
+static const char* TAG = "selftest";
 
 /* Unity requires these once per binary. The suites manage their own fixtures,
  * since they all share this program. */
-void setUp(void) { }
-void tearDown(void) { }
+void
+setUp(void) {}
 
-int selftest_run(void)
-{
+void
+tearDown(void) {}
+
+int
+selftest_run(void) {
     const int64_t started = esp_timer_get_time();
 
     ESP_LOGI(TAG, "running self test");
@@ -51,15 +54,13 @@ int selftest_run(void)
      * count so the sentinel below - and every harness that reads it - sees a
      * failed run rather than a green one that tested less than it claims. */
     if (suites_dropped() > 0) {
-        ESP_LOGE(TAG, "%d suite(s) dropped; raise SUITE_MAX in suites.h",
-                 suites_dropped());
+        ESP_LOGE(TAG, "%d suite(s) dropped; raise SUITE_MAX in suites.h", suites_dropped());
         failures += suites_dropped();
     }
 
     /* A sentinel on its own line, so an automated harness can tell a finished
      * run from a board that went quiet mid-test. */
-    printf("\nSELFTEST_COMPLETE failures=%d elapsed_ms=%lld\n",
-           failures, (long long)elapsed_ms);
+    printf("\nSELFTEST_COMPLETE failures=%d elapsed_ms=%lld\n", failures, (long long)elapsed_ms);
     fflush(stdout);
 
     if (failures > 0) {

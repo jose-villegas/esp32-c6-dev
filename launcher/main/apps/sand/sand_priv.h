@@ -177,8 +177,7 @@ cell_settled(const sand_t* s, int x, int y) {
     if (s->block_state == NULL) {
         return false;
     }
-    return (s->block_state[block_of(s, x, y)]
-            & (BLOCK_SETTLED_NEAREST | BLOCK_SETTLED_OTHER)) != 0;
+    return (s->block_state[block_of(s, x, y)] & (BLOCK_SETTLED_NEAREST | BLOCK_SETTLED_OTHER)) != 0;
 }
 
 /* Is there liquid in this cell's own block or any block touching it?
@@ -454,15 +453,14 @@ covered_at(const sand_t* s, int x, int y, int w, int h, uint8_t density) {
 /* One cullet grain, at a random shade from sand's reserved band. Shared by
  * every path that breaks glass - a crack, and a pane knocked loose by an
  * impulse - so they cannot drift apart on which band they land in. */
-static inline cell_t cullet_cell(sand_t *s)
-{
-    return CELL_MAKE(MAT_SAND,
-                     (uint8_t)(SAND_CULLET_BASE + rng_below(&s->rng, SAND_CULLET_SHADES)));
+static inline cell_t
+cullet_cell(sand_t* s) {
+    return CELL_MAKE(MAT_SAND, (uint8_t)(SAND_CULLET_BASE + rng_below(&s->rng, SAND_CULLET_SHADES)));
 }
 
-static inline uint8_t impulse_drag_of(cell_t displaced)
-{
-    const material_t *m = material_of(displaced);
+static inline uint8_t
+impulse_drag_of(cell_t displaced) {
+    const material_t* m = material_of(displaced);
     unsigned d = (unsigned)m->density;
 
     if (m->kind == KIND_LIQUID) {
@@ -760,7 +758,7 @@ void sand_step_gas(sand_t* s, int gx, int gy, int dx, int dy, const int* slide_a
  * sand_impulse.c since it moves OUTWARD, not gravity-ward. Called once
  * from sand_step(), the same seam sand_step_liquids()/sand_step_gas() use;
  * must run LAST - see sand_impulse.c's own banner. */
-void step_impulses(sand_t *s, int dx, int dy);
+void step_impulses(sand_t* s, int dx, int dy);
 
 /* try_fall_or_scatter()/try_slide() live here, static inline, same
  * reason as dest_row()/mark_rows(): hottest path, called once per grain

@@ -27,19 +27,19 @@
 #include "input/imu.h"
 
 typedef struct {
-    int64_t  uptime_us;            /* esp_timer_get_time() */
+    int64_t uptime_us; /* esp_timer_get_time() */
     uint32_t heap_free_bytes;
-    uint32_t heap_min_free_bytes;  /* low-water mark since boot */
-    int      cpu_freq_mhz;
+    uint32_t heap_min_free_bytes; /* low-water mark since boot */
+    int cpu_freq_mhz;
 
-    bool  temp_ok;   /* false if the sensor did not answer */
-    float temp_c;    /* only meaningful if temp_ok */
+    bool temp_ok; /* false if the sensor did not answer */
+    float temp_c; /* only meaningful if temp_ok */
 
-    int quarter;     /* display_shell_quarter() */
+    int quarter; /* display_shell_quarter() */
 
-    bool         imu_ready;      /* false: chip absent/never initialised */
-    bool         imu_read_ok;    /* only meaningful if imu_ready */
-    imu_sample_t imu;            /* only meaningful if imu_ready && imu_read_ok */
+    bool imu_ready;   /* false: chip absent/never initialised */
+    bool imu_read_ok; /* only meaningful if imu_ready */
+    imu_sample_t imu; /* only meaningful if imu_ready && imu_read_ok */
 } device_state_t;
 
 /* Reads everything above fresh - see device_state.c. Touches hardware
@@ -47,7 +47,7 @@ typedef struct {
  * an I2C transaction for the IMU), so this is not something to call every
  * frame - fine for an occasional, deliberately-triggered snapshot like
  * screenshot_dump()'s. */
-void device_state_read(device_state_t *out);
+void device_state_read(device_state_t* out);
 
 /* Large enough for every field at its worst-case width (a full int64_t
  * uptime, both heap counters at UINT32_MAX, the IMU's six int16_t axes all
@@ -65,10 +65,8 @@ void device_state_read(device_state_t *out);
  * current frame" on its own - see screenshot_dump()'s comment in
  * screenshot.h for why its caller passes the exact input_t the frame being
  * captured was drawn with. */
-static inline void device_state_format_json(const device_state_t *state,
-                                             const input_t *input,
-                                             char out[DEVICE_STATE_JSON_MAX])
-{
+static inline void
+device_state_format_json(const device_state_t* state, const input_t* input, char out[DEVICE_STATE_JSON_MAX]) {
     char imu_json[96];
     if (!state->imu_ready) {
         snprintf(imu_json, sizeof imu_json, "{\"ready\":false}");
@@ -81,8 +79,7 @@ static inline void device_state_format_json(const device_state_t *state,
         snprintf(imu_json, sizeof imu_json,
                  "{\"ready\":true,\"ax\":%d,\"ay\":%d,\"az\":%d,"
                  "\"gx\":%d,\"gy\":%d,\"gz\":%d}",
-                 state->imu.ax, state->imu.ay, state->imu.az,
-                 state->imu.gx, state->imu.gy, state->imu.gz);
+                 state->imu.ax, state->imu.ay, state->imu.az, state->imu.gx, state->imu.gy, state->imu.gz);
     }
 
     char temp_json[24];
@@ -98,14 +95,7 @@ static inline void device_state_format_json(const device_state_t *state,
              "\"temp_c\":%s,\"orientation_quarter\":%d,\"imu\":%s,"
              "\"touch\":{\"down\":%s,\"x\":%d,\"y\":%d},"
              "\"buttons\":{\"boot_down\":%s,\"power_held\":%s}}",
-             (long long)state->uptime_us,
-             (unsigned)state->heap_free_bytes,
-             (unsigned)state->heap_min_free_bytes,
-             state->cpu_freq_mhz,
-             temp_json,
-             state->quarter,
-             imu_json,
-             input->down ? "true" : "false", input->x, input->y,
-             input->boot.down ? "true" : "false",
-             input->power.held ? "true" : "false");
+             (long long)state->uptime_us, (unsigned)state->heap_free_bytes, (unsigned)state->heap_min_free_bytes,
+             state->cpu_freq_mhz, temp_json, state->quarter, imu_json, input->down ? "true" : "false", input->x,
+             input->y, input->boot.down ? "true" : "false", input->power.held ? "true" : "false");
 }

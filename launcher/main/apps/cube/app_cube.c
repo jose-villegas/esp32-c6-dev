@@ -23,9 +23,9 @@
 #define S3L_PIXEL_FUNCTION     shade_pixel
 #define S3L_RESOLUTION_X       GFX_WIDTH
 #define S3L_RESOLUTION_Y       GFX_HEIGHT
-#define S3L_Z_BUFFER           0   /* no depth buffer; sorting handles it */
-#define S3L_SORT               1   /* back-to-front (painter's algorithm) */
-#define S3L_MAX_TRIANGES_DRAWN 16  /* the cube has 12 */
+#define S3L_Z_BUFFER           0  /* no depth buffer; sorting handles it */
+#define S3L_SORT               1  /* back-to-front (painter's algorithm) */
+#define S3L_MAX_TRIANGES_DRAWN 16 /* the cube has 12 */
 #include "small3dlib.h"
 
 /* small3dlib is fixed point: S3L_F (512) is 1.0, and is also one full turn
@@ -36,30 +36,30 @@
 
 /* Milliseconds per revolution. Deliberately unequal so it tumbles rather than
  * spinning about one fixed axis. */
-#define SPIN_PERIOD_Y_MS 4000
-#define SPIN_PERIOD_X_MS 7000
+#define SPIN_PERIOD_Y_MS    4000
+#define SPIN_PERIOD_X_MS    7000
 
-#define BACKGROUND_RGB 0x0A0C14
+#define BACKGROUND_RGB      0x0A0C14
 
-static const S3L_Unit cube_vertices[]  = { S3L_CUBE_VERTICES(S3L_F) };
-static const S3L_Index cube_triangles[] = { S3L_CUBE_TRIANGLES };
+static const S3L_Unit cube_vertices[] = {S3L_CUBE_VERTICES(S3L_F)};
+static const S3L_Index cube_triangles[] = {S3L_CUBE_TRIANGLES};
 
 /* Each corner is coloured by the sign of its position: +x adds red, +y green,
  * +z blue. Interpolating those across each face gives the gradients. */
 static const uint8_t cube_corner_colors[S3L_CUBE_VERTEX_COUNT][3] = {
-    { 255,   0,   0 },  /* 0  right, bottom, front */
-    {   0,   0,   0 },  /* 1  left,  bottom, front */
-    { 255, 255,   0 },  /* 2  right, top,    front */
-    {   0, 255,   0 },  /* 3  left,  top,    front */
-    { 255,   0, 255 },  /* 4  right, bottom, back  */
-    {   0,   0, 255 },  /* 5  left,  bottom, back  */
-    { 255, 255, 255 },  /* 6  right, top,    back  */
-    {   0, 255, 255 },  /* 7  left,  top,    back  */
+    {255, 0, 0},     /* 0  right, bottom, front */
+    {0, 0, 0},       /* 1  left,  bottom, front */
+    {255, 255, 0},   /* 2  right, top,    front */
+    {0, 255, 0},     /* 3  left,  top,    front */
+    {255, 0, 255},   /* 4  right, bottom, back  */
+    {0, 0, 255},     /* 5  left,  bottom, back  */
+    {255, 255, 255}, /* 6  right, top,    back  */
+    {0, 255, 255},   /* 7  left,  top,    back  */
 };
 
 static S3L_Model3D cube;
-static S3L_Scene   scene;
-static uint32_t    elapsed_ms;
+static S3L_Scene scene;
+static uint32_t elapsed_ms;
 
 /* The toggle this file exists to demonstrate: whether cube_frame() clears
  * the whole framebuffer every frame or only the pixels the cube touches,
@@ -92,17 +92,21 @@ static int frame_x0, frame_y0, frame_x1, frame_y1;
 #define FPS_WINDOW_MS 500
 static uint32_t fps_frame_count;
 static uint32_t fps_window_elapsed_ms;
-static double   fps_value;
+static double fps_value;
 
 /* Last ui_layout_generation() seen, so cube_frame() can tell a shell
  * orientation change happened since last frame - see its own comment for
  * why that forces a full clear rather than a partial one. */
 static uint32_t last_layout_generation;
 
-static inline uint8_t clamp_to_byte(S3L_Unit v)
-{
-    if (v < 0)   return 0;
-    if (v > 255) return 255;
+static inline uint8_t
+clamp_to_byte(S3L_Unit v) {
+    if (v < 0) {
+        return 0;
+    }
+    if (v > 255) {
+        return 255;
+    }
     return (uint8_t)v;
 }
 
@@ -114,22 +118,18 @@ static inline uint8_t clamp_to_byte(S3L_Unit v)
  * than through gfx_pixel(): this runs tens of thousands of times per
  * frame, and coordinates are already guaranteed on-screen by the
  * rasterizer. */
-static inline void shade_pixel(S3L_PixelInfo *pixel)
-{
-    const S3L_Index *corners = cube_triangles + pixel->triangleIndex * 3;
-    const uint8_t *a = cube_corner_colors[corners[0]];
-    const uint8_t *b = cube_corner_colors[corners[1]];
-    const uint8_t *c = cube_corner_colors[corners[2]];
+static inline void
+shade_pixel(S3L_PixelInfo* pixel) {
+    const S3L_Index* corners = cube_triangles + pixel->triangleIndex * 3;
+    const uint8_t* a = cube_corner_colors[corners[0]];
+    const uint8_t* b = cube_corner_colors[corners[1]];
+    const uint8_t* c = cube_corner_colors[corners[2]];
 
-    const uint8_t r = clamp_to_byte(
-        S3L_interpolateBarycentric(a[0], b[0], c[0], pixel->barycentric));
-    const uint8_t g = clamp_to_byte(
-        S3L_interpolateBarycentric(a[1], b[1], c[1], pixel->barycentric));
-    const uint8_t bl = clamp_to_byte(
-        S3L_interpolateBarycentric(a[2], b[2], c[2], pixel->barycentric));
+    const uint8_t r = clamp_to_byte(S3L_interpolateBarycentric(a[0], b[0], c[0], pixel->barycentric));
+    const uint8_t g = clamp_to_byte(S3L_interpolateBarycentric(a[1], b[1], c[1], pixel->barycentric));
+    const uint8_t bl = clamp_to_byte(S3L_interpolateBarycentric(a[2], b[2], c[2], pixel->barycentric));
 
-    gfx_framebuffer()[pixel->y * GFX_WIDTH + pixel->x] =
-        gfx_rgb(((uint32_t)r << 16) | ((uint32_t)g << 8) | bl);
+    gfx_framebuffer()[pixel->y * GFX_WIDTH + pixel->x] = gfx_rgb(((uint32_t)r << 16) | ((uint32_t)g << 8) | bl);
 
     /* Only tracked in partial_updates mode - cube_frame() is the sole
      * reader, and there is no reason to pay for it on every one of the
@@ -138,17 +138,24 @@ static inline void shade_pixel(S3L_PixelInfo *pixel)
      * lives - see its own comment on why writing gfx_framebuffer()
      * directly, as this does, requires one. */
     if (partial_updates) {
-        if (pixel->x < frame_x0)     { frame_x0 = pixel->x; }
-        if (pixel->x + 1 > frame_x1) { frame_x1 = pixel->x + 1; }
-        if (pixel->y < frame_y0)     { frame_y0 = pixel->y; }
-        if (pixel->y + 1 > frame_y1) { frame_y1 = pixel->y + 1; }
+        if (pixel->x < frame_x0) {
+            frame_x0 = pixel->x;
+        }
+        if (pixel->x + 1 > frame_x1) {
+            frame_x1 = pixel->x + 1;
+        }
+        if (pixel->y < frame_y0) {
+            frame_y0 = pixel->y;
+        }
+        if (pixel->y + 1 > frame_y1) {
+            frame_y1 = pixel->y + 1;
+        }
     }
 }
 
-void cube_enter(void)
-{
-    S3L_model3DInit(cube_vertices, S3L_CUBE_VERTEX_COUNT,
-                    cube_triangles, S3L_CUBE_TRIANGLE_COUNT, &cube);
+void
+cube_enter(void) {
+    S3L_model3DInit(cube_vertices, S3L_CUBE_VERTEX_COUNT, cube_triangles, S3L_CUBE_TRIANGLE_COUNT, &cube);
     cube.transform.translation.z = CUBE_DISTANCE;
 
     /* S3L_sceneInit() resets the camera to defaults, so the focal length
@@ -199,14 +206,13 @@ void cube_enter(void)
  * - see ORIENTATION_GRAVITY_X/Y's comment in app_diagnostics.c for why a
  * small, independent copy like this is not worth a shared header of its
  * own. */
-static mu_Color mu_color_hex(uint32_t rgb)
-{
-    return mu_color((int)((rgb >> 16) & 0xFF), (int)((rgb >> 8) & 0xFF),
-                    (int)(rgb & 0xFF), 255);
+static mu_Color
+mu_color_hex(uint32_t rgb) {
+    return mu_color((int)((rgb >> 16) & 0xFF), (int)((rgb >> 8) & 0xFF), (int)(rgb & 0xFF), 255);
 }
 
-static mu_Rect draw_overlay_box(mu_Context *ctx, int w, int h)
-{
+static mu_Rect
+draw_overlay_box(mu_Context* ctx, int w, int h) {
     const mu_Rect box = ui_centered_rect(ui_width(), w, h, 2);
     mu_draw_rect(ctx, box, mu_color_hex(BACKGROUND_RGB));
     return box;
@@ -218,9 +224,9 @@ static mu_Rect draw_overlay_box(mu_Context *ctx, int w, int h)
  * for performance testing (suite_cube_perf.c) - timed as its own phase
  * there, separate from the cube's own clear/rotate/rasterize work, so the
  * suite can compare the frame budget with and without the HUD text. */
-void draw_fps(const input_t *input)
-{
-    mu_Context *ctx = ui_context();
+void
+draw_fps(const input_t* input) {
+    mu_Context* ctx = ui_context();
     ui_begin(input);
     /* UI_TEXT_OUTLINED is app_sand.c's palette-label fix for the same
      * reason it was built for: a label with no halo of its own would
@@ -231,9 +237,7 @@ void draw_fps(const input_t *input)
      * when the backing is already opaque. */
     ui_set_text_style(UI_TEXT_OUTLINED);
 
-    if (ui_begin_screen(ctx, "Cube HUD",
-                        MU_OPT_NOTITLE | MU_OPT_NORESIZE |
-                        MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
+    if (ui_begin_screen(ctx, "Cube HUD", MU_OPT_NOTITLE | MU_OPT_NORESIZE | MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
         char fps_line[16];
         snprintf(fps_line, sizeof fps_line, "%.1f fps", fps_value);
         const int tw = gfx_text_width(fps_line, -1);
@@ -265,8 +269,8 @@ void draw_fps(const input_t *input)
     ui_end(UI_NO_BACKGROUND);
 }
 
-#define MENU_BTN_W 300
-#define MENU_BTN_H UI_ROW_HEIGHT
+#define MENU_BTN_W   300
+#define MENU_BTN_H   UI_ROW_HEIGHT
 #define MENU_BTN_GAP 20
 
 /* The BOOT-opened menu - currently just the partial_updates toggle, as
@@ -275,9 +279,9 @@ void draw_fps(const input_t *input)
  * for why BOOT opens this instead of flipping the toggle directly, and
  * menu_open's own comment for the one-button-one-screen-level-concern
  * precedent this follows. */
-static void draw_menu(const input_t *input)
-{
-    mu_Context *ctx = ui_context();
+static void
+draw_menu(const input_t* input) {
+    mu_Context* ctx = ui_context();
     ui_begin(input);
     /* ui_set_button_style(UI_BUTTON_BEZEL) is required, not automatic -
      * ui_begin() resets the button style to UI_BUTTON_FLAT every frame
@@ -285,25 +289,20 @@ static void draw_menu(const input_t *input)
      * that draws one, the same as ui_launcher.c's own menu does. */
     ui_set_button_style(UI_BUTTON_BEZEL);
 
-    if (ui_begin_screen(ctx, "Cube Menu",
-                        MU_OPT_NOTITLE | MU_OPT_NORESIZE |
-                        MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
+    if (ui_begin_screen(ctx, "Cube Menu", MU_OPT_NOTITLE | MU_OPT_NORESIZE | MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
         const int hint_h = gfx_text_height() + 4;
         const int total_h = MENU_BTN_H + MENU_BTN_GAP + hint_h;
         const int top = (ui_height() - total_h) / 2;
 
         char label[24];
-        snprintf(label, sizeof label, "PARTIAL UPDATES: %s",
-                 partial_updates ? "ON" : "OFF");
+        snprintf(label, sizeof label, "PARTIAL UPDATES: %s", partial_updates ? "ON" : "OFF");
 
         /* Both the button and the hint below it are placed via
          * mu_layout_set_next() at an absolute rect rather than through
          * mu_layout_row()'s normal top-down flow, the same trick
          * app_sand.c's own two-button boot menu uses: a single small
          * control centered mid-screen has no natural row to sit in. */
-        mu_layout_set_next(ctx,
-                           ui_centered_rect(ui_width(), MENU_BTN_W, MENU_BTN_H, top),
-                           0);
+        mu_layout_set_next(ctx, ui_centered_rect(ui_width(), MENU_BTN_W, MENU_BTN_H, top), 0);
         if (mu_button(ctx, label)) {
             partial_updates = !partial_updates;
 
@@ -313,10 +312,7 @@ static void draw_menu(const input_t *input)
             gfx_invalidate();
         }
 
-        mu_layout_set_next(ctx,
-                           ui_centered_rect(ui_width(), MENU_BTN_W, hint_h,
-                                            top + MENU_BTN_H + MENU_BTN_GAP),
-                           0);
+        mu_layout_set_next(ctx, ui_centered_rect(ui_width(), MENU_BTN_W, hint_h, top + MENU_BTN_H + MENU_BTN_GAP), 0);
         mu_label(ctx, "BOOT to close");
 
         mu_end_window(ctx);
@@ -331,18 +327,16 @@ static void draw_menu(const input_t *input)
     ui_end(BACKGROUND_RGB);
 }
 
-void cube_update_rotation(uint32_t dt_ms)
-{
+void
+cube_update_rotation(uint32_t dt_ms) {
     elapsed_ms += dt_ms;
 
-    cube.transform.rotation.y =
-        (S3L_Unit)(((uint64_t)elapsed_ms * S3L_F / SPIN_PERIOD_Y_MS) % S3L_F);
-    cube.transform.rotation.x =
-        (S3L_Unit)(((uint64_t)elapsed_ms * S3L_F / SPIN_PERIOD_X_MS) % S3L_F);
+    cube.transform.rotation.y = (S3L_Unit)(((uint64_t)elapsed_ms * S3L_F / SPIN_PERIOD_Y_MS) % S3L_F);
+    cube.transform.rotation.x = (S3L_Unit)(((uint64_t)elapsed_ms * S3L_F / SPIN_PERIOD_X_MS) % S3L_F);
 }
 
-void cube_clear_frame(void)
-{
+void
+cube_clear_frame(void) {
     /* gfx_set_partial_clear() delegates bounding-box erase and dirty marking
      * of previous-frame bounds directly to gfx_clear(). */
     gfx_set_partial_clear(partial_updates);
@@ -357,8 +351,8 @@ void cube_clear_frame(void)
  * suite_cube_perf.c would redefine those symbols and fail to link.
  * cube_frame() is just these three calls plus draw_fps(), exercising the
  * exact same code. */
-void cube_rasterize_frame(void)
-{
+void
+cube_rasterize_frame(void) {
     if (partial_updates) {
         frame_x0 = GFX_WIDTH;
         frame_y0 = GFX_HEIGHT;
@@ -374,14 +368,13 @@ void cube_rasterize_frame(void)
          * cannot see - this is the one gfx_mark_dirty() call that tells it
          * what actually changed this frame. */
         if (frame_x1 > frame_x0 && frame_y1 > frame_y0) {
-            gfx_mark_dirty(frame_x0, frame_y0, frame_x1 - frame_x0,
-                           frame_y1 - frame_y0);
+            gfx_mark_dirty(frame_x0, frame_y0, frame_x1 - frame_x0, frame_y1 - frame_y0);
         }
     }
 }
 
-static void cube_frame(uint32_t dt_ms, const input_t *input)
-{
+static void
+cube_frame(uint32_t dt_ms, const input_t* input) {
     /* BOOT opens/closes the menu now, rather than flipping partial_updates
      * directly - the toggle moved onto its own bezel button inside
      * draw_menu(). Invalidation on open and close resets partial clear
@@ -425,8 +418,7 @@ static void cube_frame(uint32_t dt_ms, const input_t *input)
     fps_frame_count++;
     fps_window_elapsed_ms += dt_ms;
     if (fps_window_elapsed_ms >= FPS_WINDOW_MS) {
-        fps_value = (double)fps_frame_count * 1000.0 /
-                    (double)fps_window_elapsed_ms;
+        fps_value = (double)fps_frame_count * 1000.0 / (double)fps_window_elapsed_ms;
         fps_frame_count = 0;
         fps_window_elapsed_ms = 0;
     }
@@ -437,8 +429,8 @@ static void cube_frame(uint32_t dt_ms, const input_t *input)
     draw_fps(input);
 }
 
-void cube_exit(void)
-{
+void
+cube_exit(void) {
     gfx_set_partial_clear(false);
     gfx_invalidate();
 }
@@ -446,11 +438,11 @@ void cube_exit(void)
 /* Exported as the struct itself rather than a pointer to it, so the registry
  * in main.c can take its address in a static initializer. */
 const app_t app_cube = {
-    .name         = "3D Cube",
-    .summary      = "Gouraud-shaded software rasterizer",
-    .enter        = cube_enter,
-    .frame        = cube_frame,
-    .exit         = cube_exit,
+    .name = "3D Cube",
+    .summary = "Gouraud-shaded software rasterizer",
+    .enter = cube_enter,
+    .frame = cube_frame,
+    .exit = cube_exit,
     .home_gesture = true,
 };
 

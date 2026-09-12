@@ -34,13 +34,13 @@ typedef struct {
  * state would stay zero and every draw would return zero for ever. Substituted
  * silently rather than rejected, because a caller seeding from a timer that
  * happened to read zero deserves a working generator, not a subtle one. */
-static inline void rng_seed(rng_t *r, uint32_t seed)
-{
+static inline void
+rng_seed(rng_t* r, uint32_t seed) {
     r->state = seed != 0 ? seed : 0x9E3779B9u;
 }
 
-static inline uint32_t rng_next(rng_t *r)
-{
+static inline uint32_t
+rng_next(rng_t* r) {
     uint32_t x = r->state;
 
     x ^= x << 13;
@@ -56,8 +56,8 @@ static inline uint32_t rng_next(rng_t *r)
  * Uses a modulo, so the lowest values are very slightly more likely for bounds
  * that do not divide 2^32. For picking one of six shades that bias is around
  * one part in seven hundred million and nobody is going to see it. */
-static inline int rng_below(rng_t *r, int bound)
-{
+static inline int
+rng_below(rng_t* r, int bound) {
     if (bound <= 0) {
         return 0;
     }
@@ -72,8 +72,8 @@ static inline int rng_below(rng_t *r, int bound)
  * can never be true 256 times out of 256, so "always" would quietly become
  * "almost always" - the kind of thing that shows up as one case in a thousand
  * behaving oddly. */
-static inline bool rng_chance(rng_t *r, int chance)
-{
+static inline bool
+rng_chance(rng_t* r, int chance) {
     if (chance <= 0) {
         return false;
     }

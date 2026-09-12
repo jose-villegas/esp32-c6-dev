@@ -10,22 +10,22 @@
  *
  * Runs under DEVICE_BUILD only - needs real panel, DMA, and framebuffer.
  */
-#include "suites.h"   /* portable - needed by SUITE_REGISTER() even on host */
+#include "suites.h" /* portable - needed by SUITE_REGISTER() even on host */
 
 #ifdef DEVICE_BUILD
 
 #include <stdint.h>
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "unity.h"
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "esp_heap_caps.h"
 
-#include "gfx/gfx.h"
 #include "app.h"
+#include "gfx/gfx.h"
 #include "ui/ui.h"
 
 /* app_cube.c's own toggle - each test sets this explicitly (see
@@ -44,23 +44,23 @@ extern void cube_exit(void);
 extern void cube_update_rotation(uint32_t dt_ms);
 extern void cube_clear_frame(void);
 extern void cube_rasterize_frame(void);
-extern void draw_fps(const input_t *input);
+extern void draw_fps(const input_t* input);
 
-static const char *TAG = "cube_perf";
+static const char* TAG = "cube_perf";
 
-#define SAMPLE_SECONDS  10
-#define SAMPLE_MS       (SAMPLE_SECONDS * 1000)
+#define SAMPLE_SECONDS 10
+#define SAMPLE_MS      (SAMPLE_SECONDS * 1000)
 
 /* Frame timing breakdown. int32_t, not int64_t: these are one frame's worth
  * of microseconds, always well under a few hundred thousand, and halving
  * their size matters here - see samples/stat_scratch's own comment below for
  * why the two arrays these fields size aren't static any more either. */
 typedef struct {
-    int32_t frame_total_us;    /* wall clock per frame */
-    int32_t logic_us;          /* cube logic + scene setup */
-    int32_t rasterize_us;      /* small3dlib S3L_drawScene() */
-    int32_t hud_us;            /* draw_fps() - zero when with_hud is false */
-    int32_t present_us;        /* gfx_present() */
+    int32_t frame_total_us; /* wall clock per frame */
+    int32_t logic_us;       /* cube logic + scene setup */
+    int32_t rasterize_us;   /* small3dlib S3L_drawScene() */
+    int32_t hud_us;         /* draw_fps() - zero when with_hud is false */
+    int32_t present_us;     /* gfx_present() */
 } frame_sample_t;
 
 /* A ring, so stats cover the most recent MAX_SAMPLES frames: a fixed cap
@@ -71,7 +71,7 @@ typedef struct {
  * 128 is still enough for a meaningful P95 (128 * 5% = 6 samples in the
  * tail), and every sample costs five int32_t fields, four of them
  * duplicated in stat_scratch. */
-#define MAX_SAMPLES  128
+#define MAX_SAMPLES 128
 
 /* Heap-allocated, not static: suite order matters, since "cube_perf"
  * sorts ahead of "sand" in a full selftest boot, and these arrays' ~3 KB
@@ -79,13 +79,13 @@ typedef struct {
  * suite_sand.c's test grids missed their largest free block on device
  * (40960 bytes measured, a 256-byte shortfall). Freeing them before
  * return gives that budget back to every suite that runs after. */
-static frame_sample_t *samples = NULL;
+static frame_sample_t* samples = NULL;
 static int sample_count = 0;
 
-static int cmp_i32(const void *a, const void *b)
-{
-    int32_t va = *(const int32_t *)a;
-    int32_t vb = *(const int32_t *)b;
+static int
+cmp_i32(const void* a, const void* b) {
+    int32_t va = *(const int32_t*)a;
+    int32_t vb = *(const int32_t*)b;
     return (va > vb) - (va < vb);
 }
 
@@ -93,9 +93,11 @@ static int cmp_i32(const void *a, const void *b)
  * compute_stats() below relies on it having already been sorted here to
  * read p95 out of the same array right after, rather than sorting again
  * itself. */
-static int32_t median_of(int32_t *arr, int n)
-{
-    if (n == 0) return 0;
+static int32_t
+median_of(int32_t* arr, int n) {
+    if (n == 0) {
+        return 0;
+    }
     qsort(arr, n, sizeof(int32_t), cmp_i32);
     return arr[n / 2];
 }
@@ -108,14 +110,14 @@ typedef enum {
     FIELD_PRESENT,
 } sample_field_t;
 
-static int32_t field_of(const frame_sample_t *s, sample_field_t field)
-{
+static int32_t
+field_of(const frame_sample_t* s, sample_field_t field) {
     switch (field) {
-        case FIELD_TOTAL:     return s->frame_total_us;
-        case FIELD_LOGIC:     return s->logic_us;
+        case FIELD_TOTAL: return s->frame_total_us;
+        case FIELD_LOGIC: return s->logic_us;
         case FIELD_RASTERIZE: return s->rasterize_us;
-        case FIELD_HUD:       return s->hud_us;
-        case FIELD_PRESENT:   return s->present_us;
+        case FIELD_HUD: return s->hud_us;
+        case FIELD_PRESENT: return s->present_us;
     }
     return 0;
 }
@@ -131,29 +133,33 @@ typedef struct {
  * moved to five static ones instead. One reused buffer costs a fifth of
  * either - heap-allocated now alongside samples above, for the same
  * reason. */
-static int32_t *stat_scratch = NULL;
+static int32_t* stat_scratch = NULL;
 
-static phase_stats_t compute_stats(sample_field_t field, int n)
-{
-    phase_stats_t s = { .min = INT64_MAX, .max = 0, .avg = 0, .med = 0, .p95 = 0 };
+static phase_stats_t
+compute_stats(sample_field_t field, int n) {
+    phase_stats_t s = {.min = INT64_MAX, .max = 0, .avg = 0, .med = 0, .p95 = 0};
     int64_t sum = 0;
 
     for (int i = 0; i < n; i++) {
         int32_t v = field_of(&samples[i], field);
         stat_scratch[i] = v;
-        if (v < s.min) s.min = v;
-        if (v > s.max) s.max = v;
+        if (v < s.min) {
+            s.min = v;
+        }
+        if (v > s.max) {
+            s.max = v;
+        }
         sum += v;
     }
 
     s.avg = sum / n;
-    s.med = median_of(stat_scratch, n);        /* sorts stat_scratch in place */
-    s.p95 = stat_scratch[(n * 95) / 100];       /* stat_scratch is now sorted */
+    s.med = median_of(stat_scratch, n);   /* sorts stat_scratch in place */
+    s.p95 = stat_scratch[(n * 95) / 100]; /* stat_scratch is now sorted */
     return s;
 }
 
-static void cube_perf_fixture(void)
-{
+static void
+cube_perf_fixture(void) {
     /* draw_fps() needs ctx->text_width/text_height, which only ui_init()
      * sets - normally done once by the shell's own startup, which the
      * selftest runs before (see main.c's app_main(): selftest_run() runs
@@ -181,15 +187,15 @@ static void cube_perf_fixture(void)
         samples = NULL;
         stat_scratch = NULL;
         TEST_FAIL_MESSAGE("need samples and stat_scratch buffers for the "
-                           "cube perf capture, and at least one of the two "
-                           "failed to allocate");
+                          "cube perf capture, and at least one of the two "
+                          "failed to allocate");
     }
 
     sample_count = 0;
 }
 
-static void cube_perf_teardown(void)
-{
+static void
+cube_perf_teardown(void) {
     cube_exit();
 
     /* gfx_set_interlace() is gfx.c-global state, not app-scoped like
@@ -207,16 +213,15 @@ static void cube_perf_teardown(void)
 /* Nothing pressed, no touch - draw_fps() feeds this straight into
  * ui_begin()/feed_input(), which dereference it unconditionally, so a real
  * (zeroed) input_t is required here, not NULL. */
-static const input_t null_input = { 0 };
+static const input_t null_input = {0};
 
 /* The label is generated from the three toggles (see run_perf_variant()),
  * so no run can state a configuration that has drifted from what it did.
  * draw_fps() is timed as its own phase rather than folded into whichever
  * phase runs next, so a with/without run shows what the HUD text costs;
  * `with_partial` and `with_interlace` get the same on/off treatment. */
-static void run_perf_capture(const char *label, bool with_hud, bool with_partial,
-                             bool with_interlace)
-{
+static void
+run_perf_capture(const char* label, bool with_hud, bool with_partial, bool with_interlace) {
     cube_perf_fixture();
     partial_updates = with_partial;
     gfx_set_interlace(with_interlace);
@@ -231,10 +236,14 @@ static void run_perf_capture(const char *label, bool with_hud, bool with_partial
     while (esp_timer_get_time() - test_start < SAMPLE_MS * 1000) {
         int64_t frame_start = esp_timer_get_time();
         int64_t dt_ms = (frame_start - next_frame_due) / 1000;
-        if (dt_ms < 0) dt_ms = 1;
-        if (dt_ms > 250) dt_ms = 250;
+        if (dt_ms < 0) {
+            dt_ms = 1;
+        }
+        if (dt_ms > 250) {
+            dt_ms = 250;
+        }
         next_frame_due += dt_ms * 1000;
-        
+
         /* --- LOGIC PHASE --- */
         int64_t logic_start = esp_timer_get_time();
         cube_update_rotation((uint32_t)dt_ms);
@@ -291,9 +300,9 @@ static void run_perf_capture(const char *label, bool with_hud, bool with_partial
 
     phase_stats_t total = compute_stats(FIELD_TOTAL, valid);
     phase_stats_t logic = compute_stats(FIELD_LOGIC, valid);
-    phase_stats_t rast  = compute_stats(FIELD_RASTERIZE, valid);
-    phase_stats_t hud   = compute_stats(FIELD_HUD, valid);
-    phase_stats_t pres  = compute_stats(FIELD_PRESENT, valid);
+    phase_stats_t rast = compute_stats(FIELD_RASTERIZE, valid);
+    phase_stats_t hud = compute_stats(FIELD_HUD, valid);
+    phase_stats_t pres = compute_stats(FIELD_PRESENT, valid);
 
     /* --- LOG THE REPORT --- */
     /* Console only - this project has no mounted filesystem to write a
@@ -302,24 +311,22 @@ static void run_perf_capture(const char *label, bool with_hud, bool with_partial
      * needs - see post.c). ESP_LOGI is what every other perf tool in this
      * codebase already reports through (e.g. suite_sand.c's own budget
      * tests), captured the same way by tools/capture_selftest.py. */
-    ESP_LOGI(TAG, "=== CUBE PERF %s (%lld frames over %ds) ===",
-             label, (long long)sample_count, SAMPLE_SECONDS);
+    ESP_LOGI(TAG, "=== CUBE PERF %s (%lld frames over %ds) ===", label, (long long)sample_count, SAMPLE_SECONDS);
     ESP_LOGI(TAG, "Total:   min=%lldus max=%lldus avg=%lldus med=%lldus p95=%lldus (%.1f/%.1f/%.1f fps)",
-             (long long)total.min, (long long)total.max, (long long)total.avg,
-             (long long)total.med, (long long)total.p95,
-             1000000.0/total.avg, 1000000.0/total.med, 1000000.0/total.p95);
-    ESP_LOGI(TAG, "Logic:   min=%lldus max=%lldus avg=%lldus med=%lldus p95=%lldus (%.1f%%)",
-             (long long)logic.min, (long long)logic.max, (long long)logic.avg,
-             (long long)logic.med, (long long)logic.p95, (double)logic.avg/total.avg*100);
-    ESP_LOGI(TAG, "Raster:  min=%lldus max=%lldus avg=%lldus med=%lldus p95=%lldus (%.1f%%)",
-             (long long)rast.min, (long long)rast.max, (long long)rast.avg,
-             (long long)rast.med, (long long)rast.p95, (double)rast.avg/total.avg*100);
-    ESP_LOGI(TAG, "HUD:     min=%lldus max=%lldus avg=%lldus med=%lldus p95=%lldus (%.1f%%)",
-             (long long)hud.min, (long long)hud.max, (long long)hud.avg,
-             (long long)hud.med, (long long)hud.p95, (double)hud.avg/total.avg*100);
-    ESP_LOGI(TAG, "Present: min=%lldus max=%lldus avg=%lldus med=%lldus p95=%lldus (%.1f%%)",
-             (long long)pres.min, (long long)pres.max, (long long)pres.avg,
-             (long long)pres.med, (long long)pres.p95, (double)pres.avg/total.avg*100);
+             (long long)total.min, (long long)total.max, (long long)total.avg, (long long)total.med,
+             (long long)total.p95, 1000000.0 / total.avg, 1000000.0 / total.med, 1000000.0 / total.p95);
+    ESP_LOGI(TAG, "Logic:   min=%lldus max=%lldus avg=%lldus med=%lldus p95=%lldus (%.1f%%)", (long long)logic.min,
+             (long long)logic.max, (long long)logic.avg, (long long)logic.med, (long long)logic.p95,
+             (double)logic.avg / total.avg * 100);
+    ESP_LOGI(TAG, "Raster:  min=%lldus max=%lldus avg=%lldus med=%lldus p95=%lldus (%.1f%%)", (long long)rast.min,
+             (long long)rast.max, (long long)rast.avg, (long long)rast.med, (long long)rast.p95,
+             (double)rast.avg / total.avg * 100);
+    ESP_LOGI(TAG, "HUD:     min=%lldus max=%lldus avg=%lldus med=%lldus p95=%lldus (%.1f%%)", (long long)hud.min,
+             (long long)hud.max, (long long)hud.avg, (long long)hud.med, (long long)hud.p95,
+             (double)hud.avg / total.avg * 100);
+    ESP_LOGI(TAG, "Present: min=%lldus max=%lldus avg=%lldus med=%lldus p95=%lldus (%.1f%%)", (long long)pres.min,
+             (long long)pres.max, (long long)pres.avg, (long long)pres.med, (long long)pres.p95,
+             (double)pres.avg / total.avg * 100);
 
     cube_perf_teardown();
 }
@@ -330,29 +337,27 @@ static void run_perf_capture(const char *label, bool with_hud, bool with_partial
  * runs the capture under it. Every test below is one line calling this
  * with the one thing it is isolating flipped off from the all-on
  * baseline, so the label is never a surprise. */
-static void run_perf_variant(bool with_hud, bool with_partial, bool with_interlace)
-{
+static void
+run_perf_variant(bool with_hud, bool with_partial, bool with_interlace) {
     char label[48];
-    snprintf(label, sizeof label, "hud_%s_partial_%s_interlace_%s",
-             with_hud ? "on" : "off",
-             with_partial ? "on" : "off",
-             with_interlace ? "on" : "off");
+    snprintf(label, sizeof label, "hud_%s_partial_%s_interlace_%s", with_hud ? "on" : "off",
+             with_partial ? "on" : "off", with_interlace ? "on" : "off");
     run_perf_capture(label, with_hud, with_partial, with_interlace);
 }
 
 /* Baseline: everything this branch adds turned on, matching app_cube.c's
  * own real defaults (partial_updates starts true; interlace is a
  * diagnostics-only toggle, off unless a developer turns it on). */
-void test_cube_performance_baseline(void)
-{
+void
+test_cube_performance_baseline(void) {
     run_perf_variant(true, true, false);
     TEST_PASS();
 }
 
 /* Isolates draw_fps()'s own cost - only Present (and the phase named HUD
  * itself) should move relative to the baseline. */
-void test_cube_performance_no_hud(void)
-{
+void
+test_cube_performance_no_hud(void) {
     run_perf_variant(false, true, false);
     TEST_PASS();
 }
@@ -361,8 +366,8 @@ void test_cube_performance_no_hud(void)
  * every frame, same as any other app that never turns it on. This is the
  * branch's actual headline optimization, so Logic (the clear) and Present
  * (what gfx_present() finds dirty) are both expected to move. */
-void test_cube_performance_no_partial(void)
-{
+void
+test_cube_performance_no_partial(void) {
     run_perf_variant(true, false, false);
     TEST_PASS();
 }
@@ -370,24 +375,25 @@ void test_cube_performance_no_partial(void)
 /* Isolates interlace: gfx_present() skips half the dirty strips each
  * frame, sending the other half next frame instead - Present should drop
  * accordingly with partial_updates still on underneath it. */
-void test_cube_performance_interlaced(void)
-{
+void
+test_cube_performance_interlaced(void) {
     run_perf_variant(true, true, true);
     TEST_PASS();
 }
 
-void run_cube_perf_suite(void)
-{
+void
+run_cube_perf_suite(void) {
     RUN_TEST(test_cube_performance_baseline);
     RUN_TEST(test_cube_performance_no_hud);
     RUN_TEST(test_cube_performance_no_partial);
     RUN_TEST(test_cube_performance_interlaced);
 }
 
-#else  /* !DEVICE_BUILD */
+#else /* !DEVICE_BUILD */
 
-void run_cube_perf_suite(void) { }
+void
+run_cube_perf_suite(void) {}
 
-#endif  /* DEVICE_BUILD */
+#endif /* DEVICE_BUILD */
 
 SUITE_REGISTER(run_cube_perf_suite);

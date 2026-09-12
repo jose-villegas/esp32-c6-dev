@@ -1,21 +1,21 @@
 /* ui_pointer - see ui_pointer.h. */
 #include "ui/ui_pointer.h"
 
-static ui_pointer_event_t make(ui_pointer_kind_t kind, int x, int y)
-{
-    return (ui_pointer_event_t){ .kind = kind, .x = x, .y = y };
+static ui_pointer_event_t
+make(ui_pointer_kind_t kind, int x, int y) {
+    return (ui_pointer_event_t){.kind = kind, .x = x, .y = y};
 }
 
 /* No bounds check: ui_pointer_step()'s max < UI_POINTER_MAX_EVENTS guard
  * already rejected any buffer too small for the most this can ever write. */
-static int emit(ui_pointer_event_t *out, int n, ui_pointer_kind_t kind, int x, int y)
-{
+static int
+emit(ui_pointer_event_t* out, int n, ui_pointer_kind_t kind, int x, int y) {
     out[n] = make(kind, x, y);
     return n + 1;
 }
 
-int ui_pointer_step(ui_pointer_t *p, const input_t *input, ui_pointer_event_t *out, int max)
-{
+int
+ui_pointer_step(ui_pointer_t* p, const input_t* input, ui_pointer_event_t* out, int max) {
     if (max < UI_POINTER_MAX_EVENTS) {
         return 0;
     }

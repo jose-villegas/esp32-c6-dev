@@ -50,18 +50,18 @@ typedef struct {
     /* Header: swatch on the left, caption above name to its right, info
      * button at the far right edge. */
     mu_Rect swatch;
-    mu_Rect material_caption;   /* "MATERIAL" */
-    mu_Rect material_name;      /* the large material name */
+    mu_Rect material_caption; /* "MATERIAL" */
+    mu_Rect material_name;    /* the large material name */
     mu_Rect info_button;
 
     /* Brush mode: caption above three equal-width, equal-gap segments. */
-    mu_Rect mode_caption;       /* "BRUSH MODE" */
+    mu_Rect mode_caption; /* "BRUSH MODE" */
     mu_Rect segments[BRUSH_SCREEN_SEGMENT_COUNT];
 
     /* Brush size: caption and right-aligned value share a row, above the
      * slider track. */
-    mu_Rect size_caption;       /* e.g. "POUR BRUSH SIZE" */
-    mu_Rect size_value;         /* e.g. "06 PX" */
+    mu_Rect size_caption; /* e.g. "POUR BRUSH SIZE" */
+    mu_Rect size_value;   /* e.g. "06 PX" */
     mu_Rect slider_track;
 } brush_screen_layout_t;
 
@@ -70,7 +70,7 @@ typedef struct {
  * the two only mean anything together: suite_brush_screen.c measures the
  * strings below against their own rects at this scale, which is what caught
  * "POUR BRUSH SIZE" overflowing its row in portrait. */
-#define BRUSH_SCREEN_CAPTION_SCALE 2
+#define BRUSH_SCREEN_CAPTION_SCALE    2
 
 /* The screen's fixed strings. Here rather than at the drawing call site so
  * the fit check above can reach them - a caption the layout has never seen
@@ -83,8 +83,8 @@ typedef struct {
  * which needs 240px of a row that is only 232px wide once the value has its
  * 80. The dropped word is the one carrying no information: the panel is
  * already the brush screen and the segment above already says POUR. */
-const char *brush_screen_segment_label(brush_screen_segment_t seg);
-const char *brush_screen_size_caption(brush_screen_segment_t seg);
+const char* brush_screen_segment_label(brush_screen_segment_t seg);
+const char* brush_screen_size_caption(brush_screen_segment_t seg);
 
 /* The screen's own chrome palette - dark navy panels, a gold accent for the
  * selected mode segment. Unlike the material palette (app_sand.c's
@@ -93,15 +93,15 @@ const char *brush_screen_size_caption(brush_screen_segment_t seg);
  * above are: anything that draws this screen, or previews it off-device,
  * must agree on these exact values rather than each keeping its own copy
  * that can drift. */
-#define BRUSH_PANEL_FACE_COLOR         0x131C2E
-#define BRUSH_PANEL_BORDER_COLOR       0xE8ECF4
-#define BRUSH_SEG_SELECTED_COLOR       0xE0A63C
-#define BRUSH_SEG_UNSELECTED_COLOR     0x1B2740
-#define BRUSH_CAPTION_COLOR            0x8FA3C0
-#define BRUSH_TEXT_COLOR               0xF2F6FF
-#define BRUSH_SEG_SELECTED_INK_COLOR   0x2A1A06
+#define BRUSH_PANEL_FACE_COLOR       0x131C2E
+#define BRUSH_PANEL_BORDER_COLOR     0xE8ECF4
+#define BRUSH_SEG_SELECTED_COLOR     0xE0A63C
+#define BRUSH_SEG_UNSELECTED_COLOR   0x1B2740
+#define BRUSH_CAPTION_COLOR          0x8FA3C0
+#define BRUSH_TEXT_COLOR             0xF2F6FF
+#define BRUSH_SEG_SELECTED_INK_COLOR 0x2A1A06
 
 /* Fills `out` for a `screen_w` x `screen_h` canvas - the LOGICAL canvas
  * (ui_width()/ui_height()), which swap under a quarter turn, exactly as
  * palette_tile_rect() takes them. Never reads GFX_WIDTH/GFX_HEIGHT. */
-void brush_screen_layout(int screen_w, int screen_h, brush_screen_layout_t *out);
+void brush_screen_layout(int screen_w, int screen_h, brush_screen_layout_t* out);

@@ -9,120 +9,119 @@
  * `const`, so it lives in flash rather than RAM. Adding a material is a row.
  */
 
-#define TWIN_ROW(id, ...)                                                \
-    [MATERIAL_ROW(id)] = __VA_ARGS__, [MATERIAL_ROW(id) + 1] = __VA_ARGS__
+#define TWIN_ROW(id, ...) [MATERIAL_ROW(id)] = __VA_ARGS__, [MATERIAL_ROW(id) + 1] = __VA_ARGS__
 
 const material_t materials[MATERIAL_ROWS] = {
     TWIN_ROW(MAT_EMPTY,
-        {
-            .name = "empty",
-            .kind = KIND_NONE,
-            .density = 0,
-        }),
+             {
+                 .name = "empty",
+                 .kind = KIND_NONE,
+                 .density = 0,
+             }),
 
     TWIN_ROW(MAT_SAND,
-        {
-            .name = "Sand",
-            .kind = KIND_POWDER,
-            .density = 60,
-            .slip = 96,
-            .repose = 7, /* about 35 degrees, dry sand */
-            .scatter = 40,
-        }),
+             {
+                 .name = "Sand",
+                 .kind = KIND_POWDER,
+                 .density = 60,
+                 .slip = 96,
+                 .repose = 7, /* about 35 degrees, dry sand */
+                 .scatter = 40,
+             }),
 
     TWIN_ROW(MAT_WATER,
-        {
+             {
 
-            .name = "Water",
-            .kind = KIND_LIQUID,
-            .density = 30, /* lighter than sand, so sand sinks through it */
+                 .name = "Water",
+                 .kind = KIND_LIQUID,
+                 .density = 30, /* lighter than sand, so sand sinks through it */
 
-            .slip = 255,
-            .repose = 0,
-            .scatter = 0,
+                 .slip = 255,
+                 .repose = 0,
+                 .scatter = 0,
 
-            .mobility = 255, /* VISCOSITY, inverted - see material.h's own
+                 .mobility = 255, /* VISCOSITY, inverted - see material.h's own
                               * comment on the field. Water is the runny
                               * one and moves on every step it can, which
                               * is exactly what every liquid did before
                               * this field had a second reader, so water's
                               * behaviour is unchanged by its arrival. */
-        }),
+             }),
 
     TWIN_ROW(MAT_STONE,
-        {
-            .name = "Stone",
-            .kind = KIND_STATIC,
-            .density = 181, /* Nothing displaces it via ordinary movement -
+             {
+                 .name = "Stone",
+                 .kind = KIND_STATIC,
+                 .density = 181, /* Nothing displaces it via ordinary movement -
                               * this only feeds the dislodge-toughness roll
                               * (queue_flying_grain(), sand_impulse.c). Rank
                               * 2 of 8 on `density = 221 - 20*rank`, the
                               * fragility curve every solid sits on - see
                               * MATX_METAL's own comment for the full
                               * ranking and the curve's own derivation. */
-            .slip = 0,
-            .repose = 0,
-            .scatter = 0,
-        }),
+                 .slip = 0,
+                 .repose = 0,
+                 .scatter = 0,
+             }),
 
     TWIN_ROW(MAT_GAS,
-        {
-            .name = "Gas",
-            .kind = KIND_GAS,
-            .density = 10, /* 1-25 works the same */
+             {
+                 .name = "Gas",
+                 .kind = KIND_GAS,
+                 .density = 10, /* 1-25 works the same */
 
-            .slip = 255,
-            .repose = 0,
-            .scatter = 120, /* well above sand's 40 - a visibly turbulent,
+                 .slip = 255,
+                 .repose = 0,
+                 .scatter = 120, /* well above sand's 40 - a visibly turbulent,
                                * wispy rise rather than a rigid column */
 
-            .decay = 6, /* Gas is whole-grain. Decay prevents infinite solid
+                 .decay = 6, /* Gas is whole-grain. Decay prevents infinite solid
                          * buildup. Adjust on device. */
 
-            .mobility = 96, /* ~2.7 steps avg between rises (was 32, ~8
+                 .mobility = 96, /* ~2.7 steps avg between rises (was 32, ~8
                              * steps), too sluggish on device. Slower than
                              * sand's instant rise, but not stuck. Life ticks
                              * regardless (see tick_decay() in sand_priv.h).
                              * Tune on device. */
 
-            .sight = 16, /* Material's own `sight` figure, wider than water's
+                 .sight = 16, /* Material's own `sight` figure, wider than water's
                           * `SAND_LIQUID_SIGHT` (8), for faster/further gas
                           * dispersal using same `equalise_*()` mechanism. */
-        }),
+             }),
 
     TWIN_ROW(MAT_FIRE,
-        {
-            .name = "Fire",
-            .kind = KIND_GAS, /* replaces KIND_STATIC (immobile, never
+             {
+                 .name = "Fire",
+                 .kind = KIND_GAS, /* replaces KIND_STATIC (immobile, never
                                * buriable) */
 
-            .density = 15, /* Gas (10) vs. sand (60). Sand sinks through fire.
+                 .density = 15, /* Gas (10) vs. sand (60). Sand sinks through fire.
                             * Fire avoids dense gases, mixes with ignited
                             * elements. */
-            .slip = 255,   /* no resistance, same reasoning as
+                 .slip = 255,   /* no resistance, same reasoning as
                                  * gas's own row above */
-            .repose = 0,
-            .scatter = 120, /* matches gas's own figure - equally
+                 .repose = 0,
+                 .scatter = 120, /* matches gas's own figure - equally
                                  * turbulent rise, tune independently
                                  * later if it should read differently */
 
-            .decay = 96,    /* Gap > 32: ~40 steps, under a second at 60fps.
+                 .decay = 96,    /* Gap > 32: ~40 steps, under a second at 60fps.
                              * Fire burns faster than gas. Tune on device. */
-            .mobility = 96, /* Tune independently if fire should rise
+                 .mobility = 96, /* Tune independently if fire should rise
                              * faster/slower than gas */
-            .sight = 5,     /* noticeably tighter than gas's 16 -
+                 .sight = 5,     /* noticeably tighter than gas's 16 -
                                 * "tighter instead of sparse". Starting
                                 * point, not final - tune on device */
-        }),
+             }),
 
     TWIN_ROW(MAT_WOOD,
-        {
-            .name = "Wood",
-            .kind = KIND_STATIC, /* a log does not fall over or pile up
+             {
+                 .name = "Wood",
+                 .kind = KIND_STATIC, /* a log does not fall over or pile up
                                      * - it sits where it is drawn until
                                      * fire chars it into an ember (see
                                      * sand_reactions.c) */
-            .density = 141,      /* above sand (60) and water (30), so
+                 .density = 141,      /* above sand (60) and water (30), so
                                      * neither can displace a log - it
                                      * holds its shape under a pour, the
                                      * way a real log does not wash away.
@@ -130,178 +129,178 @@ const material_t materials[MATERIAL_ROWS] = {
                                      * (see MATX_METAL's own comment) -
                                      * tougher than glass, which shatters,
                                      * but more brittle than a root. */
-        }),
+             }),
 
     TWIN_ROW(MAT_STEAM,
-        {
-            .name = "Steam",
-            .kind = KIND_GAS, /* Rises and disperses like gas and fire;
+             {
+                 .name = "Steam",
+                 .kind = KIND_GAS, /* Rises and disperses like gas and fire;
                                * lighter and faster. Steam is boiled water or
                                * flashed off fire. Fuel burning leaves
                                * MAT_SMOKE. Initially one material, but
                                * separate rows for correct visuals. */
 
-            .density = 5, /* Below gas and fire so it can't displace them
+                 .density = 5, /* Below gas and fire so it can't displace them
                            * (can_enter() needs strictly greater density);
                            * lighter than water, so it bubbles up through it. */
-            .slip = 255,  /* no resistance, same reasoning as
+                 .slip = 255,  /* no resistance, same reasoning as
                                      * gas's own row */
-            .repose = 0,
-            .scatter = 140, /* above both gas's 120 and fire's
+                 .repose = 0,
+                 .scatter = 140, /* above both gas's 120 and fire's
                                      * 120 - a wispier, more turbulent
                                      * rise. Starting point, not final -
                                      * tune on device like every other
                                      * constant here. */
 
-            .decay = 12,     /* RAISED TO ~320 STEPS (~5.3S AT ~60FPS), 33%
+                 .decay = 12,     /* RAISED TO ~320 STEPS (~5.3S AT ~60FPS), 33%
                               * LONGER THAN SMOKE'S 16 STEPS (~4S). STEAM
                               * DECAYS SLOWER THAN SMOKE BUT NO TEST CHANGE
                               * NEEDED. STARTING LIFE IS MATERIAL_VARIANTS - 1
                               * = 15. NOT MEASURED ON DEVICE YET. */
-            .mobility = 160, /* Steam rises eagerly, not like gas. Tune on
+                 .mobility = 160, /* Steam rises eagerly, not like gas. Tune on
                               * device. */
-            .sight = 20,     /* wider than gas's 16 - a puff of
+                 .sight = 20,     /* wider than gas's 16 - a puff of
                                      * steam disperses generously rather
                                      * than staying a tight column the
                                      * way fire's own 5 does. Starting
                                      * point, not final - tune on device
                                      * like every other constant here. */
-        }),
+             }),
 
     TWIN_ROW(MAT_SMOKE,
-        {
-            .name = "Smoke",
-            .kind = KIND_GAS, /* Similar to steam, gas, and fire; smoke is
+             {
+                 .name = "Smoke",
+                 .kind = KIND_GAS, /* Similar to steam, gas, and fire; smoke is
                                * FUEL's residue, steam is WATER's. Both behave
                                * alike, thus this row mirrors steam's. They
                                * differ only in appearance to distinguish fire
                                * smoke from kettle steam. Palette defines this
                                * row. */
 
-            .density = 7, /* Smoke heavier; steam rises, correct for basin
+                 .density = 7, /* Smoke heavier; steam rises, correct for basin
                            * over fire. */
-            .slip = 255,  /* no resistance, same reasoning as
+                 .slip = 255,  /* no resistance, same reasoning as
                                      * gas's own row */
-            .repose = 0,
-            .scatter = 150, /* just above steam's 140 - smoke
+                 .repose = 0,
+                 .scatter = 150, /* just above steam's 140 - smoke
                                      * curls a little more than steam
                                      * does. Starting point, not final -
                                      * tune on device like every other
                                      * constant here. */
 
-            .decay = 16,     /* Decay chance per step; smaller means slower
+                 .decay = 16,     /* Decay chance per step; smaller means slower
                               * decay. Tune on device. */
-            .mobility = 120, /* between gas's 96 and steam's 160 -
+                 .mobility = 120, /* between gas's 96 and steam's 160 -
                                      * smoke climbs, but lazily, where
                                      * steam comes off a boil eagerly.
                                      * Starting point, not final - tune
                                      * on device like every other
                                      * constant here. */
-            .sight = 24,     /* smoke spreads into haze, not column. Tune on
+                 .sight = 24,     /* smoke spreads into haze, not column. Tune on
                               * device. */
-        }),
+             }),
 
     TWIN_ROW(MAT_OIL,
-        {
-            .name = "Oil",
-            .kind = KIND_LIQUID,
-            .density = 22, /* Oil floats, fire can't move it, sand sinks. */
+             {
+                 .name = "Oil",
+                 .kind = KIND_LIQUID,
+                 .density = 22, /* Oil floats, fire can't move it, sand sinks. */
 
-            .mobility = 140, /* VISCOSITY inverted - see material.h. Water
+                 .mobility = 140, /* VISCOSITY inverted - see material.h. Water
                               * spreads in 8 steps, oil in 18. Tune on device. */
 
-            .slip = 255,
-            .repose = 0,
-            .scatter = 0,
-        }),
+                 .slip = 255,
+                 .repose = 0,
+                 .scatter = 0,
+             }),
 
     TWIN_ROW(MAT_LAVA,
-        {
-            .name = "Lava",
-            .kind = KIND_LIQUID,
-            .density = 45, /* above water (30) so lava sinks and water
+             {
+                 .name = "Lava",
+                 .kind = KIND_LIQUID,
+                 .density = 45, /* above water (30) so lava sinks and water
                               * floats when they meet, below sand (60) so
                               * sand still sinks through lava. Both fall
                               * out of the existing rules; neither needs
                               * lava-specific code. */
-            .slip = 255,
-            .repose = 0,
-            .scatter = 0,
+                 .slip = 255,
+                 .repose = 0,
+                 .scatter = 0,
 
-            .mobility = 70, /* VISCOSITY inverted in material.h. Set unset
+                 .mobility = 70, /* VISCOSITY inverted in material.h. Set unset
                              * byte to zero for free flow. Tune on device. */
 
-            .decay = 0, /* decay != 0 changes lava meaning, lava immortal,
+                 .decay = 0, /* decay != 0 changes lava meaning, lava immortal,
                          * cools by water */
-        }),
+             }),
 
     TWIN_ROW(MAT_ACID,
-        {
-            .name = "Acid",
-            .kind = KIND_LIQUID,
-            .density = 38, /* Acid sinks in water, floats on lava. Sand sinks
+             {
+                 .name = "Acid",
+                 .kind = KIND_LIQUID,
+                 .density = 38, /* Acid sinks in water, floats on lava. Sand sinks
                             * in acid. Grain must enter acid. */
-            .slip = 255,   /* the usual "no resistance" values a liquid
+                 .slip = 255,   /* the usual "no resistance" values a liquid
                               * leaves these at - see water's own row */
-            .repose = 0,
-            .scatter = 0,
+                 .repose = 0,
+                 .scatter = 0,
 
-            .mobility = 220, /* VISCOSITY, inverted - see material.h. Acid is
+                 .mobility = 220, /* VISCOSITY, inverted - see material.h. Acid is
                               * runny, slower to read as heavier. Tune on
                               * device. */
-        }),
+             }),
 
     TWIN_ROW(MAT_GLASS,
-        {
-            .name = "Glass",
-            .kind = KIND_STATIC,
-            .density = 121, /* Brittle - rank 5 of 8 on the fragility curve
+             {
+                 .name = "Glass",
+                 .kind = KIND_STATIC,
+                 .density = 121, /* Brittle - rank 5 of 8 on the fragility curve
                               * (see MATX_METAL's own comment), more easily
                               * dislodged than wood or a root but tougher
                               * than ice/plant/leaf. Differs from stone in
                               * ACID resistance too. */
-            .slip = 0,
-            .repose = 0,
-            .scatter = 0,
-        }),
+                 .slip = 0,
+                 .repose = 0,
+                 .scatter = 0,
+             }),
 
     TWIN_ROW(MAT_DIRT,
-        {
-            .name = "Dirt",
-            .kind = KIND_POWDER,
-            .density = 62, /* just above sand's 60. Soil is sand with
+             {
+                 .name = "Dirt",
+                 .kind = KIND_POWDER,
+                 .density = 62, /* just above sand's 60. Soil is sand with
                               * water and organic matter packed into the
                               * gaps, so it should sink through a loose
                               * pile rather than float on it - and being
                               * only just heavier keeps that slow */
-            .slip = 64,    /* stickier than sand's 96: damp soil clumps
+                 .slip = 64,    /* stickier than sand's 96: damp soil clumps
                               * where dry sand runs */
-            .repose = 11,  /* ~48 degrees against sand's ~35. A bank of
+                 .repose = 11,  /* ~48 degrees against sand's ~35. A bank of
                               * earth holds a much steeper face than a
                               * dune does, which is most of what makes it
                               * read as soil rather than as brown sand */
-            .scatter = 12, /* well under sand's 40 - it lands where it
+                 .scatter = 12, /* well under sand's 40 - it lands where it
                               * falls instead of skittering */
-        }),
+             }),
 
     TWIN_ROW(MAT_SNOW,
-        {
-            .name = "Snow",
-            .kind = KIND_POWDER,
-            .density = 15, /* Under oil's 22 and well under water's 30,
+             {
+                 .name = "Snow",
+                 .kind = KIND_POWDER,
+                 .density = 15, /* Under oil's 22 and well under water's 30,
                               * so snow FLOATS on both - can_enter() lets
                               * the denser one displace it and that is the
                               * whole mechanism. Snow sitting on top of a
                               * pool is right, and it also puts the snow
                               * where it is useful: on the surface, in
                               * reach of whatever is above it. */
-            .slip = 64,    /* Snow clumps, bank shape hold. Packs onto glass
+                 .slip = 64,    /* Snow clumps, bank shape hold. Packs onto glass
                             * pane. */
-            .repose = 9,   /* ~42 degrees, steeper than dry sand's ~35 -
+                 .repose = 9,   /* ~42 degrees, steeper than dry sand's ~35 -
                               * again so a bank holds. */
-            .scatter = 90, /* Falling snow drifts instead of dropping
+                 .scatter = 90, /* Falling snow drifts instead of dropping
                             * straight, making it look like snow. */
-        }),
+             }),
 
     /* NIBBLE 15, TWO ROWS - varied materials. No unique density, kind, slip,
      * repose, or scatter. */
@@ -425,7 +424,7 @@ const reaction_t reactions[MATERIAL_MAX] = {
 
     [MAT_DIRT] =
         {
-            .tones = SOIL_DRY_TONES,       /* MUST agree with
+            .tones = SOIL_DRY_TONES, /* MUST agree with
                                             * SOIL_DRY_TONES/SOIL_MOISTURE_MAX */
             .moist_max = SOIL_MOISTURE_MAX,
             .soaks = 60,
@@ -436,23 +435,23 @@ const reaction_t reactions[MATERIAL_MAX] = {
 
             .dissolvable = 200, /* the same as sand: it is mostly sand */
 
-        .heats_to    = MATX(MATX_METAL),
-        .heat_chance = 10,
+            .heats_to = MATX(MATX_METAL),
+            .heat_chance = 10,
 
-        /* METAL IS WHAT SURVIVES THIS ROLL, so the number is the STONE
+            /* METAL IS WHAT SURVIVES THIS ROLL, so the number is the STONE
          * share: 230/256 stone leaves ~10% metal. Clumped, not sprinkled -
          * HEAT_FLAW_CLUMP (sand_reactions.c) re-rolls only every fifth cell,
          * so ore arrives in short veins and one run in ten is metal. */
-        .flaw_to     = MAT_STONE,
-        .flaw_chance = 230,
+            .flaw_to = MAT_STONE,
+            .flaw_chance = 230,
 
-        /* Wet ground now yields to heat more often than it crumbles: 77/256
+            /* Wet ground now yields to heat more often than it crumbles: 77/256
          * is about 30%, against the 235 that made wet dirt almost never
          * produce anything but sand. Digging into damp earth is meant to
          * be worth doing, not a reason to dry it out first. */
-        .spoils_to     = MAT_SAND,
-        .spoils_chance = 77,
-    },
+            .spoils_to = MAT_SAND,
+            .spoils_chance = 77,
+        },
 
     [MAT_SNOW] =
         {
@@ -465,7 +464,7 @@ const reaction_t reactions[MATERIAL_MAX] = {
             /* See reaction_t.thaws. Snow melts slower. */
             .thaws = 4,
 
-            .crusts = 35,  /* out of CRUST_ROLL_MAX a settled, bordered cell.
+            .crusts = 35, /* out of CRUST_ROLL_MAX a settled, bordered cell.
                             * Set by the balance ceiling, not by feel: a 32
                             * cell deep cover of snow is 90% ice after 9152
                             * steps, about five minutes of play. This field
@@ -566,20 +565,10 @@ const reaction_t reactions[MATERIAL_MAX] = {
 };
 
 static const char* const extended_names[MATERIAL_EXTENDED_CODES] = {
-    [MATX_ICE] = "Ice",
-    [MATX_PLANT] = "Plant",
-    [MATX_LEAF] = "Leaf",
-    [MATX_METAL] = "Metal",
-    [MATX_ROOT] = "Root",
+    [MATX_ICE] = "Ice", [MATX_PLANT] = "Plant", [MATX_LEAF] = "Leaf", [MATX_METAL] = "Metal", [MATX_ROOT] = "Root",
 
-    [8] = "Gunpowder",
-    [9] = "Gunpowder",
-    [10] = "Gunpowder",
-    [11] = "Gunpowder",
-    [12] = "Gunpowder",
-    [13] = "Gunpowder",
-    [14] = "Gunpowder",
-    [15] = "Gunpowder",
+    [8] = "Gunpowder",  [9] = "Gunpowder",      [10] = "Gunpowder",   [11] = "Gunpowder",     [12] = "Gunpowder",
+    [13] = "Gunpowder", [14] = "Gunpowder",     [15] = "Gunpowder",
 };
 
 const char*
@@ -782,7 +771,7 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_CODES] = {
         .moist_max = GUNPOWDER_MOIST_MAX,                                                                              \
         .dries = 1,                                                                                                    \
         .soaked_to = MAT_OIL,                                                                                          \
-        .soaked_chance = 16,                                                                                            \
+        .soaked_chance = 16,                                                                                           \
         .residue = 0,                                                                                                  \
     }
     [8] = GUNPOWDER_REACTION,

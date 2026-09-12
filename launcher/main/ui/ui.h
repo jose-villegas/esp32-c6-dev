@@ -40,14 +40,14 @@
 #include "ui/ui_transform.h"
 
 /* Shared metrics, so the shell and any app UI look like one product. */
-#define UI_TITLE_HEIGHT   56
-#define UI_ROW_HEIGHT     64
-#define UI_ROW_GAP        8
-#define UI_MARGIN         16
+#define UI_TITLE_HEIGHT  56
+#define UI_ROW_HEIGHT    64
+#define UI_ROW_GAP       8
+#define UI_MARGIN        16
 
 /* ui_slider_int()'s knob width - chunky enough for a finger, not tuned
  * finer than that until Phase 5 puts a screenshot next to the design. */
-#define UI_SLIDER_KNOB_W  40
+#define UI_SLIDER_KNOB_W 40
 
 /* The strip across the top of the home screen, reserved and deliberately
  * empty. It is where status belongs - battery, connection, the clock -
@@ -55,7 +55,7 @@
  * nothing below it. A row of the menu was there before; a status bar and
  * a heading that only ever said "APPS" cannot both have the top of a
  * 448px screen. */
-#define UI_BANNER_HEIGHT  56
+#define UI_BANNER_HEIGHT 56
 
 /* Pass as ui_end()'s background to draw without clearing first - for a UI laid
  * over an app's own output rather than replacing it. */
@@ -64,7 +64,7 @@
 void ui_init(void);
 
 /* The microui context, for building the UI between ui_begin and ui_end. */
-mu_Context *ui_context(void);
+mu_Context* ui_context(void);
 
 /* Start a UI frame: translates touch into the mouse events microui
  * expects, then opens the frame. Also resets the button style to
@@ -73,7 +73,7 @@ mu_Context *ui_context(void);
  * states it every frame. That matters here because the whole shell
  * shares one mu_Context: without the reset, the launcher opting into a
  * bezel would leave the running app's own overlay buttons bezelled too. */
-void ui_begin(const input_t *input);
+void ui_begin(const input_t* input);
 
 /* Choose how button frames are drawn for the rest of this frame.
  *
@@ -96,20 +96,20 @@ void ui_set_text_style(ui_text_style_t style);
  * and ui_set_transform() below, this does NOT need ui_invalidate() - see
  * ui_set_font()'s ui.c comment for why. Equivalent to
  * ui_set_font_scaled(font, GFX_GLYPH_SCALE). */
-void ui_set_font(const gfx_font_t *font);
+void ui_set_font(const gfx_font_t* font);
 
 /* Like ui_set_font(), but at `scale` glyph cells instead of the fixed
  * GFX_GLYPH_SCALE - see ui_set_font()'s ui.c comment for why carrying the
  * scale inside the font, rather than a separate render-time setting, is
  * what lets a screen mix two text sizes without paying ui_invalidate()
  * every frame. Clamped to at least 1. */
-void ui_set_font_scaled(const gfx_font_t *font, int scale);
+void ui_set_font_scaled(const gfx_font_t* font, int scale);
 
 /* The width `str` would measure at the CURRENT font and scale - what
  * ui_set_font()/ui_set_font_scaled() last set. For right-aligning a
  * string (e.g. against a caption on the same row) without re-deriving
  * the font role and scale at the call site. */
-int ui_measure_text(const char *str);
+int ui_measure_text(const char* str);
 
 /* Choose the transform every command is mapped through before it is
  * drawn - see ui_transform.h for what a transform is and why it is
@@ -148,7 +148,7 @@ int ui_height(void);
  * canvas rotates. Uncorrected, a rect pins to the first-open
  * orientation, and a bigger later orientation leaves part of the screen
  * uncleared, showing a previous app's frame. */
-int ui_begin_screen(mu_Context *ctx, const char *title, int opt);
+int ui_begin_screen(mu_Context* ctx, const char* title, int opt);
 
 /*
  * FILL content - a banner, a status strip - has no natural width of its own
@@ -167,9 +167,9 @@ int ui_begin_screen(mu_Context *ctx, const char *title, int opt);
  * is a caller bug (a button wider than the screen it is centred on)
  * rather than something to paper over silently here. Clamp at the call
  * site if `w` might ever exceed `canvas_w`. */
-static inline mu_Rect ui_centered_rect(int canvas_w, int w, int h, int y)
-{
-    return (mu_Rect){ (canvas_w - w) / 2, y, w, h };
+static inline mu_Rect
+ui_centered_rect(int canvas_w, int w, int h, int y) {
+    return (mu_Rect){(canvas_w - w) / 2, y, w, h};
 }
 
 /* Draws a baked icons_<name>.h glyph (icon_t) filling `r`, in `color`, via
@@ -177,13 +177,13 @@ static inline mu_Rect ui_centered_rect(int canvas_w, int w, int h, int y)
  * count no longer bounds artwork. `rows` is separate from `icon` because
  * icon_t.offset indexes into its own header's blob, not a self-contained
  * pointer - see gfx/icon.h. */
-void ui_draw_icon(mu_Context *ctx, mu_Rect r, const icon_t *icon, const uint8_t *rows, mu_Color color);
+void ui_draw_icon(mu_Context* ctx, mu_Rect r, const icon_t* icon, const uint8_t* rows, mu_Color color);
 
 /* An integer-valued slider over the next layout row - shaped like
  * mu_slider_ex(), but integer: that one's float/"%.2f" thumb is the wrong
  * shape for a "06 PX" control. Writes through `value`, returns whether it
  * changed this frame. */
-bool ui_slider_int(mu_Context *ctx, int *value, int lo, int hi, int step);
+bool ui_slider_int(mu_Context* ctx, int* value, int lo, int hi, int step);
 
 /* Close the frame and paint it, but only if it would look any different
  * from what is already on screen. Returns whether it drew. It repaints

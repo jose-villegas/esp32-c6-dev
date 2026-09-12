@@ -11,4 +11,4 @@ int post_ui_draw(int top, bool failures_only);
 
 /* A full report: title, summary line, then every check. Clears the screen
  * first. Does not present - the caller decides when to push the frame. */
-void post_ui_draw_report(const char *title);
+void post_ui_draw_report(const char* title);

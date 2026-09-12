@@ -7,8 +7,8 @@
  * _Static_assert path (PALETTE_FITS, also built from PALETTE_COLS_FOR())
  * share exactly one formula - see PALETTE_COLS_FOR()'s own comment for why
  * that matters. */
-int palette_cols(int screen_w)
-{
+int
+palette_cols(int screen_w) {
     return PALETTE_COLS_FOR(screen_w);
 }
 
@@ -17,20 +17,20 @@ int palette_cols(int screen_w)
  * functions must never disagree. Both compute a row's tile count and its
  * left edge with this exact arithmetic rather than each rolling their own,
  * so there is only one place the centring rule can be wrong. */
-static int row_tile_count(int row, int count, int cols)
-{
+static int
+row_tile_count(int row, int count, int cols) {
     const int start = row * cols;
     const int remaining = count - start;
     return (remaining < cols) ? remaining : cols;
 }
 
-static int row_left_x(int row_count, int screen_w)
-{
+static int
+row_left_x(int row_count, int screen_w) {
     return (screen_w - row_count * PALETTE_TILE) / 2;
 }
 
-static int panel_top_y(int count, int cols, int screen_h)
-{
+static int
+panel_top_y(int count, int cols, int screen_h) {
     const int rows = PALETTE_ROWS(count, cols);
     return (screen_h - rows * PALETTE_TILE) / 2;
 }
@@ -43,9 +43,8 @@ static int panel_top_y(int count, int cols, int screen_h)
  * (screen_w - row_width)/2 - a full row's row_count is `cols`, landing
  * that formula on the left edge, so there is only one centring rule, not
  * a special case for the last row. */
-void palette_tile_rect(int index, int count, int cols, int screen_w,
-                       int screen_h, int *x, int *y, int *w, int *h)
-{
+void
+palette_tile_rect(int index, int count, int cols, int screen_w, int screen_h, int* x, int* y, int* w, int* h) {
     const int row = index / cols;
     const int col = index % cols;
     const int row_count = row_tile_count(row, count, cols);
@@ -56,9 +55,8 @@ void palette_tile_rect(int index, int count, int cols, int screen_w,
     *h = PALETTE_TILE;
 }
 
-int palette_hit(int px, int py, int count, int cols, int screen_w,
-                int screen_h)
-{
+int
+palette_hit(int px, int py, int count, int cols, int screen_w, int screen_h) {
     const int top = panel_top_y(count, cols, screen_h);
     const int rows = PALETTE_ROWS(count, cols);
 
@@ -83,9 +81,8 @@ int palette_hit(int px, int py, int count, int cols, int screen_w,
     return index;
 }
 
-void palette_panel_rect(int count, int cols, int screen_w, int screen_h,
-                        int *x, int *y, int *w, int *h)
-{
+void
+palette_panel_rect(int count, int cols, int screen_w, int screen_h, int* x, int* y, int* w, int* h) {
     /* row_left_x(cols, ...) is exactly the panel's own left edge: a
      * full-width row (row_count == cols) IS the panel's own width, centred
      * the same way. Not hardcoded to 0: PALETTE_COLS * PALETTE_TILE ==
@@ -98,9 +95,8 @@ void palette_panel_rect(int count, int cols, int screen_w, int screen_h,
     *h = PALETTE_HEIGHT(count, cols);
 }
 
-void palette_label_origin(int x, int y, int w, int h, int len, int turn,
-                          int *out_x, int *out_y)
-{
+void
+palette_label_origin(int x, int y, int w, int h, int len, int turn, int* out_x, int* out_y) {
     /* The bounding box the string occupies, centred in (x, y, w, h) - one
      * box, computed the same way regardless of turn, which is what makes
      * turn 0 and turn 2 (and turn 1 and turn 3) share it below. Swapped at

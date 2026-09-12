@@ -65,10 +65,9 @@
  * block header below assumes it can place an arena_block_t at the base. */
 static _Alignas(max_align_t) unsigned char s_storage[HOST_HEAP_ARENA_STORAGE_BYTES];
 
-typedef struct arena_block
-{
-    struct arena_block *prev;
-    struct arena_block *next;
+typedef struct arena_block {
+    struct arena_block* prev;
+    struct arena_block* next;
     size_t size; /* usable payload bytes, excludes this header */
     int in_use;
     unsigned magic; /* set while in_use, checked on free() - catches a
@@ -76,26 +75,26 @@ typedef struct arena_block
                       * land inside the arena's byte range */
 } arena_block_t;
 
-#define ARENA_MAGIC_LIVE 0xA23EA11Cu
-#define ARENA_ALIGN (sizeof(max_align_t))
+#define ARENA_MAGIC_LIVE  0xA23EA11Cu
+#define ARENA_ALIGN       (sizeof(max_align_t))
 #define ARENA_HEADER_SIZE (align_up(sizeof(arena_block_t), ARENA_ALIGN))
 
-static arena_block_t *s_head;
-static size_t s_cap;      /* effective cap in bytes, <= sizeof(s_storage) */
+static arena_block_t* s_head;
+static size_t s_cap;        /* effective cap in bytes, <= sizeof(s_storage) */
 static size_t s_cur_bytes;  /* outstanding payload bytes right now */
 static size_t s_cur_blocks; /* outstanding block count right now */
 static size_t s_peak_bytes; /* highest s_cur_bytes since the last reset */
 static int s_initialized;
 
-static size_t align_up(size_t n, size_t a)
-{
+static size_t
+align_up(size_t n, size_t a) {
     /* a is always a power of two here (sizeof(max_align_t)) */
     return (n + (a - 1)) & ~(a - 1);
 }
 
-static int ptr_in_arena(const void *p)
-{
-    const unsigned char *b = (const unsigned char *)p;
+static int
+ptr_in_arena(const void* p) {
+    const unsigned char* b = (const unsigned char*)p;
     return b >= s_storage && b < s_storage + sizeof(s_storage);
 }
 
@@ -105,33 +104,26 @@ static int ptr_in_arena(const void *p)
  * where it came from exactly once, since a gate whose cap is silently
  * different from what the last person read in the log is worse than one
  * that never widened at all. */
-static size_t arena_effective_cap(void)
-{
+static size_t
+arena_effective_cap(void) {
     size_t cap = (size_t)HOST_HEAP_ARENA_BYTES;
-    const char *origin = "compile-time default (device profile "
-                          "DP_FREE_HEAP_BYTES via -DHOST_HEAP_ARENA_BYTES)";
+    const char* origin = "compile-time default (device profile "
+                         "DP_FREE_HEAP_BYTES via -DHOST_HEAP_ARENA_BYTES)";
 
-    const char *env = getenv("HOST_HEAP_ARENA_BYTES");
-    if (env && *env)
-    {
-        char *end = NULL;
+    const char* env = getenv("HOST_HEAP_ARENA_BYTES");
+    if (env && *env) {
+        char* end = NULL;
         unsigned long long v = strtoull(env, &end, 10);
-        if (end != env && *end == '\0' && v > 0)
-        {
+        if (end != env && *end == '\0' && v > 0) {
             cap = (size_t)v;
             origin = "environment override (HOST_HEAP_ARENA_BYTES)";
-        }
-        else
-        {
+        } else {
             fprintf(stderr, "heap_arena: ignoring unparseable HOST_HEAP_ARENA_BYTES=%s\n", env);
         }
     }
 
-    if (cap > sizeof(s_storage))
-    {
-        fprintf(stderr,
-                "heap_arena: requested cap %zu exceeds static storage %zu, clamping\n",
-                cap, sizeof(s_storage));
+    if (cap > sizeof(s_storage)) {
+        fprintf(stderr, "heap_arena: requested cap %zu exceeds static storage %zu, clamping\n", cap, sizeof(s_storage));
         cap = sizeof(s_storage);
     }
 
@@ -139,14 +131,13 @@ static size_t arena_effective_cap(void)
     return cap;
 }
 
-static void arena_init_once(void)
-{
-    if (s_initialized)
-    {
+static void
+arena_init_once(void) {
+    if (s_initialized) {
         return;
     }
     s_cap = arena_effective_cap();
-    s_head = (arena_block_t *)s_storage;
+    s_head = (arena_block_t*)s_storage;
     s_head->prev = NULL;
     s_head->next = NULL;
     s_head->size = s_cap > ARENA_HEADER_SIZE ? s_cap - ARENA_HEADER_SIZE : 0;
@@ -159,19 +150,17 @@ static void arena_init_once(void)
  * leaving the remainder as a new free block when there is enough of it to
  * be worth a header - a remainder smaller than one more header is folded
  * into this allocation instead of stranding an unusable sliver. */
-static void *arena_take_block(arena_block_t *b, size_t need)
-{
+static void*
+arena_take_block(arena_block_t* b, size_t need) {
     size_t remaining = b->size - need;
-    if (remaining >= ARENA_HEADER_SIZE + ARENA_ALIGN)
-    {
-        arena_block_t *nb = (arena_block_t *)((unsigned char *)b + ARENA_HEADER_SIZE + need);
+    if (remaining >= ARENA_HEADER_SIZE + ARENA_ALIGN) {
+        arena_block_t* nb = (arena_block_t*)((unsigned char*)b + ARENA_HEADER_SIZE + need);
         nb->size = remaining - ARENA_HEADER_SIZE;
         nb->in_use = 0;
         nb->magic = 0;
         nb->prev = b;
         nb->next = b->next;
-        if (nb->next)
-        {
+        if (nb->next) {
             nb->next->prev = nb;
         }
         b->next = nb;
@@ -181,44 +170,37 @@ static void *arena_take_block(arena_block_t *b, size_t need)
     b->magic = ARENA_MAGIC_LIVE;
     s_cur_bytes += b->size;
     s_cur_blocks += 1;
-    if (s_cur_bytes > s_peak_bytes)
-    {
+    if (s_cur_bytes > s_peak_bytes) {
         s_peak_bytes = s_cur_bytes;
     }
-    return (unsigned char *)b + ARENA_HEADER_SIZE;
+    return (unsigned char*)b + ARENA_HEADER_SIZE;
 }
 
 /* First-fit search plus, on failure, the same story a device OOM would
  * give (bd esp32c6-e82: "41.2 KiB needed, 38 KiB largest free block") -
  * printed here rather than left for the caller to reconstruct from a bare
  * NULL. */
-static void *arena_alloc(size_t n)
-{
+static void*
+arena_alloc(size_t n) {
     arena_init_once();
-    if (n == 0)
-    {
+    if (n == 0) {
         n = 1; /* malloc(0): return a distinct, freeable pointer, not NULL */
     }
     size_t need = align_up(n, ARENA_ALIGN);
 
-    arena_block_t *b;
-    for (b = s_head; b; b = b->next)
-    {
-        if (!b->in_use && b->size >= need)
-        {
+    arena_block_t* b;
+    for (b = s_head; b; b = b->next) {
+        if (!b->in_use && b->size >= need) {
             return arena_take_block(b, need);
         }
     }
 
     size_t total_free = 0, largest_free = 0, free_blocks = 0;
-    for (arena_block_t *s = s_head; s; s = s->next)
-    {
-        if (!s->in_use)
-        {
+    for (arena_block_t* s = s_head; s; s = s->next) {
+        if (!s->in_use) {
             total_free += s->size;
             free_blocks += 1;
-            if (s->size > largest_free)
-            {
+            if (s->size > largest_free) {
                 largest_free = s->size;
             }
         }
@@ -234,30 +216,26 @@ static void *arena_alloc(size_t n)
  * "neighbour" here means adjacent in the list, which is also adjacent in
  * memory by construction (every split creates its remainder immediately
  * after the block it came from). */
-static void arena_release(arena_block_t *b)
-{
+static void
+arena_release(arena_block_t* b) {
     b->in_use = 0;
     b->magic = 0;
     s_cur_bytes -= b->size;
     s_cur_blocks -= 1;
 
-    if (b->next && !b->next->in_use)
-    {
-        arena_block_t *n = b->next;
+    if (b->next && !b->next->in_use) {
+        arena_block_t* n = b->next;
         b->size += ARENA_HEADER_SIZE + n->size;
         b->next = n->next;
-        if (b->next)
-        {
+        if (b->next) {
             b->next->prev = b;
         }
     }
-    if (b->prev && !b->prev->in_use)
-    {
-        arena_block_t *p = b->prev;
+    if (b->prev && !b->prev->in_use) {
+        arena_block_t* p = b->prev;
         p->size += ARENA_HEADER_SIZE + b->size;
         p->next = b->next;
-        if (p->next)
-        {
+        if (p->next) {
             p->next->prev = p;
         }
     }
@@ -268,11 +246,10 @@ static void arena_release(arena_block_t *b)
  * corrupting the list: a double-free or an in-arena-but-not-a-live-block
  * pointer is a real bug, and a test gate that swallows it defeats the
  * point of running under a byte-for-byte-accurate allocator at all. */
-static void arena_free(void *ptr)
-{
-    arena_block_t *b = (arena_block_t *)((unsigned char *)ptr - ARENA_HEADER_SIZE);
-    if (!ptr_in_arena(b) || b->magic != ARENA_MAGIC_LIVE)
-    {
+static void
+arena_free(void* ptr) {
+    arena_block_t* b = (arena_block_t*)((unsigned char*)ptr - ARENA_HEADER_SIZE);
+    if (!ptr_in_arena(b) || b->magic != ARENA_MAGIC_LIVE) {
         fprintf(stderr,
                 "heap_arena: free(%p) does not look like a live arena "
                 "block - double free, corruption, or a pointer this arena "
@@ -283,26 +260,24 @@ static void arena_free(void *ptr)
     arena_release(b);
 }
 
-void heap_arena_snapshot(size_t *out_blocks, size_t *out_bytes)
-{
+void
+heap_arena_snapshot(size_t* out_blocks, size_t* out_bytes) {
     arena_init_once();
-    if (out_blocks)
-    {
+    if (out_blocks) {
         *out_blocks = s_cur_blocks;
     }
-    if (out_bytes)
-    {
+    if (out_bytes) {
         *out_bytes = s_cur_bytes;
     }
 }
 
-size_t heap_arena_peak_bytes(void)
-{
+size_t
+heap_arena_peak_bytes(void) {
     return s_peak_bytes;
 }
 
-void heap_arena_reset_peak(void)
-{
+void
+heap_arena_reset_peak(void) {
     arena_init_once();
     /* Floored at what's already outstanding, not zeroed - a test that
      * starts after an earlier leak should show that leak weighing on its
@@ -312,23 +287,21 @@ void heap_arena_reset_peak(void)
 
 /* --- malloc/calloc/realloc/free interposition ------------------------- */
 
-extern void *__real_malloc(size_t size);
-extern void __real_free(void *ptr);
-extern void *__real_realloc(void *ptr, size_t size);
+extern void* __real_malloc(size_t size);
+extern void __real_free(void* ptr);
+extern void* __real_realloc(void* ptr, size_t size);
 
-void *__wrap_malloc(size_t size)
-{
+void*
+__wrap_malloc(size_t size) {
     return arena_alloc(size);
 }
 
-void __wrap_free(void *ptr)
-{
-    if (!ptr)
-    {
+void
+__wrap_free(void* ptr) {
+    if (!ptr) {
         return;
     }
-    if (!ptr_in_arena(ptr))
-    {
+    if (!ptr_in_arena(ptr)) {
         /* Almost certainly a libc-internal allocation (strdup() and
          * friends) that never went through __wrap_malloc - see this
          * file's top comment. Forward it rather than misread foreign
@@ -339,43 +312,37 @@ void __wrap_free(void *ptr)
     arena_free(ptr);
 }
 
-void *__wrap_calloc(size_t nmemb, size_t size)
-{
-    if (nmemb != 0 && size > (size_t)-1 / nmemb)
-    {
+void*
+__wrap_calloc(size_t nmemb, size_t size) {
+    if (nmemb != 0 && size > (size_t)-1 / nmemb) {
         return NULL; /* overflow - same contract calloc itself makes */
     }
     size_t total = nmemb * size;
-    void *p = arena_alloc(total);
-    if (p)
-    {
+    void* p = arena_alloc(total);
+    if (p) {
         memset(p, 0, total);
     }
     return p;
 }
 
-void *__wrap_realloc(void *ptr, size_t size)
-{
-    if (!ptr)
-    {
+void*
+__wrap_realloc(void* ptr, size_t size) {
+    if (!ptr) {
         return arena_alloc(size);
     }
-    if (!ptr_in_arena(ptr))
-    {
+    if (!ptr_in_arena(ptr)) {
         /* Foreign pointer - see __wrap_free above for why this can happen
          * at all. Hand it to the real realloc untouched. */
         return __real_realloc(ptr, size);
     }
-    if (size == 0)
-    {
+    if (size == 0) {
         arena_free(ptr);
         return NULL;
     }
 
-    arena_block_t *b = (arena_block_t *)((unsigned char *)ptr - ARENA_HEADER_SIZE);
+    arena_block_t* b = (arena_block_t*)((unsigned char*)ptr - ARENA_HEADER_SIZE);
     size_t need = align_up(size, ARENA_ALIGN);
-    if (need <= b->size)
-    {
+    if (need <= b->size) {
         /* Shrinking (or same size) in place. No split on shrink - kept
          * simple on purpose, this is a test gate, not a production
          * allocator, and the extra fragmentation from not splitting here
@@ -384,9 +351,8 @@ void *__wrap_realloc(void *ptr, size_t size)
         return ptr;
     }
 
-    void *grown = arena_alloc(size);
-    if (!grown)
-    {
+    void* grown = arena_alloc(size);
+    if (!grown) {
         return NULL; /* realloc's own contract: leave the original intact */
     }
     memcpy(grown, ptr, b->size);

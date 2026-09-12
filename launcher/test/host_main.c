@@ -11,16 +11,19 @@
 
 #include <stdio.h>
 
-#include "unity.h"
 #include "suites.h"
+#include "unity.h"
 
 /* Unity requires these once per binary. Suites manage their own fixtures,
  * because several of them share this program. */
-void setUp(void) { }
-void tearDown(void) { }
+void
+setUp(void) {}
 
-int main(void)
-{
+void
+tearDown(void) {}
+
+int
+main(void) {
     UNITY_BEGIN();
 
     suites_run_all();
@@ -30,8 +33,7 @@ int main(void)
     /* A suite that did not fit is a test that did not run, so this run must
      * not come back green having quietly checked less than the whole set. */
     if (suites_dropped() > 0) {
-        printf("FAIL: %d suite(s) dropped; raise SUITE_MAX in suites.h\n",
-               suites_dropped());
+        printf("FAIL: %d suite(s) dropped; raise SUITE_MAX in suites.h\n", suites_dropped());
         failures += suites_dropped();
     }
     return failures;

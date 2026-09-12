@@ -31,8 +31,8 @@
  * this returns brush_color()'s (app_sand.c) own representative cell instead,
  * a flat swatch rather than texture built from bytes that mean something
  * else. */
-static inline cell_t sand_swatch_cell(cell_t spec, int col, int row, int cells)
-{
+static inline cell_t
+sand_swatch_cell(cell_t spec, int col, int row, int cells) {
     if (cell_is_gunpowder(spec)) {
         return GUNPOWDER_CELL(2);
     }

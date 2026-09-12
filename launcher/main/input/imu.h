@@ -29,8 +29,8 @@
  * loop and buy nothing. The scale factors are here for anyone who does need
  * real units. */
 typedef struct {
-    int16_t ax, ay, az;   /* accelerometer, 4096 counts per g   (+/- 8 g)   */
-    int16_t gx, gy, gz;   /* gyroscope,       64 counts per dps (+/- 512)   */
+    int16_t ax, ay, az; /* accelerometer, 4096 counts per g   (+/- 8 g)   */
+    int16_t gx, gy, gz; /* gyroscope,       64 counts per dps (+/- 512)   */
 } imu_sample_t;
 
 #define IMU_COUNTS_PER_G   4096
@@ -43,7 +43,7 @@ bool imu_init(void);
 bool imu_ready(void);
 
 /* Reads all six axes. Returns false on a bus error, leaving `out` untouched. */
-bool imu_read(imu_sample_t *out);
+bool imu_read(imu_sample_t* out);
 
 /* How fast the board is TURNING, 0-255 from the gyroscope's total rotation
  * rate, saturating rather than wrapping. Named for what it measures because
@@ -52,4 +52,4 @@ bool imu_read(imu_sample_t *out);
  * shaken. Shaking means accelerating the device, the accelerometer's
  * business - see tilt_shake(). Deliberately not a filter or gesture
  * detector; the caller decides what counts as "fast". */
-int imu_rotation_level(const imu_sample_t *s);
+int imu_rotation_level(const imu_sample_t* s);

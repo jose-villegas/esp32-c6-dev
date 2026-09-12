@@ -34,10 +34,10 @@
 #include <stdint.h>
 
 typedef struct {
-    uint16_t offset;   /* byte offset into that header's rows[] blob */
-    uint8_t  w, h;
-    uint8_t  stride;   /* bytes per row: (w + 7) / 8, MSB is column 0 */
-    uint8_t  blocks;   /* baked run-length rect count - see gen_icons.py */
+    uint16_t offset; /* byte offset into that header's rows[] blob */
+    uint8_t w, h;
+    uint8_t stride; /* bytes per row: (w + 7) / 8, MSB is column 0 */
+    uint8_t blocks; /* baked run-length rect count - see gen_icons.py */
 } icon_t;
 
 /* One run, in whatever coordinate space its producer documents - a plain
@@ -50,7 +50,7 @@ typedef struct {
 /* icon_walk_blocks()'s output: one contiguous horizontal run, already scaled
  * and positioned relative to the destination box's own origin (0, 0) - the
  * caller adds its box's x/y. */
-typedef void (*icon_emit_fn)(void *ctx, int x, int y, int w, int h);
+typedef void (*icon_emit_fn)(void* ctx, int x, int y, int w, int h);
 
 /* Fits an icon to a box and EMITS each run rather than collecting them, so
  * per-draw stack is O(1) in the icon's size. `rows`/`iw`/`ih`/`stride` are
@@ -59,10 +59,8 @@ typedef void (*icon_emit_fn)(void *ctx, int x, int y, int w, int h);
  * Callback indirection is fine: icons draw once per hash-skipped canvas
  * repaint (ui.c), not a hot loop - don't turn this into an array without
  * measuring first. */
-static inline void icon_walk_blocks(const uint8_t *rows, int iw, int ih, int stride,
-                                    int box_w, int box_h,
-                                    icon_emit_fn emit, void *ctx)
-{
+static inline void
+icon_walk_blocks(const uint8_t* rows, int iw, int ih, int stride, int box_w, int box_h, icon_emit_fn emit, void* ctx) {
     const int scale_w = box_w / iw;
     const int scale_h = box_h / ih;
     int scale = (scale_w < scale_h) ? scale_w : scale_h;
@@ -77,13 +75,21 @@ static inline void icon_walk_blocks(const uint8_t *rows, int iw, int ih, int str
     int min_x = iw, max_x = -1;
     int min_row = ih, max_row = -1;
     for (int y = 0; y < ih; y++) {
-        const uint8_t *row = rows + (size_t)y * stride;
+        const uint8_t* row = rows + (size_t)y * stride;
         for (int x = 0; x < iw; x++) {
             if (row[x / 8] & (uint8_t)(0x80 >> (x % 8))) {
-                if (x < min_x) { min_x = x; }
-                if (x > max_x) { max_x = x; }
-                if (y < min_row) { min_row = y; }
-                if (y > max_row) { max_row = y; }
+                if (x < min_x) {
+                    min_x = x;
+                }
+                if (x > max_x) {
+                    max_x = x;
+                }
+                if (y < min_row) {
+                    min_row = y;
+                }
+                if (y > max_row) {
+                    max_row = y;
+                }
             }
         }
     }
@@ -98,7 +104,7 @@ static inline void icon_walk_blocks(const uint8_t *rows, int iw, int ih, int str
     const int origin_y = (box_h - content_h * scale) / 2 - min_row * scale;
 
     for (int y = 0; y < ih; y++) {
-        const uint8_t *row = rows + (size_t)y * stride;
+        const uint8_t* row = rows + (size_t)y * stride;
         int x = 0;
         while (x < iw) {
             if (!(row[x / 8] & (uint8_t)(0x80 >> (x % 8)))) {
@@ -109,8 +115,7 @@ static inline void icon_walk_blocks(const uint8_t *rows, int iw, int ih, int str
             while (x < iw && (row[x / 8] & (uint8_t)(0x80 >> (x % 8)))) {
                 x++;
             }
-            emit(ctx, origin_x + run_start * scale, origin_y + y * scale,
-                 (x - run_start) * scale, scale);
+            emit(ctx, origin_x + run_start * scale, origin_y + y * scale, (x - run_start) * scale, scale);
         }
     }
 }

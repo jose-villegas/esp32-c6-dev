@@ -37,7 +37,7 @@
  * quarter turn) - it still comes out to 4 by calculation, not
  * coincidence: floor(368/92)=4 exactly, floor(448/92)=4 with 80 px left
  * over. */
-#define PALETTE_TILE 92
+#define PALETTE_TILE     92
 
 /* Upper bound on what palette_cols()/PALETTE_COLS_FOR() can return. Not
  * protecting any fixed-size array - there is none keyed by column count.
@@ -56,10 +56,9 @@
  * than reimplementing the same arithmetic, so there is exactly one
  * formula and no way for the runtime and compile-time versions to drift
  * apart. floor(w / PALETTE_TILE), clamped to [1, PALETTE_COLS_MAX]. */
-#define PALETTE_COLS_FOR(w) \
-    ((((w) / PALETTE_TILE) < 1) ? 1 : \
-     (((w) / PALETTE_TILE) > PALETTE_COLS_MAX ? PALETTE_COLS_MAX : \
-      ((w) / PALETTE_TILE)))
+#define PALETTE_COLS_FOR(w)                                                                                            \
+    ((((w) / PALETTE_TILE) < 1) ? 1                                                                                    \
+                                : (((w) / PALETTE_TILE) > PALETTE_COLS_MAX ? PALETTE_COLS_MAX : ((w) / PALETTE_TILE)))
 
 /* How many columns a `screen_w`-wide canvas gets - see this file's own
  * "WHY DERIVED, NOT FIXED" comment above. Callers pass the LOGICAL
@@ -74,15 +73,15 @@ int palette_cols(int screen_w);
  * drags in bsp/esp-bsp.h, which this host-testable module cannot
  * include. Both are 16 (an 8x8 font glyph at GFX_GLYPH_SCALE 2) and must
  * stay in step with gfx.h's own definitions by hand. */
-#define PALETTE_CHAR_W 16
-#define PALETTE_CHAR_H 16
+#define PALETTE_CHAR_W              16
+#define PALETTE_CHAR_H              16
 
 /* Rows a `count`-brush palette needs at `cols` columns, ceiling-divided so a
  * partial last row still gets counted. Both are compile-time constants at
  * PALETTE_FITS's only call site (BRUSH_COUNT and PALETTE_COLS_FOR(...) in
  * app_sand.c), which is what keeps PALETTE_FITS usable inside a
  * _Static_assert. */
-#define PALETTE_ROWS(count, cols) (((count) + (cols) - 1) / (cols))
+#define PALETTE_ROWS(count, cols)   (((count) + (cols) - 1) / (cols))
 
 /* The panel's pixel height for `count` brushes at `cols` columns, derived
  * rather than hardcoded - see PALETTE_ROWS above. */
@@ -96,11 +95,9 @@ int palette_cols(int screen_w);
  * turned pairing (368 tall == PALETTE_SCREEN_W) pins that fit with NO
  * margin. Assert against the real brush count so growth fails the
  * BUILD, not the screen. */
-#define PALETTE_FITS(count) \
-    (PALETTE_HEIGHT(count, PALETTE_COLS_FOR(PALETTE_SCREEN_W)) <= \
-        PALETTE_SCREEN_H && \
-     PALETTE_HEIGHT(count, PALETTE_COLS_FOR(PALETTE_SCREEN_H)) <= \
-        PALETTE_SCREEN_W)
+#define PALETTE_FITS(count)                                                                                            \
+    (PALETTE_HEIGHT(count, PALETTE_COLS_FOR(PALETTE_SCREEN_W)) <= PALETTE_SCREEN_H                                     \
+     && PALETTE_HEIGHT(count, PALETTE_COLS_FOR(PALETTE_SCREEN_H)) <= PALETTE_SCREEN_W)
 
 /* Where tile `index` sits, in screen pixels - grid is `cols` wide,
  * PALETTE_ROWS(count, cols) tall, centred on `screen_w` x `screen_h`.
@@ -109,8 +106,7 @@ int palette_cols(int screen_w);
  * `screen_w`/`screen_h` is the LOGICAL canvas (ui_width()/ui_height()):
  * under a quarter turn the two swap. See palette.c's own comment above
  * the definition for the centring arithmetic. */
-void palette_tile_rect(int index, int count, int cols, int screen_w,
-                       int screen_h, int *x, int *y, int *w, int *h);
+void palette_tile_rect(int index, int count, int cols, int screen_w, int screen_h, int* x, int* y, int* w, int* h);
 
 /* Which tile contains (px, py), or -1 for none - including a point in
  * the empty part of a centred partial row, a point outside the panel
@@ -119,14 +115,12 @@ void palette_tile_rect(int index, int count, int cols, int screen_w,
  * and `screen_h` must be the same values passed to palette_tile_rect()
  * for the two to agree - see that function's own comment on why `cols`
  * is threaded through rather than recomputed. */
-int palette_hit(int px, int py, int count, int cols, int screen_w,
-                int screen_h);
+int palette_hit(int px, int py, int count, int cols, int screen_w, int screen_h);
 
 /* The panel's own bounds - `cols * PALETTE_TILE` wide,
  * PALETTE_HEIGHT(count, cols) tall, centred on a `screen_w` x `screen_h`
  * canvas - for the caller to clear or restore. */
-void palette_panel_rect(int count, int cols, int screen_w, int screen_h,
-                        int *x, int *y, int *w, int *h);
+void palette_panel_rect(int count, int cols, int screen_w, int screen_h, int* x, int* y, int* w, int* h);
 
 /* Where to start drawing a `len`-character label so gfx_text_turned(), at
  * `turn` quarter turns, ends up centred in the rect (x, y, w, h).
@@ -136,5 +130,4 @@ void palette_panel_rect(int count, int cols, int screen_w, int screen_h,
  * invisible until the board is turned, why this is host-tested (see
  * suite_palette.c). Generalises app_sand.c's draw_mode_label() to an
  * arbitrary rect. */
-void palette_label_origin(int x, int y, int w, int h, int len, int turn,
-                          int *out_x, int *out_y);
+void palette_label_origin(int x, int y, int w, int h, int len, int turn, int* out_x, int* out_y);

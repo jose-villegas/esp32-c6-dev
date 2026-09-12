@@ -18,26 +18,26 @@
  * detangle (same reasoning main.c and an app each keep their own copy of
  * the IMU's gravity-axis mapping). Not for every frame - fine for the
  * occasional snapshot device_state_read() is for. */
-static bool read_die_temperature(float *out_celsius)
-{
+static bool
+read_die_temperature(float* out_celsius) {
     temperature_sensor_handle_t sensor = NULL;
     temperature_sensor_config_t cfg = TEMPERATURE_SENSOR_CONFIG_DEFAULT(-10, 80);
     if (temperature_sensor_install(&cfg, &sensor) != ESP_OK) {
         return false;
     }
 
-    const bool ok = temperature_sensor_enable(sensor) == ESP_OK &&
-                    temperature_sensor_get_celsius(sensor, out_celsius) == ESP_OK;
+    const bool ok =
+        temperature_sensor_enable(sensor) == ESP_OK && temperature_sensor_get_celsius(sensor, out_celsius) == ESP_OK;
 
     temperature_sensor_disable(sensor);
     temperature_sensor_uninstall(sensor);
     return ok;
 }
 
-void device_state_read(device_state_t *out)
-{
-    out->uptime_us           = esp_timer_get_time();
-    out->heap_free_bytes     = (uint32_t)esp_get_free_heap_size();
+void
+device_state_read(device_state_t* out) {
+    out->uptime_us = esp_timer_get_time();
+    out->heap_free_bytes = (uint32_t)esp_get_free_heap_size();
     out->heap_min_free_bytes = (uint32_t)esp_get_minimum_free_heap_size();
 
     /* Not a runtime query: this project does not enable dynamic frequency

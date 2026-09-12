@@ -60,6 +60,7 @@ typedef enum { BRUSH_POUR, BRUSH_SPAWN } brush_mode_t;
  * modes, each with its own remembered radius - see sand_ui_t.radius_px and
  * sand_ui_mode_clicked(). */
 typedef enum { SAND_MODE_PAINT, SAND_MODE_ERASE, SAND_MODE_DETONATE } sand_mode_t;
+
 #define SAND_MODE_COUNT 3
 
 /* Which screen the sand app is showing. SAND_UI_MENU is never acted on by
@@ -73,13 +74,13 @@ typedef enum { SAND_UI_MENU, SAND_UI_RUNNING, SAND_UI_PALETTE, SAND_UI_BRUSH } s
  * carries it out. More than one bit can be set on the same call: closing the
  * palette can also want the label shown. */
 typedef enum {
-    SAND_UI_OPEN_PALETTE   = 1u << 0,   /* pause the sim, read gravity, draw_palette() */
-    SAND_UI_CLOSE_PALETTE  = 1u << 1,   /* resume the sim, force a full repaint */
-    SAND_UI_REDRAW_PALETTE = 1u << 2,   /* selection or mode changed - redraw the panel */
-    SAND_UI_SHOW_LABEL     = 1u << 3,   /* arm the mode-label countdown */
-    SAND_UI_OPEN_BRUSH     = 1u << 4,   /* draw_brush_screen() (Phase 5c) */
-    SAND_UI_CLOSE_BRUSH    = 1u << 5,   /* force a full repaint */
-    SAND_UI_REDRAW_BRUSH   = 1u << 6,   /* mode or radius changed - redraw the panel */
+    SAND_UI_OPEN_PALETTE = 1u << 0,   /* pause the sim, read gravity, draw_palette() */
+    SAND_UI_CLOSE_PALETTE = 1u << 1,  /* resume the sim, force a full repaint */
+    SAND_UI_REDRAW_PALETTE = 1u << 2, /* selection or mode changed - redraw the panel */
+    SAND_UI_SHOW_LABEL = 1u << 3,     /* arm the mode-label countdown */
+    SAND_UI_OPEN_BRUSH = 1u << 4,     /* draw_brush_screen() (Phase 5c) */
+    SAND_UI_CLOSE_BRUSH = 1u << 5,    /* force a full repaint */
+    SAND_UI_REDRAW_BRUSH = 1u << 6,   /* mode or radius changed - redraw the panel */
 } sand_ui_action_t;
 
 /* Brush radius bounds in px, shared by every mode's slider - see
@@ -93,20 +94,20 @@ typedef enum {
 typedef struct {
     /* Caller-owned, exactly as sand_t borrows `cells` - this module never
      * sees app_sand.c's tables, only points at them. */
-    const cell_t *brushes;      /* brush_count cells, indexed by `brush` */
-    uint8_t      *modes;        /* brush_count entries, BRUSH_POUR/BRUSH_SPAWN */
-    int           brush_count;
+    const cell_t* brushes; /* brush_count cells, indexed by `brush` */
+    uint8_t* modes;        /* brush_count entries, BRUSH_POUR/BRUSH_SPAWN */
+    int brush_count;
 
     sand_ui_screen_t screen;
-    int         brush;       /* index into brushes[]/modes[] */
-    sand_mode_t mode;        /* PAINT/ERASE/DETONATE - set from the brush screen */
+    int brush;        /* index into brushes[]/modes[] */
+    sand_mode_t mode; /* PAINT/ERASE/DETONATE - set from the brush screen */
 
     /* Per-mode brush radius in px, indexed by sand_mode_t, clamped to
      * [SAND_UI_RADIUS_MIN, SAND_UI_RADIUS_MAX] by sand_ui_set_radius().
      * Owned here rather than borrowed like brushes/modes above, since
      * nothing outside this module needs to share it - app_sand.c only
      * seeds the three defaults at startup. */
-    uint8_t  radius_px[SAND_MODE_COUNT];
+    uint8_t radius_px[SAND_MODE_COUNT];
 
     /* Set by open_palette()/open_brush() when a finger is already down as
      * the panel opens. Cleared on the first frame input->down goes false -
@@ -114,20 +115,20 @@ typedef struct {
      * seen directly here (see "WHO HIT-TESTS AND WHO DECIDES" above). While
      * armed, sand_ui_tile_clicked() and sand_ui_mode_clicked() ignore
      * whatever they are told was clicked. */
-    bool     swallow_release;
+    bool swallow_release;
 
     /* The brush and its mode at the moment the palette opened - recorded on
      * open, compared against the current brush/mode on close, so the mode
      * label on the way out confirms a choice only when the choice actually
      * changed while the panel was open. */
-    int      opened_brush;
-    uint8_t  opened_mode;
+    int opened_brush;
+    uint8_t opened_mode;
 
     /* The SAND_UI_BRUSH counterpart to opened_brush/opened_mode above:
      * mode and its radius at the moment the brush screen opened, compared
      * on close for the same reason. */
     sand_mode_t opened_sand_mode;
-    uint8_t     opened_radius;
+    uint8_t opened_radius;
 } sand_ui_t;
 
 /* One frame's input. Returns a sand_ui_action_t bitmask; this module draws
@@ -135,7 +136,7 @@ typedef struct {
  * see "WHO HIT-TESTS AND WHO DECIDES" above. PWR opens SAND_UI_BRUSH from
  * RUNNING and closes it from BRUSH; BOOT and PWR never open both panels
  * at once. */
-unsigned sand_ui_step(sand_ui_t *ui, const input_t *input);
+unsigned sand_ui_step(sand_ui_t* ui, const input_t* input);
 
 /* What a click on palette tile `index` means, once the caller's hit-test
  * (a real mu_button() per tile) decided a click landed on it. The
@@ -145,7 +146,7 @@ unsigned sand_ui_step(sand_ui_t *ui, const input_t *input);
  * instead: `mode` resets to SAND_MODE_PAINT, its remembered pour/spawn
  * mode left as-is. While `swallow_release` is armed, returns 0. `index`
  * is caller-guaranteed real. */
-unsigned sand_ui_tile_clicked(sand_ui_t *ui, int index);
+unsigned sand_ui_tile_clicked(sand_ui_t* ui, int index);
 
 /* What a tap on brush-mode segment `index` means, once the caller's
  * hit-test (a real mu_button() per segment) decided a tap landed on it -
@@ -155,12 +156,12 @@ unsigned sand_ui_tile_clicked(sand_ui_t *ui, int index);
  * order). Selects that mode; the already-selected segment is a no-op.
  * While `swallow_release` is armed, returns 0. `index` is
  * caller-guaranteed real. */
-unsigned sand_ui_mode_clicked(sand_ui_t *ui, int index);
+unsigned sand_ui_mode_clicked(sand_ui_t* ui, int index);
 
 /* Sets the CURRENT mode's brush radius, clamped to
  * [SAND_UI_RADIUS_MIN, SAND_UI_RADIUS_MAX]. Every other mode's remembered
  * radius is untouched - see sand_ui_t.radius_px. */
-void sand_ui_set_radius(sand_ui_t *ui, uint8_t radius_px);
+void sand_ui_set_radius(sand_ui_t* ui, uint8_t radius_px);
 
 /* The current mode's brush radius. */
-uint8_t sand_ui_radius(const sand_ui_t *ui);
+uint8_t sand_ui_radius(const sand_ui_t* ui);

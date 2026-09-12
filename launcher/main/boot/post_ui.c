@@ -16,31 +16,31 @@
 
 #include "gfx/gfx.h"
 
-#define BG_RGB        0x0A0C14
-#define HEADING_RGB   0xE6EAF2
-#define OK_RGB        0x3DDC97
-#define FAIL_RGB      0xFF5C5C
-#define ABSENT_RGB    0x6E778C
-#define DETAIL_RGB    0x8A93A8
+#define BG_RGB      0x0A0C14
+#define HEADING_RGB 0xE6EAF2
+#define OK_RGB      0x3DDC97
+#define FAIL_RGB    0xFF5C5C
+#define ABSENT_RGB  0x6E778C
+#define DETAIL_RGB  0x8A93A8
 
-#define SCALE         1
-#define GLYPH_W       (8 * SCALE)
-#define LINE_H        10
-#define MARGIN        10
+#define SCALE       1
+#define GLYPH_W     (8 * SCALE)
+#define LINE_H      10
+#define MARGIN      10
 
 /* Details go on their own line beneath the name rather than in a column beside
  * it. Sharing a line leaves about 23 characters for the detail, and nearly
  * every one is longer than that - so it read as a wall of truncated text. */
-#define NAME_X        (MARGIN + 5 * GLYPH_W)
-#define DETAIL_X      NAME_X
-#define DETAIL_COLS   ((GFX_WIDTH - DETAIL_X - MARGIN) / GLYPH_W)
+#define NAME_X      (MARGIN + 5 * GLYPH_W)
+#define DETAIL_X    NAME_X
+#define DETAIL_COLS ((GFX_WIDTH - DETAIL_X - MARGIN) / GLYPH_W)
 
 /* How much of `text` fits on one line of `columns` width, breaking at the
  * last space that still fits - or the whole line, if no such space exists.
  * That fallback is a hard break for a single token longer than the line, so
  * a pathological string still renders rather than looping forever. */
-static int line_break_length(const char *text, int columns)
-{
+static int
+line_break_length(const char* text, int columns) {
     const int len = (int)strlen(text);
     if (len <= columns) {
         return len;
@@ -55,9 +55,8 @@ static int line_break_length(const char *text, int columns)
 
 /* Draws `text` across as many lines as it needs, breaking at spaces, and
  * returns the y below the last line. */
-static int draw_wrapped(int x, int y, int columns, const char *text,
-                        gfx_color_t colour)
-{
+static int
+draw_wrapped(int x, int y, int columns, const char* text, gfx_color_t colour) {
     char line[64];
     if (columns > (int)sizeof(line) - 1) {
         columns = (int)sizeof(line) - 1;
@@ -65,7 +64,7 @@ static int draw_wrapped(int x, int y, int columns, const char *text,
 
     while (*text != '\0') {
         while (*text == ' ') {
-            text++;          /* skip the break we just consumed */
+            text++; /* skip the break we just consumed */
         }
         if (*text == '\0') {
             break;
@@ -84,14 +83,14 @@ static int draw_wrapped(int x, int y, int columns, const char *text,
     return y;
 }
 
-int post_ui_draw(int top, bool failures_only)
-{
-    const post_result_t *results = post_results();
+int
+post_ui_draw(int top, bool failures_only) {
+    const post_result_t* results = post_results();
     const int count = post_result_count();
     int y = top;
 
     for (int i = 0; i < count; i++) {
-        const post_result_t *r = &results[i];
+        const post_result_t* r = &results[i];
 
         /* An optional peripheral that is simply absent is not a failure, so it
          * is skipped when only failures were asked for. */
@@ -100,7 +99,7 @@ int post_ui_draw(int top, bool failures_only)
             continue;
         }
 
-        const char *mark;
+        const char* mark;
         gfx_color_t mark_colour;
         if (r->ok) {
             mark = "[ok]";
@@ -118,18 +117,17 @@ int post_ui_draw(int top, bool failures_only)
         y += LINE_H;
 
         if (r->detail[0] != '\0') {
-            y = draw_wrapped(DETAIL_X, y, DETAIL_COLS, r->detail,
-                             failed ? gfx_rgb(FAIL_RGB) : gfx_rgb(DETAIL_RGB));
+            y = draw_wrapped(DETAIL_X, y, DETAIL_COLS, r->detail, failed ? gfx_rgb(FAIL_RGB) : gfx_rgb(DETAIL_RGB));
         }
 
-        y += 3;   /* a little air between entries */
+        y += 3; /* a little air between entries */
     }
 
     return y;
 }
 
-void post_ui_draw_report(const char *title)
-{
+void
+post_ui_draw_report(const char* title) {
     gfx_clear(gfx_rgb(BG_RGB));
 
     gfx_text(MARGIN, MARGIN, title, gfx_rgb(HEADING_RGB));
@@ -138,10 +136,8 @@ void post_ui_draw_report(const char *title)
 
     char summary[48];
     const int failures = post_failure_count();
-    snprintf(summary, sizeof(summary), "%d checks, %d failed",
-             post_result_count(), failures);
-    gfx_text_scaled(MARGIN, y, summary,
-                    failures ? gfx_rgb(FAIL_RGB) : gfx_rgb(OK_RGB), SCALE);
+    snprintf(summary, sizeof(summary), "%d checks, %d failed", post_result_count(), failures);
+    gfx_text_scaled(MARGIN, y, summary, failures ? gfx_rgb(FAIL_RGB) : gfx_rgb(OK_RGB), SCALE);
 
     y += LINE_H + 6;
     post_ui_draw(y, false);

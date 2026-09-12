@@ -30,7 +30,7 @@ typedef struct {
 /* One press-to-release cycle never needs more than a move, a down and an
  * up, even when a tap resolves before the natural hover-then-press cadence
  * can play out - see ui_pointer_step()'s own comment. */
-#define UI_POINTER_MAX_EVENTS 3
+#define UI_POINTER_MAX_EVENTS   3
 
 /* MOVE-only frames a press waits through before its DOWN is fed, and both
  * are load-bearing: mu_mouse_over() needs hover_root, which mu_begin()
@@ -52,4 +52,4 @@ typedef struct {
  * in playback order. Returns the count written, or 0 if `max` can't hold the
  * largest possible result - ui_bezel_spans()'s all-or-nothing rule, so a
  * partial count never lets a caller read past a too-small array. */
-int ui_pointer_step(ui_pointer_t *p, const input_t *input, ui_pointer_event_t *out, int max);
+int ui_pointer_step(ui_pointer_t* p, const input_t* input, ui_pointer_event_t* out, int max);

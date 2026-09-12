@@ -6,7 +6,7 @@
  * past 32,000 lines across 500+ tests. Shared fixtures and assertion helpers
  * live in suite_sand_common.{c,h} - see that header.
  */
-#include <math.h>   /* not every file in the split still needs atan2()/M_PI,
+#include <math.h> /* not every file in the split still needs atan2()/M_PI,
                      * but every file inherited suite_sand.c's own include
                      * block rather than being pruned by hand, to keep the
                      * split itself mechanical and low-risk */
@@ -21,14 +21,14 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-#include "unity.h"
 #include "suites.h"
+#include "unity.h"
 
 #include "material_palette.h"
 #include "sand.h"
 #include "sand_priv.h"
-#include "util/intmath.h"
 #include "suite_sand_common.h"
+#include "util/intmath.h"
 
 /* ===================================================================
  * Glass as a material with a temperature: the heat ramp, cooling, and
@@ -36,8 +36,8 @@
  * =================================================================== */
 
 /* The hottest glass cell anywhere, or 0 if there is no glass at all. */
-static int hottest_glass(void)
-{
+static int
+hottest_glass(void) {
     int hot = 0;
     for (int y = 0; y < H; y++) {
         for (int x = 0; x < W; x++) {
@@ -51,8 +51,8 @@ static int hottest_glass(void)
 }
 
 /* A pane with lava held against its underside, for `steps` steps. */
-static void hold_lava_under_a_pane(int steps)
-{
+static void
+hold_lava_under_a_pane(int steps) {
     fixture();
     for (int x = 0; x < W; x++) {
         sand_set(&s, x, H - 1, STONE);
@@ -73,8 +73,8 @@ static void hold_lava_under_a_pane(int steps)
 /* One more step of the scene hold_lava_under_a_pane() built, lava topped
  * back up. Separate so a caller can soak to a condition instead of to a
  * step count. */
-static void hold_lava_under_a_pane_again(void)
-{
+static void
+hold_lava_under_a_pane_again(void) {
     for (int x = 1; x < W - 1; x++) {
         if (CELL_IS_EMPTY(sand_at(&s, x, H - 2))) {
             sand_set(&s, x, H - 2, CELL_MAKE(MAT_LAVA, MASS_MAX));
@@ -91,22 +91,21 @@ static void hold_lava_under_a_pane_again(void)
  *
  * Asserted as "still glass, but changed": the level is a race between the
  * ramp and cooling, and pinning it would test the RNG. */
-static void test_glass_banks_heat_rather_than_melting_on_contact(void)
-{
+static void
+test_glass_banks_heat_rather_than_melting_on_contact(void) {
     hold_lava_under_a_pane(60);
 
     TEST_ASSERT_TRUE_MESSAGE(count_cells_of(MAT_GLASS) > 0,
-        "a brief touch of lava must not melt glass outright - if it does, "
-        "the ramp is not being consulted and heat is transforming on "
-        "contact the way it does for sand");
-    TEST_ASSERT_TRUE_MESSAGE(hottest_glass() > 0,
-        "and it must have GAINED heat while being touched, or nothing is "
-        "accumulating and the pane is simply immune");
+                             "a brief touch of lava must not melt glass outright - if it does, "
+                             "the ramp is not being consulted and heat is transforming on "
+                             "contact the way it does for sand");
+    TEST_ASSERT_TRUE_MESSAGE(hottest_glass() > 0, "and it must have GAINED heat while being touched, or nothing is "
+                                                  "accumulating and the pane is simply immune");
 }
 
 /* Held long enough, the same fire wins and the pane runs. */
-static void test_a_fire_held_long_enough_melts_glass_to_lava(void)
-{
+static void
+test_a_fire_held_long_enough_melts_glass_to_lava(void) {
     fixture();
     for (int x = 0; x < W; x++) {
         sand_set(&s, x, H - 1, STONE);
@@ -126,11 +125,10 @@ static void test_a_fire_held_long_enough_melts_glass_to_lava(void)
         melted = count_cells_of(MAT_GLASS) == 0;
     }
 
-    TEST_ASSERT_TRUE_MESSAGE(melted,
-        "lava held against a pane must eventually melt it. Cooling faster "
-        "than the ramp climbs would make this never happen for any fire of "
-        "any size, which is an easy thing to do by accident with two "
-        "constants that pull opposite ways");
+    TEST_ASSERT_TRUE_MESSAGE(melted, "lava held against a pane must eventually melt it. Cooling faster "
+                                     "than the ramp climbs would make this never happen for any fire of "
+                                     "any size, which is an easy thing to do by accident with two "
+                                     "constants that pull opposite ways");
 }
 
 /* Take the fire away and the heat drains back out.
@@ -139,8 +137,8 @@ static void test_a_fire_held_long_enough_melts_glass_to_lava(void)
  * rather than lifetime total. Without it a pane remembers every flame it
  * ever met, so a candle lit for one step a day melts it just as surely as
  * a furnace - the exposure simply accumulates forever. */
-static void test_glass_forgets_a_fire_that_went_out(void)
-{
+static void
+test_glass_forgets_a_fire_that_went_out(void) {
     /* Soaked in short bursts up to a CONDITION rather than for a fixed
      * count: the ramp is fast enough now that a constant long enough to
      * heat the pane on a slow build melts it outright on this one, and a
@@ -150,9 +148,8 @@ static void test_glass_forgets_a_fire_that_went_out(void)
         hold_lava_under_a_pane_again();
     }
     const int peak = hottest_glass();
-    TEST_ASSERT_TRUE_MESSAGE(peak > 0,
-        "fixture check: the pane has to be hot before cooling it means "
-        "anything");
+    TEST_ASSERT_TRUE_MESSAGE(peak > 0, "fixture check: the pane has to be hot before cooling it means "
+                                       "anything");
 
     for (int y = 0; y < H; y++) {
         for (int x = 0; x < W; x++) {
@@ -166,9 +163,9 @@ static void test_glass_forgets_a_fire_that_went_out(void)
     }
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(SAND_AMBIENT_HEAT, hottest_glass(),
-        "with the fire gone the pane must drain all the way back to room "
-        "temperature - which is SAND_AMBIENT_HEAT, not 0, since 0 now means "
-        "frosted");
+                                  "with the fire gone the pane must drain all the way back to room "
+                                  "temperature - which is SAND_AMBIENT_HEAT, not 0, since 0 now means "
+                                  "frosted");
 }
 
 /* And it drains on a board where nothing is burning and nothing dissolves.
@@ -177,8 +174,8 @@ static void test_glass_forgets_a_fire_that_went_out(void)
  * pass returns early unless something wants it, and hanging heat off the
  * fire flag would leave a pane frozen at whatever level the fire left it -
  * cooling forever pending a fire that is, by definition, already out. */
-static void test_glass_cools_on_a_board_with_no_fire_at_all(void)
-{
+static void
+test_glass_cools_on_a_board_with_no_fire_at_all(void) {
     fixture();
     for (int x = 0; x < W; x++) {
         sand_set(&s, x, H - 1, STONE);
@@ -187,15 +184,15 @@ static void test_glass_cools_on_a_board_with_no_fire_at_all(void)
         sand_set(&s, x, H - 2, CELL_MAKE(MAT_GLASS, MATERIAL_VARIANTS - 1));
     }
     TEST_ASSERT_EQUAL_INT_MESSAGE(MATERIAL_VARIANTS - 1, hottest_glass(),
-        "fixture check: the pane starts at the top of its ramp");
+                                  "fixture check: the pane starts at the top of its ramp");
 
     for (int i = 0; i < 3000 && hottest_glass() > SAND_AMBIENT_HEAT; i++) {
         sand_step(&s, 0, 1000, 0);
     }
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(SAND_AMBIENT_HEAT, hottest_glass(),
-        "hot glass must cool with no fire and no acid anywhere on the "
-        "board - temperature is its own reason to run the reactions pass");
+                                  "hot glass must cool with no fire and no acid anywhere on the "
+                                  "board - temperature is its own reason to run the reactions pass");
 }
 
 /* Glass made by heat arrives COLD.
@@ -206,8 +203,8 @@ static void test_glass_cools_on_a_board_with_no_fire_at_all(void)
  * already at the top of its melt ramp, and the next step would run it to
  * lava. Sand under a steady fire would reach lava in two ticks and the
  * duration this whole mechanism exists to express would be unreachable. */
-static void test_freshly_fused_glass_starts_cold(void)
-{
+static void
+test_freshly_fused_glass_starts_cold(void) {
     fixture();
     for (int x = 0; x < W; x++) {
         sand_set(&s, x, H - 1, STONE);
@@ -227,12 +224,11 @@ static void test_freshly_fused_glass_starts_cold(void)
         made = count_cells_of(MAT_GLASS) > 0;
     }
 
-    TEST_ASSERT_TRUE_MESSAGE(made,
-        "fixture check: fire over sand has to make some glass");
+    TEST_ASSERT_TRUE_MESSAGE(made, "fixture check: fire over sand has to make some glass");
     TEST_ASSERT_EQUAL_INT_MESSAGE(SAND_AMBIENT_HEAT, hottest_glass(),
-        "glass fused out of sand must start at room temperature - starting "
-        "full would melt it to lava on the following step, and starting at "
-        "0 would hand the player a pane that begins life frosted");
+                                  "glass fused out of sand must start at room temperature - starting "
+                                  "full would melt it to lava on the following step, and starting at "
+                                  "0 would hand the player a pane that begins life frosted");
 }
 
 /* Snow on a glowing pane cracks it, and it goes back to being sand.
@@ -240,8 +236,8 @@ static void test_freshly_fused_glass_starts_cold(void)
  * works as a rule but fails as a design, since nothing in this
  * simulation says water is cold, so a pane cracking beside it would read
  * as "glass breaks near water" rather than a temperature difference. */
-static void test_snow_shatters_a_glowing_pane_into_sand(void)
-{
+static void
+test_snow_shatters_a_glowing_pane_into_sand(void) {
     fixture();
     const int panes = W - 2;
     for (int x = 0; x < W; x++) {
@@ -263,11 +259,11 @@ static void test_snow_shatters_a_glowing_pane_into_sand(void)
      * bank eating itself from its own meltwater could run a cell short.
      * Contact alone is enough now. */
     TEST_ASSERT_EQUAL_INT_MESSAGE(0, count_cells_of(MAT_GLASS),
-        "snow touching panes above the shock threshold must shatter every "
-        "one of them");
+                                  "snow touching panes above the shock threshold must shatter every "
+                                  "one of them");
     TEST_ASSERT_EQUAL_INT_MESSAGE(panes, count_cells_of(MAT_SAND),
-        "and shattered glass must come back as SAND - that is what closes "
-        "the loop heat opened, so the player can un-make the material");
+                                  "and shattered glass must come back as SAND - that is what closes "
+                                  "the loop heat opened, so the player can un-make the material");
 }
 
 /* The threshold is sharp, and it is the ONLY thing that decides.
@@ -277,8 +273,8 @@ static void test_snow_shatters_a_glowing_pane_into_sand(void)
  * which side of the line a pane is on - which is what the colour test
  * below is for. The two belong together: this one fixes the behaviour to
  * SAND_SHOCK_HEAT, that one fixes the appearance to the same number. */
-static void test_the_shock_threshold_is_exact(void)
-{
+static void
+test_the_shock_threshold_is_exact(void) {
     const int panes = W - 2;
 
     for (int heat = SAND_SHOCK_HEAT - 1; heat <= SAND_SHOCK_HEAT; heat++) {
@@ -298,12 +294,12 @@ static void test_the_shock_threshold_is_exact(void)
 
         if (heat < SAND_SHOCK_HEAT) {
             TEST_ASSERT_EQUAL_INT_MESSAGE(panes, count_cells_of(MAT_GLASS),
-                "a pane one level BELOW the shock threshold must survive "
-                "snow - it only cools, which is what makes the threshold "
-                "mean something");
+                                          "a pane one level BELOW the shock threshold must survive "
+                                          "snow - it only cools, which is what makes the threshold "
+                                          "mean something");
         } else {
             TEST_ASSERT_EQUAL_INT_MESSAGE(0, count_cells_of(MAT_GLASS),
-                "and a pane exactly AT the threshold must break");
+                                          "and a pane exactly AT the threshold must break");
         }
     }
 }
@@ -316,11 +312,11 @@ static void test_the_shock_threshold_is_exact(void)
  * Asserted as "the largest step in the ramp", not "these two colours
  * differ" - any two entries of a gradient differ, and the claim worth
  * defending is that this break is the one you notice. */
-static void test_glass_looks_different_at_the_shock_threshold(void)
-{
-    const gfx_color_t *pal = material_palette();
+static void
+test_glass_looks_different_at_the_shock_threshold(void) {
+    const gfx_color_t* pal = material_palette();
 
-    int gap[MATERIAL_VARIANTS] = { 0 };
+    int gap[MATERIAL_VARIANTS] = {0};
     for (int v = 1; v < MATERIAL_VARIANTS; v++) {
         const gfx_color_t a = pal[MAT_GLASS * MATERIAL_VARIANTS + v - 1];
         const gfx_color_t b = pal[MAT_GLASS * MATERIAL_VARIANTS + v];
@@ -328,11 +324,9 @@ static void test_glass_looks_different_at_the_shock_threshold(void)
         const uint16_t ua = (uint16_t)((a >> 8) | (a << 8));
         const uint16_t ub = (uint16_t)((b >> 8) | (b << 8));
         const int dr = ((ua >> 11) & 0x1F) - ((ub >> 11) & 0x1F);
-        const int dg = ((ua >>  5) & 0x3F) - ((ub >>  5) & 0x3F);
-        const int db = ( ua        & 0x1F) - ( ub        & 0x1F);
-        gap[v] = (dr < 0 ? -dr : dr) * 2 +
-                 (dg < 0 ? -dg : dg) +
-                 (db < 0 ? -db : db) * 2;
+        const int dg = ((ua >> 5) & 0x3F) - ((ub >> 5) & 0x3F);
+        const int db = (ua & 0x1F) - (ub & 0x1F);
+        gap[v] = (dr < 0 ? -dr : dr) * 2 + (dg < 0 ? -dg : dg) + (db < 0 ? -db : db) * 2;
     }
 
     int widest = 1;
@@ -343,9 +337,9 @@ static void test_glass_looks_different_at_the_shock_threshold(void)
     }
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(SAND_SHOCK_HEAT, widest,
-        "the biggest colour change along glass's ramp has to land exactly "
-        "where its behaviour changes - a pane that snow will shatter must "
-        "not look like one that snow will merely cool");
+                                  "the biggest colour change along glass's ramp has to land exactly "
+                                  "where its behaviour changes - a pane that snow will shatter must "
+                                  "not look like one that snow will merely cool");
 }
 
 /* A resting pane beside snow gets COLDER, and shows it - reported as "I
@@ -354,15 +348,15 @@ static void test_glass_looks_different_at_the_shock_threshold(void)
  * the variant range so a resting pane has something to lose, and
  * chilling has to be driven from the SNOW, since a pane at rest never
  * gets a turn of its own and so never looks at what is sitting on it. */
-static void test_snow_frosts_a_resting_pane(void)
-{
+static void
+test_snow_frosts_a_resting_pane(void) {
     fixture();
     sand_clear(&s);
     for (int x = 0; x < W; x++) {
         sand_set(&s, x, H - 1, STONE);
     }
     for (int x = 1; x < W - 1; x++) {
-        sand_set(&s, x, H - 2, GLASS);      /* at rest, not heated */
+        sand_set(&s, x, H - 2, GLASS); /* at rest, not heated */
         sand_set(&s, x, H - 3, SNOW);
     }
 
@@ -378,19 +372,18 @@ static void test_snow_frosts_a_resting_pane(void)
     }
 
     TEST_ASSERT_LESS_THAN_MESSAGE(SAND_AMBIENT_HEAT, coldest,
-        "snow resting on a pane at room temperature must pull it BELOW "
-        "room temperature - if ambient is the bottom of the scale there is "
-        "nothing to see, and the player gets no sign that snow and glass "
-        "interact at all");
+                                  "snow resting on a pane at room temperature must pull it BELOW "
+                                  "room temperature - if ambient is the bottom of the scale there is "
+                                  "nothing to see, and the player gets no sign that snow and glass "
+                                  "interact at all");
 
     /* And the palette has to disagree about the two, or the number moving
      * is still invisible. */
-    const gfx_color_t *pal = material_palette();
-    TEST_ASSERT_NOT_EQUAL_MESSAGE(
-        pal[MAT_GLASS * MATERIAL_VARIANTS + SAND_AMBIENT_HEAT],
-        pal[MAT_GLASS * MATERIAL_VARIANTS + coldest],
-        "and a frosted pane must not be drawn in the same colour as a "
-        "resting one");
+    const gfx_color_t* pal = material_palette();
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(pal[MAT_GLASS * MATERIAL_VARIANTS + SAND_AMBIENT_HEAT],
+                                  pal[MAT_GLASS * MATERIAL_VARIANTS + coldest],
+                                  "and a frosted pane must not be drawn in the same colour as a "
+                                  "resting one");
 }
 
 /* Cold spreads THROUGH the glass, past the cells the snow is touching.
@@ -401,8 +394,8 @@ static void test_snow_frosts_a_resting_pane(void)
  * applied within the material and scaled down hard - at its own value a
  * pane goes isothermal in a step or two, and a wall that is all one
  * temperature cannot be hot inside and cold outside. */
-static void test_frost_spreads_beyond_the_snow_touching_it(void)
-{
+static void
+test_frost_spreads_beyond_the_snow_touching_it(void) {
     fixture();
     sand_clear(&s);
     for (int x = 0; x < W; x++) {
@@ -425,18 +418,16 @@ static void test_frost_spreads_beyond_the_snow_touching_it(void)
                 continue;
             }
             const cell_t c = sand_at(&s, x, H - 2);
-            if (CELL_MATERIAL(c) == MAT_GLASS &&
-                CELL_VARIANT(c) < SAND_AMBIENT_HEAT) {
+            if (CELL_MATERIAL(c) == MAT_GLASS && CELL_VARIANT(c) < SAND_AMBIENT_HEAT) {
                 reached = 1;
                 break;
             }
         }
     }
 
-    TEST_ASSERT_TRUE_MESSAGE(reached,
-        "cold must travel along the pane to cells no snow ever touched - a "
-        "single chilled cell one level off ambient is a state change nobody "
-        "can see");
+    TEST_ASSERT_TRUE_MESSAGE(reached, "cold must travel along the pane to cells no snow ever touched - a "
+                                      "single chilled cell one level off ambient is a state change nobody "
+                                      "can see");
 }
 
 /* Snow keeps on ordinary cold glass. Chilling costs the cold material its
@@ -445,8 +436,8 @@ static void test_frost_spreads_beyond_the_snow_touching_it(void)
  * cold into something at or below it does not. Otherwise a snowbank
  * cannot be kept anywhere near the one building material it is meant to
  * be used against. */
-static void test_snow_keeps_on_ordinary_cold_glass(void)
-{
+static void
+test_snow_keeps_on_ordinary_cold_glass(void) {
     fixture();
     sand_clear(&s);
     for (int x = 0; x < W; x++) {
@@ -463,11 +454,11 @@ static void test_snow_keeps_on_ordinary_cold_glass(void)
     }
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(flakes, count_cells_of(MAT_SNOW),
-        "snow resting on glass at room temperature must not melt - it pays "
-        "for heat it takes, and there was none to take");
+                                  "snow resting on glass at room temperature must not melt - it pays "
+                                  "for heat it takes, and there was none to take");
     TEST_ASSERT_EQUAL_INT_MESSAGE(0, count_cells_of(MAT_WATER),
-        "and it must leave no water behind, which is how the melting showed "
-        "up on the board");
+                                  "and it must leave no water behind, which is how the melting showed "
+                                  "up on the board");
 }
 
 /* Shock works HOT ONTO COLD as well: thermal shock is a large temperature
@@ -478,13 +469,13 @@ static void test_snow_keeps_on_ordinary_cold_glass(void)
  * lives in try_heat_transform(), driven by the heat source, the other in
  * step_one_cold_cell(), driven by the cold cell. They can break
  * independently and have. */
-static void test_heat_arriving_at_frosted_glass_cracks_it(void)
-{
+static void
+test_heat_arriving_at_frosted_glass_cracks_it(void) {
     fixture();
     sand_clear(&s);
     for (int x = 0; x < W; x++) {
         sand_set(&s, x, H - 1, STONE);
-        sand_set(&s, x, H - 2, CELL_MAKE(MAT_GLASS, 0));   /* fully frosted */
+        sand_set(&s, x, H - 2, CELL_MAKE(MAT_GLASS, 0)); /* fully frosted */
     }
     const int panes = W;
     const int sand_before = count_cells_of(MAT_SAND);
@@ -500,12 +491,11 @@ static void test_heat_arriving_at_frosted_glass_cracks_it(void)
         cracked = count_cells_of(MAT_SAND) > sand_before;
     }
 
-    TEST_ASSERT_TRUE_MESSAGE(cracked,
-        "lava arriving at a frosted pane must crack it, not warm it "
-        "through - shock is about the size of the change, and it has to "
-        "work in both directions or it is not that");
+    TEST_ASSERT_TRUE_MESSAGE(cracked, "lava arriving at a frosted pane must crack it, not warm it "
+                                      "through - shock is about the size of the change, and it has to "
+                                      "work in both directions or it is not that");
     TEST_ASSERT_LESS_THAN_MESSAGE(panes, count_cells_of(MAT_GLASS),
-        "and the pane must actually be gone, not merely warmed");
+                                  "and the pane must actually be gone, not merely warmed");
 }
 
 /* A pane at room temperature is not cracked by heat arriving.
@@ -514,13 +504,13 @@ static void test_heat_arriving_at_frosted_glass_cracks_it(void)
  * simply "below ambient": ordinary glass meeting fire has to warm up
  * through the ramp the way it always did, or every pane in the game breaks
  * the first time anyone lights something next to it. */
-static void test_heat_arriving_at_resting_glass_only_warms_it(void)
-{
+static void
+test_heat_arriving_at_resting_glass_only_warms_it(void) {
     fixture();
     sand_clear(&s);
     for (int x = 0; x < W; x++) {
         sand_set(&s, x, H - 1, STONE);
-        sand_set(&s, x, H - 2, GLASS);            /* at rest */
+        sand_set(&s, x, H - 2, GLASS); /* at rest */
     }
     const int sand_before = count_cells_of(MAT_SAND);
 
@@ -534,8 +524,8 @@ static void test_heat_arriving_at_resting_glass_only_warms_it(void)
     }
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(sand_before, count_cells_of(MAT_SAND),
-        "glass at room temperature must warm up when fire reaches it, not "
-        "shatter - only glass that was already COLD is shocked by heat");
+                                  "glass at room temperature must warm up when fire reaches it, not "
+                                  "shatter - only glass that was already COLD is shocked by heat");
 }
 
 /* Frost fades. It is a state, not a scar.
@@ -543,15 +533,15 @@ static void test_heat_arriving_at_resting_glass_only_warms_it(void)
  * Ambient is a resting point that gets approached from BOTH sides, which
  * is what makes putting cold below it work at all - otherwise the first
  * snowfall would leave every pane it touched permanently pale. */
-static void test_a_frosted_pane_warms_back_to_room_temperature(void)
-{
+static void
+test_a_frosted_pane_warms_back_to_room_temperature(void) {
     fixture();
     sand_clear(&s);
     for (int x = 0; x < W; x++) {
         sand_set(&s, x, H - 1, STONE);
     }
     for (int x = 1; x < W - 1; x++) {
-        sand_set(&s, x, H - 2, CELL_MAKE(MAT_GLASS, 0));   /* fully frosted */
+        sand_set(&s, x, H - 2, CELL_MAKE(MAT_GLASS, 0)); /* fully frosted */
     }
 
     /* Breaks the moment it reaches ambient, so the cap only has to be
@@ -574,9 +564,9 @@ static void test_a_frosted_pane_warms_back_to_room_temperature(void)
     }
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(SAND_AMBIENT_HEAT, coldest,
-        "a frosted pane left alone must warm back to room temperature - "
-        "the same `cools` drift that brings a hot one down, running the "
-        "other way");
+                                  "a frosted pane left alone must warm back to room temperature - "
+                                  "the same `cools` drift that brings a hot one down, running the "
+                                  "other way");
 }
 
 /* Lava on one side of a wall, snow on the other: it cracks. Nothing is
@@ -588,8 +578,8 @@ static void test_a_frosted_pane_warms_back_to_room_temperature(void)
  * the hot cell. And heat first, chill second: chilling is faster than
  * heating, so snow present from the start keeps the wall from ever
  * reaching the threshold. */
-static void test_lava_one_side_snow_the_other_cracks_the_wall(void)
-{
+static void
+test_lava_one_side_snow_the_other_cracks_the_wall(void) {
     const int wall = W / 2;
 
     /* --- heat it first ---------------------------------------------- */
@@ -616,21 +606,18 @@ static void test_lava_one_side_snow_the_other_cracks_the_wall(void)
     int i;
     for (i = 0; i < 4000; i++) {
         const cell_t c = sand_at(&s, wall, face);
-        if (CELL_MATERIAL(c) == MAT_GLASS &&
-            CELL_VARIANT(c) >= SAND_SHOCK_HEAT) {
+        if (CELL_MATERIAL(c) == MAT_GLASS && CELL_VARIANT(c) >= SAND_SHOCK_HEAT) {
             break;
         }
         sand_step(&s, 0, 1000, 0);
     }
-    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_GLASS,
-        CELL_MATERIAL(sand_at(&s, wall, face)),
-        "fixture check: the wall cell being tested must survive the soak - "
-        "if lava melted it there is nothing left to shatter");
-    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(SAND_SHOCK_HEAT,
-        CELL_VARIANT(sand_at(&s, wall, face)),
-        "fixture check: lava held against a glass wall has to drive THAT "
-        "cell past the shock threshold on its own, or the rest proves "
-        "nothing about heat arriving from a real source");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_GLASS, CELL_MATERIAL(sand_at(&s, wall, face)),
+                                  "fixture check: the wall cell being tested must survive the soak - "
+                                  "if lava melted it there is nothing left to shatter");
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(SAND_SHOCK_HEAT, CELL_VARIANT(sand_at(&s, wall, face)),
+                                             "fixture check: lava held against a glass wall has to drive THAT "
+                                             "cell past the shock threshold on its own, or the rest proves "
+                                             "nothing about heat arriving from a real source");
 
     const int sand_before = count_cells_of(MAT_SAND);
 
@@ -651,10 +638,9 @@ static void test_lava_one_side_snow_the_other_cracks_the_wall(void)
         cracked = count_cells_of(MAT_SAND) > sand_before;
     }
 
-    TEST_ASSERT_TRUE_MESSAGE(cracked,
-        "snow banked against a wall that lava has heated from the far side "
-        "must crack it - the gradient works whichever side the heat came "
-        "from, which is the whole point of it being a gradient");
+    TEST_ASSERT_TRUE_MESSAGE(cracked, "snow banked against a wall that lava has heated from the far side "
+                                      "must crack it - the gradient works whichever side the heat came "
+                                      "from, which is the whole point of it being a gradient");
 
     /* --- and without snow it never cracks at all --------------------- */
     fixture();
@@ -677,13 +663,11 @@ static void test_lava_one_side_snow_the_other_cracks_the_wall(void)
     }
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(dry_sand_before, count_cells_of(MAT_SAND),
-        "the identical wall with no snow must never shatter, however long "
-        "the lava works on it - lava MELTS glass and only cold SHATTERS it, "
-        "and a test that cannot tell those apart would pass on a board "
-        "where snow did nothing at all");
+                                  "the identical wall with no snow must never shatter, however long "
+                                  "the lava works on it - lava MELTS glass and only cold SHATTERS it, "
+                                  "and a test that cannot tell those apart would pass on a board "
+                                  "where snow did nothing at all");
 }
-
-
 
 /* One shock takes the whole pane, not one cell of it: a crack starts
  * somewhere and travels, the same way glass actually breaks - it does
@@ -691,8 +675,8 @@ static void test_lava_one_side_snow_the_other_cracks_the_wall(void)
  * shock needs something cold touching glass that is still hot at the
  * moment it touches, so needing one per cell would be attrition rather
  * than a working mechanism. */
-static void test_one_shock_cracks_the_whole_pane(void)
-{
+static void
+test_one_shock_cracks_the_whole_pane(void) {
     fixture();
     sand_clear(&s);
     for (int x = 0; x < W; x++) {
@@ -709,9 +693,9 @@ static void test_one_shock_cracks_the_whole_pane(void)
     }
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(0, count_cells_of(MAT_GLASS),
-        "a crack started at one end of a pane must run the length of it - "
-        "the far end going too is the whole point, and it is why one "
-        "successful shock is enough to matter");
+                                  "a crack started at one end of a pane must run the length of it - "
+                                  "the far end going too is the whole point, and it is why one "
+                                  "successful shock is enough to matter");
 }
 
 /* But it does not jump a gap.
@@ -720,8 +704,8 @@ static void test_one_shock_cracks_the_whole_pane(void)
  * two panes. Without this the previous test passes just as well against
  * "any shock shatters all glass on the board", which would make glass
  * unusable anywhere near anything cold. */
-static void test_a_crack_does_not_jump_to_a_separate_pane(void)
-{
+static void
+test_a_crack_does_not_jump_to_a_separate_pane(void) {
     fixture();
     sand_clear(&s);
     for (int x = 0; x < W; x++) {
@@ -746,8 +730,8 @@ static void test_a_crack_does_not_jump_to_a_separate_pane(void)
     }
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(far_side, count_cells_of(MAT_GLASS),
-        "the pane on the other side of the gap must be untouched - a crack "
-        "runs through the material it is in, not through the air beside it");
+                                  "the pane on the other side of the gap must be untouched - a crack "
+                                  "runs through the material it is in, not through the air beside it");
 }
 
 /* The same snow on a cold pane does nothing at all.
@@ -756,8 +740,8 @@ static void test_a_crack_does_not_jump_to_a_separate_pane(void)
  * being corrosive to glass. Without this the previous test passes just as
  * happily against "snow destroys glass", a far worse rule that would make
  * the only acid-proof container in the game vulnerable to weather. */
-static void test_cold_glass_is_unharmed_by_snow(void)
-{
+static void
+test_cold_glass_is_unharmed_by_snow(void) {
     fixture();
     for (int x = 0; x < W; x++) {
         sand_set(&s, x, H - 1, STONE);
@@ -773,8 +757,8 @@ static void test_cold_glass_is_unharmed_by_snow(void)
     }
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(panes, count_cells_of(MAT_GLASS),
-        "snow on COLD glass must leave every pane intact - shock is about "
-        "the temperature difference, not about snow being bad for glass");
+                                  "snow on COLD glass must leave every pane intact - shock is about "
+                                  "the temperature difference, not about snow being bad for glass");
 }
 
 /* Chilling costs the snow. It melts doing it.
@@ -783,8 +767,8 @@ static void test_cold_glass_is_unharmed_by_snow(void)
  * sink made of a material that arrives in a drift, so any pane anywhere
  * near weather would be unusable. Paying for the exchange is what keeps a
  * glass vessel over a fire a thing you can actually build. */
-static void test_snow_melts_where_it_chills(void)
-{
+static void
+test_snow_melts_where_it_chills(void) {
     fixture();
     for (int x = 0; x < W; x++) {
         sand_set(&s, x, H - 1, STONE);
@@ -800,10 +784,9 @@ static void test_snow_melts_where_it_chills(void)
     }
 
     TEST_ASSERT_TRUE_MESSAGE(count_cells_of(MAT_SNOW) < flakes,
-        "snow that cools a hot pane must be spent doing it, or it is a "
-        "free and permanent heat sink");
-    TEST_ASSERT_TRUE_MESSAGE(count_cells_of(MAT_WATER) > 0,
-        "and what it turns into is water, not nothing");
+                             "snow that cools a hot pane must be spent doing it, or it is a "
+                             "free and permanent heat sink");
+    TEST_ASSERT_TRUE_MESSAGE(count_cells_of(MAT_WATER) > 0, "and what it turns into is water, not nothing");
 }
 
 /* A re-initialised simulation remembers nothing about the old board: the
@@ -812,8 +795,8 @@ static void test_snow_melts_where_it_chills(void)
  * when it need not - and a stale TRUE carried over from a previous
  * test's board can silently make a later brush-latching test pass
  * regardless of what the brush actually latched. */
-static void test_reinitialising_forgets_the_old_board(void)
-{
+static void
+test_reinitialising_forgets_the_old_board(void) {
     fixture();
     sand_clear(&s);
     sand_set(&s, 1, 1, CELL_MAKE(MAT_WATER, MASS_MAX));
@@ -822,23 +805,22 @@ static void test_reinitialising_forgets_the_old_board(void)
     sand_set(&s, 4, 1, CELL_MAKE(MAT_ACID, MASS_MAX));
     sand_set(&s, 5, 1, SNOW);
 
-    TEST_ASSERT_TRUE_MESSAGE(s.may_have_liquid && s.may_have_gas &&
-                             s.may_have_burning && s.may_have_dissolver &&
-                             s.may_have_temperature,
-        "fixture check: this board has one of everything, so every flag "
-        "should be set before we throw it away");
+    TEST_ASSERT_TRUE_MESSAGE(s.may_have_liquid && s.may_have_gas && s.may_have_burning && s.may_have_dissolver
+                                 && s.may_have_temperature,
+                             "fixture check: this board has one of everything, so every flag "
+                             "should be set before we throw it away");
 
     fixture();
 
-    TEST_ASSERT_FALSE_MESSAGE(s.may_have_liquid,      "liquid flag leaked");
-    TEST_ASSERT_FALSE_MESSAGE(s.may_have_gas,         "gas flag leaked");
-    TEST_ASSERT_FALSE_MESSAGE(s.may_have_burning,     "burning flag leaked");
-    TEST_ASSERT_FALSE_MESSAGE(s.may_have_dissolver,   "dissolver flag leaked");
+    TEST_ASSERT_FALSE_MESSAGE(s.may_have_liquid, "liquid flag leaked");
+    TEST_ASSERT_FALSE_MESSAGE(s.may_have_gas, "gas flag leaked");
+    TEST_ASSERT_FALSE_MESSAGE(s.may_have_burning, "burning flag leaked");
+    TEST_ASSERT_FALSE_MESSAGE(s.may_have_dissolver, "dissolver flag leaked");
     TEST_ASSERT_FALSE_MESSAGE(s.may_have_temperature, "temperature flag leaked");
 }
 
-void run_sand_glass_thermal_suite(void)
-{
+void
+run_sand_glass_thermal_suite(void) {
     RUN_TEST(test_glass_banks_heat_rather_than_melting_on_contact);
     RUN_TEST(test_a_fire_held_long_enough_melts_glass_to_lava);
     RUN_TEST(test_glass_forgets_a_fire_that_went_out);

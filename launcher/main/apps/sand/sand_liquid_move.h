@@ -19,13 +19,13 @@
  * Inlining move_liquid_grain() into the sweep won 18.4% on liquid scenes but
  * grew sand_step() 975 -> 1425 instructions, and that growth is paid by
  * every cell - the liquid-free rows lost 5.5%. */
-static __attribute__((noinline, unused)) void splash_displace(sand_t *s, int x, int y, uint8_t mat_id)
-{
+static __attribute__((noinline, unused)) void
+splash_displace(sand_t* s, int x, int y, uint8_t mat_id) {
     if (mat_id != MAT_WATER) {
         return;
     }
     if ((rng_next(&s->rng) & 0xFF) > s->splash_chance) {
-        return;   /* this echo lost the roll - let the bounce die here */
+        return; /* this echo lost the roll - let the bounce die here */
     }
     sand_displace_material(s, x, y, s->splash_radius_water, mat_id);
     /* Directed toward EMPTY neighbours: a radial spray mostly throws
@@ -37,34 +37,31 @@ static __attribute__((noinline, unused)) void splash_displace(sand_t *s, int x, 
      * contact point makes every push compete for one grain, so only
      * one resolves. See test_a_water_splash_actually_opens_a_gap. */
     for (int dir = 0; dir < 8; dir++) {
-        const int *d = ring_dir(dir);
+        const int* d = ring_dir(dir);
         const int nx = x + d[0], ny = y + d[1];
         const int fx = x + 2 * d[0], fy = y + 2 * d[1];
-        if ((unsigned)nx >= (unsigned)s->w || (unsigned)ny >= (unsigned)s->h ||
-            (unsigned)fx >= (unsigned)s->w || (unsigned)fy >= (unsigned)s->h) {
+        if ((unsigned)nx >= (unsigned)s->w || (unsigned)ny >= (unsigned)s->h || (unsigned)fx >= (unsigned)s->w
+            || (unsigned)fy >= (unsigned)s->h) {
             continue;
         }
         const cell_t neighbour = s->cells[(size_t)ny * (size_t)s->w + (size_t)nx];
         if (CELL_IS_EMPTY(neighbour)) {
-            continue;   /* nothing there to push outward */
+            continue; /* nothing there to push outward */
         }
         if (CELL_MATERIAL(neighbour) != mat_id) {
             continue;
         }
         if (!CELL_IS_EMPTY(s->cells[(size_t)fy * (size_t)s->w + (size_t)fx])) {
-            continue;   /* no room one further out to push it into */
+            continue; /* no room one further out to push it into */
         }
         sand_impulse(s, nx, ny, dir, SAND_EXPLODE_INITIAL_SPEED);
     }
-    s->splash_chance =
-        s->splash_chance > SAND_SPLASH_CHANCE_FLOOR + SAND_SPLASH_CHANCE_STEP
-            ? (uint8_t)(s->splash_chance - SAND_SPLASH_CHANCE_STEP)
-            : SAND_SPLASH_CHANCE_FLOOR;
-    s->splash_radius_water =
-        s->splash_radius_water
-                > SAND_SPLASH_RADIUS_WATER_FLOOR + SAND_SPLASH_RADIUS_WATER_STEP
-            ? (uint8_t)(s->splash_radius_water - SAND_SPLASH_RADIUS_WATER_STEP)
-            : SAND_SPLASH_RADIUS_WATER_FLOOR;
+    s->splash_chance = s->splash_chance > SAND_SPLASH_CHANCE_FLOOR + SAND_SPLASH_CHANCE_STEP
+                           ? (uint8_t)(s->splash_chance - SAND_SPLASH_CHANCE_STEP)
+                           : SAND_SPLASH_CHANCE_FLOOR;
+    s->splash_radius_water = s->splash_radius_water > SAND_SPLASH_RADIUS_WATER_FLOOR + SAND_SPLASH_RADIUS_WATER_STEP
+                                 ? (uint8_t)(s->splash_radius_water - SAND_SPLASH_RADIUS_WATER_STEP)
+                                 : SAND_SPLASH_RADIUS_WATER_FLOOR;
 }
 
 /* Mass is only ever moved, never made - every caller subtracts the same
@@ -72,8 +69,8 @@ static __attribute__((noinline, unused)) void splash_displace(sand_t *s, int x, 
  * was empty beforehand: the only case that can move where a puddle's
  * surface sits, which callers that care feed to mark_depth_band()
  * (sand_priv.h). */
-static inline bool pour_into(cell_t *dst, uint8_t id, int amount)
-{
+static inline bool
+pour_into(cell_t* dst, uint8_t id, int amount) {
     const bool was_empty = CELL_IS_EMPTY(*dst);
     const int had = was_empty ? 0 : CELL_VARIANT(*dst);
 
@@ -82,8 +79,8 @@ static inline bool pour_into(cell_t *dst, uint8_t id, int amount)
 }
 
 /* How much of `id` a cell will accept, 0 if it holds something else. */
-static inline int room_in(cell_t c, uint8_t id)
-{
+static inline int
+room_in(cell_t c, uint8_t id) {
     if (CELL_IS_EMPTY(c)) {
         return MASS_MAX;
     }
@@ -97,9 +94,8 @@ static inline int room_in(cell_t c, uint8_t id)
 
 /* Row-shaped bookkeeping. Calls mark_rows() up to thrice per grain. Cache
  * removal makes it cheap. */
-static inline int give_mass(sand_t *s, uint8_t *to_row, int tx, int w,
-                            int mass, uint8_t mat_id, int y, int ty)
-{
+static inline int
+give_mass(sand_t* s, uint8_t* to_row, int tx, int w, int mass, uint8_t mat_id, int y, int ty) {
     if (to_row == NULL || (unsigned)tx >= (unsigned)w) {
         return 0;
     }
@@ -122,10 +118,9 @@ static inline int give_mass(sand_t *s, uint8_t *to_row, int tx, int w,
  * moves, oil (90) crawls, defaulting to 255 so code that never asks for
  * viscosity keeps old behaviour. No jostle bypass: shaking a viscous
  * liquid does not thin it. */
-static inline bool liquid_may_move(sand_t *s, uint8_t id)
-{
-    const int m = (s->mobility >= 0) ? s->mobility
-                                     : material_by_id((material_id_t)id)->mobility;
+static inline bool
+liquid_may_move(sand_t* s, uint8_t id) {
+    const int m = (s->mobility >= 0) ? s->mobility : material_by_id((material_id_t)id)->mobility;
 
     /* Default is NO VISCOSITY, not "never moves". Unset lava behaves like
      * pre-field liquids. Trap if read otherwise. "Twelve times too slow"
@@ -141,11 +136,9 @@ static inline bool liquid_may_move(sand_t *s, uint8_t id)
  * can reach has room - see the sweep's own block loop. It sits AFTER the
  * viscosity roll so the skip draws the same RNG the long way round would, and
  * the store it skips would have written the grain back unchanged. */
-static inline bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
-                       int x, int y, int dx, int dy,
-                       const int *slide_a, const int *slide_b,
-                       cell_t grain, uint8_t mat_id, bool dest_full)
-{
+static inline bool
+move_liquid_grain(sand_t* s, uint8_t* row, uint8_t* prow, int x, int y, int dx, int dy, const int* slide_a,
+                  const int* slide_b, cell_t grain, uint8_t mat_id, bool dest_full) {
     const int w = s->w;
     int mass = CELL_VARIANT(grain);
     bool moved = false;
@@ -160,8 +153,7 @@ static inline bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
      * too-viscous-to-move code out of the hot path, worth ~26% on a
      * water benchmark. Wrong for oil (refuses ~2 in 3 steps), but water
      * is what a screen of liquid usually is. */
-    if (s->may_have_viscous_liquid
-        && __builtin_expect(!liquid_may_move(s, mat_id), 0)) {
+    if (s->may_have_viscous_liquid && __builtin_expect(!liquid_may_move(s, mat_id), 0)) {
         return false;
     }
 
@@ -171,8 +163,7 @@ static inline bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
 
     /* Checked BEFORE give_mass() writes into the target - afterward it
      * never reads as empty again. */
-    const bool target_occupied = (unsigned)tx0 < (unsigned)w && prow != NULL
-        && !CELL_IS_EMPTY(prow[tx0]);
+    const bool target_occupied = (unsigned)tx0 < (unsigned)w && prow != NULL && !CELL_IS_EMPTY(prow[tx0]);
 
     const int down = give_mass(s, prow, tx0, w, mass, mat_id, y, ty0);
     mass -= down;
@@ -185,8 +176,8 @@ static inline bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
     }
 
     for (int d = 0; d < 2 && mass > 0; d++) {
-        const int *slide = (d == 0) ? slide_a : slide_b;
-        uint8_t *srow = dest_row(s, y + slide[1]);
+        const int* slide = (d == 0) ? slide_a : slide_b;
+        uint8_t* srow = dest_row(s, y + slide[1]);
         const int tx = x + slide[0], ty = y + slide[1];
         const int given = give_mass(s, srow, tx, w, mass, mat_id, y, ty);
         mass -= given;

@@ -22,4 +22,4 @@ void touch_start(void);
 
 /* Copies the accumulated state into `out` and clears the latched edges, so
  * each press and release is reported exactly once. */
-void touch_read(input_t *out);
+void touch_read(input_t* out);

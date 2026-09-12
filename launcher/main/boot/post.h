@@ -26,20 +26,20 @@
 #define POST_MAX_CHECKS 24
 
 typedef enum {
-    POST_REQUIRED,   /* absence means the board is faulty */
-    POST_OPTIONAL,   /* absence is legitimate - a missing SD card, say */
+    POST_REQUIRED, /* absence means the board is faulty */
+    POST_OPTIONAL, /* absence is legitimate - a missing SD card, say */
 } post_severity_t;
 
 typedef struct {
-    const char     *name;
-    bool            ok;
+    const char* name;
+    bool ok;
     post_severity_t severity;
     /* 96 comfortably fits every check's detail string, including
      * check_sdcard_live()'s "<name>, <capacity> MB (live, <n> ms round
      * trip)" in post.c, the longest one - with margin for GCC's own
      * (pessimistic) -Wformat-truncation estimate of that string's maximum
      * length, which came out to 79 bytes. */
-    char            detail[96];
+    char detail[96];
 } post_result_t;
 
 /* POST runs in two phases, because the SD card and the display are wired to
@@ -72,6 +72,6 @@ void post_rerun(void);
 
 /* The results of the last run, retained so they can be shown on screen as well
  * as logged - a board in the field may have no serial cable attached. */
-const post_result_t *post_results(void);
+const post_result_t* post_results(void);
 int post_result_count(void);
 int post_failure_count(void);

@@ -26,21 +26,20 @@
 #define TOUCH_RELEASE_QUIET_US (60 * 1000)
 
 typedef struct {
-    bool    down;
-    int     x, y;
-    int     press_x, press_y;
-    bool    pressed;         /* latched until taken */
-    bool    released;        /* latched until taken */
+    bool down;
+    int x, y;
+    int press_x, press_y;
+    bool pressed;  /* latched until taken */
+    bool released; /* latched until taken */
     int64_t last_contact_us;
 } touch_fsm_t;
 
-void touch_fsm_init(touch_fsm_t *fsm);
+void touch_fsm_init(touch_fsm_t* fsm);
 
 /* Feed one sample. `have_point` is whether the controller reported a contact;
  * x and y are only meaningful when it did. */
-void touch_fsm_update(touch_fsm_t *fsm, bool have_point,
-                      int x, int y, int64_t now_us);
+void touch_fsm_update(touch_fsm_t* fsm, bool have_point, int x, int y, int64_t now_us);
 
 /* Copy the current state out and consume the latched edges, so each press and
  * release is reported to exactly one caller. */
-void touch_fsm_take(touch_fsm_t *fsm, input_t *out);
+void touch_fsm_take(touch_fsm_t* fsm, input_t* out);

@@ -20,9 +20,9 @@
  */
 #pragma once
 
-#include <stddef.h>   /* NULL, used by the advance field of a monospace font */
-#include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h> /* NULL, used by the advance field of a monospace font */
+#include <stdint.h>
 
 #include "gfx/font8x8_basic.h"
 
@@ -35,12 +35,12 @@
  * row-major, 0..255 background to ink - see tools/gen_font.py and
  * gfx.c's draw_glyph_font(). */
 typedef struct {
-    const uint8_t *atlas;      /* glyph bitmaps, cell by cell */
-    uint8_t  bpp;              /* 1 = bitmask (gfx_font_8x8); 8 = coverage */
-    uint8_t  cell_w, cell_h;   /* one glyph's cell, in atlas pixels */
-    uint8_t  first;            /* first codepoint the atlas covers */
-    uint16_t count;            /* how many glyphs follow it, from `first` */
-    const uint8_t *advance;    /* per-glyph advance in pixels, indexed from
+    const uint8_t* atlas;   /* glyph bitmaps, cell by cell */
+    uint8_t bpp;            /* 1 = bitmask (gfx_font_8x8); 8 = coverage */
+    uint8_t cell_w, cell_h; /* one glyph's cell, in atlas pixels */
+    uint8_t first;          /* first codepoint the atlas covers */
+    uint16_t count;         /* how many glyphs follow it, from `first` */
+    const uint8_t* advance; /* per-glyph advance in pixels, indexed from
                                  * `first`; NULL means monospace at cell_w */
 } gfx_font_t;
 
@@ -53,12 +53,12 @@ typedef struct {
  * is pure and included from more than one translation unit, and
  * internal linkage keeps that safe. */
 static const gfx_font_t gfx_font_8x8 = {
-    .atlas   = (const uint8_t *)font8x8_basic,
-    .bpp     = 1,
-    .cell_w  = 8,
-    .cell_h  = 8,
-    .first   = 0,
-    .count   = 128,
+    .atlas = (const uint8_t*)font8x8_basic,
+    .bpp = 1,
+    .cell_w = 8,
+    .cell_h = 8,
+    .first = 0,
+    .count = 128,
     .advance = NULL,
 };
 
@@ -70,13 +70,12 @@ static const gfx_font_t gfx_font_8x8 = {
  * of range; see gfx.c. A font WITH an advance table looks up the
  * per-glyph value only when `ch` is in range, and falls back the same
  * way otherwise. */
-static inline int gfx_font_advance(const gfx_font_t *f, unsigned char ch, int scale)
-{
+static inline int
+gfx_font_advance(const gfx_font_t* f, unsigned char ch, int scale) {
     if (scale < 1) {
         scale = 1;
     }
-    if (f->advance != NULL && ch >= f->first &&
-        (unsigned)(ch - f->first) < f->count) {
+    if (f->advance != NULL && ch >= f->first && (unsigned)(ch - f->first) < f->count) {
         return f->advance[ch - f->first] * scale;
     }
     return f->cell_w * scale;
@@ -90,9 +89,8 @@ static inline int gfx_font_advance(const gfx_font_t *f, unsigned char ch, int sc
  * it today, and must not start to just because this got more general. A
  * font with a real advance table has no such shortcut and reads each
  * character. */
-static inline int gfx_font_text_width(const gfx_font_t *f, const char *s,
-                                      int len, int scale)
-{
+static inline int
+gfx_font_text_width(const gfx_font_t* f, const char* s, int len, int scale) {
     if (scale < 1) {
         scale = 1;
     }
@@ -113,8 +111,8 @@ static inline int gfx_font_text_width(const gfx_font_t *f, const char *s,
 }
 
 /* Height in pixels of one line of `f`, at `scale`. */
-static inline int gfx_font_height(const gfx_font_t *f, int scale)
-{
+static inline int
+gfx_font_height(const gfx_font_t* f, int scale) {
     if (scale < 1) {
         scale = 1;
     }

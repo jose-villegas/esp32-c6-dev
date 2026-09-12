@@ -51,7 +51,7 @@
  * seen_materials is the same mask being rebuilt from what THIS pass actually
  * walks, so the board can narrow as well as widen - a latch alone only ever
  * grows. */
-static uint8_t  present_pair_bits = 0xFFu;
+static uint8_t present_pair_bits = 0xFFu;
 static uint16_t seen_materials;
 
 /* Can an acid-rain quad exist at all? It needs all four cells to be steam or
@@ -59,7 +59,7 @@ static uint16_t seen_materials;
  * material can never form one, wherever the cells happen to sit.
  *
  * True until the first pass has looked, since it gates work being skipped. */
-static bool     acid_rain_possible = true;
+static bool acid_rain_possible = true;
 
 /* The densest non-liquid anywhere on the board, from the same mask. A cell at
  * or above it has no possible smotherer, because neighbor_smothers() asks only
@@ -67,7 +67,7 @@ static bool     acid_rain_possible = true;
  * the board, not of the cell asking, exactly as the pair bits are.
  *
  * 255 until the first pass has looked: it gates work being skipped. */
-static uint8_t  max_smothering_density = 255u;
+static uint8_t max_smothering_density = 255u;
 
 /* A 17th material would fall out of the mask silently, and a material missing
  * from it reads as absent - which SKIPS work rather than adding it. Wrong
@@ -101,7 +101,6 @@ neighbor_quenches(const sand_t* s, int nx, int ny, int w, int h) {
     }
     return (pair_theirs_bits(CELL_MATERIAL(n)) & PAIR_QUENCHES) != 0;
 }
-
 
 /* Checks burial; returns false on failure. No cover_mask()/covered_at().
  * Burial skips rotation, side. */
@@ -221,7 +220,7 @@ try_heat_transform_given(sand_t* s, int nx, int ny, int w, int h, size_t at, cel
         }
         s->cells[at] = CELL_MAKE(CELL_MATERIAL(n), heat + 1);
         s->may_have_temperature = true;
-        mark_rows(s, ny, ny);   /* drawn, not woken - see HEAT LEVELS DO NOT WAKE */
+        mark_rows(s, ny, ny); /* drawn, not woken - see HEAT LEVELS DO NOT WAKE */
         return true;
     }
 
@@ -388,11 +387,9 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
 
     /* `>=` used, not `==`. Short-circuits on `soaked_to != 0`. */
     REACTION_DOC(soaked_to, "once fully saturated, at a per-step chance");
-    const unsigned convert_period = (s->soak_convert > 0)
-        ? (unsigned)s->soak_convert : SOAKED_CONVERT_PERIOD;
+    const unsigned convert_period = (s->soak_convert > 0) ? (unsigned)s->soak_convert : SOAKED_CONVERT_PERIOD;
     if (r->soaked_to != 0 && held >= r->moist_max
-        && (((unsigned)s->step_phase + (unsigned)x * 5u + (unsigned)y * 33u)
-            & (convert_period - 1u)) == 0u
+        && (((unsigned)s->step_phase + (unsigned)x * 5u + (unsigned)y * 33u) & (convert_period - 1u)) == 0u
         && (int)(rng_next(&s->rng) & 0xFF) < r->soaked_chance) {
         const size_t at = (size_t)y * (size_t)w + (size_t)x;
         place_reacted(s, x, y, at, r->soaked_to);
@@ -658,7 +655,7 @@ step_one_warming_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
  * cold walk in step_one_cold_cell(). See "THE BOILER" for the rationale, and
  * note the two share it deliberately: a medium carries cold as far as it
  * carries heat. */
-#define CONDUCT_REACH 32
+#define CONDUCT_REACH      32
 
 /* How far COLD carries, which is no longer the same as heat.
  *
@@ -666,7 +663,7 @@ step_one_warming_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
  * as it carries heat, and that stopped being true once cold got its own
  * attenuation run and, now, the diagonals. Thirty-two cells of cold read as
  * unrealistic in play - a third of it does not. */
-#define COLD_REACH (CONDUCT_REACH / 3)
+#define COLD_REACH         (CONDUCT_REACH / 3)
 
 /* Cells the cold crosses per attenuation roll - THE ONE PLACE COLD BEATS HEAT,
  * which is what bd esp32c6-tov asked for. The heat walk rolls at every cell,
@@ -675,7 +672,7 @@ step_one_warming_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
  *
  * Measured, 40x50 glass slab under snow at equilibrium: cells below ambient
  * 24% -> 64%, cells cold enough to shatter when warmed 12% -> 47%. */
-#define COLD_CARRY_RUN 4
+#define COLD_CARRY_RUN     4
 
 /* One carry attempt per cold cell every this many steps. The face a chiller
  * touches still cools every step; reaching deeper is rate-limited, so a slab
@@ -685,7 +682,7 @@ step_one_warming_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
  * to say "no", and moved the shared RNG stream under every other rule on the
  * board. The x and y multipliers only spread the phase, so a drift narrower
  * than the period does not cool in one burst. Power of two. */
-#define COLD_CARRY_PERIOD 512
+#define COLD_CARRY_PERIOD  512
 
 /* A cell below ambient drifts back one level in this many steps.
  *
@@ -703,10 +700,9 @@ step_one_cold_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
     /* ONE DECISION FOR THE CELL, not one per direction - the question is
      * whether this cell sends cold onward this step, and asking it four times
      * would make the rate four times what it reads as. */
-    const bool carries = (present_pair_bits & PAIR_CONDUCTS) != 0
-        && r->chills != 0
-        && (((unsigned)s->step_phase + (unsigned)x * 5u + (unsigned)y * 33u)
-            & (COLD_CARRY_PERIOD - 1u)) == 0u;
+    const bool carries =
+        (present_pair_bits & PAIR_CONDUCTS) != 0 && r->chills != 0
+        && (((unsigned)s->step_phase + (unsigned)x * 5u + (unsigned)y * 33u) & (COLD_CARRY_PERIOD - 1u)) == 0u;
     bool spent_on_heat = false;
 
     /* THE CARRY RUNS ON ALL EIGHT, unlike the contact loop below it.
@@ -721,7 +717,7 @@ step_one_cold_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
      * one per step instead of up to four. */
     if (carries) {
         for (int d = 0; d < 8; d++) {
-            const int *dir = ring_dir(d);
+            const int* dir = ring_dir(d);
             int cx = x, cy = y;
             for (int depth = 1; depth < COLD_REACH; depth++) {
                 cx += dir[0];
@@ -736,15 +732,14 @@ step_one_cold_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
                 }
                 const reaction_t* cr = reaction_of(cc);
                 if (cr->conducts == 0 || cr->heat_ramp == 0) {
-                    break;   /* the medium ends here */
+                    break; /* the medium ends here */
                 }
                 const uint8_t ct = CELL_VARIANT(cc);
                 if (ct == 0) {
-                    continue;   /* already as cold as the scale goes */
+                    continue; /* already as cold as the scale goes */
                 }
-                if ((depth % COLD_CARRY_RUN) == 0
-                    && (int)(rng_next(&s->rng) & 0xFF) >= cr->conducts) {
-                    break;   /* the cold did not carry this far this step */
+                if ((depth % COLD_CARRY_RUN) == 0 && (int)(rng_next(&s->rng) & 0xFF) >= cr->conducts) {
+                    break; /* the cold did not carry this far this step */
                 }
                 /* Drawn, not woken - see HEAT LEVELS DO NOT WAKE. This walk
                  * is where that rule was first found and paid for. */
@@ -819,7 +814,6 @@ step_one_cold_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
             continue;
         }
 
-
         if (temp == 0) {
             continue; /* the face is as cold as it goes - but the walk above
                        * has already carried cold past it */
@@ -830,7 +824,7 @@ step_one_cold_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
 
         s->cells[nat] = CELL_MAKE(CELL_MATERIAL(n), (uint8_t)(temp - 1));
         s->may_have_temperature = true;
-        mark_rows(s, ny, ny);   /* drawn, not woken - see HEAT LEVELS DO NOT WAKE */
+        mark_rows(s, ny, ny); /* drawn, not woken - see HEAT LEVELS DO NOT WAKE */
 
         /* AND ON THROUGH THE MEDIUM. Cold stopped where it touched: snow on
          * glass chilled three rows and sat there, the same at 250 steps as at
@@ -901,7 +895,7 @@ step_one_tempered_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cons
         }
         s->cells[nat] = CELL_MAKE(CELL_MATERIAL(n), (uint8_t)(gap > 0 ? nt + 1 : nt - 1));
         s->may_have_temperature = true;
-        mark_rows(s, ny, ny);   /* drawn, not woken - see HEAT LEVELS DO NOT WAKE */
+        mark_rows(s, ny, ny); /* drawn, not woken - see HEAT LEVELS DO NOT WAKE */
     }
 
     /* MULTIPLIES DRAIN BY SAND_WET_COOLING_FACTOR (sand.h) */
@@ -912,9 +906,8 @@ step_one_tempered_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cons
      * retains that role. */
     unsigned drain = r->cools;
     if (temp < SAND_AMBIENT_HEAT
-        && (((unsigned)s->step_phase + (unsigned)x * 17u + (unsigned)y * 3u)
-            & (COLD_REWARM_PERIOD - 1u)) != 0u) {
-        drain = 0;   /* not this cell's step to warm back up */
+        && (((unsigned)s->step_phase + (unsigned)x * 17u + (unsigned)y * 3u) & (COLD_REWARM_PERIOD - 1u)) != 0u) {
+        drain = 0; /* not this cell's step to warm back up */
     }
     if (temp > SAND_AMBIENT_HEAT) {
         drain *= (unsigned)(temp - SAND_AMBIENT_HEAT);
@@ -931,7 +924,7 @@ step_one_tempered_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cons
 
     const uint8_t next = (uint8_t)(temp > SAND_AMBIENT_HEAT ? temp - 1 : temp + 1);
     row[x] = CELL_MAKE(CELL_MATERIAL(c), next);
-    mark_rows(s, y, y);   /* drawn, not woken - see HEAT LEVELS DO NOT WAKE */
+    mark_rows(s, y, y); /* drawn, not woken - see HEAT LEVELS DO NOT WAKE */
     return next != SAND_AMBIENT_HEAT;
 }
 
@@ -944,8 +937,8 @@ step_one_tempered_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cons
  *
  * Neither face is interior, and never crusts. AIR IS NOT A FACE: count it and
  * a drift rims its whole outline in ice. Off-grid, likewise. */
-#define FACE_FOREIGN 1u
-#define FACE_CRUST   2u
+#define FACE_FOREIGN        1u
+#define FACE_CRUST          2u
 
 /* How much crust a cell must be backed by before it joins one, over all eight
  * neighbours.
@@ -957,13 +950,12 @@ step_one_tempered_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cons
 #define CRUST_WIDEN_MIN_ICE 3
 
 static inline unsigned
-crust_faces(const sand_t* s, int x, int y, int w, int h, uint8_t mine,
-            uint8_t becomes) {
+crust_faces(const sand_t* s, int x, int y, int w, int h, uint8_t mine, uint8_t becomes) {
     unsigned faces = 0;
     unsigned crust_seen = 0;
     bool open = false;
     for (int d = 0; d < 8; d++) {
-        const int *dir = ring_dir(d);
+        const int* dir = ring_dir(d);
         const int nx = x + dir[0];
         const int ny = y + dir[1];
         if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
@@ -1004,8 +996,8 @@ crust_faces(const sand_t* s, int x, int y, int w, int h, uint8_t mine,
  *
  * The stagger multipliers differ per path so the two do not come due
  * together. */
-#define CRUST_SEED_PERIOD  4
-#define CRUST_WIDEN_PERIOD 8
+#define CRUST_SEED_PERIOD            4
+#define CRUST_WIDEN_PERIOD           8
 
 /* Fixed blast radius. Cascade ignition simulates lid giving way. Tune on
  * device. */
@@ -1115,7 +1107,7 @@ static inline bool
 emit_against_gravity(sand_t* s, int x, int y, int w, int h, uint8_t spec) {
     const int dx = s->last_step_dx, dy = s->last_step_dy;
     if (dx == 0 && dy == 0) {
-        return false;   /* no down yet, so no up to rise into */
+        return false; /* no down yet, so no up to rise into */
     }
     const int up = ring_of(-dx, -dy);
 
@@ -1491,7 +1483,7 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cell_
     const bool lit_state = (plan_flags & BURN_LIT) != 0;
 
     if (lit_state ? !tick_decay_at(s, row, x, y, &grain, rx, plan->tick_rate)
-                 : !tick_decay(s, row, x, y, &grain, mat_id, plan->tick_rate)) {
+                  : !tick_decay(s, row, x, y, &grain, mat_id, plan->tick_rate)) {
         if (rx->explodes != 0) {
             REACTION_DOC(
                 explodes,
@@ -1625,8 +1617,7 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cell_
 
     /* TRIGGER A of cool_off_chain(): 0 short-circuits check before loop
      * starts. */
-    const int lava_cooloff =
-        is_lava ? ((s->lava_cooloff >= 0) ? s->lava_cooloff : SAND_LAVA_COOLOFF_CHANCE) : 0;
+    const int lava_cooloff = is_lava ? ((s->lava_cooloff >= 0) ? s->lava_cooloff : SAND_LAVA_COOLOFF_CHANCE) : 0;
     /* SKIPPED WHOLE when nothing on the board can be paired WITH. On a full
      * screen of fire that is every cell, every step: measured 41216 walks
      * all finding nothing, four bounds-checked probes each.
@@ -1807,8 +1798,7 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
     static void* const stage_labels[RSTAGE_COUNT] = {
         &&stage_burn_any, &&stage_burn_always, &&stage_burn_check, &&stage_dissolve, &&stage_acid_rain,
         &&stage_condense, &&stage_heat_ramp,   &&stage_crust,      &&stage_chill,    &&stage_warm,
-        &&stage_soak_dry,
-        &&stage_fall,     &&stage_drink,       &&stage_root,       &&stage_grow,
+        &&stage_soak_dry, &&stage_fall,        &&stage_drink,      &&stage_root,     &&stage_grow,
         &&stage_sprout,   &&stage_bud,         &&stage_end,
     };
 
@@ -1902,19 +1892,15 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
          * crust would form one cell and stall; and nothing needs waking,
          * because snow becoming ice only makes the board more solid. */
         const unsigned faces = (r->crusts != 0 && cell_settled(s, x, y))
-            ? crust_faces(s, x, y, w, h, CELL_MATERIAL(c),
-                          CELL_MATERIAL((cell_t)r->crusts_to))
-            : 0u;
+                                   ? crust_faces(s, x, y, w, h, CELL_MATERIAL(c), CELL_MATERIAL((cell_t)r->crusts_to))
+                                   : 0u;
         const unsigned phase = (unsigned)s->step_phase;
         const bool seed_due = ((faces & FACE_FOREIGN) != 0)
-            && ((phase + (unsigned)x * 11u + (unsigned)y * 7u)
-                & (CRUST_SEED_PERIOD - 1u)) == 0u;
+                              && ((phase + (unsigned)x * 11u + (unsigned)y * 7u) & (CRUST_SEED_PERIOD - 1u)) == 0u;
         const bool widen_due = ((faces & FACE_CRUST) != 0)
-            && ((phase + (unsigned)x * 5u + (unsigned)y * 33u)
-                & (CRUST_WIDEN_PERIOD - 1u)) == 0u;
+                               && ((phase + (unsigned)x * 5u + (unsigned)y * 33u) & (CRUST_WIDEN_PERIOD - 1u)) == 0u;
         const bool may_crust = seed_due || widen_due;
-        if (may_crust
-            && (int)(rng_next(&s->rng) & (CRUST_ROLL_MAX - 1)) < ((s->crust >= 0) ? s->crust : r->crusts)) {
+        if (may_crust && (int)(rng_next(&s->rng) & (CRUST_ROLL_MAX - 1)) < ((s->crust >= 0) ? s->crust : r->crusts)) {
             REACTION_DOC(crusts_to, "what a settled cell slowly crusts into");
             row[x] = (cell_t)r->crusts_to;
             latch_content_flags(s, row[x]);
@@ -1939,8 +1925,7 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
         }
         /* Cheap tests first: field, may_have_liquid, then neighbour scan. */
     stage_soak_dry:
-        if ((r->soaks != 0 || r->dries != 0)
-            && step_one_soaking_cell(s, row, x, y, w, h, r)) {
+        if ((r->soaks != 0 || r->dries != 0) && step_one_soaking_cell(s, row, x, y, w, h, r)) {
             found |= FOUND_MOISTURE;
             continue;
         }
@@ -2011,8 +1996,8 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
  * scene. */
 static bool reaction_tables_ready;
 
-static void build_reaction_tables(void)
-{
+static void
+build_reaction_tables(void) {
     if (reaction_tables_ready) {
         return;
     }
@@ -2085,8 +2070,7 @@ fill_burn_plan(burn_plan_t* p, const sand_t* s, const reaction_t* r, const mater
     p->tick_rate = (s->decay >= 0) ? (uint8_t)s->decay : own_rate;
     p->flare = r->flare;
     p->flags = (uint8_t)((lit ? BURN_LIT : 0u)
-                         | ((mat->kind != KIND_LIQUID && r->explodes == 0
-                             && mat->density < max_smothering_density)
+                         | ((mat->kind != KIND_LIQUID && r->explodes == 0 && mat->density < max_smothering_density)
                                 ? BURN_SMOTHERS
                                 : 0u)
                          | ((mat->kind == KIND_LIQUID && r->quench_to != 0) ? BURN_LAVA : 0u));
@@ -2128,8 +2112,8 @@ sand_step_reactions(sand_t* s) {
      * cell. */
     present_pair_bits = 0;
     max_smothering_density = 0;
-    acid_rain_possible = (s->may_have_materials & (1u << MAT_STEAM)) != 0
-                      && (s->may_have_materials & (1u << MAT_GAS)) != 0;
+    acid_rain_possible =
+        (s->may_have_materials & (1u << MAT_STEAM)) != 0 && (s->may_have_materials & (1u << MAT_GAS)) != 0;
     for (int m = 0; m < MATERIAL_MAX; m++) {
         if ((s->may_have_materials & (1u << m)) == 0) {
             continue;
@@ -2159,8 +2143,7 @@ sand_step_reactions(sand_t* s) {
         fill_burn_plan(&material_plan[m], s, &reactions[m], material_of(CELL_MAKE((uint8_t)m, 0)));
     }
     for (int k = 0; k < MATERIAL_EXTENDED_CODES; k++) {
-        fill_burn_plan(&extended_plan[k], s, &extended_reactions[k],
-                       material_of(CELL_MAKE(MAT_EXTENDED, (uint8_t)k)));
+        fill_burn_plan(&extended_plan[k], s, &extended_reactions[k], material_of(CELL_MAKE(MAT_EXTENDED, (uint8_t)k)));
     }
 
     /* CLEARED HERE so a bit latch_content_flags() ORs in mid-pass survives the

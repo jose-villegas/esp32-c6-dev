@@ -23,17 +23,13 @@
 typedef uint16_t gfx_color_t;
 
 /* 0xRRGGBB to RGB565. */
-#define GFX_RGB565(rgb)                        \
-    ((((uint32_t)(rgb) >> 8) & 0xF800u) |      \
-     (((uint32_t)(rgb) >> 5) & 0x07E0u) |      \
-     (((uint32_t)(rgb) >> 3) & 0x001Fu))
+#define GFX_RGB565(rgb)                                                                                                \
+    ((((uint32_t)(rgb) >> 8) & 0xF800u) | (((uint32_t)(rgb) >> 5) & 0x07E0u) | (((uint32_t)(rgb) >> 3) & 0x001Fu))
 
 /* 0xRRGGBB to the panel's format: RGB565 with the bytes swapped, which is what
  * this QSPI controller expects - the opposite order to the chip's native
  * layout. Usable in a constant expression. */
-#define GFX_RGB(rgb)                           \
-    ((gfx_color_t)((GFX_RGB565(rgb) >> 8) |    \
-                   (GFX_RGB565(rgb) << 8)))
+#define GFX_RGB(rgb) ((gfx_color_t)((GFX_RGB565(rgb) >> 8) | (GFX_RGB565(rgb) << 8)))
 
 /* Blend `a` toward `b`. t is 0..255, 0 all `a`, 255 all `b`. A gfx_color_t
  * is RGB565 with bytes swapped (see GFX_RGB above), not RGB565 itself, so
@@ -51,8 +47,8 @@ typedef uint16_t gfx_color_t;
  * lives next to its one caller instead of in intmath.h. Worth having: a
  * divide is the slowest integer instruction on this chip, and
  * gfx_color_mix() is hot. */
-static inline uint32_t div255(uint32_t v)
-{
+static inline uint32_t
+div255(uint32_t v) {
     return (v + (v >> 8) + 1) >> 8;
 }
 
@@ -63,15 +59,15 @@ static inline uint32_t div255(uint32_t v)
  * accident, most values landing one bucket short and reading darker each
  * round trip. Replication fills those low bits with the channel's own
  * high bits instead, so GFX_RGB(gfx_color_rgb888(c)) == c for every c. */
-static inline uint32_t gfx_color_rgb888(gfx_color_t c)
-{
+static inline uint32_t
+gfx_color_rgb888(gfx_color_t c) {
     /* Undo the byte swap to get back to native-endian RGB565 - see
      * gfx_color_mix() above for the same first step. */
     const uint16_t native = (uint16_t)((c >> 8) | (c << 8));
 
     const uint8_t r5 = (uint8_t)((native >> 11) & 0x1Fu); /* 5 bits */
-    const uint8_t g6 = (uint8_t)((native >> 5)  & 0x3Fu); /* 6 bits */
-    const uint8_t b5 = (uint8_t)( native        & 0x1Fu); /* 5 bits */
+    const uint8_t g6 = (uint8_t)((native >> 5) & 0x3Fu);  /* 6 bits */
+    const uint8_t b5 = (uint8_t)(native & 0x1Fu);         /* 5 bits */
 
     const uint8_t r8 = (uint8_t)((r5 << 3) | (r5 >> 2));
     const uint8_t g8 = (uint8_t)((g6 << 2) | (g6 >> 4));
@@ -80,19 +76,19 @@ static inline uint32_t gfx_color_rgb888(gfx_color_t c)
     return ((uint32_t)r8 << 16) | ((uint32_t)g8 << 8) | b8;
 }
 
-static inline gfx_color_t gfx_color_mix(gfx_color_t a, gfx_color_t b, uint8_t t)
-{
+static inline gfx_color_t
+gfx_color_mix(gfx_color_t a, gfx_color_t b, uint8_t t) {
     /* Undo the byte swap to get back to native-endian RGB565. */
     const uint16_t na = (uint16_t)((a >> 8) | (a << 8));
     const uint16_t nb = (uint16_t)((b >> 8) | (b << 8));
 
     const uint8_t ar = (uint8_t)((na >> 11) & 0x1Fu); /* 5 bits */
-    const uint8_t ag = (uint8_t)((na >> 5)  & 0x3Fu); /* 6 bits */
-    const uint8_t ab = (uint8_t)( na        & 0x1Fu); /* 5 bits */
+    const uint8_t ag = (uint8_t)((na >> 5) & 0x3Fu);  /* 6 bits */
+    const uint8_t ab = (uint8_t)(na & 0x1Fu);         /* 5 bits */
 
     const uint8_t br = (uint8_t)((nb >> 11) & 0x1Fu);
-    const uint8_t bg = (uint8_t)((nb >> 5)  & 0x3Fu);
-    const uint8_t bb = (uint8_t)( nb        & 0x1Fu);
+    const uint8_t bg = (uint8_t)((nb >> 5) & 0x3Fu);
+    const uint8_t bb = (uint8_t)(nb & 0x1Fu);
 
     /* (channel * (255 - t) + channel * t) / 255, rounded rather than
      * truncated so t=255 lands exactly on `b` and t=0 exactly on `a`.
@@ -121,10 +117,10 @@ static inline gfx_color_t gfx_color_mix(gfx_color_t a, gfx_color_t b, uint8_t t)
  * every shape restart the pattern at its own corner, reading as a seam
  * where two meet. */
 static const uint8_t gfx_dither4x4[4][4] = {
-    {  0,  8,  2, 10 },
-    { 12,  4, 14,  6 },
-    {  3, 11,  1,  9 },
-    { 15,  7, 13,  5 },
+    {0, 8, 2, 10},
+    {12, 4, 14, 6},
+    {3, 11, 1, 9},
+    {15, 7, 13, 5},
 };
 
 /* The alpha -> Bayer-level scaling gfx_dither_covers() compares against
@@ -135,8 +131,8 @@ static const uint8_t gfx_dither4x4[4][4] = {
  * +8 rounds to the nearest of 16 levels instead of flooring. 17, not 16:
  * alpha 255 maps above every table cell (max 15), keeping "fully solid"
  * exactly solid. */
-static inline int gfx_dither_level(uint8_t alpha)
-{
+static inline int
+gfx_dither_level(uint8_t alpha) {
     if (alpha == 0) {
         return 0;
     }
@@ -154,8 +150,8 @@ static inline int gfx_dither_level(uint8_t alpha)
  * copy that could drift out of phase with it. static inline: meant to
  * inline into a hot per-pixel loop the same way gfx_color_mix() above
  * does. */
-static inline bool gfx_dither_covers(int x, int y, uint8_t alpha)
-{
+static inline bool
+gfx_dither_covers(int x, int y, uint8_t alpha) {
     return gfx_dither_level(alpha) > gfx_dither4x4[y & 3][x & 3];
 }
 
@@ -166,18 +162,24 @@ static inline bool gfx_dither_covers(int x, int y, uint8_t alpha)
  * trap as gfx_color_mix() above: channels are NOT the same width.
  * Clamping all three at 31 dims green by half; at 63, red and blue wrap
  * to nearly black at their brightest, looking like holes. */
-static inline gfx_color_t gfx_color_add(gfx_color_t a, gfx_color_t b)
-{
+static inline gfx_color_t
+gfx_color_add(gfx_color_t a, gfx_color_t b) {
     const uint16_t na = (uint16_t)((a >> 8) | (a << 8));
     const uint16_t nb = (uint16_t)((b >> 8) | (b << 8));
 
     uint16_t r = (uint16_t)(((na >> 11) & 0x1Fu) + ((nb >> 11) & 0x1Fu));
-    uint16_t g = (uint16_t)(((na >> 5)  & 0x3Fu) + ((nb >> 5)  & 0x3Fu));
+    uint16_t g = (uint16_t)(((na >> 5) & 0x3Fu) + ((nb >> 5) & 0x3Fu));
     uint16_t bl = (uint16_t)((na & 0x1Fu) + (nb & 0x1Fu));
 
-    if (r  > 0x1Fu) { r  = 0x1Fu; }
-    if (g  > 0x3Fu) { g  = 0x3Fu; }
-    if (bl > 0x1Fu) { bl = 0x1Fu; }
+    if (r > 0x1Fu) {
+        r = 0x1Fu;
+    }
+    if (g > 0x3Fu) {
+        g = 0x3Fu;
+    }
+    if (bl > 0x1Fu) {
+        bl = 0x1Fu;
+    }
 
     const uint16_t nm = (uint16_t)((r << 11) | (g << 5) | bl);
     return (gfx_color_t)((nm >> 8) | (nm << 8));
