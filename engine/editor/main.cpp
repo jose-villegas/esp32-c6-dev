@@ -33,7 +33,9 @@ create_preview(SDL_Renderer* renderer, Preview& preview) {
         preview.height,
         preview.pixels.data(),
     };
-    engine_preview_render_transport_test(&surface);
+    if (!engine_preview_render_launcher(&surface)) {
+        return false;
+    }
 
     preview.texture =
         SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STATIC, preview.width, preview.height);
@@ -158,7 +160,8 @@ draw_editor(Preview& landscape, Preview& portrait) {
     ImGui::Begin("Problems");
     ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.82f, 1.0f),
                        "Firmware runtime ready: gfx.c and Microui initialized in-process.");
-    ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.82f, 1.0f), "Transport ready: both RGB565 surfaces reached SDL.");
+    ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.82f, 1.0f),
+                       "Current firmware launcher rendered at both device orientations.");
     ImGui::TextDisabled("Layout validation is the next engine module.");
     ImGui::End();
 }

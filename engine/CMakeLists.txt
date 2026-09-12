@@ -4,6 +4,8 @@ project(engine LANGUAGES C CXX)
 
 include(CTest)
 
+find_package(Python3 COMPONENTS Interpreter)
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 17)
@@ -60,11 +62,15 @@ target_link_libraries(engine_imgui PUBLIC ${ENGINE_SDL_TARGET})
 add_library(engine_runtime STATIC
     runtime/runtime.c
     ${LAUNCHER_DIR}/main/gfx/gfx.c
+    ${LAUNCHER_DIR}/main/ui/ui.c
+    ${LAUNCHER_DIR}/main/ui/ui_launcher.c
+    ${LAUNCHER_DIR}/main/ui/ui_pointer.c
     ${LAUNCHER_DIR}/components/microui/src/microui.c
 )
 target_include_directories(engine_runtime
     PUBLIC include
     PRIVATE
+        runtime/host
         ${LAUNCHER_DIR}/main
         ${LAUNCHER_DIR}/components/microui/include
 )
@@ -110,4 +116,19 @@ if(BUILD_TESTING)
     add_executable(engine_runtime_smoke tests/runtime_smoke.c)
     target_link_libraries(engine_runtime_smoke PRIVATE engine_runtime)
     add_test(NAME engine_runtime_smoke COMMAND engine_runtime_smoke)
+    if(Python3_Interpreter_FOUND)
+        add_test(
+            NAME launcher_layout_codegen
+            COMMAND ${Python3_EXECUTABLE}
+                ${LAUNCHER_DIR}/tools/gen_launcher_layout.py
+                ${LAUNCHER_DIR}/main/ui/launcher_layout.json
+                ${LAUNCHER_DIR}/main/ui/launcher_layout_generated.h
+                --check
+        )
+        add_test(
+            NAME launcher_layout_generator
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/launcher_layout_generator_test.py
+        )
+    endif()
 endif()

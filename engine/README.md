@@ -14,14 +14,18 @@ The first executable proves the durable boundary:
 
 - Dear ImGui owns editor chrome, docking and host input.
 - SDL2 owns the native window and RGB565 preview textures.
-- `engine_runtime` compiles and initializes the firmware's real `gfx.c` and
-  Microui sources directly; it is a host target, never an ESP-IDF component.
+- `engine_runtime` compiles the firmware's real launcher UI, Microui bridge
+  and `gfx.c` directly; it is a host target, never an ESP-IDF component.
 - A C interface supplies exact 448 x 368 and 368 x 448 framebuffers.
 - The initial workspace docks hierarchy left, preview center, inspector right
   and problems below; later adjustments persist in Dear ImGui's settings.
-- The temporary transport pattern is not a second renderer. Its only purpose
-  is to prove pixels can cross the boundary before the real host `gfx.c` path
-  replaces it.
+- Both preview textures contain the current firmware launcher rendered through
+  Microui, `ui.c` and `gfx.c`, then read back from the real framebuffer.
+
+The launcher's orientation-specific geometry is authored in
+`launcher/main/ui/launcher_layout.json` and deterministically baked into
+`launcher_layout_generated.h`. The checked-in header is the only form used by
+firmware; the device does not parse JSON or run a layout solver.
 
 Dependencies are fetched into the untracked build directory rather than
 vendored into firmware source.
@@ -34,7 +38,5 @@ cmake --build engine/build --config Debug
 ctest --test-dir engine/build --output-on-failure
 ```
 
-The executable is named `engine`. The next slice is to replace
-`engine_preview_render_transport_test()` with pixels read from the initialized
-firmware framebuffer, then load the authored layout data described in
-`docs/plans/UI-Editor-Plan.md`.
+The executable is named `engine`. The next slice is for its hierarchy and
+inspector to load and edit the authored launcher geometry before rebaking it.
