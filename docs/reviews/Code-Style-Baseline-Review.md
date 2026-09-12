@@ -103,20 +103,29 @@ C++, Objective-C and JavaScript constructs this repository does not contain.
 Worth a pass that deletes what does not apply and rewrites the legacy keys
 to their current names.
 
-## 3. The style guide's normative dependency was deleted
+## 3. Two rules are now referred to but not written down anywhere
 
-`docs/C-Style-Guide.md` defers two rules to `AGENTS.md`: the comment policy
-(line 10) and the include/comment layering rule (line 125). `adb2028`
-deleted `AGENTS.md` and `CLAUDE.md` - 716 lines - and `39f7f1f` gitignored
-them. Both rules are now documented nowhere in the repository, while
-`comment-rules.yml` still enforces them in CI and its own header still
-attributes them to `CLAUDE.md`.
+Keeping `AGENTS.md`, `CLAUDE.md`, `.claude/` and `.codex/` out of the
+repository is deliberate: they are personal, and `adb2028` plus `39f7f1f`
+remove and ignore them on purpose. Restoring them is not the fix, and this
+finding is not an argument to.
 
-A fresh clone therefore has a style guide with a dangling pointer, and a CI
-job whose rationale left with the file. Either fold the shared parts into
-`docs/`, or restore a tracked `AGENTS.md` holding only what the guide and
-the workflow refer to. The genuinely local material (session state, personal
-agent definitions) belongs behind the new `.gitignore` rules either way.
+What is left behind is two dangling pointers. `docs/C-Style-Guide.md` defers
+the comment policy (line 10) and the include/comment layering rule (line 125)
+to `AGENTS.md`, and `comment-rules.yml`'s own header attributes its rules to
+`CLAUDE.md`. Both rules are still enforced - `check_comment_length.py`,
+`check_comment_symbols.py` and `check_comment_layers.py` run on every push -
+so a contributor can fail CI on a rule that the repository describes only by
+pointing at a file that is not in it.
+
+The fix is to move just those two rules into `docs/`, where the shared,
+non-personal part of that material belongs: the comment policy as its own
+section of the style guide (it is a style rule, and the guide is the only
+place looking for it), and the layering rule alongside the headers section it
+qualifies. Then drop the `AGENTS.md` references from the guide and reword
+`comment-rules.yml`'s header to cite the scripts and the guide. Nothing
+personal moves into the tree - the policy those checkers already enforce is
+not personal, it is just currently unwritten.
 
 ## 4. The MISRA stubs silence findings in live code, not just in tables
 
