@@ -77,6 +77,9 @@ extern void sand_host_probe_run_snowfall(void);
 extern void sand_host_probe_run_plant_pour(void);
 extern void sand_host_probe_run_plant_idle(void);
 extern void sand_host_probe_run_mature_tree(void);
+extern void sand_host_probe_run_landscape_water(void);
+extern void sand_host_probe_run_landscape_deep_water(void);
+extern void sand_host_probe_run_landscape_sand(void);
 
 typedef struct {
     const char* name;
@@ -109,6 +112,9 @@ static const probe_scene_t SCENES[] = {
     {"plant_pour", sand_host_probe_run_plant_pour},
     {"plant_idle", sand_host_probe_run_plant_idle},
     {"mature_tree", sand_host_probe_run_mature_tree},
+    {"landscape_water", sand_host_probe_run_landscape_water},
+    {"landscape_deep_water", sand_host_probe_run_landscape_deep_water},
+    {"landscape_sand", sand_host_probe_run_landscape_sand},
 };
 #define SCENE_COUNT (int)(sizeof(SCENES) / sizeof(SCENES[0]))
 
