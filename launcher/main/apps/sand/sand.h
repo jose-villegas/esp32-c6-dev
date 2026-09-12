@@ -30,12 +30,15 @@
 #define SAND_FIRST_SHADE  CELL_MAKE(MAT_SAND, 0)
 #define SAND_LAST_SHADE   CELL_MAKE(MAT_SAND, MATERIAL_VARIANTS - 1)
 
-/* Cells per block, on each axis, for the settled-block tracking behind
- * sand_enable_sleeping() - see the comment there. 32x64 is the only shape,
- * of several measured on real hardware, that clears the settled-screen
- * frame budget - see docs/sand/Simulation-Lessons.md for the sweep. */
-#define SAND_BLOCK_W 32
-#define SAND_BLOCK_H 64
+/* Cells per block for the settled-block tracking behind
+ * sand_enable_sleeping() - see the comment there. W is the knob in either
+ * orientation: every block-level rejection spans along X in units of it,
+ * where H only divides rows into block rows. Narrowing W buys 12-54% on
+ * every row where something moves and costs the two settled rows, which is
+ * accepted - a still board has no motion to lag. W must be a power of two,
+ * no narrower than SAND_LIQUID_SIGHT. */
+#define SAND_BLOCK_W 16
+#define SAND_BLOCK_H 32
 
 /* How many persistent emitters sand_t can carry - see sand_add_emitter(). A
  * fixed cap keeps the list a small inline array; 16 is more taps than this

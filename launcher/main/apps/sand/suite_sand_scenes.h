@@ -198,8 +198,9 @@ void build_dry_plant_heap_scene(sand_t *s);
  * stopped growing and drunk the ground dry - the state a garden spends the
  * rest of its life in, and the one every row above stops short of. Measured
  * on this bed and seed: structure stops changing at 759, the last damp cell
- * evaporates at 1,490. */
-#define MATURE_TREE_SETTLE_STEPS 1600
+ * evaporates at 1,644. Block-shape sensitive: re-measure after a
+ * SAND_BLOCK_W/H change. */
+#define MATURE_TREE_SETTLE_STEPS 1800
 
 /* Fresh soil laid over the canopy and rained on - the one thing a finished
  * tree will still answer, and the reason a skip here has to be shown resuming
@@ -267,11 +268,12 @@ void landscape_sand_pour(sand_t *s, int step);
 /* Measured: the bed reaches its share in these many steps at eight stamps
  * apiece, and every block is asleep by the end of the settle. A dragged
  * brush this fast lays the same bed a single-stamp drag does - front column
- * 95 against 96 over five times the steps. */
+ * 95 against 96 over five times the steps. Block-shape sensitive: the
+ * shallow bed's last grain stops at 158, the deep at 151. */
 #define LANDSCAPE_BED_STAMPS       8
 #define LANDSCAPE_BED_STEPS      300
 #define LANDSCAPE_DEEP_BED_STEPS 490
-#define LANDSCAPE_SETTLE_STEPS   150
+#define LANDSCAPE_SETTLE_STEPS   170
 
 /* The window times a pour ALREADY RUNNING, the reason the filling basin
  * primes too: measured from first contact the cost climbs the whole way -
