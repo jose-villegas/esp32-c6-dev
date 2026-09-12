@@ -46,6 +46,7 @@ that won.
 | 17 | Clear three named suspects; ship a sequential memo for the gas sight scan | `e07081f`, `468a53f`, `0cfc087` | shipped |
 | 18 | Counter-driven decomposition of both hot passes; mask the reaction probes' pre-roll rejects; pin `sand_step` to the cache line | `8a20c86`, `66a1e9b` | shipped |
 | 19 | The pair-matrix: a 16×16 classification table gating five probes, plus a one-load-per-neighbour cascade; a stage-list dispatcher tried and retired | `7b3273a`, `58b1f42` (shipped); `fcf329b`, `69e796e` (kept on `sand-pair-matrix`, unmerged) | mixed (stages 1–2 shipped) |
+| 20 | Three landscape frame-budget rows, a block-size search space closed under transpose, and a host pre-screen; two shapes then priced on device | `9cd384b5`, `08ad8a53`, `151d2519` | shipped (scenes + tooling); shape change deferred |
 
 A sha marked "not on main" lives on a feature/exploration branch that was
 never merged; `git show` still works once that branch is fetched, or
@@ -66,6 +67,16 @@ never merged; `git show` still works once that branch is fetched, or
   (12/step), block-based 4/step, block-based 8/step (5) — each won one
   axis and lost another; no variant beat plain no-staggering across the
   board. Kept on the unmerged `sand-block-row-stagger` branch.
+- **Transposing the block to suit landscape** (20) — the obvious answer
+  to "the board is played sideways" and measured backwards. Host-ranked
+  over the three landscape rows, every transpose lost (64×32 −14%,
+  128×32 −11%, 64×16 −12%) and every narrower block won (8×32 +33%,
+  16×32 +23%). The knob is **W, in both orientations**: each block-level
+  rejection in the hot loop spans along X in units of `SAND_BLOCK_W` —
+  the mask in `dest_rows_full()`, the `bx` walk in `equalise_one_row()`,
+  the wake range in `sand_liquid.c` — while H only decides how many grid
+  rows share a block row. Landscape loses more of it because more of the
+  board is moving, not because the block is the wrong way round.
 - **Forcing `try_slide_impl` inline with `always_inline`** (8, exp. 1) —
   a wash overall, and the one benchmark that is 99% pure sweep moved the
   *wrong* way.
@@ -224,6 +235,23 @@ never merged; `git show` still works once that branch is fetched, or
   restoration. It is also worth less than it was: the whole sweep now
   inlines into 3.5 KB of `sand_step`, so where its inner loops sit matters
   more than where the function starts.
+- **The two liquid-free controls are not controls for a block-shape
+  change.** `compare_reports.py` calls them a noise floor because they run
+  no liquid, reaction or gas code — true — but both walk block columns, so
+  `SAND_BLOCK_W` changes what they cost. 32×64 → 16×32 sent them **+10.2%
+  and −10.3%** in one capture, which the tool then reported as a 10.3%
+  floor and used to mark genuine 10% wins `layout?`. For a geometry sweep,
+  read the rows directly and treat the controls as measurements.
+- **A smaller block trades a moving board against a still one, and the
+  still half is invisible on the host.** Device, 32×64 → 16×32: wet earth
+  −34.9%, campfire −35.8%, snowfall −26.7%, landscape sand −53.8%,
+  landscape water −21.3%, deep landscape water −24.6% — against settled
+  screen and settled garden both **60 → 119 us (+98%)**. At 32×32 the
+  same rows give −35.3/−30.2/−26.9/−23.3% and the two settled rows
+  **60 → 76 (+27%)**, while the landscape *water* rows barely move
+  (−1.7%, −4.7%): W is what those two answer to, and 32×32 does not
+  change it. Behaviour: 32×32 is fingerprint-identical on all 17 rows;
+  16×32 moves `snow_crust` alone, by one cell.
 - The diagnostics image no longer runs a task watchdog. It used to charge
   its own periodic console dump to whatever benchmark's timed loop it
   landed inside — deterministically, up to 2.6× inflation, with nothing

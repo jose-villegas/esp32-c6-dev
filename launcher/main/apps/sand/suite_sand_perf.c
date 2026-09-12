@@ -375,6 +375,17 @@ static void test_a_screen_of_settled_sand_costs_almost_nothing(void)
         "rows are being examined that had no reason to be");
 }
 
+#ifdef SAND_HOST_PROBE
+/* Host-only timing probe. This row is the one the block-size sweep has
+ * always been decided on - a smaller block scans more of them on a board
+ * where nothing moves - so a candidate shape that is not ranked here has
+ * not been ranked at all. */
+void sand_host_probe_run_settled_screen(void)
+{
+    test_a_screen_of_settled_sand_costs_almost_nothing();
+}
+#endif
+
 static void test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget(void)
 {
     /* Worst case pouring: all blocks wake at once. */
@@ -2020,6 +2031,179 @@ void sand_host_probe_run_mature_tree(void)
 }
 #endif
 
+/* Every row above holds the board portrait, and the block shape behind the
+ * settled-block skip was swept against exactly those rows. The board is
+ * played LANDSCAPE, down grid +X (bd esp32c6-1z6) - geometry in
+ * suite_sand_scenes.h. Measured 53,513 / 71,905 / 25,546 us, perf-scoped,
+ * pegged at that x 0.9 rounded down like every row above, so all three
+ * ship red as reduction targets. Controls 5,564 and 5,656. */
+#define LANDSCAPE_WATER_BUDGET_US      48100
+#define LANDSCAPE_DEEP_WATER_BUDGET_US 64700
+#define LANDSCAPE_SAND_BUDGET_US       22900
+
+static int64_t landscape_scene_us_per_step(sand_t *real, bool water,
+                                           int64_t *worst_out)
+{
+    for (int i = 0; i < LANDSCAPE_PRIME_STEPS; i++) {
+        if (water) {
+            landscape_water_pour(real, i);
+        } else {
+            landscape_sand_pour(real, i);
+        }
+        sand_step(real, LANDSCAPE_GX, 0, 0);
+    }
+
+    const int steps = LANDSCAPE_MEASURED_STEPS;
+    int64_t worst = 0;
+    const int64_t start = esp_timer_get_time();
+    for (int i = 0; i < steps; i++) {
+        if (water) {
+            landscape_water_pour(real, LANDSCAPE_PRIME_STEPS + i);
+        } else {
+            landscape_sand_pour(real, LANDSCAPE_PRIME_STEPS + i);
+        }
+        const int64_t t0 = esp_timer_get_time();
+        sand_step(real, LANDSCAPE_GX, 0, 0);
+        const int64_t took = esp_timer_get_time() - t0;
+        if (took > worst) {
+            worst = took;
+        }
+    }
+    *worst_out = worst;
+    return (esp_timer_get_time() - start) / steps;
+}
+
+/* Water poured into a settled sand bed, held the way the board is played
+ * (build_landscape_bed_scene(), shared with
+ * test_the_landscape_beds_sleep_against_the_landscape_floor). The dearest
+ * of the three, and the pairing the palette puts first. */
+static void test_pouring_water_into_a_landscape_sand_bed_fits_in_the_frame_budget(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 29u);
+    sand_enable_sleeping(&real, blocks);
+    sand_set_scatter(&real, SAND_SCATTER_PER_MATERIAL);
+    sand_set_decay(&real, SAND_DECAY_PER_MATERIAL);
+    sand_set_mobility(&real, SAND_MOBILITY_PER_MATERIAL);
+    build_landscape_bed_scene(&real);
+
+    int64_t worst = 0;
+    const int64_t per_step = landscape_scene_us_per_step(&real, true, &worst);
+
+    ESP_LOGI("device_tests", "landscape water onto a sand bed, %dx%d: %lld "
+                             "us per step, worst single step %lld us",
+             REAL_W, REAL_H, (long long)per_step, (long long)worst);
+
+    free(big);
+    free(blocks);
+
+    TEST_ASSERT_LESS_THAN_MESSAGE(LANDSCAPE_WATER_BUDGET_US, (int)per_step,
+        "the orientation the board is actually played in must fit in a "
+        "frame or two - the settled-block skip keeps less of the board here "
+        "than in any portrait row, so that is the thing to suspect");
+}
+
+#ifdef SAND_HOST_PROBE
+/* Host-only timing probe - water into a landscape bed (see the full-step
+ * control's own wrapper for the pattern). */
+void sand_host_probe_run_landscape_water(void)
+{
+    test_pouring_water_into_a_landscape_sand_bed_fits_in_the_frame_budget();
+}
+#endif
+
+/* The same pour onto a bed holding 65% of the board rather than 40%: a
+ * shorter drop, far more settled mass for the skip to win or lose, and the
+ * arena's other priced landscape depth. */
+static void test_pouring_water_into_a_deep_landscape_bed_fits_in_the_frame_budget(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 29u);
+    sand_enable_sleeping(&real, blocks);
+    sand_set_scatter(&real, SAND_SCATTER_PER_MATERIAL);
+    sand_set_decay(&real, SAND_DECAY_PER_MATERIAL);
+    sand_set_mobility(&real, SAND_MOBILITY_PER_MATERIAL);
+    build_landscape_deep_bed_scene(&real);
+
+    int64_t worst = 0;
+    const int64_t per_step = landscape_scene_us_per_step(&real, true, &worst);
+
+    ESP_LOGI("device_tests", "landscape water onto a deep sand bed, %dx%d: "
+                             "%lld us per step, worst single step %lld us",
+             REAL_W, REAL_H, (long long)per_step, (long long)worst);
+
+    free(big);
+    free(blocks);
+
+    TEST_ASSERT_LESS_THAN_MESSAGE(LANDSCAPE_DEEP_WATER_BUDGET_US,
+                                  (int)per_step,
+        "a deeper landscape bed leaves less drop and more settled mass - if "
+        "this row and the shallow one ever move in opposite directions, the "
+        "skip's geometry is what changed");
+}
+
+#ifdef SAND_HOST_PROBE
+/* Host-only timing probe - water into a deep landscape bed (see the
+ * full-step control's own wrapper for the pattern). */
+void sand_host_probe_run_landscape_deep_water(void)
+{
+    test_pouring_water_into_a_deep_landscape_bed_fits_in_the_frame_budget();
+}
+#endif
+
+/* The liquid-free landscape row. Without it a geometry change that moved
+ * the two rows above could not be told apart from one that moved the liquid
+ * passes, since every other liquid-free scene in this file is portrait. */
+static void test_pouring_sand_onto_a_landscape_sand_bed_fits_in_the_frame_budget(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 29u);
+    sand_enable_sleeping(&real, blocks);
+    sand_set_scatter(&real, SAND_SCATTER_PER_MATERIAL);
+    sand_set_decay(&real, SAND_DECAY_PER_MATERIAL);
+    sand_set_mobility(&real, SAND_MOBILITY_PER_MATERIAL);
+    build_landscape_bed_scene(&real);
+
+    int64_t worst = 0;
+    const int64_t per_step = landscape_scene_us_per_step(&real, false, &worst);
+
+    ESP_LOGI("device_tests", "landscape sand onto a sand bed, %dx%d: %lld us "
+                             "per step, worst single step %lld us",
+             REAL_W, REAL_H, (long long)per_step, (long long)worst);
+
+    free(big);
+    free(blocks);
+
+    TEST_ASSERT_LESS_THAN_MESSAGE(LANDSCAPE_SAND_BUDGET_US, (int)per_step,
+        "the powder path alone, held landscape - this is the row that says "
+        "whether a change to the block geometry helped the sweep or the "
+        "liquid passes");
+}
+
+#ifdef SAND_HOST_PROBE
+/* Host-only timing probe - sand onto a landscape bed (see the full-step
+ * control's own wrapper for the pattern). */
+void sand_host_probe_run_landscape_sand(void)
+{
+    test_pouring_sand_onto_a_landscape_sand_bed_fits_in_the_frame_budget();
+}
+#endif
+
 /* --- gfx_present() cost against real sand scenes ------------------------
  *
  * Every frame-budget test above times sand_step() alone, with no drawing
@@ -2706,6 +2890,9 @@ void run_sand_perf_suite(void)
     RUN_TEST(test_pouring_the_plant_brush_fits_in_the_frame_budget);
     RUN_TEST(test_a_settled_plant_garden_fits_in_the_frame_budget);
     RUN_TEST(test_a_finished_tree_fits_in_the_frame_budget);
+    RUN_TEST(test_pouring_water_into_a_landscape_sand_bed_fits_in_the_frame_budget);
+    RUN_TEST(test_pouring_water_into_a_deep_landscape_bed_fits_in_the_frame_budget);
+    RUN_TEST(test_pouring_sand_onto_a_landscape_sand_bed_fits_in_the_frame_budget);
 
     RUN_TEST(test_present_cost_against_a_falling_sand_scene);
     RUN_TEST(test_a_real_frame_is_sim_plus_present_on_a_falling_sand_scene);

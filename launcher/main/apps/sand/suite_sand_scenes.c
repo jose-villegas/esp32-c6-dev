@@ -2646,6 +2646,257 @@ static void test_the_settled_plant_heap_is_dry_and_still_full_of_plants(void)
         "runs the whole pass on its own and hides what this row measures");
 }
 
+/* The ceiling is column 0 when down is +X, so the brush drags along Y. */
+static int landscape_sweep_y(int step)
+{
+    const int margin = LANDSCAPE_POUR_RADIUS + 2;
+    const int span   = REAL_H - 2 * margin;
+    const int cycle  = step % (2 * span);
+
+    return margin + ((cycle < span) ? cycle : (2 * span - cycle - 1));
+}
+
+/* Walks inward from the ceiling until something lands, because a player
+ * pours into whatever space there is. Held at a fixed entry column the
+ * stamp places nothing once the bed grows back to it, and the row would
+ * then be timing a pour that had stopped. */
+static int landscape_stamp(sand_t *s, cell_t cell, int step)
+{
+    const int y = landscape_sweep_y(step);
+
+    for (int x = 1; x < REAL_W / 2; x += LANDSCAPE_POUR_RADIUS) {
+        const int placed = sand_spawn_cell(s, x, y, LANDSCAPE_POUR_RADIUS,
+                                           cell);
+        if (placed > 0) {
+            return placed;
+        }
+    }
+    return 0;
+}
+
+static void landscape_pour(sand_t *s, cell_t cell, int step)
+{
+    for (int k = 0; k < LANDSCAPE_POUR_STAMPS; k++) {
+        landscape_stamp(s, cell, step * LANDSCAPE_POUR_STAMPS + k);
+    }
+}
+
+void landscape_water_pour(sand_t *s, int step)
+{
+    landscape_pour(s, CELL_MAKE(MAT_WATER, MASS_MAX), step);
+}
+
+void landscape_sand_pour(sand_t *s, int step)
+{
+    landscape_pour(s, CELL_MAKE(MAT_SAND, 0), step);
+}
+
+/* Clears the grid itself rather than trusting the caller's buffer: the pour
+ * places into empty cells only, so a board handed over dirty is a different
+ * scene, and a malloc here is not zeroed. */
+static void build_landscape_bed(sand_t *s, int steps)
+{
+    memset(s->cells, CELL_EMPTY, (size_t)s->w * (size_t)s->h);
+
+    for (int i = 0; i < steps; i++) {
+        for (int k = 0; k < LANDSCAPE_BED_STAMPS; k++) {
+            landscape_stamp(s, CELL_MAKE(MAT_SAND, 0),
+                            i * LANDSCAPE_BED_STAMPS + k);
+        }
+        sand_step(s, LANDSCAPE_GX, 0, 0);
+    }
+    for (int i = 0; i < LANDSCAPE_SETTLE_STEPS; i++) {
+        sand_step(s, LANDSCAPE_GX, 0, 0);
+    }
+}
+
+void build_landscape_bed_scene(sand_t *s)
+{
+    build_landscape_bed(s, LANDSCAPE_BED_STEPS);
+}
+
+void build_landscape_deep_bed_scene(sand_t *s)
+{
+    build_landscape_bed(s, LANDSCAPE_DEEP_BED_STEPS);
+}
+
+/* The column nearest the ceiling holding anything at all - how far back up
+ * the drop the bed's repose slopes reach, and so how much fall the stream
+ * still has. */
+static int landscape_front_column(const sand_t *s)
+{
+    for (int x = 0; x < REAL_W; x++) {
+        for (int y = 0; y < REAL_H; y++) {
+            if (!CELL_IS_EMPTY(sand_at(s, x, y))) {
+                return x;
+            }
+        }
+    }
+    return REAL_W;
+}
+
+static int landscape_awake_blocks(const sand_t *s)
+{
+    const int cols = (REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W;
+    const int rows = (REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H;
+    int awake = 0;
+
+    for (int by = 0; by < rows; by++) {
+        for (int bx = 0; bx < cols; bx++) {
+            if (!sand_block_settled(s, bx, by)) {
+                awake++;
+            }
+        }
+    }
+    return awake;
+}
+
+static int landscape_material_count(const sand_t *s, material_id_t want)
+{
+    int n = 0;
+
+    for (int y = 0; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            const cell_t c = sand_at(s, x, y);
+            if (!CELL_IS_EMPTY(c) && CELL_MATERIAL(c) == want) {
+                n++;
+            }
+        }
+    }
+    return n;
+}
+
+static void landscape_fixture(sand_t *s, uint8_t *big, uint8_t *blocks,
+                              uint32_t seed)
+{
+    sand_init(s, big, REAL_W, REAL_H, seed);
+    sand_enable_sleeping(s, blocks);
+    sand_set_scatter(s, SAND_SCATTER_PER_MATERIAL);
+    sand_set_decay(s, SAND_DECAY_PER_MATERIAL);
+    sand_set_mobility(s, SAND_MOBILITY_PER_MATERIAL);
+}
+
+/* Everything the two landscape frame-budget rows assume before their window
+ * opens: the bed is against the floor the board is actually held on, it is
+ * asleep, and the deeper bed really is a shorter drop rather than the same
+ * board with more grains in it. */
+static void test_the_landscape_beds_sleep_against_the_landscape_floor(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
+                              ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t s2;
+    landscape_fixture(&s2, big, blocks, 29u);
+    build_landscape_bed_scene(&s2);
+
+    const int shallow = sand_count(&s2);
+    const int shallow_front = landscape_front_column(&s2);
+    const int shallow_awake = landscape_awake_blocks(&s2);
+    int ceiling = 0;
+    for (int y = 0; y < REAL_H; y++) {
+        if (!CELL_IS_EMPTY(sand_at(&s2, 0, y))) {
+            ceiling++;
+        }
+    }
+
+    landscape_fixture(&s2, big, blocks, 29u);
+    build_landscape_deep_bed_scene(&s2);
+
+    const int deep = sand_count(&s2);
+    const int deep_front = landscape_front_column(&s2);
+    const int deep_awake = landscape_awake_blocks(&s2);
+
+    free(big);
+    free(blocks);
+
+    char why[220];
+    snprintf(why, sizeof why,
+             "the shallow bed must hold about %d%% of the board - %d cells "
+             "of %d", LANDSCAPE_BED_PERCENT, shallow, REAL_W * REAL_H);
+    TEST_ASSERT_INT_WITHIN_MESSAGE(REAL_W * REAL_H / 40,
+        REAL_W * REAL_H * LANDSCAPE_BED_PERCENT / 100, shallow, why);
+
+    snprintf(why, sizeof why,
+             "and the deep bed about %d%% - %d cells",
+             LANDSCAPE_DEEP_BED_PERCENT, deep);
+    TEST_ASSERT_INT_WITHIN_MESSAGE(REAL_W * REAL_H / 40,
+        REAL_W * REAL_H * LANDSCAPE_DEEP_BED_PERCENT / 100, deep, why);
+
+    snprintf(why, sizeof why,
+             "both beds must be asleep when the window opens, or the rows "
+             "time a bed still falling - %d and %d blocks awake",
+             shallow_awake, deep_awake);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, shallow_awake + deep_awake, why);
+
+    snprintf(why, sizeof why,
+             "the bed must rest against the landscape floor, leaving the "
+             "ceiling column clear - %d cells in column 0", ceiling);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, ceiling, why);
+
+    snprintf(why, sizeof why,
+             "and the deep bed must be a genuinely shorter drop, not the "
+             "same board - front column %d against %d", deep_front,
+             shallow_front);
+    TEST_ASSERT_LESS_THAN_INT_MESSAGE(shallow_front, deep_front, why);
+}
+
+/* What the landscape rows are actually pricing. The pour has to keep
+ * arriving across the window, and it has to keep COSTING: water reaching
+ * fresh bed is what takes the board away from the settled-block skip, and
+ * a window in which the skip had already won back the board would measure
+ * a sleeping pile instead. */
+static void test_the_landscape_water_pour_keeps_taking_the_board_awake(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
+                              ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t s2;
+    landscape_fixture(&s2, big, blocks, 29u);
+    build_landscape_bed_scene(&s2);
+
+    const int asleep_before = (REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W *
+                              ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H);
+
+    for (int i = 0; i < LANDSCAPE_PRIME_STEPS; i++) {
+        landscape_water_pour(&s2, i);
+        sand_step(&s2, LANDSCAPE_GX, 0, 0);
+    }
+    const int water_before = landscape_material_count(&s2, MAT_WATER);
+    const int awake_at_open = landscape_awake_blocks(&s2);
+
+    for (int i = 0; i < LANDSCAPE_MEASURED_STEPS; i++) {
+        landscape_water_pour(&s2, LANDSCAPE_PRIME_STEPS + i);
+        sand_step(&s2, LANDSCAPE_GX, 0, 0);
+    }
+    const int water_after = landscape_material_count(&s2, MAT_WATER);
+    const int awake_at_close = landscape_awake_blocks(&s2);
+
+    free(big);
+    free(blocks);
+
+    char why[220];
+    snprintf(why, sizeof why,
+             "water must still be arriving across the window - %d cells "
+             "when it opened, %d when it closed", water_before, water_after);
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(water_before, water_after, why);
+
+    snprintf(why, sizeof why,
+             "and most of the board must be awake for it, or the row times "
+             "a pile the skip already owns - %d of %d blocks awake at the "
+             "open, %d at the close", awake_at_open, asleep_before,
+             awake_at_close);
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(asleep_before / 2, awake_at_open,
+                                          why);
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(asleep_before / 2, awake_at_close,
+                                          why);
+}
+
 void run_sand_scenes_suite(void)
 {
     RUN_TEST(test_the_mixed_scene_puts_every_material_pair_in_contact);
@@ -2663,6 +2914,8 @@ void run_sand_scenes_suite(void)
     RUN_TEST(test_the_snowfall_scene_holds_a_crusting_bank_and_a_live_fall);
     RUN_TEST(test_the_plant_pour_scene_keeps_a_loose_heap_in_the_air);
     RUN_TEST(test_the_settled_plant_heap_is_dry_and_still_full_of_plants);
+    RUN_TEST(test_the_landscape_beds_sleep_against_the_landscape_floor);
+    RUN_TEST(test_the_landscape_water_pour_keeps_taking_the_board_awake);
 }
 
 SUITE_REGISTER(run_sand_scenes_suite);
