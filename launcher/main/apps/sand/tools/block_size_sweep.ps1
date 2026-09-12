@@ -9,9 +9,10 @@
     cheap, and catches most breakage before spending device time), builds
     and flashes build.diag, resets the device and captures its self-test
     output, then parses the settled-screen/flip/water frame-budget lines
-    and the three landscape pour rows into a CSV. Restores sand.h and reflashes build.release in a `finally`
-    block regardless of outcome, so a crash mid-sweep still leaves the
-    repo and device in a known-good state.
+    and the three landscape pour rows into a CSV. Restores sand.h and
+    reflashes build.release in a `finally` block regardless of outcome, so
+    a crash mid-sweep still leaves the repo and device in a known-good
+    state.
 
     Background and the bugs this pattern hit before it worked cleanly:
     docs/sand/Simulation-Lessons.md, "The sixth attempt" section.
@@ -19,13 +20,21 @@
     WHY THE CANDIDATE LIST CHANGED (bd esp32c6-1z6). Every shape this script
     used to try was W <= 32 and H >= 32 - six tall blocks, no square, no
     transpose of any of them. 32x64 won that as the best of six, judged on
-    scenes that all pour down grid +Y. The board is played LANDSCAPE, where
-    down is grid +X and the same block presents its 64-cell side to a
-    ten-cell stream instead of its 32-cell one. A search space with no wide
-    block in it could not have found a landscape answer and would have kept
-    reporting the same winner however landscape the scenes became. The list
-    below is now closed under transpose, plus a square, so an orientation
-    bias cannot be baked into the shape of the search itself.
+    scenes that all pour down grid +Y, while the board is played landscape,
+    down grid +X. A search space with no wide block in it could not have
+    found a landscape answer and would have kept naming the same winner
+    however landscape the scenes became. The list below is closed under
+    transpose plus the square, so an orientation bias cannot be baked into
+    the shape of the search itself.
+
+    WHAT THE WIDENED LIST ACTUALLY SAYS, host-ranked over the landscape
+    rows: every transpose is WORSE (64x32 by 14%, 128x32 by 11%) and every
+    narrower block is better (8x32 by 33%, 16x32 by 23%). The knob is W in
+    both orientations - each block-level rejection in the hot loop spans
+    along X in units of SAND_BLOCK_W, while H only decides how many grid
+    rows share a block row. Landscape merely loses more of it, because more
+    of the board is in motion. The list stays closed under transpose anyway:
+    that is how the question got answered, not a prediction of the answer.
 
     WHAT CONSTRAINS A SHAPE: sand.c's _Static_assert covers SAND_BLOCK_W
     only - it must be a power of two, because dest_rows_full() recovers a

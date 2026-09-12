@@ -235,16 +235,14 @@ void build_water_over_lava_scene(sand_t *s);
 void build_gunpowder_basin_scene(sand_t *s);
 
 /* The landscape set. Every other scene here falls down grid +Y; the board
- * is played sideways, down grid +X (bd esp32c6-1z6). Not a relabelling: the
- * grid is 184x224, so a landscape pour drops 184 cells onto a floor 224
- * wide, and a 32x64 block turns its long side to the stream. Built for it,
- * not transposed. */
+ * is played sideways, down grid +X (bd esp32c6-1z6). The grid is 184x224,
+ * so a landscape pour drops 184 cells onto a floor 224 wide and settles
+ * into a different shape - built for that, not transposed. */
 #define LANDSCAPE_GX 1000
 
 /* The app's own brush - POUR_RADIUS_PX 10 at 2 px per cell - dragged along
- * the landscape ceiling, which is column 0. The stream it lays down is
- * about ten cells across, and that width against the block's extent across
- * it is the whole of what these scenes are here to expose. */
+ * the landscape ceiling, column 0. The stream is about ten cells across,
+ * which is what leaves the settled-block skip anything to keep. */
 #define LANDSCAPE_POUR_RADIUS 5
 
 /* How much of the board the bed holds before anything is poured onto it.

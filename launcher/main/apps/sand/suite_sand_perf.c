@@ -2033,12 +2033,13 @@ void sand_host_probe_run_mature_tree(void)
 
 /* Every row above holds the board portrait, and the block shape behind the
  * settled-block skip was swept against exactly those rows. The board is
- * played LANDSCAPE, down grid +X (bd esp32c6-1z6). Three rows close that -
- * sand and water first, the palette's first two brushes. The geometry is
- * in suite_sand_scenes.h, beside the builders. */
-#define LANDSCAPE_WATER_BUDGET_US      1
-#define LANDSCAPE_DEEP_WATER_BUDGET_US 1
-#define LANDSCAPE_SAND_BUDGET_US       1
+ * played LANDSCAPE, down grid +X (bd esp32c6-1z6) - geometry in
+ * suite_sand_scenes.h. Measured 53,513 / 71,905 / 25,546 us, perf-scoped,
+ * pegged at that x 0.9 rounded down like every row above, so all three
+ * ship red as reduction targets. Controls 5,564 and 5,656. */
+#define LANDSCAPE_WATER_BUDGET_US      48100
+#define LANDSCAPE_DEEP_WATER_BUDGET_US 64700
+#define LANDSCAPE_SAND_BUDGET_US       22900
 
 static int64_t landscape_scene_us_per_step(sand_t *real, bool water,
                                            int64_t *worst_out)
@@ -2103,8 +2104,8 @@ static void test_pouring_water_into_a_landscape_sand_bed_fits_in_the_frame_budge
 
     TEST_ASSERT_LESS_THAN_MESSAGE(LANDSCAPE_WATER_BUDGET_US, (int)per_step,
         "the orientation the board is actually played in must fit in a "
-        "frame or two - and the settled-block skip sees a ten-cell stream "
-        "across a block's long side here, so that is the thing to suspect");
+        "frame or two - the settled-block skip keeps less of the board here "
+        "than in any portrait row, so that is the thing to suspect");
 }
 
 #ifdef SAND_HOST_PROBE
