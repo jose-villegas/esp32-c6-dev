@@ -14,95 +14,91 @@
  * these tests exist to prove.
  */
 
-#include "unity.h"
 #include "suites.h"
+#include "unity.h"
 
 #include "gfx/gfx.h"
 #include "ui/ui.h"
 
 /* Two separate canvases, well apart, each inside its own band. */
-#define TOP_Y      0
-#define TOP_H      64
-#define BOTTOM_Y   256
-#define BOTTOM_H   64
+#define TOP_Y    0
+#define TOP_H    64
+#define BOTTOM_Y 256
+#define BOTTOM_H 64
 
 static input_t no_touch;
 
 /* Builds both windows. `bottom_label` is what varies between frames. */
-static void build(const char *bottom_label)
-{
-    mu_Context *ctx = ui_context();
+static void
+build(const char* bottom_label) {
+    mu_Context* ctx = ui_context();
 
     ui_begin(&no_touch);
 
     if (mu_begin_window_ex(ctx, "top", mu_rect(0, TOP_Y, GFX_WIDTH, TOP_H),
-                           MU_OPT_NOTITLE | MU_OPT_NORESIZE |
-                           MU_OPT_NOCLOSE  | MU_OPT_NOFRAME)) {
-        mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
+                           MU_OPT_NOTITLE | MU_OPT_NORESIZE | MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
+        mu_layout_row(ctx, 1, (int[]){-1}, 0);
         mu_text(ctx, "steady");
         mu_end_window(ctx);
     }
 
-    if (mu_begin_window_ex(ctx, "bottom",
-                           mu_rect(0, BOTTOM_Y, GFX_WIDTH, BOTTOM_H),
-                           MU_OPT_NOTITLE | MU_OPT_NORESIZE |
-                           MU_OPT_NOCLOSE  | MU_OPT_NOFRAME)) {
-        mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
+    if (mu_begin_window_ex(ctx, "bottom", mu_rect(0, BOTTOM_Y, GFX_WIDTH, BOTTOM_H),
+                           MU_OPT_NOTITLE | MU_OPT_NORESIZE | MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
+        mu_layout_row(ctx, 1, (int[]){-1}, 0);
         mu_text(ctx, bottom_label);
         mu_end_window(ctx);
     }
 }
 
 /* Paint both windows and get the screen to a known, fully-sent state. */
-static void settle(const char *bottom_label)
-{
+static void
+settle(const char* bottom_label) {
     build(bottom_label);
     ui_end(0x000000);
-    gfx_present();          /* clears every dirty band */
+    gfx_present(); /* clears every dirty band */
 }
 
-static void fixture(void)
-{
-    no_touch = (input_t){ 0 };
+static void
+fixture(void) {
+    no_touch = (input_t){0};
     ui_init();
     gfx_clear_clip();
 }
 
-static void test_an_unchanged_ui_is_not_repainted(void)
-{
+static void
+test_an_unchanged_ui_is_not_repainted(void) {
     fixture();
     settle("one");
 
     build("one");
     const bool drew = ui_end(0x000000);
 
-    TEST_ASSERT_FALSE_MESSAGE(drew,
-        "an immediate-mode UI is REBUILT every frame but not necessarily "
-        "CHANGED - repainting one that looks identical throws away the whole "
-        "point of tracking dirty bands");
+    TEST_ASSERT_FALSE_MESSAGE(drew, "an immediate-mode UI is REBUILT every frame but not necessarily "
+                                    "CHANGED - repainting one that looks identical throws away the whole "
+                                    "point of tracking dirty bands");
     TEST_ASSERT_FALSE_MESSAGE(gfx_region_dirty(0, 0, GFX_WIDTH, GFX_HEIGHT),
-        "and nothing may be queued for the panel either");
+                              "and nothing may be queued for the panel either");
 }
 
-static void test_only_the_canvas_that_changed_repaints(void)
-{
+static void
+test_only_the_canvas_that_changed_repaints(void) {
     fixture();
     settle("one");
 
-    build("two");                    /* only the bottom window differs */
+    build("two"); /* only the bottom window differs */
     const bool drew = ui_end(0x000000);
 
     TEST_ASSERT_TRUE_MESSAGE(drew, "a changed UI must repaint");
     TEST_ASSERT_TRUE_MESSAGE(gfx_region_dirty(0, BOTTOM_Y, GFX_WIDTH, BOTTOM_H),
-        "the window whose contents changed must be repainted");
+                             "the window whose contents changed must be repainted");
     TEST_ASSERT_FALSE_MESSAGE(gfx_region_dirty(0, TOP_Y, GFX_WIDTH, TOP_H),
-        "the window that did not change must be left alone - this is what "
-        "separate canvases buy, and without it a live readout would force a "
-        "static toolbar to repaint with it");
+                              "the window that did not change must be left alone - this is what "
+                              "separate canvases buy, and without it a live readout would force a "
+                              "static toolbar to repaint with it");
 }
 
-static void test_a_canvas_is_repainted_when_something_draws_over_it(void)
-{
+static void
+test_a_canvas_is_repainted_when_something_draws_over_it(void) {
     fixture();
     settle("one");
 
@@ -113,22 +109,20 @@ static void test_a_canvas_is_repainted_when_something_draws_over_it(void)
     build("one");
     const bool drew = ui_end(UI_NO_BACKGROUND);
 
-    TEST_ASSERT_TRUE_MESSAGE(drew,
-        "a UI whose pixels were overwritten must repaint even though its own "
-        "description is unchanged");
+    TEST_ASSERT_TRUE_MESSAGE(drew, "a UI whose pixels were overwritten must repaint even though its own "
+                                   "description is unchanged");
 }
 
-static void test_invalidate_forces_a_repaint(void)
-{
+static void
+test_invalidate_forces_a_repaint(void) {
     fixture();
     settle("one");
 
     ui_invalidate();
 
     build("one");
-    TEST_ASSERT_TRUE_MESSAGE(ui_end(0x000000),
-        "ui_invalidate is how the shell says the framebuffer no longer holds "
-        "this UI - returning to the launcher after an app has been running");
+    TEST_ASSERT_TRUE_MESSAGE(ui_end(0x000000), "ui_invalidate is how the shell says the framebuffer no longer holds "
+                                               "this UI - returning to the launcher after an app has been running");
 }
 
 /*
@@ -139,8 +133,8 @@ static void test_invalidate_forces_a_repaint(void)
  * than hard-coding the generation's starting value.
  */
 
-static void test_layout_generation_unchanged_by_a_repeated_equal_transform(void)
-{
+static void
+test_layout_generation_unchanged_by_a_repeated_equal_transform(void) {
     fixture();
     ui_set_transform(ui_transform_identity());
     const uint32_t gen = ui_layout_generation();
@@ -149,13 +143,13 @@ static void test_layout_generation_unchanged_by_a_repeated_equal_transform(void)
     ui_set_transform(ui_transform_identity());
 
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(gen, ui_layout_generation(),
-        "setting the transform already in force must not bump the generation "
-        "- this is the same transforms_equal() check ui_set_transform() uses "
-        "to decide whether to call ui_invalidate()");
+                                     "setting the transform already in force must not bump the generation "
+                                     "- this is the same transforms_equal() check ui_set_transform() uses "
+                                     "to decide whether to call ui_invalidate()");
 }
 
-static void test_layout_generation_increments_by_one_per_genuine_change(void)
-{
+static void
+test_layout_generation_increments_by_one_per_genuine_change(void) {
     fixture();
     ui_set_transform(ui_transform_identity());
     const uint32_t before = ui_layout_generation();
@@ -163,12 +157,12 @@ static void test_layout_generation_increments_by_one_per_genuine_change(void)
     ui_set_transform(ui_transform_quarter_turn(1, GFX_WIDTH, GFX_HEIGHT));
 
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(before + 1, ui_layout_generation(),
-        "a transform that genuinely differs from the one in force must bump "
-        "the generation by exactly one");
+                                     "a transform that genuinely differs from the one in force must bump "
+                                     "the generation by exactly one");
 }
 
-static void test_layout_generation_counts_a_sequence_of_genuine_changes(void)
-{
+static void
+test_layout_generation_counts_a_sequence_of_genuine_changes(void) {
     fixture();
     ui_set_transform(ui_transform_identity());
     const uint32_t start = ui_layout_generation();
@@ -182,8 +176,8 @@ static void test_layout_generation_counts_a_sequence_of_genuine_changes(void)
     ui_set_transform(ui_transform_quarter_turn(3, GFX_WIDTH, GFX_HEIGHT));
 
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(start + 3, ui_layout_generation(),
-        "three genuine changes among four calls must bump the generation "
-        "exactly three times, not four and not fewer");
+                                     "three genuine changes among four calls must bump the generation "
+                                     "exactly three times, not four and not fewer");
 }
 
 /*
@@ -200,21 +194,20 @@ static void test_layout_generation_counts_a_sequence_of_genuine_changes(void)
  * simulating one visit to it in whatever orientation `quarter` selects
  * (0 = identity/portrait-native, 1 = a quarter turn - see
  * ui_transform_quarter_turn()'s own comment for the domain/viewport split). */
-static void visit_screen(const char *title, int quarter)
-{
-    mu_Context *ctx = ui_context();
+static void
+visit_screen(const char* title, int quarter) {
+    mu_Context* ctx = ui_context();
 
     ui_set_transform(ui_transform_quarter_turn(quarter, GFX_WIDTH, GFX_HEIGHT));
     ui_begin(&no_touch);
-    if (ui_begin_screen(ctx, title, MU_OPT_NOTITLE | MU_OPT_NORESIZE |
-                                    MU_OPT_NOCLOSE  | MU_OPT_NOFRAME)) {
+    if (ui_begin_screen(ctx, title, MU_OPT_NOTITLE | MU_OPT_NORESIZE | MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
         mu_end_window(ctx);
     }
     ui_end(0x000000);
 }
 
-static void test_ui_begin_screen_corrects_a_stale_rect_from_a_prior_orientation(void)
-{
+static void
+test_ui_begin_screen_corrects_a_stale_rect_from_a_prior_orientation(void) {
     fixture();
 
     /* First-ever visit to this title, in one orientation - this is the call
@@ -232,21 +225,20 @@ static void test_ui_begin_screen_corrects_a_stale_rect_from_a_prior_orientation(
     const int landscape_h = ui_height();
 
     TEST_ASSERT_NOT_EQUAL_MESSAGE(portrait_w, landscape_w,
-        "the test needs a real dimension swap between visits, or it proves "
-        "nothing");
-    TEST_ASSERT_NOT_EQUAL_MESSAGE(portrait_h, landscape_h,
-        "same check for height - a quarter turn must swap both");
+                                  "the test needs a real dimension swap between visits, or it proves "
+                                  "nothing");
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(portrait_h, landscape_h, "same check for height - a quarter turn must swap both");
 
-    mu_Context *ctx = ui_context();
-    mu_Container *cnt = mu_get_container(ctx, "Reused Screen");
+    mu_Context* ctx = ui_context();
+    mu_Container* cnt = mu_get_container(ctx, "Reused Screen");
 
     TEST_ASSERT_EQUAL_MESSAGE(landscape_w, cnt->rect.w,
-        "the container's rect must track THIS frame's logical canvas width, "
-        "not whatever width was current the first time this title was ever "
-        "opened");
+                              "the container's rect must track THIS frame's logical canvas width, "
+                              "not whatever width was current the first time this title was ever "
+                              "opened");
     TEST_ASSERT_EQUAL_MESSAGE(landscape_h, cnt->rect.h,
-        "same for height - a stale rect here is precisely what leaves part "
-        "of a rotated screen uncleared");
+                              "same for height - a stale rect here is precisely what leaves part "
+                              "of a rotated screen uncleared");
 }
 
 /*
@@ -257,30 +249,27 @@ static void test_ui_begin_screen_corrects_a_stale_rect_from_a_prior_orientation(
  * untransformed rect covers only 368 of the physical framebuffer's 448
  * rows.
  */
-static void test_repaint_clears_every_physical_row_under_an_odd_quarter(void)
-{
+static void
+test_repaint_clears_every_physical_row_under_an_odd_quarter(void) {
     fixture();
 
     ui_set_transform(ui_transform_quarter_turn(1, GFX_WIDTH, GFX_HEIGHT));
     ui_begin(&no_touch);
-    mu_Context *ctx = ui_context();
-    if (ui_begin_screen(ctx, "Landscape Screen", MU_OPT_NOTITLE |
-                                    MU_OPT_NORESIZE | MU_OPT_NOCLOSE |
-                                    MU_OPT_NOFRAME)) {
+    mu_Context* ctx = ui_context();
+    if (ui_begin_screen(ctx, "Landscape Screen", MU_OPT_NOTITLE | MU_OPT_NORESIZE | MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
         mu_end_window(ctx);
     }
     ui_end(0x000000);
 
-    TEST_ASSERT_TRUE_MESSAGE(
-        gfx_region_dirty(0, GFX_HEIGHT - 1, GFX_WIDTH, 1),
-        "a full-screen window's background clear must reach the physical "
-        "panel's last row too - clearing the untransformed logical rect "
-        "instead silently stops 80 rows short of it under Landscape, "
-        "leaving whatever the previous screen left there on screen");
+    TEST_ASSERT_TRUE_MESSAGE(gfx_region_dirty(0, GFX_HEIGHT - 1, GFX_WIDTH, 1),
+                             "a full-screen window's background clear must reach the physical "
+                             "panel's last row too - clearing the untransformed logical rect "
+                             "instead silently stops 80 rows short of it under Landscape, "
+                             "leaving whatever the previous screen left there on screen");
 }
 
-void run_ui_suite(void)
-{
+void
+run_ui_suite(void) {
     RUN_TEST(test_an_unchanged_ui_is_not_repainted);
     RUN_TEST(test_only_the_canvas_that_changed_repaints);
     RUN_TEST(test_a_canvas_is_repainted_when_something_draws_over_it);

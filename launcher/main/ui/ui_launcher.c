@@ -19,16 +19,16 @@
  * name's width before adding it. */
 #define LAUNCHER_BTN_W 240
 
-void ui_launcher_init(void)
-{
+void
+ui_launcher_init(void) {
     ui_init();
 }
 
-int ui_launcher_frame(const input_t *input)
-{
+int
+ui_launcher_frame(const input_t* input) {
     int chosen = -1;
 
-    mu_Context *ctx = ui_context();
+    mu_Context* ctx = ui_context();
 
     ui_begin(input);
 
@@ -48,16 +48,14 @@ int ui_launcher_frame(const input_t *input)
      * swap under a quarter turn. A window hardcoded to the panel's own
      * dimensions would still claim the un-rotated size after such a
      * turn and overflow the rotated canvas. */
-    if (ui_begin_screen(ctx, "Launcher",
-                        MU_OPT_NOTITLE | MU_OPT_NORESIZE |
-                        MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
+    if (ui_begin_screen(ctx, "Launcher", MU_OPT_NOTITLE | MU_OPT_NORESIZE | MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
 
         /* The banner. Claimed from the layout and left blank: mu_layout_next()
          * hands back the rect and advances past it, which is how an
          * immediate-mode UI reserves space without a widget in it. When there
          * is status to show, it is drawn into that rect and nothing below
          * moves. */
-        mu_layout_row(ctx, 1, (int[]){ -1 }, UI_BANNER_HEIGHT);
+        mu_layout_row(ctx, 1, (int[]){-1}, UI_BANNER_HEIGHT);
         mu_layout_next(ctx);
 
         /* Fixed-width, centred not filled - see ui_centered_rect().
@@ -71,10 +69,7 @@ int ui_launcher_frame(const input_t *input)
          * the top, not a block. */
         int y = UI_BANNER_HEIGHT + UI_ROW_GAP;
         for (int i = 0; i < app_list_count(); i++) {
-            mu_layout_set_next(ctx,
-                               ui_centered_rect(ui_width(), LAUNCHER_BTN_W,
-                                                UI_ROW_HEIGHT, y),
-                               0);
+            mu_layout_set_next(ctx, ui_centered_rect(ui_width(), LAUNCHER_BTN_W, UI_ROW_HEIGHT, y), 0);
             if (mu_button(ctx, app_list()[i]->name)) {
                 chosen = i;
             }

@@ -6,7 +6,7 @@
  * past 32,000 lines across 500+ tests. Shared fixtures and assertion helpers
  * live in suite_sand_common.{c,h} - see that header.
  */
-#include <math.h>   /* not every file in the split still needs atan2()/M_PI,
+#include <math.h> /* not every file in the split still needs atan2()/M_PI,
                      * but every file inherited suite_sand.c's own include
                      * block rather than being pruned by hand, to keep the
                      * split itself mechanical and low-risk */
@@ -22,13 +22,13 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-#include "unity.h"
 #include "suites.h"
+#include "unity.h"
 
 #include "sand.h"
 #include "sand_priv.h"
-#include "util/intmath.h"
 #include "suite_sand_common.h"
+#include "util/intmath.h"
 
 /* BLAST SCENES - a settled dune and a detonation at its centre.
  *
@@ -55,12 +55,12 @@
  * `big`'s own, against the roughly 66,632 this device has free once the
  * display framebuffer is carved out of the heap. A collision is possible
  * in principle, and accepted. */
-static uint64_t grid_checksum(const uint8_t *cells, size_t len)
-{
-    uint64_t h = 0xcbf29ce484222325ULL;    /* FNV-1a 64-bit offset basis */
+static uint64_t
+grid_checksum(const uint8_t* cells, size_t len) {
+    uint64_t h = 0xcbf29ce484222325ULL; /* FNV-1a 64-bit offset basis */
     for (size_t i = 0; i < len; i++) {
         h ^= cells[i];
-        h *= 0x100000001b3ULL;             /* FNV-1a 64-bit prime */
+        h *= 0x100000001b3ULL; /* FNV-1a 64-bit prime */
     }
     return h;
 }
@@ -70,8 +70,8 @@ static uint64_t grid_checksum(const uint8_t *cells, size_t len)
  * throw with gravity still finishing its job. The caller must assert on
  * the returned convergence: a dune still settling is not the scene the
  * rest of the test thinks it is. */
-static bool settle_fully(sand_t *s, size_t cells_len)
-{
+static bool
+settle_fully(sand_t* s, size_t cells_len) {
     for (int batch = 0; batch < DUNE_SETTLE_MAX_BATCHES; batch++) {
         const uint64_t before = grid_checksum(s->cells, cells_len);
         for (int i = 0; i < DUNE_SETTLE_BATCH_STEPS; i++) {
@@ -88,16 +88,15 @@ static bool settle_fully(sand_t *s, size_t cells_len)
  * would cost 41,216 bytes, the bitset 5,152. It stays separate from the
  * thermal shock scene's own mask, which answers an unrelated question and
  * has no reason to share storage or a lifetime with it. */
-#define DUNE_FOOTPRINT_BYTES \
-    (((size_t)REAL_W * (size_t)REAL_H + 7) / 8)
+#define DUNE_FOOTPRINT_BYTES (((size_t)REAL_W * (size_t)REAL_H + 7) / 8)
 
-static inline bool footprint_get(const uint8_t *mask, size_t idx)
-{
+static inline bool
+footprint_get(const uint8_t* mask, size_t idx) {
     return (mask[idx >> 3] >> (idx & 7)) & 1u;
 }
 
-static inline void footprint_set(uint8_t *mask, size_t idx)
-{
+static inline void
+footprint_set(uint8_t* mask, size_t idx) {
     mask[idx >> 3] |= (uint8_t)(1u << (idx & 7));
 }
 
@@ -108,9 +107,8 @@ static inline void footprint_set(uint8_t *mask, size_t idx)
  * storage beyond locals). `cap` bounds the search to the largest
  * possible Chebyshev distance on this grid, so it only bounds the
  * search, never affects correctness. */
-static int nearest_footprint_distance(const uint8_t *footprint, int w, int h,
-                                      int x, int y, int cap)
-{
+static int
+nearest_footprint_distance(const uint8_t* footprint, int w, int h, int x, int y, int cap) {
     if (footprint_get(footprint, (size_t)y * (size_t)w + (size_t)x)) {
         return 0;
     }
@@ -123,12 +121,10 @@ static int nearest_footprint_distance(const uint8_t *footprint, int w, int h,
             if (xx < 0 || xx >= w) {
                 continue;
             }
-            if (y0 >= 0 &&
-                footprint_get(footprint, (size_t)y0 * (size_t)w + (size_t)xx)) {
+            if (y0 >= 0 && footprint_get(footprint, (size_t)y0 * (size_t)w + (size_t)xx)) {
                 return r;
             }
-            if (y1 < h &&
-                footprint_get(footprint, (size_t)y1 * (size_t)w + (size_t)xx)) {
+            if (y1 < h && footprint_get(footprint, (size_t)y1 * (size_t)w + (size_t)xx)) {
                 return r;
             }
         }
@@ -136,17 +132,15 @@ static int nearest_footprint_distance(const uint8_t *footprint, int w, int h,
             if (yy < 0 || yy >= h) {
                 continue;
             }
-            if (x0 >= 0 &&
-                footprint_get(footprint, (size_t)yy * (size_t)w + (size_t)x0)) {
+            if (x0 >= 0 && footprint_get(footprint, (size_t)yy * (size_t)w + (size_t)x0)) {
                 return r;
             }
-            if (x1 < w &&
-                footprint_get(footprint, (size_t)yy * (size_t)w + (size_t)x1)) {
+            if (x1 < w && footprint_get(footprint, (size_t)yy * (size_t)w + (size_t)x1)) {
                 return r;
             }
         }
     }
-    return cap + 1;   /* not found within cap - see this function's own comment */
+    return cap + 1; /* not found within cap - see this function's own comment */
 }
 
 /* The largest Chebyshev distance any two cells on this grid could ever
@@ -163,7 +157,7 @@ static int nearest_footprint_distance(const uint8_t *footprint, int w, int h,
  * the disc, whenever it exceeds the buffer given, rather than truncating
  * the shape. See DETONATE_RADIUS_PX's comment in app_sand.c for why 25
  * cells. */
-#define DUNE_BLAST_RADIUS 25
+#define DUNE_BLAST_RADIUS     25
 
 /* A FIXED ENTRY COUNT MIRRORING APP_IMPULSE_MAX, not a formula in
  * DUNE_BLAST_RADIUS - see APP_IMPULSE_MAX's own comment in app_sand.c for
@@ -173,7 +167,7 @@ static int nearest_footprint_distance(const uint8_t *footprint, int w, int h,
  * real device budget, not its radius - a differently-sized buffer would
  * measure a blast against a different memory ceiling than the device
  * actually has. */
-#define DUNE_IMPULSE_MAX  2048
+#define DUNE_IMPULSE_MAX      2048
 
 /* Poured rather than painted: a painted rectangle is not a dune - no
  * slope for a blast to disturb, and square corners that would slide under
@@ -181,8 +175,8 @@ static int nearest_footprint_distance(const uint8_t *footprint, int w, int h,
  * displaced this" with "gravity was already going to". Settling is the
  * caller's job, as with every other builder here, so a caller wanting a
  * MID-fall dune can still use this one. */
-static void build_sand_dune_scene(sand_t *s)
-{
+static void
+build_sand_dune_scene(sand_t* s) {
     sand_spawn(s, REAL_W / 2, REAL_H / 4, REAL_W / 5, MAT_SAND);
 }
 
@@ -194,18 +188,20 @@ static void build_sand_dune_scene(sand_t *s)
  * Checking for MAT_SAND excludes the fire the core itself becomes: fire
  * landing outside the footprint is the fireball's own edge, not a grain
  * flying off. */
-static void test_the_sand_dune_scene_throws_grains_beyond_its_own_footprint(void)
-{
+static void
+test_the_sand_dune_scene_throws_grains_beyond_its_own_footprint(void) {
     const size_t cells_len = (size_t)REAL_W * REAL_H;
-    uint8_t   *big      = malloc(cells_len);
-    uint8_t   *blocks   = malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
-                                 ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
-    uint8_t   *footprint = malloc(DUNE_FOOTPRINT_BYTES);
-    impulse_t *impulses  = malloc((size_t)DUNE_IMPULSE_MAX * sizeof(impulse_t));
-    const bool have_all = (big != NULL && blocks != NULL &&
-                          footprint != NULL && impulses != NULL);
+    uint8_t* big = malloc(cells_len);
+    uint8_t* blocks =
+        malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) * ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
+    uint8_t* footprint = malloc(DUNE_FOOTPRINT_BYTES);
+    impulse_t* impulses = malloc((size_t)DUNE_IMPULSE_MAX * sizeof(impulse_t));
+    const bool have_all = (big != NULL && blocks != NULL && footprint != NULL && impulses != NULL);
     if (!have_all) {
-        free(big); free(blocks); free(footprint); free(impulses);
+        free(big);
+        free(blocks);
+        free(footprint);
+        free(impulses);
         TEST_FAIL_MESSAGE("need a grid, a block map, a one-bit-per-cell "
                           "footprint mask, and an impulse buffer for the "
                           "dune scene, and at least one failed to allocate");
@@ -235,10 +231,18 @@ static void test_the_sand_dune_scene_throws_grains_beyond_its_own_footprint(void
             if (occupied) {
                 footprint_set(footprint, (size_t)y * REAL_W + x);
                 before++;
-                if (x < min_x) min_x = x;
-                if (x > max_x) max_x = x;
-                if (y < min_y) min_y = y;
-                if (y > max_y) max_y = y;
+                if (x < min_x) {
+                    min_x = x;
+                }
+                if (x > max_x) {
+                    max_x = x;
+                }
+                if (y < min_y) {
+                    min_y = y;
+                }
+                if (y > max_y) {
+                    max_y = y;
+                }
             }
         }
     }
@@ -261,9 +265,7 @@ static void test_the_sand_dune_scene_throws_grains_beyond_its_own_footprint(void
      * either one is retuned, plus margin for gravity to bring a landed
      * grain to rest and for a water/collapse scene's own refill to
      * finish. */
-    const int max_lifetime = (SAND_EXPLODE_INITIAL_SPEED +
-                              SAND_IMPULSE_SPEED_RAMP - 1) /
-                             SAND_IMPULSE_SPEED_RAMP;
+    const int max_lifetime = (SAND_EXPLODE_INITIAL_SPEED + SAND_IMPULSE_SPEED_RAMP - 1) / SAND_IMPULSE_SPEED_RAMP;
     for (int i = 0; i < max_lifetime + 20; i++) {
         sand_step(&real, 0, 1000, 0);
     }
@@ -277,14 +279,13 @@ static void test_the_sand_dune_scene_throws_grains_beyond_its_own_footprint(void
     for (int y = 0; y < REAL_H; y++) {
         for (int x = 0; x < REAL_W; x++) {
             if (footprint_get(footprint, (size_t)y * REAL_W + x)) {
-                continue;   /* inside the original dune - not an escape */
+                continue; /* inside the original dune - not an escape */
             }
             if (CELL_MATERIAL(sand_at(&real, x, y)) != MAT_SAND) {
-                continue;   /* fire, not a grain - see this test's own comment */
+                continue; /* fire, not a grain - see this test's own comment */
             }
             outside++;
-            const int d = nearest_footprint_distance(footprint, REAL_W, REAL_H,
-                                                      x, y, NEAREST_FOOTPRINT_CAP);
+            const int d = nearest_footprint_distance(footprint, REAL_W, REAL_H, x, y, NEAREST_FOOTPRINT_CAP);
             if (d > max_throw) {
                 max_throw = d;
             }
@@ -298,33 +299,32 @@ static void test_the_sand_dune_scene_throws_grains_beyond_its_own_footprint(void
     free(footprint);
     free(impulses);
 
-    TEST_ASSERT_TRUE_MESSAGE(settled,
-        "the dune must actually stop moving within the settle budget - a "
-        "pile still falling is not a dune, it is a rectangle in the "
-        "middle of becoming one");
+    TEST_ASSERT_TRUE_MESSAGE(settled, "the dune must actually stop moving within the settle budget - a "
+                                      "pile still falling is not a dune, it is a rectangle in the "
+                                      "middle of becoming one");
     TEST_ASSERT_GREATER_THAN_MESSAGE(0, before,
-        "the dune must have settled into SOMETHING - an empty footprint "
-        "means sand_spawn() itself failed, not that the blast did");
+                                     "the dune must have settled into SOMETHING - an empty footprint "
+                                     "means sand_spawn() itself failed, not that the blast did");
     TEST_ASSERT_GREATER_THAN_MESSAGE(0, outside,
-        "at least one grain must land outside the dune's own settled "
-        "footprint - the user's own criterion, and the one no existing "
-        "test checked: a blast that only ever disturbs its own footprint "
-        "reads as a shuffle, not a throw");
+                                     "at least one grain must land outside the dune's own settled "
+                                     "footprint - the user's own criterion, and the one no existing "
+                                     "test checked: a blast that only ever disturbs its own footprint "
+                                     "reads as a shuffle, not a throw");
     TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(1, max_throw,
-        "the furthest grain must land at least one step past the dune's "
-        "own edge, by the corrected (nearest-footprint-cell) distance - "
-        "this bar is deliberately low for now: measured at exactly 1 "
-        "with today's constants, which is the same finding that motivates "
-        "the retune and the displacement work queued right after this "
-        "commit, and it should rise once either lands");
+                                             "the furthest grain must land at least one step past the dune's "
+                                             "own edge, by the corrected (nearest-footprint-cell) distance - "
+                                             "this bar is deliberately low for now: measured at exactly 1 "
+                                             "with today's constants, which is the same finding that motivates "
+                                             "the retune and the displacement work queued right after this "
+                                             "commit, and it should rise once either lands");
     TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(0, destroyed,
-        "destruction is bounded below by zero - sand_count() must never "
-        "rise from a blast, whatever else changes about it");
+                                             "destruction is bounded below by zero - sand_count() must never "
+                                             "rise from a blast, whatever else changes about it");
     TEST_ASSERT_LESS_THAN_MESSAGE(before / 2, destroyed,
-        "losing more than half the dune to the core's own fire is a sign "
-        "the core divisor has drifted back toward eating the blast "
-        "rather than flashing it - see SAND_EXPLODE_CORE_DIVISOR's own "
-        "comment in sand.h");
+                                  "losing more than half the dune to the core's own fire is a sign "
+                                  "the core divisor has drifted back toward eating the blast "
+                                  "rather than flashing it - see SAND_EXPLODE_CORE_DIVISOR's own "
+                                  "comment in sand.h");
 }
 
 /* =========================================================================
@@ -340,8 +340,8 @@ static void test_the_sand_dune_scene_throws_grains_beyond_its_own_footprint(void
  * what actually exercises "does the cavity collapse and refill", not
  * detonating in the dune and merely having water somewhere on the same
  * screen. */
-static void build_dune_beside_water_scene(sand_t *s)
-{
+static void
+build_dune_beside_water_scene(sand_t* s) {
     sand_spawn(s, REAL_W / 2, REAL_H / 4, REAL_W / 5, MAT_SAND);
 
     /* Laid down at roughly the depth this volume settles to anyway,
@@ -367,8 +367,8 @@ static void build_dune_beside_water_scene(sand_t *s)
  * filled by falling sand or by impulse-thrown debris whether or not the
  * liquid can flow at all, so "something is there now" is not evidence of
  * anything. */
-static int water_within(const sand_t *s, int cx, int cy, int r)
-{
+static int
+water_within(const sand_t* s, int cx, int cy, int r) {
     int n = 0;
     for (int y = cy - r; y <= cy + r; y++) {
         for (int x = cx - r; x <= cx + r; x++) {
@@ -387,8 +387,8 @@ static int water_within(const sand_t *s, int cx, int cy, int r)
     return n;
 }
 
-static int empty_within(const sand_t *s, int cx, int cy, int r)
-{
+static int
+empty_within(const sand_t* s, int cx, int cy, int r) {
     int n = 0;
     for (int y = cy - r; y <= cy + r; y++) {
         for (int x = cx - r; x <= cx + r; x++) {
@@ -407,16 +407,18 @@ static int empty_within(const sand_t *s, int cx, int cy, int r)
     return n;
 }
 
-static void test_the_water_pool_scene_refills_its_own_cavity(void)
-{
+static void
+test_the_water_pool_scene_refills_its_own_cavity(void) {
     const size_t cells_len = (size_t)REAL_W * REAL_H;
-    uint8_t   *big     = malloc(cells_len);
-    uint8_t   *blocks  = malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
-                                ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
-    impulse_t *impulses = malloc((size_t)DUNE_IMPULSE_MAX * sizeof(impulse_t));
+    uint8_t* big = malloc(cells_len);
+    uint8_t* blocks =
+        malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) * ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
+    impulse_t* impulses = malloc((size_t)DUNE_IMPULSE_MAX * sizeof(impulse_t));
     const bool have_all = (big != NULL && blocks != NULL && impulses != NULL);
     if (!have_all) {
-        free(big); free(blocks); free(impulses);
+        free(big);
+        free(blocks);
+        free(impulses);
         TEST_FAIL_MESSAGE("need a grid, a block map and an impulse buffer "
                           "for the water pool scene, and at least one "
                           "failed to allocate");
@@ -455,16 +457,14 @@ static void test_the_water_pool_scene_refills_its_own_cavity(void)
         }
     }
     TEST_ASSERT_GREATER_THAN_MESSAGE(-1, surface_y,
-        "the pool must have a water surface in the column this test "
-        "detonates in, or there is no pool to test");
+                                     "the pool must have a water surface in the column this test "
+                                     "detonates in, or there is no pool to test");
     const int cy = surface_y + 12 < REAL_H - 2 ? surface_y + 12 : REAL_H - 2;
     const int centre_material_before = CELL_MATERIAL(sand_at(&real, cx, cy));
 
     sand_explode(&real, cx, cy, DUNE_BLAST_RADIUS);
 
-    const int max_lifetime = (SAND_EXPLODE_INITIAL_SPEED +
-                              SAND_IMPULSE_SPEED_RAMP - 1) /
-                             SAND_IMPULSE_SPEED_RAMP;
+    const int max_lifetime = (SAND_EXPLODE_INITIAL_SPEED + SAND_IMPULSE_SPEED_RAMP - 1) / SAND_IMPULSE_SPEED_RAMP;
     for (int i = 0; i < max_lifetime + 40; i++) {
         sand_step(&real, 0, 1000, 0);
     }
@@ -490,8 +490,7 @@ static void test_the_water_pool_scene_refills_its_own_cavity(void)
     const int carve_r = 6;
     for (int y = cy - carve_r; y <= cy + carve_r; y++) {
         for (int x = cx - carve_r; x <= cx + carve_r; x++) {
-            if ((unsigned)x >= (unsigned)REAL_W ||
-                (unsigned)y >= (unsigned)REAL_H) {
+            if ((unsigned)x >= (unsigned)REAL_W || (unsigned)y >= (unsigned)REAL_H) {
                 continue;
             }
             const int ddx = x - cx, ddy = y - cy;
@@ -510,29 +509,27 @@ static void test_the_water_pool_scene_refills_its_own_cavity(void)
     free(blocks);
     free(impulses);
 
-    TEST_ASSERT_TRUE_MESSAGE(settled,
-        "the dune and the pool must both stop moving within the settle "
-        "budget before anything is measured against them");
+    TEST_ASSERT_TRUE_MESSAGE(settled, "the dune and the pool must both stop moving within the settle "
+                                      "budget before anything is measured against them");
     TEST_ASSERT_GREATER_THAN_MESSAGE(1000, water_before,
-        "the pool must actually hold a good depth of water before the "
-        "blast touches it, or 'still has water after' proves nothing");
+                                     "the pool must actually hold a good depth of water before the "
+                                     "blast touches it, or 'still has water after' proves nothing");
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(MAT_WATER, centre_material_before,
-        "the chosen centre must actually be inside the pool, or this "
-        "is not testing what it claims to");
-    TEST_ASSERT_TRUE_MESSAGE(centre_refilled,
-        "the blast's own centre must not be left an empty void once "
-        "everything has settled - a liquid closes over a disturbance, "
-        "it does not leave a permanent hole in itself");
+                                    "the chosen centre must actually be inside the pool, or this "
+                                    "is not testing what it claims to");
+    TEST_ASSERT_TRUE_MESSAGE(centre_refilled, "the blast's own centre must not be left an empty void once "
+                                              "everything has settled - a liquid closes over a disturbance, "
+                                              "it does not leave a permanent hole in itself");
     TEST_ASSERT_GREATER_THAN_MESSAGE(carved_empty / 2, carved_water_after,
-        "a cavity carved into the pool must fill back up with WATER, not "
-        "merely with something - this is the claim this test is named for, "
-        "and for a long time nothing here checked it: the old assertion "
-        "asked only that the blast's centre be non-empty, which held even "
-        "with liquids unable to move at all");
+                                     "a cavity carved into the pool must fill back up with WATER, not "
+                                     "merely with something - this is the claim this test is named for, "
+                                     "and for a long time nothing here checked it: the old assertion "
+                                     "asked only that the blast's centre be non-empty, which held even "
+                                     "with liquids unable to move at all");
     TEST_ASSERT_GREATER_THAN_MESSAGE(water_before / 2, water_after,
-        "the pool must still hold most of its own water after settling - "
-        "a blast in water should slosh and refill, not boil the whole "
-        "pool away");
+                                     "the pool must still hold most of its own water after settling - "
+                                     "a blast in water should slosh and refill, not boil the whole "
+                                     "pool away");
 }
 
 /* Real empty space is left OUTSIDE the vessel: the grid's own boundary is
@@ -546,15 +543,13 @@ static void test_the_water_pool_scene_refills_its_own_cavity(void)
  * breached. */
 #define VESSEL_MARGIN 20
 #define VESSEL_WALL   3
-static void build_dune_in_a_vessel_scene(sand_t *s)
-{
+
+static void
+build_dune_in_a_vessel_scene(sand_t* s) {
     for (int y = VESSEL_MARGIN; y < REAL_H - VESSEL_MARGIN; y++) {
         for (int x = VESSEL_MARGIN; x < REAL_W - VESSEL_MARGIN; x++) {
-            const bool on_wall =
-                x < VESSEL_MARGIN + VESSEL_WALL ||
-                x >= REAL_W - VESSEL_MARGIN - VESSEL_WALL ||
-                y < VESSEL_MARGIN + VESSEL_WALL ||
-                y >= REAL_H - VESSEL_MARGIN - VESSEL_WALL;
+            const bool on_wall = x < VESSEL_MARGIN + VESSEL_WALL || x >= REAL_W - VESSEL_MARGIN - VESSEL_WALL
+                                 || y < VESSEL_MARGIN + VESSEL_WALL || y >= REAL_H - VESSEL_MARGIN - VESSEL_WALL;
             if (on_wall) {
                 sand_set(s, x, y, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
             }
@@ -564,16 +559,18 @@ static void build_dune_in_a_vessel_scene(sand_t *s)
     sand_spawn(s, REAL_W / 2, REAL_H / 4, REAL_W / 5, MAT_SAND);
 }
 
-static void test_the_vessel_scene_lets_nothing_reach_outside_it(void)
-{
+static void
+test_the_vessel_scene_lets_nothing_reach_outside_it(void) {
     const size_t cells_len = (size_t)REAL_W * REAL_H;
-    uint8_t   *big     = malloc(cells_len);
-    uint8_t   *blocks  = malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
-                                ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
-    impulse_t *impulses = malloc((size_t)DUNE_IMPULSE_MAX * sizeof(impulse_t));
+    uint8_t* big = malloc(cells_len);
+    uint8_t* blocks =
+        malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) * ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
+    impulse_t* impulses = malloc((size_t)DUNE_IMPULSE_MAX * sizeof(impulse_t));
     const bool have_all = (big != NULL && blocks != NULL && impulses != NULL);
     if (!have_all) {
-        free(big); free(blocks); free(impulses);
+        free(big);
+        free(blocks);
+        free(impulses);
         TEST_FAIL_MESSAGE("need a grid, a block map and an impulse buffer "
                           "for the vessel scene, and at least one failed "
                           "to allocate");
@@ -596,10 +593,18 @@ static void test_the_vessel_scene_lets_nothing_reach_outside_it(void)
     for (int y = 0; y < REAL_H; y++) {
         for (int x = 0; x < REAL_W; x++) {
             if (CELL_MATERIAL(sand_at(&real, x, y)) == MAT_SAND) {
-                if (x < min_x) min_x = x;
-                if (x > max_x) max_x = x;
-                if (y < min_y) min_y = y;
-                if (y > max_y) max_y = y;
+                if (x < min_x) {
+                    min_x = x;
+                }
+                if (x > max_x) {
+                    max_x = x;
+                }
+                if (y < min_y) {
+                    min_y = y;
+                }
+                if (y > max_y) {
+                    max_y = y;
+                }
             }
         }
     }
@@ -609,9 +614,7 @@ static void test_the_vessel_scene_lets_nothing_reach_outside_it(void)
 
     sand_explode(&real, cx, cy, DUNE_BLAST_RADIUS);
 
-    const int max_lifetime = (SAND_EXPLODE_INITIAL_SPEED +
-                              SAND_IMPULSE_SPEED_RAMP - 1) /
-                             SAND_IMPULSE_SPEED_RAMP;
+    const int max_lifetime = (SAND_EXPLODE_INITIAL_SPEED + SAND_IMPULSE_SPEED_RAMP - 1) / SAND_IMPULSE_SPEED_RAMP;
     for (int i = 0; i < max_lifetime + 20; i++) {
         sand_step(&real, 0, 1000, 0);
     }
@@ -620,8 +623,7 @@ static void test_the_vessel_scene_lets_nothing_reach_outside_it(void)
     for (int y = 0; y < REAL_H; y++) {
         for (int x = 0; x < REAL_W; x++) {
             const bool outside_vessel =
-                x < VESSEL_MARGIN || x >= REAL_W - VESSEL_MARGIN ||
-                y < VESSEL_MARGIN || y >= REAL_H - VESSEL_MARGIN;
+                x < VESSEL_MARGIN || x >= REAL_W - VESSEL_MARGIN || y < VESSEL_MARGIN || y >= REAL_H - VESSEL_MARGIN;
             if (outside_vessel && sand_at(&real, x, y) != SAND_EMPTY) {
                 outside_occupied++;
             }
@@ -632,19 +634,18 @@ static void test_the_vessel_scene_lets_nothing_reach_outside_it(void)
     free(blocks);
     free(impulses);
 
-    TEST_ASSERT_TRUE_MESSAGE(settled,
-        "the dune inside the vessel must stop moving within the settle "
-        "budget before anything is measured against it");
+    TEST_ASSERT_TRUE_MESSAGE(settled, "the dune inside the vessel must stop moving within the settle "
+                                      "budget before anything is measured against it");
     TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(0, max_x,
-        "the vessel must actually contain a settled dune to detonate, or "
-        "this is not testing containment against anything");
+                                             "the vessel must actually contain a settled dune to detonate, or "
+                                             "this is not testing containment against anything");
     TEST_ASSERT_EQUAL_INT_MESSAGE(0, outside_occupied,
-        "at a blast this weak relative to this vessel's own distance, "
-        "nothing may occupy the margin outside its walls - this is the "
-        "inverse of the base dune scene's own claim, for the common case "
-        "a built container is meant to survive; see test_a_strong_close_"
-        "blast_can_breach_a_wall for why 'never, at any radius' is no "
-        "longer the claim this project makes");
+                                  "at a blast this weak relative to this vessel's own distance, "
+                                  "nothing may occupy the margin outside its walls - this is the "
+                                  "inverse of the base dune scene's own claim, for the common case "
+                                  "a built container is meant to survive; see test_a_strong_close_"
+                                  "blast_can_breach_a_wall for why 'never, at any radius' is no "
+                                  "longer the claim this project makes");
 }
 
 /* The wood is the floor the dune settles onto, which guarantees contact
@@ -652,8 +653,8 @@ static void test_the_vessel_scene_lets_nothing_reach_outside_it(void)
  * falling sand has reached it. What is proved is the direction that works
  * today: a blast's own fire reaching nearby fuel, exactly as painted fire
  * already would. */
-static void build_dune_over_wood_scene(sand_t *s)
-{
+static void
+build_dune_over_wood_scene(sand_t* s) {
     sand_spawn(s, REAL_W / 2, REAL_H / 4, REAL_W / 5, MAT_SAND);
 
     /* CELL_MAKE(MAT_WOOD, 0), not MASS_MAX - wood's own variant is burn
@@ -676,17 +677,18 @@ static void build_dune_over_wood_scene(sand_t *s)
  * can_enter()'s displacement rule), so it rises through the pile rather than
  * sinking to a floor beneath it. A centre at the dune's middle leaves the
  * core entirely inside sand, short of the wood, igniting nothing. */
-static int dune_over_wood_burning(uint32_t seed, bool *settled_out,
-                                  int *wood_before_out)
-{
+static int
+dune_over_wood_burning(uint32_t seed, bool* settled_out, int* wood_before_out) {
     const size_t cells_len = (size_t)REAL_W * REAL_H;
-    uint8_t   *big     = malloc(cells_len);
-    uint8_t   *blocks  = malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
-                                ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
-    impulse_t *impulses = malloc((size_t)DUNE_IMPULSE_MAX * sizeof(impulse_t));
+    uint8_t* big = malloc(cells_len);
+    uint8_t* blocks =
+        malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) * ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
+    impulse_t* impulses = malloc((size_t)DUNE_IMPULSE_MAX * sizeof(impulse_t));
     const bool have_all = (big != NULL && blocks != NULL && impulses != NULL);
     if (!have_all) {
-        free(big); free(blocks); free(impulses);
+        free(big);
+        free(blocks);
+        free(impulses);
         TEST_FAIL_MESSAGE("need a grid, a block map and an impulse buffer "
                           "for the wood floor scene, and at least one "
                           "failed to allocate");
@@ -717,9 +719,7 @@ static int dune_over_wood_burning(uint32_t seed, bool *settled_out,
 
     sand_explode(&real, cx, cy, DUNE_BLAST_RADIUS);
 
-    const int max_lifetime = (SAND_EXPLODE_INITIAL_SPEED +
-                              SAND_IMPULSE_SPEED_RAMP - 1) /
-                             SAND_IMPULSE_SPEED_RAMP;
+    const int max_lifetime = (SAND_EXPLODE_INITIAL_SPEED + SAND_IMPULSE_SPEED_RAMP - 1) / SAND_IMPULSE_SPEED_RAMP;
     for (int i = 0; i < max_lifetime + 20; i++) {
         sand_step(&real, 0, 1000, 0);
     }
@@ -745,10 +745,10 @@ static int dune_over_wood_burning(uint32_t seed, bool *settled_out,
  * decided by sweep order. Over 30 seeds, 24 boards light at block 32x64 and
  * 23 at 16x32, landing opposite ways on seed 83 alone. A broken ignition
  * path takes every board to zero, which this still catches. */
-#define DUNE_WOOD_SEEDS { 83u, 85u, 87u, 89u }
+#define DUNE_WOOD_SEEDS {83u, 85u, 87u, 89u}
 
-static void test_the_wood_floor_scene_catches_fire(void)
-{
+static void
+test_the_wood_floor_scene_catches_fire(void) {
     const uint32_t seeds[] = DUNE_WOOD_SEEDS;
     const int n = (int)(sizeof seeds / sizeof seeds[0]);
     int lit_boards = 0;
@@ -758,20 +758,20 @@ static void test_the_wood_floor_scene_catches_fire(void)
     for (int i = 0; i < n; i++) {
         bool settled = false;
         int wood_before = 0;
-        const int burning = dune_over_wood_burning(seeds[i], &settled,
-                                                   &wood_before);
+        const int burning = dune_over_wood_burning(seeds[i], &settled, &wood_before);
 
         snprintf(why, sizeof why,
                  "the dune over its wood floor must stop moving within the "
                  "settle budget before anything is measured against it - "
-                 "seed %u", (unsigned)seeds[i]);
+                 "seed %u",
+                 (unsigned)seeds[i]);
         TEST_ASSERT_TRUE_MESSAGE(settled, why);
 
         snprintf(why, sizeof why,
                  "the wood floor must have survived settling - if sand "
                  "displaced all of it before the blast even happens, this "
-                 "proves nothing - seed %u, %d wood", (unsigned)seeds[i],
-                 wood_before);
+                 "proves nothing - seed %u, %d wood",
+                 (unsigned)seeds[i], wood_before);
         TEST_ASSERT_GREATER_THAN_MESSAGE(0, wood_before, why);
 
         total_burning += burning;
@@ -785,7 +785,8 @@ static void test_the_wood_floor_scene_catches_fire(void)
              "burning on at least one of %d boards - the core's own fire "
              "reaching nearby fuel exactly as painted fire already would, "
              "not a special case a blast needs of its own - %d lit, %d "
-             "cells", n, lit_boards, total_burning);
+             "cells",
+             n, lit_boards, total_burning);
     TEST_ASSERT_GREATER_THAN_MESSAGE(0, lit_boards, why);
 }
 
@@ -798,8 +799,8 @@ static void test_the_wood_floor_scene_catches_fire(void)
  * the grid's width, and DUNE_BLAST_RADIUS's disc then never reaches empty
  * ground - the guard test below measured zero grains outside it, every
  * time. 40 steps still leaves 5 distinct shades against 150's 7. */
-static void build_layered_dune_scene(sand_t *s)
-{
+static void
+build_layered_dune_scene(sand_t* s) {
     sand_spawn(s, REAL_W / 2, REAL_H / 4, REAL_W / 5, MAT_SAND);
     for (int i = 0; i < 40; i++) {
         sand_step(s, 0, 1000, 0);
@@ -818,18 +819,20 @@ static void build_layered_dune_scene(sand_t *s)
  * range: more than one shade outside the footprint is evidence that more
  * than one band contributed, not just the surface-most pour skimming
  * off. */
-static void test_the_layered_dune_scene_throws_more_than_one_band(void)
-{
+static void
+test_the_layered_dune_scene_throws_more_than_one_band(void) {
     const size_t cells_len = (size_t)REAL_W * REAL_H;
-    uint8_t   *big      = malloc(cells_len);
-    uint8_t   *blocks   = malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
-                                 ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
-    uint8_t   *footprint = malloc(DUNE_FOOTPRINT_BYTES);
-    impulse_t *impulses  = malloc((size_t)DUNE_IMPULSE_MAX * sizeof(impulse_t));
-    const bool have_all = (big != NULL && blocks != NULL &&
-                          footprint != NULL && impulses != NULL);
+    uint8_t* big = malloc(cells_len);
+    uint8_t* blocks =
+        malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) * ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
+    uint8_t* footprint = malloc(DUNE_FOOTPRINT_BYTES);
+    impulse_t* impulses = malloc((size_t)DUNE_IMPULSE_MAX * sizeof(impulse_t));
+    const bool have_all = (big != NULL && blocks != NULL && footprint != NULL && impulses != NULL);
     if (!have_all) {
-        free(big); free(blocks); free(footprint); free(impulses);
+        free(big);
+        free(blocks);
+        free(footprint);
+        free(impulses);
         TEST_FAIL_MESSAGE("need a grid, a block map, a one-bit-per-cell "
                           "footprint mask and an impulse buffer for the "
                           "layered dune scene, and at least one failed "
@@ -849,17 +852,25 @@ static void test_the_layered_dune_scene_throws_more_than_one_band(void)
     const bool settled = settle_fully(&real, cells_len);
 
     int min_x = REAL_W, max_x = -1, min_y = REAL_H, max_y = -1;
-    bool seen_variant_before[SAND_SHADE_COUNT] = { false };
+    bool seen_variant_before[SAND_SHADE_COUNT] = {false};
     for (int y = 0; y < REAL_H; y++) {
         for (int x = 0; x < REAL_W; x++) {
             const cell_t c = sand_at(&real, x, y);
             const bool occupied = c != SAND_EMPTY;
             if (occupied) {
                 footprint_set(footprint, (size_t)y * REAL_W + x);
-                if (x < min_x) min_x = x;
-                if (x > max_x) max_x = x;
-                if (y < min_y) min_y = y;
-                if (y > max_y) max_y = y;
+                if (x < min_x) {
+                    min_x = x;
+                }
+                if (x > max_x) {
+                    max_x = x;
+                }
+                if (y < min_y) {
+                    min_y = y;
+                }
+                if (y > max_y) {
+                    max_y = y;
+                }
                 if (CELL_MATERIAL(c) == MAT_SAND) {
                     seen_variant_before[CELL_VARIANT(c)] = true;
                 }
@@ -868,7 +879,9 @@ static void test_the_layered_dune_scene_throws_more_than_one_band(void)
     }
     int distinct_bands = 0;
     for (int v = 0; v < SAND_SHADE_COUNT; v++) {
-        if (seen_variant_before[v]) distinct_bands++;
+        if (seen_variant_before[v]) {
+            distinct_bands++;
+        }
     }
 
     const int cx = (min_x + max_x) / 2;
@@ -876,14 +889,12 @@ static void test_the_layered_dune_scene_throws_more_than_one_band(void)
 
     sand_explode(&real, cx, cy, DUNE_BLAST_RADIUS);
 
-    const int max_lifetime = (SAND_EXPLODE_INITIAL_SPEED +
-                              SAND_IMPULSE_SPEED_RAMP - 1) /
-                             SAND_IMPULSE_SPEED_RAMP;
+    const int max_lifetime = (SAND_EXPLODE_INITIAL_SPEED + SAND_IMPULSE_SPEED_RAMP - 1) / SAND_IMPULSE_SPEED_RAMP;
     for (int i = 0; i < max_lifetime + 20; i++) {
         sand_step(&real, 0, 1000, 0);
     }
 
-    bool seen_variant_outside[SAND_SHADE_COUNT] = { false };
+    bool seen_variant_outside[SAND_SHADE_COUNT] = {false};
     for (int y = 0; y < REAL_H; y++) {
         for (int x = 0; x < REAL_W; x++) {
             if (footprint_get(footprint, (size_t)y * REAL_W + x)) {
@@ -897,7 +908,9 @@ static void test_the_layered_dune_scene_throws_more_than_one_band(void)
     }
     int distinct_bands_outside = 0;
     for (int v = 0; v < SAND_SHADE_COUNT; v++) {
-        if (seen_variant_outside[v]) distinct_bands_outside++;
+        if (seen_variant_outside[v]) {
+            distinct_bands_outside++;
+        }
     }
 
     free(big);
@@ -905,22 +918,21 @@ static void test_the_layered_dune_scene_throws_more_than_one_band(void)
     free(footprint);
     free(impulses);
 
-    TEST_ASSERT_TRUE_MESSAGE(settled,
-        "the layered dune must stop moving within the settle budget "
-        "before anything is measured against it");
+    TEST_ASSERT_TRUE_MESSAGE(settled, "the layered dune must stop moving within the settle budget "
+                                      "before anything is measured against it");
     TEST_ASSERT_GREATER_THAN_MESSAGE(1, distinct_bands,
-        "three pours spaced by real settling time must have left more "
-        "than one distinct shade in the settled dune - if they did not, "
-        "the bands never separated and this scene is not testing what "
-        "it claims to");
+                                     "three pours spaced by real settling time must have left more "
+                                     "than one distinct shade in the settled dune - if they did not, "
+                                     "the bands never separated and this scene is not testing what "
+                                     "it claims to");
     TEST_ASSERT_GREATER_THAN_MESSAGE(1, distinct_bands_outside,
-        "more than one shade band must appear outside the original "
-        "footprint - a single band escaping would just be the base "
-        "scene's own claim again, not displaced LAYERS specifically");
+                                     "more than one shade band must appear outside the original "
+                                     "footprint - a single band escaping would just be the base "
+                                     "scene's own claim again, not displaced LAYERS specifically");
 }
 
-void run_sand_dune_blast_suite(void)
-{
+void
+run_sand_dune_blast_suite(void) {
     RUN_TEST(test_the_sand_dune_scene_throws_grains_beyond_its_own_footprint);
     RUN_TEST(test_the_water_pool_scene_refills_its_own_cavity);
     RUN_TEST(test_the_vessel_scene_lets_nothing_reach_outside_it);

@@ -62,76 +62,75 @@
 #include "sand_swatch.h"
 #include "sand_ui.h"
 #include "tilt.h"
-#include "util/intmath.h"   /* im_abs(), im_len() - see
+#include "util/intmath.h" /* im_abs(), im_len() - see
                              * update_local_depth_gravity() below, which
                              * projects gravity's own direction into the
                              * vertical/horizontal weights LOCAL DEPTH's own
                              * comment describes */
 
-static const char *TAG = "sand";
+static const char* TAG = "sand";
 
 #define COL_BACKGROUND 0x0A0C14
 
-typedef struct { const char *name; int cell; } quality_t;
+typedef struct {
+    const char* name;
+    int cell;
+} quality_t;
+
 static const quality_t qualities[] = {
-    { "ULTRA",    2 },
-    { "HIGH",     3 },
-    { "NORMAL",   4 },
-    { "LOW",      6 },
-    { "VERY LOW", 8 },
+    {"ULTRA", 2}, {"HIGH", 3}, {"NORMAL", 4}, {"LOW", 6}, {"VERY LOW", 8},
 };
-#define QUALITY_COUNT ((int)(sizeof(qualities) / sizeof(qualities[0])))
-#define QUALITY_DEFAULT 2        /* NORMAL */
+#define QUALITY_COUNT   ((int)(sizeof(qualities) / sizeof(qualities[0])))
+#define QUALITY_DEFAULT 2 /* NORMAL */
 
 static int quality = QUALITY_DEFAULT;
 
 static int cell, grid_w, grid_h, block_cols, block_rows;
 
-#define CELL_MIN    2                          /* finest quality; sets every allocation size */
-#define GRID_W_MAX  (GFX_WIDTH  / CELL_MIN)
-#define GRID_H_MAX  (GFX_HEIGHT / CELL_MIN)
+#define CELL_MIN                  2 /* finest quality; sets every allocation size */
+#define GRID_W_MAX                (GFX_WIDTH / CELL_MIN)
+#define GRID_H_MAX                (GFX_HEIGHT / CELL_MIN)
 
-#define BLOCK_COLS_MAX ((GRID_W_MAX + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
-#define BLOCK_ROWS_MAX ((GRID_H_MAX + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
+#define BLOCK_COLS_MAX            ((GRID_W_MAX + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
+#define BLOCK_ROWS_MAX            ((GRID_H_MAX + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
 
-#define MENU_BTN_W    300
-#define MENU_BTN_H    UI_ROW_HEIGHT
-#define MENU_BTN_GAP  20
+#define MENU_BTN_W                300
+#define MENU_BTN_H                UI_ROW_HEIGHT
+#define MENU_BTN_GAP              20
 
 /* Default pour brush radius, in px - seeds sand_ui_t.radius_px; the value
  * actually in force is whatever the brush screen's slider last set (see
  * sand_ui_radius()). */
-#define POUR_RADIUS_PX   10
+#define POUR_RADIUS_PX            10
 
-#define POUR_HZ       60
-#define POUR_STEP_MS  (1000 / POUR_HZ)
+#define POUR_HZ                   60
+#define POUR_STEP_MS              (1000 / POUR_HZ)
 
 /* Default erase brush radius, in px - see POUR_RADIUS_PX's own comment. */
-#define ERASE_RADIUS_PX  16
+#define ERASE_RADIUS_PX           16
 
-#define ERASE_EMITTER_RADIUS_PX  32
+#define ERASE_EMITTER_RADIUS_PX   32
 
 /* Default BOOM brush radius, in px - see POUR_RADIUS_PX's own comment. */
-#define DETONATE_RADIUS_PX  50
+#define DETONATE_RADIUS_PX        50
 
-#define APP_IMPULSE_MAX  2048
+#define APP_IMPULSE_MAX           2048
 
-#define SAND_IMPULSE_BUDGET_BYTES  12288
+#define SAND_IMPULSE_BUDGET_BYTES 12288
 
-_Static_assert(
-    (unsigned long)APP_IMPULSE_MAX * sizeof(impulse_t) <= SAND_IMPULSE_BUDGET_BYTES,
-    "APP_IMPULSE_MAX * sizeof(impulse_t) exceeds SAND_IMPULSE_BUDGET_BYTES - "
-    "these are two independently-chosen constants that must agree. This "
-    "assert passing is NOT proof detonate works on real hardware - this "
-    "exact budget already failed a live device flash once at a larger "
-    "value (24,576 bytes) that this same assert also happily passed, "
-    "because the real failure was the budget being sized against total "
-    "free heap instead of the largest contiguous block a single malloc() "
-    "call actually needs - see SAND_IMPULSE_BUDGET_BYTES's own comment "
-    "for that incident. Shrink APP_IMPULSE_MAX, or raise "
-    "SAND_IMPULSE_BUDGET_BYTES only after a fresh device capture of "
-    "heap_caps_get_largest_free_block() at the point impulse_buf is "
-    "allocated - never from arithmetic alone.");
+_Static_assert((unsigned long)APP_IMPULSE_MAX * sizeof(impulse_t) <= SAND_IMPULSE_BUDGET_BYTES,
+               "APP_IMPULSE_MAX * sizeof(impulse_t) exceeds SAND_IMPULSE_BUDGET_BYTES - "
+               "these are two independently-chosen constants that must agree. This "
+               "assert passing is NOT proof detonate works on real hardware - this "
+               "exact budget already failed a live device flash once at a larger "
+               "value (24,576 bytes) that this same assert also happily passed, "
+               "because the real failure was the budget being sized against total "
+               "free heap instead of the largest contiguous block a single malloc() "
+               "call actually needs - see SAND_IMPULSE_BUDGET_BYTES's own comment "
+               "for that incident. Shrink APP_IMPULSE_MAX, or raise "
+               "SAND_IMPULSE_BUDGET_BYTES only after a fresh device capture of "
+               "heap_caps_get_largest_free_block() at the point impulse_buf is "
+               "allocated - never from arithmetic alone.");
 
 /* Selected from the palette panel, not cycled - a cycle's cost grows with
  * material count, a panel's doesn't. PAINT/ERASE/DETONATE now comes from
@@ -141,99 +140,94 @@ _Static_assert(
  * material (reaction_t.burn_decay). Whole CELLS, not ids: an extended
  * material isn't nameable by id alone (MATX() in material.h). */
 static const cell_t brushes[] = {
-    CELL_MAKE(MAT_SAND, 0),  CELL_MAKE(MAT_WATER, 0),
-    CELL_MAKE(MAT_STONE, 0), CELL_MAKE(MAT_GAS, 0),
-    CELL_MAKE(MAT_FIRE, 0),  CELL_MAKE(MAT_WOOD, 0),
-    CELL_MAKE(MAT_OIL, 0),   CELL_MAKE(MAT_LAVA, 0),
-    CELL_MAKE(MAT_ACID, 0),  CELL_MAKE(MAT_GLASS, 0),
-    CELL_MAKE(MAT_SNOW, 0),  CELL_MAKE(MAT_DIRT, 0),
-    MATX(MATX_ICE),      MATX(MATX_PLANT),
-    GUNPOWDER_CELL(0), /* dry, tone 0 - see brush_color()'s own comment for
+    CELL_MAKE(MAT_SAND, 0), CELL_MAKE(MAT_WATER, 0), CELL_MAKE(MAT_STONE, 0), CELL_MAKE(MAT_GAS, 0),
+    CELL_MAKE(MAT_FIRE, 0), CELL_MAKE(MAT_WOOD, 0),  CELL_MAKE(MAT_OIL, 0),   CELL_MAKE(MAT_LAVA, 0),
+    CELL_MAKE(MAT_ACID, 0), CELL_MAKE(MAT_GLASS, 0), CELL_MAKE(MAT_SNOW, 0),  CELL_MAKE(MAT_DIRT, 0),
+    MATX(MATX_ICE),         MATX(MATX_PLANT),        GUNPOWDER_CELL(0), /* dry, tone 0 - see brush_color()'s own comment for
                          * why the panel tile itself paints a different code */
 };
 #define BRUSH_COUNT ((int)(sizeof(brushes) / sizeof(brushes[0])))
 
-_Static_assert(PALETTE_FITS(BRUSH_COUNT),
-               "the palette panel for BRUSH_COUNT brushes is taller than the "
-               "screen at some orientation - see palette_cols()/PALETTE_TILE "
-               "in palette.h");
+_Static_assert(PALETTE_FITS(BRUSH_COUNT), "the palette panel for BRUSH_COUNT brushes is taller than the "
+                                          "screen at some orientation - see palette_cols()/PALETTE_TILE "
+                                          "in palette.h");
 
 /* brush_mode_t per brush - sand_init() does not reset this, so a brush can
  * still show Water as its source with no tap present. */
 static uint8_t brush_mode[BRUSH_COUNT];
 
 static sand_ui_t ui = {
-    .brushes     = brushes,
-    .modes       = brush_mode,
+    .brushes = brushes,
+    .modes = brush_mode,
     .brush_count = BRUSH_COUNT,
     /* The three values PAINT/ERASE/DETONATE already used before each mode
      * had a slider of its own, so the brush screen opens on what the app
      * has always done rather than on a fresh set of numbers. */
-    .radius_px   = { [SAND_MODE_PAINT]    = POUR_RADIUS_PX,
-                     [SAND_MODE_ERASE]    = ERASE_RADIUS_PX,
-                     [SAND_MODE_DETONATE] = DETONATE_RADIUS_PX },
+    .radius_px = {[SAND_MODE_PAINT] = POUR_RADIUS_PX,
+                  [SAND_MODE_ERASE] = ERASE_RADIUS_PX,
+                  [SAND_MODE_DETONATE] = DETONATE_RADIUS_PX},
 };
 
 /* Duration mode label stays after significant change, balancing readability
  * and non-obtrusiveness. */
-#define LABEL_MS 1800
+#define LABEL_MS        1800
 
-#define LABEL_MARGIN 18
-#define LABEL_SCALE   2
+#define LABEL_MARGIN    18
+#define LABEL_SCALE     2
 
-#define SHAKE_DEADZONE 40
+#define SHAKE_DEADZONE  40
 
-#define SIM_HZ            60
-#define SIM_STEP_MS       (1000 / SIM_HZ)
+#define SIM_HZ          60
+#define SIM_STEP_MS     (1000 / SIM_HZ)
 
-#define SIM_MAX_CATCHUP   2
+#define SIM_MAX_CATCHUP 2
 
-static uint8_t    *grid;
-static uint8_t    *dirty_rows;   /* GRID_H_MAX bytes: which rows changed -
+static uint8_t* grid;
+static uint8_t* dirty_rows;    /* GRID_H_MAX bytes: which rows changed -
                                    * only the first grid_h are in use at any
                                    * quality below ULTRA */
-static uint8_t    *sleep_blocks; /* BLOCK_COLS_MAX*BLOCK_ROWS_MAX bytes:
+static uint8_t* sleep_blocks;  /* BLOCK_COLS_MAX*BLOCK_ROWS_MAX bytes:
                                    * settled blocks to skip - see
                                    * sand_enable_sleeping() */
-static impulse_t  *impulse_buf;  /* APP_IMPULSE_MAX entries: grains in
+static impulse_t* impulse_buf; /* APP_IMPULSE_MAX entries: grains in
                                    * flight from DETONATE - see
                                    * sand_enable_impulses(). */
 
-static uint16_t   *row_run_x0;
-static uint16_t   *row_run_x1;
-static uint8_t    *row_run_n;
-static sand_t      sim;
-static tilt_t      tilt;
-static bool        failed;
-static uint32_t    label_left_ms;    /* countdown for the mode label */
+static uint16_t* row_run_x0;
+static uint16_t* row_run_x1;
+static uint8_t* row_run_n;
+static sand_t sim;
+static tilt_t tilt;
+static bool failed;
+static uint32_t label_left_ms; /* countdown for the mode label */
 
-static bool        input_ready;
+static bool input_ready;
 
 /* The shell's quarter turn as of the last frame either overlay panel
  * (palette or brush) was drawn - both can be left open while the board
  * rotates, and each detects the change against this the same way. */
-static int         panel_drawn_quarter;
+static int panel_drawn_quarter;
 
 #if CONFIG_LAUNCHER_DEVELOPMENT
 /* Rolling averages, purely for the log line - a release build has nobody
  * watching the serial console to read them, so it carries none of this. */
 static uint32_t frames;
-static int64_t  step_us_total;
-static int64_t  draw_us_total;
-static int64_t  rows_redrawn_total;
-static int64_t  steps_total;
+static int64_t step_us_total;
+static int64_t draw_us_total;
+static int64_t rows_redrawn_total;
+static int64_t steps_total;
 
-static int64_t  pour_step_us_total, pour_draw_us_total;
+static int64_t pour_step_us_total, pour_draw_us_total;
 static uint32_t pour_frames;
-static int64_t  idle_step_us_total, idle_draw_us_total;
+static int64_t idle_step_us_total, idle_draw_us_total;
 static uint32_t idle_frames;
-static int64_t  split_log_at_us;
+static int64_t split_log_at_us;
 
-static int64_t  pour_awake_total, idle_awake_total;
+static int64_t pour_awake_total, idle_awake_total;
 
 /* Measure occupied cells in blocks; confirms step_one_row() cost per row, not
  * unit. */
-static int64_t  pour_awake_cells_total, idle_awake_cells_total;
+static int64_t pour_awake_cells_total, idle_awake_cells_total;
 #endif
 static uint32_t sim_accumulator_q8;
 static uint32_t pour_accumulator_ms;
@@ -245,13 +239,13 @@ static uint32_t pour_accumulator_ms;
  * its X axis and roughly zero on Y, so the chip's X runs down the screen and
  * its Y runs across it pointing left, hence the negation.
  */
-#define GRAVITY_SCREEN_X(s)  (-(s)->ay)
-#define GRAVITY_SCREEN_Y(s)  ( (s)->ax)
+#define GRAVITY_SCREEN_X(s) (-(s)->ay)
+#define GRAVITY_SCREEN_Y(s) ((s)->ax)
 
 /* Setup */
 
-static void sand_enter(void)
-{
+static void
+sand_enter(void) {
 #if CONFIG_LAUNCHER_DEVELOPMENT
     frames = 0;
     step_us_total = 0;
@@ -279,8 +273,8 @@ static void sand_enter(void)
  * were occupied. Shared with sand_frame()'s SAND_UI_CLOSE_PALETTE handling,
  * which forces the panel to clear the framebuffer fully on the first frame
  * after closing, not trusting the sand's narrower real extent. */
-static void seed_row_runs_full_width(void)
-{
+static void
+seed_row_runs_full_width(void) {
     for (int i = 0; i < grid_h; i++) {
         row_run_x0[i * ROW_MAX_RUNS] = 0;
         row_run_x1[i * ROW_MAX_RUNS] = (uint16_t)grid_w;
@@ -288,26 +282,25 @@ static void seed_row_runs_full_width(void)
     }
 }
 
-static void mark_sand_fully_dirty(void)
-{
+static void
+mark_sand_fully_dirty(void) {
     seed_row_runs_full_width();
     memset(dirty_rows, 1, (size_t)grid_h);
     gfx_mark_all_dirty();
 }
 
 #if CONFIG_LAUNCHER_SELFTEST
-bool sand_app_alloc_selfcheck(size_t *out_largest_free, bool *out_impulses_ok)
-{
-    uint8_t   *t_dirty  = malloc(GRID_H_MAX);
-    uint8_t   *t_blocks = malloc((size_t)BLOCK_COLS_MAX * BLOCK_ROWS_MAX);
-    uint8_t   *t_grid   = malloc((size_t)GRID_W_MAX * GRID_H_MAX);
-    uint16_t  *t_x0     = malloc(GRID_H_MAX * ROW_MAX_RUNS * sizeof(uint16_t));
-    uint16_t  *t_x1     = malloc(GRID_H_MAX * ROW_MAX_RUNS * sizeof(uint16_t));
-    uint8_t   *t_n      = malloc(GRID_H_MAX * sizeof(uint8_t));
-    impulse_t *t_imp    = malloc((size_t)APP_IMPULSE_MAX * sizeof(impulse_t));
+bool
+sand_app_alloc_selfcheck(size_t* out_largest_free, bool* out_impulses_ok) {
+    uint8_t* t_dirty = malloc(GRID_H_MAX);
+    uint8_t* t_blocks = malloc((size_t)BLOCK_COLS_MAX * BLOCK_ROWS_MAX);
+    uint8_t* t_grid = malloc((size_t)GRID_W_MAX * GRID_H_MAX);
+    uint16_t* t_x0 = malloc(GRID_H_MAX * ROW_MAX_RUNS * sizeof(uint16_t));
+    uint16_t* t_x1 = malloc(GRID_H_MAX * ROW_MAX_RUNS * sizeof(uint16_t));
+    uint8_t* t_n = malloc(GRID_H_MAX * sizeof(uint8_t));
+    impulse_t* t_imp = malloc((size_t)APP_IMPULSE_MAX * sizeof(impulse_t));
 
-    const bool essential_ok = (t_dirty && t_blocks && t_grid &&
-                               t_x0 && t_x1 && t_n);
+    const bool essential_ok = (t_dirty && t_blocks && t_grid && t_x0 && t_x1 && t_n);
     if (out_impulses_ok) {
         *out_impulses_ok = (t_imp != NULL);
     }
@@ -326,11 +319,11 @@ bool sand_app_alloc_selfcheck(size_t *out_largest_free, bool *out_impulses_ok)
 }
 #endif /* CONFIG_LAUNCHER_SELFTEST */
 
-static void start_sim(void)
-{
-    cell       = qualities[quality].cell;
-    grid_w     = GFX_WIDTH  / cell;
-    grid_h     = GFX_HEIGHT / cell;
+static void
+start_sim(void) {
+    cell = qualities[quality].cell;
+    grid_w = GFX_WIDTH / cell;
+    grid_h = GFX_HEIGHT / cell;
     block_cols = (grid_w + SAND_BLOCK_W - 1) / SAND_BLOCK_W;
     block_rows = (grid_h + SAND_BLOCK_H - 1) / SAND_BLOCK_H;
 
@@ -367,11 +360,11 @@ static void start_sim(void)
          * SAND_IMPULSE_BUDGET_BYTES); largest block is what actually
          * predicts whether this allocation succeeds. */
         if (impulse_buf == NULL) {
-            ESP_LOGE(TAG, "Could not allocate the %d-entry blast buffer "
-                          "(%u bytes) - detonate will be a no-op this "
-                          "session; largest free block is %u",
-                     APP_IMPULSE_MAX,
-                     (unsigned)((size_t)APP_IMPULSE_MAX * sizeof(*impulse_buf)),
+            ESP_LOGE(TAG,
+                     "Could not allocate the %d-entry blast buffer "
+                     "(%u bytes) - detonate will be a no-op this "
+                     "session; largest free block is %u",
+                     APP_IMPULSE_MAX, (unsigned)((size_t)APP_IMPULSE_MAX * sizeof(*impulse_buf)),
                      (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
         }
     }
@@ -384,10 +377,11 @@ static void start_sim(void)
     if (row_run_n == NULL) {
         row_run_n = malloc(GRID_H_MAX * sizeof(*row_run_n));
     }
-    if (grid == NULL || dirty_rows == NULL || sleep_blocks == NULL ||
-        row_run_x0 == NULL || row_run_x1 == NULL || row_run_n == NULL) {
-        ESP_LOGE(TAG, "Could not allocate a %d x %d grid (%d bytes); "
-                      "largest free block is %u",
+    if (grid == NULL || dirty_rows == NULL || sleep_blocks == NULL || row_run_x0 == NULL || row_run_x1 == NULL
+        || row_run_n == NULL) {
+        ESP_LOGE(TAG,
+                 "Could not allocate a %d x %d grid (%d bytes); "
+                 "largest free block is %u",
                  GRID_W_MAX, GRID_H_MAX, GRID_W_MAX * GRID_H_MAX,
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
         failed = true;
@@ -418,8 +412,7 @@ static void start_sim(void)
         ESP_LOGW(TAG, "No IMU - falling back to fixed downward gravity");
     }
 
-    ESP_LOGI(TAG, "%d x %d grid, %d bytes, %d px cells",
-             grid_w, grid_h, grid_w * grid_h, cell);
+    ESP_LOGI(TAG, "%d x %d grid, %d bytes, %d px cells", grid_w, grid_h, grid_w * grid_h, cell);
 
     gfx_clear(material_palette()[SAND_EMPTY]);
     gfx_mark_all_dirty();
@@ -427,30 +420,29 @@ static void start_sim(void)
     ui.screen = SAND_UI_RUNNING;
 }
 
-static void sand_exit(void)
-{
+static void
+sand_exit(void) {
     /* Grid is kept between visits (the app's largest allocation) so
      * re-entry cannot fail to heap fragmentation from whatever ran while
      * this app was closed. */
 #if CONFIG_LAUNCHER_DEVELOPMENT
     if (frames > 0) {
-        ESP_LOGI(TAG, "%lu frames, %lld sim steps, step %lld us, draw %lld us, "
-                      "%lld of %d rows redrawn per frame",
-                 (unsigned long)frames, (long long)steps_total,
-                 (long long)(step_us_total / frames),
-                 (long long)(draw_us_total / frames),
-                 (long long)(rows_redrawn_total / frames), grid_h);
+        ESP_LOGI(TAG,
+                 "%lu frames, %lld sim steps, step %lld us, draw %lld us, "
+                 "%lld of %d rows redrawn per frame",
+                 (unsigned long)frames, (long long)steps_total, (long long)(step_us_total / frames),
+                 (long long)(draw_us_total / frames), (long long)(rows_redrawn_total / frames), grid_h);
     }
 #endif
 }
 
 /* Drawing */
 
-#define SHINE_PERIOD   64      /* power of two - see the mask below */
-#define SHINE_STEP_MS  40
-#define SHINE_STEP_PX   2
+#define SHINE_PERIOD  64 /* power of two - see the mask below */
+#define SHINE_STEP_MS 40
+#define SHINE_STEP_PX 2
 
-static int      shine_offset;
+static int shine_offset;
 static uint32_t shine_elapsed_ms;
 
 static int shine_ux_q8 = 181;
@@ -468,7 +460,7 @@ static int wood_leaf_top5_down;
 
 /* How many of the 5 are actually checked, out of 5 - higher reads bulkier
  * and greener since more wood cells beside foliage qualify. */
-#define WOOD_LEAF_SLOTS_CHECKED 5u
+#define WOOD_LEAF_SLOTS_CHECKED       5u
 
 /* A sweep that always travels the same way still reads as one shine, even
  * with gusts dropping out - real wind swings direction. Interval jittered
@@ -495,7 +487,7 @@ static uint8_t row_flags[GRID_H_MAX];
 
 #define FOAM_BLOB_SHIFT 3
 
-#define FOAM_PHASE_MS 90
+#define FOAM_PHASE_MS   90
 
 static uint32_t foam_elapsed_ms;
 
@@ -539,8 +531,8 @@ static bool local_depth_h_reverse_prev;
 
 static uint8_t local_depth_row_a[GRID_W_MAX];
 static uint8_t local_depth_row_b[GRID_W_MAX];
-static uint8_t *local_depth_cur_row = local_depth_row_a;
-static uint8_t *local_depth_prev_row = local_depth_row_b;
+static uint8_t* local_depth_cur_row = local_depth_row_a;
+static uint8_t* local_depth_prev_row = local_depth_row_b;
 
 /* THE DEFECT, exactly. Every cross-row read in paint_row_n() below treats
  * local_depth_prev_row[qx] as "the count belonging to the cell one step
@@ -569,15 +561,14 @@ static uint8_t local_depth_top_row[GRID_W_MAX];
  * test_a_saturated_liquid_body_reads_the_same_shade_at_every_tilt_angle. */
 #define LOCAL_DEPTH_COUNT_CEILING MATERIAL_LIQUID_DEPTH_BAND
 
-static void update_local_depth_gravity(int gx, int gy)
-{
+static void
+update_local_depth_gravity(int gx, int gy) {
     const int ax = im_abs(gx), ay = im_abs(gy);
 
     const int len = im_len(gx, gy);
     const bool new_vertical_dominant = (ay >= ax);
     const unsigned dom_axis = new_vertical_dominant ? (unsigned)ay : (unsigned)ax;
-    local_depth_scale_q8 = (dom_axis != 0u)
-        ? (256u * (unsigned)len) / dom_axis : 256u;
+    local_depth_scale_q8 = (dom_axis != 0u) ? (256u * (unsigned)len) / dom_axis : 256u;
     local_depth_ax = (unsigned)ax;
     local_depth_ay = (unsigned)ay;
 
@@ -595,13 +586,12 @@ static void update_local_depth_gravity(int gx, int gy)
 
     const bool drift_observable = ((long)grid_h * (long)ax >= (long)ay);
     const bool cross_row_observable = ((long)grid_w * (long)ay >= (long)ax);
-    const bool v_reverse_matters = (new_v_reverse != local_depth_v_reverse_prev) &&
-        (new_vertical_dominant || cross_row_observable);
-    const bool h_reverse_matters = (new_h_reverse != local_depth_h_reverse_prev) &&
-        (!new_vertical_dominant || drift_observable);
+    const bool v_reverse_matters =
+        (new_v_reverse != local_depth_v_reverse_prev) && (new_vertical_dominant || cross_row_observable);
+    const bool h_reverse_matters =
+        (new_h_reverse != local_depth_h_reverse_prev) && (!new_vertical_dominant || drift_observable);
 
-    if (new_vertical_dominant != local_depth_vertical_dominant_prev ||
-        v_reverse_matters || h_reverse_matters) {
+    if (new_vertical_dominant != local_depth_vertical_dominant_prev || v_reverse_matters || h_reverse_matters) {
         for (int cx = 0; cx < grid_w; cx++) {
             local_depth_row_a[cx] = 0u;
             local_depth_row_b[cx] = 0u;
@@ -627,28 +617,26 @@ static void update_local_depth_gravity(int gx, int gy)
 
 static uint32_t local_depth_wake_elapsed_ms;
 
-static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
-                               int cy, const uint8_t *row, int n)
-{
-    gfx_color_t *out = fb + (cy * n) * GFX_WIDTH;
+static inline void
+paint_row_n(gfx_color_t* fb, const gfx_color_t* pal, int cy, const uint8_t* row, int n) {
+    gfx_color_t* out = fb + (cy * n) * GFX_WIDTH;
     row_flags[cy] = 0;
 
-    const uint8_t *above = (cy > 0) ? row - grid_w : NULL;
-    const uint8_t *below = (cy < grid_h - 1) ? row + grid_w : NULL;
+    const uint8_t* above = (cy > 0) ? row - grid_w : NULL;
+    const uint8_t* below = (cy < grid_h - 1) ? row + grid_w : NULL;
 
-    const uint8_t *toward_surface = local_depth_v_reverse ? below : above;
+    const uint8_t* toward_surface = local_depth_v_reverse ? below : above;
 
     /* local_depth_prev_row[] checks if `toward_surface` points at it, hoisted
      * out of the cx loop for an 841-to-83 improvement. Only the
      * hold-then-commit debounce reads it, as same-material climbs trust a
      * stale count, and BOUNDARY's carry is nonsense for other rows. */
     const int local_depth_vdir = local_depth_v_reverse ? -1 : 1;
-    const bool local_depth_chain_ok =
-        (local_depth_prev_cy == cy - local_depth_vdir);
+    const bool local_depth_chain_ok = (local_depth_prev_cy == cy - local_depth_vdir);
 
     const int hdir = local_depth_h_reverse ? -1 : 1;
     const int cx_first = local_depth_h_reverse ? grid_w - 1 : 0;
-    const int cx_step  = local_depth_h_reverse ? -1 : 1;
+    const int cx_step = local_depth_h_reverse ? -1 : 1;
 
     /* THE ROW OFFSET, WITHOUT AN ACCUMULATOR: computed from `cy` alone, not
      * a running Bresenham accumulator carried across paint_row_n() calls -
@@ -663,7 +651,7 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
         const int vdir = local_depth_vdir;
         const int xsign = local_depth_h_reverse ? 1 : -1;
         const int n = (vdir > 0) ? cy : (grid_h - 1 - cy);
-        const int cum_n  = (int)(((long)(n)     * (long)local_depth_ax) / (long)local_depth_ay);
+        const int cum_n = (int)(((long)(n) * (long)local_depth_ax) / (long)local_depth_ay);
         const int cum_n1 = (int)(((long)(n + 1) * (long)local_depth_ax) / (long)local_depth_ay);
         local_depth_row_step = xsign * (cum_n1 - cum_n);
     }
@@ -676,25 +664,22 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
     for (int cx_i = 0; cx_i < grid_w; cx_i++) {
         const int cx = cx_first + cx_i * cx_step;
 
-        unsigned mask =
-            ((cx > 0          && CELL_IS_EMPTY(row[cx - 1])) ? MATERIAL_EDGE_LEFT  : 0u) |
-            ((cx < grid_w - 1 && CELL_IS_EMPTY(row[cx + 1])) ? MATERIAL_EDGE_RIGHT : 0u) |
-            ((above != NULL   && CELL_IS_EMPTY(above[cx]))   ? MATERIAL_EDGE_UP    : 0u) |
-            ((below != NULL   && CELL_IS_EMPTY(below[cx]))   ? MATERIAL_EDGE_DOWN  : 0u);
+        unsigned mask = ((cx > 0 && CELL_IS_EMPTY(row[cx - 1])) ? MATERIAL_EDGE_LEFT : 0u)
+                        | ((cx < grid_w - 1 && CELL_IS_EMPTY(row[cx + 1])) ? MATERIAL_EDGE_RIGHT : 0u)
+                        | ((above != NULL && CELL_IS_EMPTY(above[cx])) ? MATERIAL_EDGE_UP : 0u)
+                        | ((below != NULL && CELL_IS_EMPTY(below[cx])) ? MATERIAL_EDGE_DOWN : 0u);
 
-        if ((mask & MATERIAL_EDGE_CARDINAL) != 0 &&
-            CELL_MATERIAL(row[cx]) == MAT_WATER) {
+        if ((mask & MATERIAL_EDGE_CARDINAL) != 0 && CELL_MATERIAL(row[cx]) == MAT_WATER) {
             mask |=
-                ((cx > 0          && above != NULL && CELL_IS_EMPTY(above[cx - 1])) ? MATERIAL_EDGE_UP_LEFT    : 0u) |
-                ((cx < grid_w - 1 && above != NULL && CELL_IS_EMPTY(above[cx + 1])) ? MATERIAL_EDGE_UP_RIGHT   : 0u) |
-                ((cx > 0          && below != NULL && CELL_IS_EMPTY(below[cx - 1])) ? MATERIAL_EDGE_DOWN_LEFT  : 0u) |
-                ((cx < grid_w - 1 && below != NULL && CELL_IS_EMPTY(below[cx + 1])) ? MATERIAL_EDGE_DOWN_RIGHT : 0u);
+                ((cx > 0 && above != NULL && CELL_IS_EMPTY(above[cx - 1])) ? MATERIAL_EDGE_UP_LEFT : 0u)
+                | ((cx < grid_w - 1 && above != NULL && CELL_IS_EMPTY(above[cx + 1])) ? MATERIAL_EDGE_UP_RIGHT : 0u)
+                | ((cx > 0 && below != NULL && CELL_IS_EMPTY(below[cx - 1])) ? MATERIAL_EDGE_DOWN_LEFT : 0u)
+                | ((cx < grid_w - 1 && below != NULL && CELL_IS_EMPTY(below[cx + 1])) ? MATERIAL_EDGE_DOWN_RIGHT : 0u);
         }
 
         const bool cell_is_water = CELL_MATERIAL(row[cx]) == MAT_WATER;
-        const unsigned hash = cell_is_water
-            ? material_grain_hash(cx >> FOAM_BLOB_SHIFT, cy >> FOAM_BLOB_SHIFT)
-            : material_grain_hash(cx, cy);
+        const unsigned hash = cell_is_water ? material_grain_hash(cx >> FOAM_BLOB_SHIFT, cy >> FOAM_BLOB_SHIFT)
+                                            : material_grain_hash(cx, cy);
 
         int step = 0;
         if (!local_depth_vertical_dominant) {
@@ -705,52 +690,44 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
             }
         }
 
-        const int qx = local_depth_vertical_dominant
-            ? (cx + local_depth_row_step) : (cx - hdir);
+        const int qx = local_depth_vertical_dominant ? (cx + local_depth_row_step) : (cx - hdir);
         const bool qx_ok = (qx >= 0 && qx < grid_w);
         const bool cross_row = local_depth_vertical_dominant || (step != 0);
-        const uint8_t *src_ptr = cross_row ? toward_surface : row;
-        const uint8_t *src_arr = cross_row
-            ? local_depth_prev_row : local_depth_cur_row;
+        const uint8_t* src_ptr = cross_row ? toward_surface : row;
+        const uint8_t* src_arr = cross_row ? local_depth_prev_row : local_depth_cur_row;
 
         const bool here_liquid = material_of(row[cx])->kind == KIND_LIQUID;
-        const bool same_material = here_liquid && qx_ok && src_ptr != NULL &&
-            (CELL_MATERIAL(src_ptr[qx]) == CELL_MATERIAL(row[cx]));
+        const bool same_material =
+            here_liquid && qx_ok && src_ptr != NULL && (CELL_MATERIAL(src_ptr[qx]) == CELL_MATERIAL(row[cx]));
         const unsigned src_count = qx_ok ? src_arr[qx] : 0u;
 
         unsigned count;
         if (!here_liquid) {
             count = 0u;
         } else if (same_material) {
-            count = src_count < LOCAL_DEPTH_COUNT_CEILING
-                ? src_count + 1u : LOCAL_DEPTH_COUNT_CEILING;
+            count = src_count < LOCAL_DEPTH_COUNT_CEILING ? src_count + 1u : LOCAL_DEPTH_COUNT_CEILING;
             if (!local_depth_vertical_dominant) {
                 local_depth_top_row[cx] = 255u;
             }
         } else {
-            const bool committed = local_depth_vertical_dominant
-                ? (local_depth_top_row[cx] == (uint8_t)cy)
-                : (local_depth_top_row[cx] != 255u);
+            const bool committed = local_depth_vertical_dominant ? (local_depth_top_row[cx] == (uint8_t)cy)
+                                                                 : (local_depth_top_row[cx] != 255u);
             if (committed) {
                 count = 0u;
             } else {
-                const unsigned carry =
-                    (cross_row && !local_depth_chain_ok) ? 0u : src_count;
-                count = carry < LOCAL_DEPTH_COUNT_CEILING
-                    ? carry + 1u : LOCAL_DEPTH_COUNT_CEILING;
-                local_depth_top_row[cx] = local_depth_vertical_dominant
-                    ? (uint8_t)cy : 0u;
+                const unsigned carry = (cross_row && !local_depth_chain_ok) ? 0u : src_count;
+                count = carry < LOCAL_DEPTH_COUNT_CEILING ? carry + 1u : LOCAL_DEPTH_COUNT_CEILING;
+                local_depth_top_row[cx] = local_depth_vertical_dominant ? (uint8_t)cy : 0u;
             }
         }
         local_depth_cur_row[cx] = (uint8_t)count;
 
         const unsigned depth_raw = (count * local_depth_scale_q8) >> 8;
-        const unsigned depth_liquid = depth_raw < MATERIAL_LIQUID_DEPTH_BAND
-            ? depth_raw : MATERIAL_LIQUID_DEPTH_BAND;
+        const unsigned depth_liquid = depth_raw < MATERIAL_LIQUID_DEPTH_BAND ? depth_raw : MATERIAL_LIQUID_DEPTH_BAND;
 
-        const bool wood_near_leaf = row[cx] == CELL_MAKE(MAT_WOOD, 0) &&
-            material_wood_near_leaf(above, row, below, cx, grid_w, wood_leaf_top5, hash,
-                                     WOOD_LEAF_SLOTS_CHECKED);
+        const bool wood_near_leaf =
+            row[cx] == CELL_MAKE(MAT_WOOD, 0)
+            && material_wood_near_leaf(above, row, below, cx, grid_w, wood_leaf_top5, hash, WOOD_LEAF_SLOTS_CHECKED);
 
         /* Projected onto the wind axis (gravity-perpendicular, see
          * material_wood_leaf_wind_axis()), not raw `cx` - a grid column is
@@ -769,11 +746,11 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
          * which must still select the tint branch in material_colours(),
          * not fall through to the untinted look an untinted depth of 0
          * would. */
-        const unsigned depth = (row[cx] == MATX(MATX_ROOT))
-            ? material_root_neighbours(above, row, below, cx, grid_w)
-            : (leaf_shading
-                   ? material_wood_leaf_wave(wood_leaf_time_ms, wood_leaf_wind_pos, grid_w, hash) + 1u
-                   : depth_liquid);
+        const unsigned depth =
+            (row[cx] == MATX(MATX_ROOT))
+                ? material_root_neighbours(above, row, below, cx, grid_w)
+                : (leaf_shading ? material_wood_leaf_wave(wood_leaf_time_ms, wood_leaf_wind_pos, grid_w, hash) + 1u
+                                : depth_liquid);
 
         if (here_liquid) {
             row_flags[cy] |= ROW_FLAG_LIQUID;
@@ -792,9 +769,8 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
         }
 
         gfx_color_t col[3];
-        const material_pattern_t pat =
-            material_colours(row[cx], hash, mask, depth, col);
-        gfx_color_t *p = out + cx * n;
+        const material_pattern_t pat = material_colours(row[cx], hash, mask, depth, col);
+        gfx_color_t* p = out + cx * n;
 
         if (pat == MATERIAL_HATCHED) {
             row_flags[cy] |= ROW_FLAG_SHINE;
@@ -816,40 +792,37 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
             for (int dx = 0; dx < n; dx++) {
 
                 const int shine_q8 = shine_base_q8 + dx * shine_ux_q8 + dy * shine_uy_q8;
-                const int along = ((shine_q8 >> 8) + shine_offset)
-                                  & (SHINE_PERIOD - 1);
+                const int along = ((shine_q8 >> 8) + shine_offset) & (SHINE_PERIOD - 1);
 
                 p[dy * GFX_WIDTH + dx] = (along < n) ? col[2] : col[0];
             }
         }
     }
 
-    uint8_t *local_depth_tmp = local_depth_cur_row;
+    uint8_t* local_depth_tmp = local_depth_cur_row;
     local_depth_cur_row = local_depth_prev_row;
     local_depth_prev_row = local_depth_tmp;
 
     local_depth_prev_cy = cy;
 }
 
-static void paint_row(gfx_color_t *fb, const gfx_color_t *pal, int cy,
-                      const uint8_t *row)
-{
+static void
+paint_row(gfx_color_t* fb, const gfx_color_t* pal, int cy, const uint8_t* row) {
     switch (cell) {
-    case 2:  paint_row_n(fb, pal, cy, row, 2); break;
-    case 3:  paint_row_n(fb, pal, cy, row, 3); break;
-    case 4:  paint_row_n(fb, pal, cy, row, 4); break;
-    case 6:  paint_row_n(fb, pal, cy, row, 6); break;
-    case 8:  paint_row_n(fb, pal, cy, row, 8); break;
-    /* Unreachable for any cell size in qualities[]; falls back to size 2 to
+        case 2: paint_row_n(fb, pal, cy, row, 2); break;
+        case 3: paint_row_n(fb, pal, cy, row, 3); break;
+        case 4: paint_row_n(fb, pal, cy, row, 4); break;
+        case 6: paint_row_n(fb, pal, cy, row, 6); break;
+        case 8: paint_row_n(fb, pal, cy, row, 8); break;
+        /* Unreachable for any cell size in qualities[]; falls back to size 2 to
      * avoid out-of-bounds writes. */
-    default: paint_row_n(fb, pal, cy, row, 2); break;
+        default: paint_row_n(fb, pal, cy, row, 2); break;
     }
 }
 
-static int draw_one_row(gfx_color_t *fb, const gfx_color_t *pal, int cy,
-                        uint16_t *cur_x0, uint16_t *cur_x1)
-{
-    const uint8_t *row = &grid[cy * grid_w];
+static int
+draw_one_row(gfx_color_t* fb, const gfx_color_t* pal, int cy, uint16_t* cur_x0, uint16_t* cur_x1) {
+    const uint8_t* row = &grid[cy * grid_w];
 
     paint_row(fb, pal, cy, row);
 
@@ -871,23 +844,22 @@ static int draw_one_row(gfx_color_t *fb, const gfx_color_t *pal, int cy,
 }
 
 /* Advances the travelling shine, and says whether it moved. */
-static bool advance_shine(uint32_t dt_ms)
-{
+static bool
+advance_shine(uint32_t dt_ms) {
     shine_elapsed_ms += dt_ms;
     if (shine_elapsed_ms < SHINE_STEP_MS) {
         return false;
     }
     const uint32_t steps = shine_elapsed_ms / SHINE_STEP_MS;
     shine_elapsed_ms -= steps * SHINE_STEP_MS;
-    shine_offset = (int)(((unsigned)shine_offset + steps * SHINE_STEP_PX)
-                         & (SHINE_PERIOD - 1));
+    shine_offset = (int)(((unsigned)shine_offset + steps * SHINE_STEP_PX) & (SHINE_PERIOD - 1));
     return true;
 }
 
 static unsigned cullet_phase_index;
 
-static bool advance_cullet(uint32_t dt_ms)
-{
+static bool
+advance_cullet(uint32_t dt_ms) {
     cullet_elapsed_ms += dt_ms;
     if (cullet_elapsed_ms < CULLET_PHASE_MS) {
         return false;
@@ -899,8 +871,8 @@ static bool advance_cullet(uint32_t dt_ms)
     return true;
 }
 
-static bool advance_wood_leaf_phase(uint32_t dt_ms)
-{
+static bool
+advance_wood_leaf_phase(uint32_t dt_ms) {
     wood_leaf_time_ms += dt_ms;
     wood_leaf_wake_elapsed_ms += dt_ms;
     if (wood_leaf_wake_elapsed_ms < WOOD_LEAF_WAKE_MS) {
@@ -911,8 +883,8 @@ static bool advance_wood_leaf_phase(uint32_t dt_ms)
     return true;
 }
 
-static void advance_wood_leaf_wind_sign(uint32_t dt_ms)
-{
+static void
+advance_wood_leaf_wind_sign(uint32_t dt_ms) {
     wood_leaf_wind_flip_elapsed_ms += dt_ms;
     if (wood_leaf_wind_flip_elapsed_ms < wood_leaf_wind_flip_due_ms) {
         return;
@@ -920,12 +892,13 @@ static void advance_wood_leaf_wind_sign(uint32_t dt_ms)
     wood_leaf_wind_flip_elapsed_ms -= wood_leaf_wind_flip_due_ms;
     wood_leaf_wind_sign = -wood_leaf_wind_sign;
     wood_leaf_wind_flip_count++;
-    wood_leaf_wind_flip_due_ms = WOOD_LEAF_WIND_FLIP_BASE_MS
+    wood_leaf_wind_flip_due_ms =
+        WOOD_LEAF_WIND_FLIP_BASE_MS
         + material_grain_hash((int)wood_leaf_wind_flip_count, 0) % WOOD_LEAF_WIND_FLIP_JITTER_MS;
 }
 
-static bool advance_local_depth_wake(uint32_t dt_ms)
-{
+static bool
+advance_local_depth_wake(uint32_t dt_ms) {
     local_depth_wake_elapsed_ms += dt_ms;
     if (local_depth_wake_elapsed_ms < LOCAL_DEPTH_WAKE_MS) {
         return false;
@@ -935,20 +908,20 @@ static bool advance_local_depth_wake(uint32_t dt_ms)
     return true;
 }
 
-static int gravity_bearing_q16(int gx, int gy)
-{
+static int
+gravity_bearing_q16(int gx, int gy) {
     const int64_t ax = gx < 0 ? -(int64_t)gx : (int64_t)gx;
     const int64_t ay = gy < 0 ? -(int64_t)gy : (int64_t)gy;
     const int64_t denom = ax + ay;
     if (denom == 0) {
-        return 0;   /* flat or free fall: no bearing to report */
+        return 0; /* flat or free fall: no bearing to report */
     }
-    const int64_t p_q16 = ((int64_t)gx << 16) / denom;   /* -65536..65536 */
+    const int64_t p_q16 = ((int64_t)gx << 16) / denom; /* -65536..65536 */
     return (int)(gy < 0 ? (p_q16 - 65536) : (65536 - p_q16));
 }
 
-static bool advance_glass_phase(int gx, int gy)
-{
+static bool
+advance_glass_phase(int gx, int gy) {
     const int phase = gravity_bearing_q16(gx, gy) >> GLASS_PHASE_SHIFT;
     const bool changed = phase != glass_last_phase;
     glass_last_phase = phase;
@@ -956,11 +929,9 @@ static bool advance_glass_phase(int gx, int gy)
     return changed;
 }
 
-static void draw_dirty_rows(bool shine_moved, bool local_depth_woke,
-                             bool cullet_moved, bool glass_moved,
-                             bool wood_leaf_moved)
-{
-    gfx_color_t *fb = gfx_framebuffer();
+static void
+draw_dirty_rows(bool shine_moved, bool local_depth_woke, bool cullet_moved, bool glass_moved, bool wood_leaf_moved) {
+    gfx_color_t* fb = gfx_framebuffer();
 
     if (shine_moved) {
         for (int cy = 0; cy < grid_h; cy++) {
@@ -1002,7 +973,7 @@ static void draw_dirty_rows(bool shine_moved, bool local_depth_woke,
         }
     }
 
-    const gfx_color_t *pal = material_palette();
+    const gfx_color_t* pal = material_palette();
 
 #if CONFIG_LAUNCHER_DEVELOPMENT
     int redrawn = 0;
@@ -1029,18 +1000,15 @@ static void draw_dirty_rows(bool shine_moved, bool local_depth_woke,
         uint16_t cur_x0[ROW_MAX_RUNS], cur_x1[ROW_MAX_RUNS];
         const int cur_n = draw_one_row(fb, pal, cy, cur_x0, cur_x1);
 
-        uint16_t *prev_x0 = &row_run_x0[cy * ROW_MAX_RUNS];
-        uint16_t *prev_x1 = &row_run_x1[cy * ROW_MAX_RUNS];
+        uint16_t* prev_x0 = &row_run_x0[cy * ROW_MAX_RUNS];
+        uint16_t* prev_x1 = &row_run_x1[cy * ROW_MAX_RUNS];
         const int prev_n = row_run_n[cy];
 
         uint16_t send_x0[2 * ROW_MAX_RUNS], send_x1[2 * ROW_MAX_RUNS];
-        const int send_n = row_runs_reconcile(cur_x0, cur_x1, cur_n, prev_x0,
-                                              prev_x1, prev_n, send_x0,
-                                              send_x1);
+        const int send_n = row_runs_reconcile(cur_x0, cur_x1, cur_n, prev_x0, prev_x1, prev_n, send_x0, send_x1);
 
         for (int i = 0; i < send_n; i++) {
-            gfx_mark_dirty(send_x0[i] * cell, cy * cell,
-                          (send_x1[i] - send_x0[i]) * cell, cell);
+            gfx_mark_dirty(send_x0[i] * cell, cy * cell, (send_x1[i] - send_x0[i]) * cell, cell);
         }
 
         for (int i = 0; i < cur_n; i++) {
@@ -1057,10 +1025,10 @@ static void draw_dirty_rows(bool shine_moved, bool local_depth_woke,
 
 #define EMITTER_MARKER_COLOR 0xFF3EC8
 
-#define EMITTER_MARKER_PX  12
+#define EMITTER_MARKER_PX    12
 
-static void draw_emitter_markers(void)
-{
+static void
+draw_emitter_markers(void) {
     const gfx_color_t marker = gfx_rgb(EMITTER_MARKER_COLOR);
     const int count = sand_emitter_count(&sim);
 
@@ -1068,9 +1036,9 @@ static void draw_emitter_markers(void)
         int ex, ey;
         cell_t ecell;
         if (!sand_emitter_at(&sim, i, &ex, &ey, &ecell)) {
-            continue;   /* not expected - see sand_emitter_count()'s contract */
+            continue; /* not expected - see sand_emitter_count()'s contract */
         }
-        (void)ecell;    /* the marker's colour is fixed, not the material's */
+        (void)ecell; /* the marker's colour is fixed, not the material's */
 
         const int mid_x = ex * cell + cell / 2;
         const int mid_y = ey * cell + cell / 2;
@@ -1081,24 +1049,23 @@ static void draw_emitter_markers(void)
     }
 }
 
-static gfx_color_t brush_color(cell_t c)
-{
+static gfx_color_t
+brush_color(cell_t c) {
     if (cell_is_gunpowder(c)) {
         return material_palette()[GUNPOWDER_CELL(2)];
     }
-    return material_palette()[
-        cell_is_extended(c) ? c : CELL_MAKE(CELL_MATERIAL(c), 13)];
+    return material_palette()[cell_is_extended(c) ? c : CELL_MAKE(CELL_MATERIAL(c), 13)];
 }
 
-static int gravity_quarter_turn(int gx, int gy)
-{
+static int
+gravity_quarter_turn(int gx, int gy) {
     const int ax = gx < 0 ? -gx : gx;
     const int ay = gy < 0 ? -gy : gy;
 
     if (ay >= ax) {
-        return (gy >= 0) ? 0 : 2;      /* down is down : board upside down */
+        return (gy >= 0) ? 0 : 2; /* down is down : board upside down */
     }
-    return (gx >= 0) ? 3 : 1;          /* down is to the right : to the left */
+    return (gx >= 0) ? 3 : 1; /* down is to the right : to the left */
 }
 
 /* Computes its own turn (gravity_quarter_turn()) rather than inheriting the
@@ -1107,45 +1074,44 @@ static int gravity_quarter_turn(int gx, int gy)
  * the canvas, bypassing microui entirely, the same way the sand grid itself
  * is painted. Canvas draws don't get the shell's transform for free - only
  * chrome does. */
-static void draw_mode_label(int gx, int gy)
-{
+static void
+draw_mode_label(int gx, int gy) {
     char text_buf[24];
-    const char *text;
+    const char* text;
     if (ui.mode == SAND_MODE_DETONATE) {
         text = "BOOM";
     } else if (ui.mode == SAND_MODE_ERASE) {
         text = "ERASE";
     } else if (ui.modes[ui.brush] == BRUSH_SPAWN) {
-        snprintf(text_buf, sizeof text_buf, "%s SOURCE",
-                material_name(brushes[ui.brush]));
+        snprintf(text_buf, sizeof text_buf, "%s SOURCE", material_name(brushes[ui.brush]));
         text = text_buf;
     } else {
         text = material_name(brushes[ui.brush]);
     }
-    const int   len  = (int)strlen(text);
-    const int   span = len * 8 * LABEL_SCALE;
-    const int   tall = 8 * LABEL_SCALE;
+    const int len = (int)strlen(text);
+    const int span = len * 8 * LABEL_SCALE;
+    const int tall = 8 * LABEL_SCALE;
 
     const int turn = gravity_quarter_turn(gx, gy);
 
     int x, y;
     switch (turn) {
-    case 0:                                             /* down is down */
-        x = (GFX_WIDTH - span) / 2;
-        y = LABEL_MARGIN;
-        break;
-    case 2:                                             /* board upside down */
-        x = (GFX_WIDTH + span) / 2 - 8 * LABEL_SCALE;
-        y = GFX_HEIGHT - LABEL_MARGIN - tall;
-        break;
-    case 3:                                             /* down is to the right */
-        x = LABEL_MARGIN;
-        y = (GFX_HEIGHT + span) / 2 - 8 * LABEL_SCALE;
-        break;
-    default:                                            /* turn == 1: down is to the left */
-        x = GFX_WIDTH - LABEL_MARGIN - tall;
-        y = (GFX_HEIGHT - span) / 2;
-        break;
+        case 0: /* down is down */
+            x = (GFX_WIDTH - span) / 2;
+            y = LABEL_MARGIN;
+            break;
+        case 2: /* board upside down */
+            x = (GFX_WIDTH + span) / 2 - 8 * LABEL_SCALE;
+            y = GFX_HEIGHT - LABEL_MARGIN - tall;
+            break;
+        case 3: /* down is to the right */
+            x = LABEL_MARGIN;
+            y = (GFX_HEIGHT + span) / 2 - 8 * LABEL_SCALE;
+            break;
+        default: /* turn == 1: down is to the left */
+            x = GFX_WIDTH - LABEL_MARGIN - tall;
+            y = (GFX_HEIGHT - span) / 2;
+            break;
     }
 
     gfx_color_t ink;
@@ -1160,23 +1126,22 @@ static void draw_mode_label(int gx, int gy)
     gfx_text_turned(x, y, text, ink, LABEL_SCALE, turn);
 }
 
-#define PALETTE_GROUT   4
+#define PALETTE_GROUT              4
 
-#define PALETTE_BEZEL   3
+#define PALETTE_BEZEL              3
 
 /* Eligibility/spawn corner badge: 18px outer square on 92px PALETTE_TILE
  * tile, 2px border, 2px margin. */
-#define PALETTE_BADGE_SIZE    18
-#define PALETTE_BADGE_INSET    2
-#define PALETTE_BADGE_MARGIN   2
+#define PALETTE_BADGE_SIZE         18
+#define PALETTE_BADGE_INSET        2
+#define PALETTE_BADGE_MARGIN       2
 
-#define PALETTE_BADGE_BORDER_COLOR  0x141414
-#define PALETTE_BADGE_FILL_COLOR    0xF2F2F2
+#define PALETTE_BADGE_BORDER_COLOR 0x141414
+#define PALETTE_BADGE_FILL_COLOR   0xF2F2F2
 
-static mu_Color mu_color_hex(uint32_t rgb)
-{
-    return mu_color((int)((rgb >> 16) & 0xFF), (int)((rgb >> 8) & 0xFF),
-                    (int)(rgb & 0xFF), 255);
+static mu_Color
+mu_color_hex(uint32_t rgb) {
+    return mu_color((int)((rgb >> 16) & 0xFF), (int)((rgb >> 8) & 0xFF), (int)(rgb & 0xFF), 255);
 }
 
 /* APPLY EXACTLY ONCE PER REPAINT OF WHAT IS UNDERNEATH, never per frame.
@@ -1188,15 +1153,14 @@ static mu_Color mu_color_hex(uint32_t rgb)
  * this reads all 368x448 pixels. */
 #define PANEL_SCRIM_ALPHA 110
 
-static void dim_backdrop(void)
-{
-    gfx_fill_rect_blend(0, 0, GFX_WIDTH, GFX_HEIGHT, gfx_rgb(0x000000),
-                        PANEL_SCRIM_ALPHA);
+static void
+dim_backdrop(void) {
+    gfx_fill_rect_blend(0, 0, GFX_WIDTH, GFX_HEIGHT, gfx_rgb(0x000000), PANEL_SCRIM_ALPHA);
 }
 
-static void draw_palette(const input_t *input)
-{
-    mu_Context *ctx = ui_context();
+static void
+draw_palette(const input_t* input) {
+    mu_Context* ctx = ui_context();
 
     ui_begin(input);
 
@@ -1205,7 +1169,7 @@ static void draw_palette(const input_t *input)
     ui_set_button_style(UI_BUTTON_BEZEL);
 
     const mu_Color saved_button_color = ctx->style->colors[MU_COLOR_BUTTON];
-    const mu_Color saved_text_color   = ctx->style->colors[MU_COLOR_TEXT];
+    const mu_Color saved_text_color = ctx->style->colors[MU_COLOR_TEXT];
 
     /* Black used for each tile name by mu_button() and UI_TEXT_OUTLINED.
      * ui_text_halo() derives a light halo at render time, ensuring dark text
@@ -1215,22 +1179,18 @@ static void draw_palette(const input_t *input)
 
     const int cols = palette_cols(ui_width());
 
-    if (ui_begin_screen(ctx, "Sand Palette",
-                        MU_OPT_NOTITLE | MU_OPT_NORESIZE |
-                        MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
+    if (ui_begin_screen(ctx, "Sand Palette", MU_OPT_NOTITLE | MU_OPT_NORESIZE | MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
 
         for (int i = 0; i < BRUSH_COUNT; i++) {
             int x, y, w, h;
-            palette_tile_rect(i, BRUSH_COUNT, cols, ui_width(), ui_height(),
-                              &x, &y, &w, &h);
+            palette_tile_rect(i, BRUSH_COUNT, cols, ui_width(), ui_height(), &x, &y, &w, &h);
 
             const int ix = x + PALETTE_GROUT;
             const int iy = y + PALETTE_GROUT;
             const int iw = w - 2 * PALETTE_GROUT;
             const int ih = h - 2 * PALETTE_GROUT;
 
-            const mu_Color face =
-                mu_color_hex(gfx_color_rgb888(brush_color(brushes[i])));
+            const mu_Color face = mu_color_hex(gfx_color_rgb888(brush_color(brushes[i])));
             ctx->style->colors[MU_COLOR_BUTTON] = face;
 
             /* Button placed by mu_layout_set_next() at (ix,iy,iw,ih).
@@ -1239,7 +1199,7 @@ static void draw_palette(const input_t *input)
              * styled frame and centered label, the button's unique id from
              * mu_get_id() in microui.c. Each BRUSH_COUNT brush has a unique
              * name to prevent id collisions. */
-            const char *name = material_name(brushes[i]);
+            const char* name = material_name(brushes[i]);
             mu_layout_set_next(ctx, mu_rect(ix, iy, iw, ih), 0);
             const int clicked = mu_button(ctx, name);
 
@@ -1259,8 +1219,7 @@ static void draw_palette(const input_t *input)
              * paired with the one face it was mixed from. */
             if (i == ui.brush) {
                 ui_span_t spans[UI_BEZEL_MAX_SPANS];
-                const int n = ui_bezel_spans(mu_rect(ix, iy, iw, ih), face,
-                                             true, spans, UI_BEZEL_MAX_SPANS);
+                const int n = ui_bezel_spans(mu_rect(ix, iy, iw, ih), face, true, spans, UI_BEZEL_MAX_SPANS);
                 for (int s = 1; s < n; s++) {
                     mu_draw_rect(ctx, spans[s].rect, spans[s].color);
                 }
@@ -1275,26 +1234,22 @@ static void draw_palette(const input_t *input)
              * itself be made of the swatch. */
             if (material_can_emit(brushes[i])) {
                 const mu_Color border = mu_color_hex(PALETTE_BADGE_BORDER_COLOR);
-                const mu_Color fill   = mu_color_hex(PALETTE_BADGE_FILL_COLOR);
-                const int bx = ix + iw - PALETTE_BEZEL - PALETTE_BADGE_MARGIN
-                             - PALETTE_BADGE_SIZE;
+                const mu_Color fill = mu_color_hex(PALETTE_BADGE_FILL_COLOR);
+                const int bx = ix + iw - PALETTE_BEZEL - PALETTE_BADGE_MARGIN - PALETTE_BADGE_SIZE;
                 const int by = iy + PALETTE_BEZEL + PALETTE_BADGE_MARGIN;
-                const mu_Rect badge_rect =
-                    mu_rect(bx, by, PALETTE_BADGE_SIZE, PALETTE_BADGE_SIZE);
+                const mu_Rect badge_rect = mu_rect(bx, by, PALETTE_BADGE_SIZE, PALETTE_BADGE_SIZE);
 
                 mu_draw_rect(ctx, badge_rect, border);
                 mu_draw_rect(ctx,
-                            mu_rect(bx + PALETTE_BADGE_INSET,
-                                    by + PALETTE_BADGE_INSET,
-                                    PALETTE_BADGE_SIZE - 2 * PALETTE_BADGE_INSET,
-                                    PALETTE_BADGE_SIZE - 2 * PALETTE_BADGE_INSET),
-                            fill);
+                             mu_rect(bx + PALETTE_BADGE_INSET, by + PALETTE_BADGE_INSET,
+                                     PALETTE_BADGE_SIZE - 2 * PALETTE_BADGE_INSET,
+                                     PALETTE_BADGE_SIZE - 2 * PALETTE_BADGE_INSET),
+                             fill);
 
                 if (ui.modes[i] == BRUSH_SPAWN) {
                     mu_draw_icon(ctx, MU_ICON_CHECK, badge_rect, border);
                 }
             }
-
         }
 
         mu_end_window(ctx);
@@ -1305,7 +1260,7 @@ static void draw_palette(const input_t *input)
      * would leak into the next thing drawn with MU_COLOR_BUTTON/
      * MU_COLOR_TEXT. */
     ctx->style->colors[MU_COLOR_BUTTON] = saved_button_color;
-    ctx->style->colors[MU_COLOR_TEXT]   = saved_text_color;
+    ctx->style->colors[MU_COLOR_TEXT] = saved_text_color;
 
     ui_end(UI_NO_BACKGROUND);
 }
@@ -1314,29 +1269,27 @@ static void draw_palette(const input_t *input)
  * its label - the icon square is whatever is left of the segment's height
  * after both, capped to the segment's width so a narrow canvas can't ask
  * for a wider icon than the segment actually has. */
-#define BRUSH_SEG_PAD        8
-#define BRUSH_SEG_LABEL_GAP  4
+#define BRUSH_SEG_PAD       8
+#define BRUSH_SEG_LABEL_GAP 4
 
 /* Inset from the info button's own edge to its icon - same reasoning as
  * INFO_BTN_SIDE's own comment in brush_screen.c: room so the glyph isn't
  * pressed against the button frame. */
-#define BRUSH_INFO_ICON_PAD  12
+#define BRUSH_INFO_ICON_PAD 12
 
-
-static const icon_t *const brush_seg_icons[BRUSH_SCREEN_SEGMENT_COUNT] = {
-    [BRUSH_SCREEN_SEG_POUR]  = &icon_sand_table[ICON_SAND_POUR],
+static const icon_t* const brush_seg_icons[BRUSH_SCREEN_SEGMENT_COUNT] = {
+    [BRUSH_SCREEN_SEG_POUR] = &icon_sand_table[ICON_SAND_POUR],
     [BRUSH_SCREEN_SEG_ERASE] = &icon_sand_table[ICON_SAND_ERASE],
-    [BRUSH_SCREEN_SEG_BOOM]  = &icon_sand_table[ICON_SAND_BOOM],
+    [BRUSH_SCREEN_SEG_BOOM] = &icon_sand_table[ICON_SAND_BOOM],
 };
 
 /* One panel frame (ui_style.h's flat section frame) in a fixed colour
  * pair, spans drawn back to front. */
-static void draw_brush_panel(mu_Context *ctx, mu_Rect r)
-{
+static void
+draw_brush_panel(mu_Context* ctx, mu_Rect r) {
     ui_span_t spans[UI_PANEL_MAX_SPANS];
-    const int n = ui_panel_spans(r, mu_color_hex(BRUSH_PANEL_FACE_COLOR),
-                                 mu_color_hex(BRUSH_PANEL_BORDER_COLOR),
-                                 spans, UI_PANEL_MAX_SPANS);
+    const int n = ui_panel_spans(r, mu_color_hex(BRUSH_PANEL_FACE_COLOR), mu_color_hex(BRUSH_PANEL_BORDER_COLOR), spans,
+                                 UI_PANEL_MAX_SPANS);
     for (int i = 0; i < n; i++) {
         mu_draw_rect(ctx, spans[i].rect, spans[i].color);
     }
@@ -1346,11 +1299,10 @@ static void draw_brush_panel(mu_Context *ctx, mu_Rect r)
  * face colour - the info button and the three mode segments use this,
  * each with its own face and `sunken`. The swatch draws its own border
  * below, via draw_brush_swatch(). */
-static void draw_brush_bezel(mu_Context *ctx, mu_Rect r, uint32_t face_rgb, bool sunken)
-{
+static void
+draw_brush_bezel(mu_Context* ctx, mu_Rect r, uint32_t face_rgb, bool sunken) {
     ui_span_t spans[UI_BEZEL_MAX_SPANS];
-    const int n = ui_bezel_spans(r, mu_color_hex(face_rgb), sunken, spans,
-                                 UI_BEZEL_MAX_SPANS);
+    const int n = ui_bezel_spans(r, mu_color_hex(face_rgb), sunken, spans, UI_BEZEL_MAX_SPANS);
     for (int i = 0; i < n; i++) {
         mu_draw_rect(ctx, spans[i].rect, spans[i].color);
     }
@@ -1365,9 +1317,9 @@ static void draw_brush_bezel(mu_Context *ctx, mu_Rect r, uint32_t face_rgb, bool
 /* Fills `r` with sand_swatch_cell()'s deterministic pattern for `spec`,
  * then its bezel border on top (span[0] of ui_bezel_spans() is skipped -
  * the grid already fills the face that span would flatten over). */
-static void draw_brush_swatch(mu_Context *ctx, mu_Rect r, cell_t spec)
-{
-    const gfx_color_t *palette = material_palette();
+static void
+draw_brush_swatch(mu_Context* ctx, mu_Rect r, cell_t spec) {
+    const gfx_color_t* palette = material_palette();
 
     for (int row = 0; row < BRUSH_SWATCH_CELLS; row++) {
         const int y0 = r.y + row * r.h / BRUSH_SWATCH_CELLS;
@@ -1376,14 +1328,13 @@ static void draw_brush_swatch(mu_Context *ctx, mu_Rect r, cell_t spec)
             const int x0 = r.x + col * r.w / BRUSH_SWATCH_CELLS;
             const int x1 = r.x + (col + 1) * r.w / BRUSH_SWATCH_CELLS;
             const cell_t cell = sand_swatch_cell(spec, col, row, BRUSH_SWATCH_CELLS);
-            mu_draw_rect(ctx, mu_rect(x0, y0, x1 - x0, y1 - y0),
-                        mu_color_hex(gfx_color_rgb888(palette[cell])));
+            mu_draw_rect(ctx, mu_rect(x0, y0, x1 - x0, y1 - y0), mu_color_hex(gfx_color_rgb888(palette[cell])));
         }
     }
 
     ui_span_t spans[UI_BEZEL_MAX_SPANS];
-    const int n = ui_bezel_spans(r, mu_color_hex(gfx_color_rgb888(brush_color(spec))),
-                                 false, spans, UI_BEZEL_MAX_SPANS);
+    const int n =
+        ui_bezel_spans(r, mu_color_hex(gfx_color_rgb888(brush_color(spec))), false, spans, UI_BEZEL_MAX_SPANS);
     for (int i = 1; i < n; i++) {
         mu_draw_rect(ctx, spans[i].rect, spans[i].color);
     }
@@ -1395,14 +1346,11 @@ static void draw_brush_swatch(mu_Context *ctx, mu_Rect r, cell_t spec)
  * right). Clipped to `r`, the same guard mu_draw_control_text() gives an
  * ordinary control's label - this screen has no built-in equivalent since
  * it draws its own frames rather than going through mu_button(). */
-static void draw_brush_text(mu_Context *ctx, mu_Rect r, const char *str,
-                            mu_Color color, int scale, int align)
-{
+static void
+draw_brush_text(mu_Context* ctx, mu_Rect r, const char* str, mu_Color color, int scale, int align) {
     const int tw = ui_measure_text(str);
     const int th = gfx_font_height(gfx_font_ui(), scale);
-    const int x = (align < 0) ? r.x
-                : (align == 0) ? r.x + (r.w - tw) / 2
-                               : r.x + r.w - tw;
+    const int x = (align < 0) ? r.x : (align == 0) ? r.x + (r.w - tw) / 2 : r.x + r.w - tw;
     const int y = r.y + (r.h - th) / 2;
 
     mu_push_clip_rect(ctx, r);
@@ -1414,9 +1362,9 @@ static void draw_brush_text(mu_Context *ctx, mu_Rect r, const char *str,
  * control, sand_ui.c decides what the hit means" split. UI_NO_BACKGROUND
  * for the same reason too: the frozen sand shows through everything the
  * panels do not cover, so the screen reads as sitting ON the sandbox. */
-static void draw_brush_screen(const input_t *input)
-{
-    mu_Context *ctx = ui_context();
+static void
+draw_brush_screen(const input_t* input) {
+    mu_Context* ctx = ui_context();
 
     ui_begin(input);
 
@@ -1425,9 +1373,7 @@ static void draw_brush_screen(const input_t *input)
     brush_screen_layout_t lay;
     brush_screen_layout(ui_width(), ui_height(), &lay);
 
-    if (ui_begin_screen(ctx, "Sand Brush",
-                        MU_OPT_NOTITLE | MU_OPT_NORESIZE |
-                        MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
+    if (ui_begin_screen(ctx, "Sand Brush", MU_OPT_NOTITLE | MU_OPT_NORESIZE | MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
 
         ui_set_font_scaled(gfx_font_ui(), BRUSH_SCREEN_CAPTION_SCALE);
 
@@ -1436,14 +1382,14 @@ static void draw_brush_screen(const input_t *input)
 
         draw_brush_swatch(ctx, lay.swatch, brushes[ui.brush]);
 
-        draw_brush_text(ctx, lay.material_caption, BRUSH_SCREEN_MATERIAL_CAPTION,
-                        mu_color_hex(BRUSH_CAPTION_COLOR), BRUSH_SCREEN_CAPTION_SCALE, -1);
+        draw_brush_text(ctx, lay.material_caption, BRUSH_SCREEN_MATERIAL_CAPTION, mu_color_hex(BRUSH_CAPTION_COLOR),
+                        BRUSH_SCREEN_CAPTION_SCALE, -1);
 
         /* 4 is the starting scale, but "Gunpowder" (the longest name any
          * brush carries) doesn't fit it in the name rect at the narrower
          * of the two real canvases - drop a size at a time rather than let
          * draw_brush_text()'s clip cut the tail off a real material name. */
-        const char *name = material_name(brushes[ui.brush]);
+        const char* name = material_name(brushes[ui.brush]);
         int name_scale = 4;
         for (; name_scale > 1; name_scale--) {
             ui_set_font_scaled(gfx_font_ui(), name_scale);
@@ -1451,8 +1397,7 @@ static void draw_brush_screen(const input_t *input)
                 break;
             }
         }
-        draw_brush_text(ctx, lay.material_name, name,
-                        mu_color_hex(BRUSH_TEXT_COLOR), name_scale, -1);
+        draw_brush_text(ctx, lay.material_name, name, mu_color_hex(BRUSH_TEXT_COLOR), name_scale, -1);
         ui_set_font_scaled(gfx_font_ui(), BRUSH_SCREEN_CAPTION_SCALE);
 
         draw_brush_bezel(ctx, lay.info_button, BRUSH_SEG_UNSELECTED_COLOR, false);
@@ -1467,18 +1412,17 @@ static void draw_brush_screen(const input_t *input)
                 lay.info_button.w - 2 * BRUSH_INFO_ICON_PAD,
                 lay.info_button.h - 2 * BRUSH_INFO_ICON_PAD,
             };
-            ui_draw_icon(ctx, icon_r, &icon_sand_table[ICON_SAND_INFO], icon_sand_rows,
-                        mu_color_hex(BRUSH_TEXT_COLOR));
+            ui_draw_icon(ctx, icon_r, &icon_sand_table[ICON_SAND_INFO], icon_sand_rows, mu_color_hex(BRUSH_TEXT_COLOR));
         }
 
         /* Brush mode: caption, three segments. */
         draw_brush_panel(ctx, lay.mode_panel);
-        draw_brush_text(ctx, lay.mode_caption, BRUSH_SCREEN_MODE_CAPTION,
-                        mu_color_hex(BRUSH_CAPTION_COLOR), BRUSH_SCREEN_CAPTION_SCALE, -1);
+        draw_brush_text(ctx, lay.mode_caption, BRUSH_SCREEN_MODE_CAPTION, mu_color_hex(BRUSH_CAPTION_COLOR),
+                        BRUSH_SCREEN_CAPTION_SCALE, -1);
 
         for (int i = 0; i < BRUSH_SCREEN_SEGMENT_COUNT; i++) {
             const mu_Rect r = lay.segments[i];
-            const char *name = brush_screen_segment_label((brush_screen_segment_t)i);
+            const char* name = brush_screen_segment_label((brush_screen_segment_t)i);
 
             /* Id from the segment's own name, the same idiom mu_button_ex()
              * uses for a labelled control - the three names differ, so no
@@ -1491,11 +1435,9 @@ static void draw_brush_screen(const input_t *input)
             }
 
             const bool selected = ((sand_mode_t)i == ui.mode);
-            const bool pressed  = (ctx->hover == id) || (ctx->focus == id);
-            const uint32_t face = selected ? BRUSH_SEG_SELECTED_COLOR
-                                            : BRUSH_SEG_UNSELECTED_COLOR;
-            const mu_Color ink  = mu_color_hex(selected ? BRUSH_SEG_SELECTED_INK_COLOR
-                                                         : BRUSH_TEXT_COLOR);
+            const bool pressed = (ctx->hover == id) || (ctx->focus == id);
+            const uint32_t face = selected ? BRUSH_SEG_SELECTED_COLOR : BRUSH_SEG_UNSELECTED_COLOR;
+            const mu_Color ink = mu_color_hex(selected ? BRUSH_SEG_SELECTED_INK_COLOR : BRUSH_TEXT_COLOR);
 
             draw_brush_bezel(ctx, r, face, pressed);
 
@@ -1506,14 +1448,18 @@ static void draw_brush_screen(const input_t *input)
                 icon_side = icon_side_max;
             }
             const mu_Rect icon_r = {
-                r.x + (r.w - icon_side) / 2, r.y + BRUSH_SEG_PAD,
-                icon_side, icon_side,
+                r.x + (r.w - icon_side) / 2,
+                r.y + BRUSH_SEG_PAD,
+                icon_side,
+                icon_side,
             };
             ui_draw_icon(ctx, icon_r, brush_seg_icons[i], icon_sand_rows, ink);
 
             const mu_Rect label_r = {
-                r.x + BRUSH_SEG_PAD, icon_r.y + icon_side + BRUSH_SEG_LABEL_GAP,
-                r.w - 2 * BRUSH_SEG_PAD, label_h,
+                r.x + BRUSH_SEG_PAD,
+                icon_r.y + icon_side + BRUSH_SEG_LABEL_GAP,
+                r.w - 2 * BRUSH_SEG_PAD,
+                label_h,
             };
             draw_brush_text(ctx, label_r, name, ink, BRUSH_SCREEN_CAPTION_SCALE, 0);
         }
@@ -1521,15 +1467,13 @@ static void draw_brush_screen(const input_t *input)
         /* Brush size: caption/value, slider. */
         draw_brush_panel(ctx, lay.size_panel);
 
-        const char *size_caption =
-            brush_screen_size_caption((brush_screen_segment_t)ui.mode);
-        draw_brush_text(ctx, lay.size_caption, size_caption,
-                        mu_color_hex(BRUSH_CAPTION_COLOR), BRUSH_SCREEN_CAPTION_SCALE, -1);
+        const char* size_caption = brush_screen_size_caption((brush_screen_segment_t)ui.mode);
+        draw_brush_text(ctx, lay.size_caption, size_caption, mu_color_hex(BRUSH_CAPTION_COLOR),
+                        BRUSH_SCREEN_CAPTION_SCALE, -1);
 
         char size_value[8];
         snprintf(size_value, sizeof size_value, "%02u PX", (unsigned)sand_ui_radius(&ui));
-        draw_brush_text(ctx, lay.size_value, size_value,
-                        mu_color_hex(BRUSH_TEXT_COLOR), BRUSH_SCREEN_CAPTION_SCALE, 1);
+        draw_brush_text(ctx, lay.size_value, size_value, mu_color_hex(BRUSH_TEXT_COLOR), BRUSH_SCREEN_CAPTION_SCALE, 1);
 
         mu_layout_set_next(ctx, lay.slider_track, 0);
         int radius = sand_ui_radius(&ui);
@@ -1545,10 +1489,8 @@ static void draw_brush_screen(const input_t *input)
 
 /* Frame */
 
-static void read_gravity_input(uint32_t dt_ms, imu_sample_t *sample, int *gx,
-                               int *gy, int *flow, int *jostle,
-                               int *rotation)
-{
+static void
+read_gravity_input(uint32_t dt_ms, imu_sample_t* sample, int* gx, int* gy, int* flow, int* jostle, int* rotation) {
     *gx = 0;
     *gy = IMU_COUNTS_PER_G;
     *flow = 256;
@@ -1561,21 +1503,20 @@ static void read_gravity_input(uint32_t dt_ms, imu_sample_t *sample, int *gx,
 
     *rotation = imu_rotation_level(sample);
 
-    tilt_update(&tilt, GRAVITY_SCREEN_X(sample), GRAVITY_SCREEN_Y(sample),
-                sample->az, *rotation, dt_ms);
+    tilt_update(&tilt, GRAVITY_SCREEN_X(sample), GRAVITY_SCREEN_Y(sample), sample->az, *rotation, dt_ms);
 
-    *gx   = tilt_x(&tilt);
-    *gy   = tilt_y(&tilt);
+    *gx = tilt_x(&tilt);
+    *gy = tilt_y(&tilt);
     *flow = tilt_strength(&tilt);
 
     const int shake = tilt_shake(&tilt);
     *jostle = shake > SHAKE_DEADZONE ? shake : 0;
 }
 
-static void handle_pour_input(const input_t *input, uint32_t dt_ms)
-{
+static void
+handle_pour_input(const input_t* input, uint32_t dt_ms) {
     if (ui.mode == SAND_MODE_DETONATE) {
-        pour_accumulator_ms = 0;   /* do not let held time leak into paint/erase */
+        pour_accumulator_ms = 0; /* do not let held time leak into paint/erase */
         if (input->pressed) {
             const int cx = input->x / cell;
             const int cy = input->y / cell;
@@ -1594,8 +1535,7 @@ static void handle_pour_input(const input_t *input, uint32_t dt_ms)
             const int cx = input->x / cell;
             const int cy = input->y / cell;
             if (!sand_add_emitter(&sim, cx, cy, brushes[ui.brush])) {
-                ESP_LOGW(TAG, "emitter list full (%d) - tap ignored",
-                         SAND_MAX_EMITTERS);
+                ESP_LOGW(TAG, "emitter list full (%d) - tap ignored", SAND_MAX_EMITTERS);
             }
         }
         return;
@@ -1619,12 +1559,9 @@ static void handle_pour_input(const input_t *input, uint32_t dt_ms)
             /* Wider than the sweep above on purpose - see
              * ERASE_EMITTER_RADIUS_PX's own comment for why a point target
              * needs more aiming tolerance than an area sweep does. */
-            sand_remove_emitters(&sim, cx, cy,
-                                 (ERASE_EMITTER_RADIUS_PX + cell / 2) / cell);
+            sand_remove_emitters(&sim, cx, cy, (ERASE_EMITTER_RADIUS_PX + cell / 2) / cell);
         } else {
-            sand_spawn_cell(&sim, cx, cy,
-                            (sand_ui_radius(&ui) + cell / 2) / cell,
-                            brushes[ui.brush]);
+            sand_spawn_cell(&sim, cx, cy, (sand_ui_radius(&ui) + cell / 2) / cell, brushes[ui.brush]);
         }
     }
 }
@@ -1633,30 +1570,29 @@ static void handle_pour_input(const input_t *input, uint32_t dt_ms)
  * the board is still, and it is what the axis mapping above was verified
  * against. The simulation itself uses the dithered direction, which changes
  * every frame by design and would be useless to log. */
-static void log_direction_change(int gx, int gy, int jostle,
-                                 const imu_sample_t *sample)
-{
+static void
+log_direction_change(int gx, int gy, int jostle, const imu_sample_t* sample) {
     static int last_dx = 99, last_dy = 99;
     int dx, dy;
     sand_gravity_direction(gx, gy, &dx, &dy);
     if (dx == last_dx && dy == last_dy) {
         return;
     }
-    ESP_LOGI(TAG, "down is (%+d,%+d)  smoothed (%+6d,%+6d)  "
-                  "raw (%+6d,%+6d)  shake %d",
+    ESP_LOGI(TAG,
+             "down is (%+d,%+d)  smoothed (%+6d,%+6d)  "
+             "raw (%+6d,%+6d)  shake %d",
              dx, dy, gx, gy, sample->ax, sample->ay, jostle);
     last_dx = dx;
     last_dy = dy;
 }
 
-static void run_sim_steps(int gx, int gy, int jostle, int flow,
-                          uint32_t dt_ms)
-{
+static void
+run_sim_steps(int gx, int gy, int jostle, int flow, uint32_t dt_ms) {
     sim_accumulator_q8 += dt_ms * (uint32_t)flow;
     int steps = (int)(sim_accumulator_q8 / (SIM_STEP_MS * 256));
     if (steps > SIM_MAX_CATCHUP) {
         steps = SIM_MAX_CATCHUP;
-        sim_accumulator_q8 = 0;      /* give up on the backlog */
+        sim_accumulator_q8 = 0; /* give up on the backlog */
     } else {
         sim_accumulator_q8 -= (uint32_t)steps * SIM_STEP_MS * 256;
     }
@@ -1670,8 +1606,8 @@ static void run_sim_steps(int gx, int gy, int jostle, int flow,
 }
 
 #if CONFIG_LAUNCHER_DEVELOPMENT
-static int count_occupied_in_block(int bx, int by)
-{
+static int
+count_occupied_in_block(int bx, int by) {
     const int x0 = bx * SAND_BLOCK_W;
     const int x1 = (x0 + SAND_BLOCK_W < grid_w) ? x0 + SAND_BLOCK_W : grid_w;
     const int y0 = by * SAND_BLOCK_H;
@@ -1679,7 +1615,7 @@ static int count_occupied_in_block(int bx, int by)
 
     int cells = 0;
     for (int y = y0; y < y1; y++) {
-        const uint8_t *row = &grid[(size_t)y * grid_w];
+        const uint8_t* row = &grid[(size_t)y * grid_w];
         for (int x = x0; x < x1; x++) {
             if (row[x] != SAND_EMPTY) {
                 cells++;
@@ -1689,8 +1625,8 @@ static int count_occupied_in_block(int bx, int by)
     return cells;
 }
 
-static void count_awake(int *out_blocks, int *out_cells)
-{
+static void
+count_awake(int* out_blocks, int* out_cells) {
     int blocks = 0, cells = 0;
     for (int by = 0; by < block_rows; by++) {
         for (int bx = 0; bx < block_cols; bx++) {
@@ -1702,13 +1638,12 @@ static void count_awake(int *out_blocks, int *out_cells)
         }
     }
     *out_blocks = blocks;
-    *out_cells  = cells;
+    *out_cells = cells;
 }
 
-static void track_pour_split(const input_t *input, int64_t step_us,
-                             int64_t draw_us, int awake_blocks, int awake_cells,
-                             int64_t now)
-{
+static void
+track_pour_split(const input_t* input, int64_t step_us, int64_t draw_us, int awake_blocks, int awake_cells,
+                 int64_t now) {
     if (input->down && ui.mode == SAND_MODE_PAINT) {
         pour_step_us_total += step_us;
         pour_draw_us_total += draw_us;
@@ -1728,24 +1663,22 @@ static void track_pour_split(const input_t *input, int64_t step_us,
     }
     if (pour_frames > 0) {
         const int64_t blocks = pour_awake_total / pour_frames;
-        const int64_t cells  = pour_awake_cells_total / pour_frames;
-        ESP_LOGI(TAG, "POURING:     %lu frames, step %lld us, draw %lld us, "
-                      "%lld of %d blocks awake, %lld cells/awake block",
-                 (unsigned long)pour_frames,
-                 (long long)(pour_step_us_total / pour_frames),
-                 (long long)(pour_draw_us_total / pour_frames),
-                 (long long)blocks, block_cols * block_rows,
+        const int64_t cells = pour_awake_cells_total / pour_frames;
+        ESP_LOGI(TAG,
+                 "POURING:     %lu frames, step %lld us, draw %lld us, "
+                 "%lld of %d blocks awake, %lld cells/awake block",
+                 (unsigned long)pour_frames, (long long)(pour_step_us_total / pour_frames),
+                 (long long)(pour_draw_us_total / pour_frames), (long long)blocks, block_cols * block_rows,
                  (long long)(blocks > 0 ? cells / blocks : 0));
     }
     if (idle_frames > 0) {
         const int64_t blocks = idle_awake_total / idle_frames;
-        const int64_t cells  = idle_awake_cells_total / idle_frames;
-        ESP_LOGI(TAG, "NOT POURING: %lu frames, step %lld us, draw %lld us, "
-                      "%lld of %d blocks awake, %lld cells/awake block",
-                 (unsigned long)idle_frames,
-                 (long long)(idle_step_us_total / idle_frames),
-                 (long long)(idle_draw_us_total / idle_frames),
-                 (long long)blocks, block_cols * block_rows,
+        const int64_t cells = idle_awake_cells_total / idle_frames;
+        ESP_LOGI(TAG,
+                 "NOT POURING: %lu frames, step %lld us, draw %lld us, "
+                 "%lld of %d blocks awake, %lld cells/awake block",
+                 (unsigned long)idle_frames, (long long)(idle_step_us_total / idle_frames),
+                 (long long)(idle_draw_us_total / idle_frames), (long long)blocks, block_cols * block_rows,
                  (long long)(blocks > 0 ? cells / blocks : 0));
     }
     pour_step_us_total = pour_draw_us_total = 0;
@@ -1757,22 +1690,18 @@ static void track_pour_split(const input_t *input, int64_t step_us,
 }
 #endif
 
-static void draw_menu(const input_t *input)
-{
-    mu_Context *ctx = ui_context();
+static void
+draw_menu(const input_t* input) {
+    mu_Context* ctx = ui_context();
 
     ui_begin(input);
 
-    if (ui_begin_screen(ctx, "Sand Menu",
-                        MU_OPT_NOTITLE | MU_OPT_NORESIZE |
-                        MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
+    if (ui_begin_screen(ctx, "Sand Menu", MU_OPT_NOTITLE | MU_OPT_NORESIZE | MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
 
         const int total_h = 2 * MENU_BTN_H + MENU_BTN_GAP;
-        const int top      = (ui_height() - total_h) / 2;
+        const int top = (ui_height() - total_h) / 2;
 
-        mu_layout_set_next(ctx,
-                           ui_centered_rect(ui_width(), MENU_BTN_W, MENU_BTN_H, top),
-                           0);
+        mu_layout_set_next(ctx, ui_centered_rect(ui_width(), MENU_BTN_W, MENU_BTN_H, top), 0);
         if (mu_button(ctx, "START")) {
             start_sim();
         }
@@ -1780,9 +1709,7 @@ static void draw_menu(const input_t *input)
         char label[24];
         snprintf(label, sizeof label, "QUALITY: %s", qualities[quality].name);
 
-        mu_layout_set_next(ctx,
-                           ui_centered_rect(ui_width(), MENU_BTN_W, MENU_BTN_H,
-                                            top + MENU_BTN_H + MENU_BTN_GAP),
+        mu_layout_set_next(ctx, ui_centered_rect(ui_width(), MENU_BTN_W, MENU_BTN_H, top + MENU_BTN_H + MENU_BTN_GAP),
                            0);
         if (mu_button(ctx, label)) {
             quality = (quality + 1) % QUALITY_COUNT;
@@ -1794,8 +1721,8 @@ static void draw_menu(const input_t *input)
     ui_end(COL_BACKGROUND);
 }
 
-static void sand_frame(uint32_t dt_ms, const input_t *input)
-{
+static void
+sand_frame(uint32_t dt_ms, const input_t* input) {
     if (ui.screen == SAND_UI_MENU) {
         draw_menu(input);
         return;
@@ -1886,7 +1813,7 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
     }
 
     int gx, gy, flow, jostle, rotation;
-    imu_sample_t sample = { 0 };
+    imu_sample_t sample = {0};
     read_gravity_input(dt_ms, &sample, &gx, &gy, &flow, &jostle, &rotation);
 
     if (label_left_ms > 0) {
@@ -1932,9 +1859,8 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
     /* Local-depth wake, cullet cycle, shine, and the wood-leaf swing each
      * have their own clock tick and row array. Driven by dt_ms, not frame
      * count. Glass's wake uses gravity_bearing_q16(). */
-    draw_dirty_rows(advance_shine(dt_ms), advance_local_depth_wake(dt_ms),
-                     advance_cullet(dt_ms), advance_glass_phase(gx, gy),
-                     advance_wood_leaf_phase(dt_ms));
+    draw_dirty_rows(advance_shine(dt_ms), advance_local_depth_wake(dt_ms), advance_cullet(dt_ms),
+                    advance_glass_phase(gx, gy), advance_wood_leaf_phase(dt_ms));
 
     draw_emitter_markers();
 
@@ -1952,18 +1878,17 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
 #endif
 }
 
-static void sand_diagnostic_json(char *out, size_t len)
-{
-    snprintf(out, len, "{\"tilt_x\":%d,\"tilt_y\":%d}",
-             tilt_x(&tilt), tilt_y(&tilt));
+static void
+sand_diagnostic_json(char* out, size_t len) {
+    snprintf(out, len, "{\"tilt_x\":%d,\"tilt_y\":%d}", tilt_x(&tilt), tilt_y(&tilt));
 }
 
 const app_t app_sand = {
-    .name           = "Falling Sand",
-    .summary        = "Tilt to steer, touch to pour",
-    .enter          = sand_enter,
-    .frame          = sand_frame,
-    .exit           = sand_exit,
+    .name = "Falling Sand",
+    .summary = "Tilt to steer, touch to pour",
+    .enter = sand_enter,
+    .frame = sand_frame,
+    .exit = sand_exit,
     .diagnostic_json = sand_diagnostic_json,
 };
 

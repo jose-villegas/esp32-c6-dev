@@ -19,28 +19,27 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#include "unity.h"
 #include "suites.h"
+#include "unity.h"
 
 #include "palette.h"
 
 /* --- palette_cols(): the derivation itself ------------------------------ */
 
-static void test_palette_cols_at_the_two_real_screen_widths(void)
-{
+static void
+test_palette_cols_at_the_two_real_screen_widths(void) {
     /* The whole point of deriving rather than assuming: both real widths
      * this panel is ever drawn at come out to 4, by calculation, not by
      * reusing a constant that happens to still say 4 - see palette.h's own
      * comment on why this is not a coincidence at 368 and IS a coincidence
      * (of PALETTE_TILE's specific value) more generally. */
-    TEST_ASSERT_EQUAL_INT_MESSAGE(4, palette_cols(PALETTE_SCREEN_W),
-        "368 / 92 == 4 exactly");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(4, palette_cols(PALETTE_SCREEN_W), "368 / 92 == 4 exactly");
     TEST_ASSERT_EQUAL_INT_MESSAGE(4, palette_cols(PALETTE_SCREEN_H),
-        "448 / 92 == 4 with 80px left over - still floors to 4, not 5");
+                                  "448 / 92 == 4 with 80px left over - still floors to 4, not 5");
 }
 
-static void test_palette_cols_spans_the_tile_size_boundary(void)
-{
+static void
+test_palette_cols_spans_the_tile_size_boundary(void) {
     /* Below one tile, at exactly one, and just past it: still 1 - a whole
      * extra column needs a whole extra PALETTE_TILE of width, not just
      * crossing into it. */
@@ -59,8 +58,8 @@ static void test_palette_cols_spans_the_tile_size_boundary(void)
     TEST_ASSERT_EQUAL_INT(4, palette_cols(5 * PALETTE_TILE - 1));
 }
 
-static void test_palette_cols_clamps_to_at_least_one(void)
-{
+static void
+test_palette_cols_clamps_to_at_least_one(void) {
     /* A caller passing a width narrower than one tile - or a nonsense
      * negative one - still gets a usable grid rather than a divide-shaped
      * degenerate case downstream. */
@@ -68,10 +67,10 @@ static void test_palette_cols_clamps_to_at_least_one(void)
     TEST_ASSERT_EQUAL_INT(1, palette_cols(-10));
 }
 
-static void test_palette_cols_clamps_to_the_max(void)
-{
+static void
+test_palette_cols_clamps_to_the_max(void) {
     TEST_ASSERT_EQUAL_INT_MESSAGE(PALETTE_COLS_MAX, palette_cols(1000000),
-        "an absurd width must not return an absurd column count");
+                                  "an absurd width must not return an absurd column count");
 }
 
 /* --- palette_tile_rect / palette_hit agreement, count = 14 (one plausible
@@ -81,21 +80,19 @@ static void test_palette_cols_clamps_to_the_max(void)
  * count 1-16 generically and this one still pins the specific 2-wide
  * partial row by name) ---------------------------------------------------- */
 
-static void test_centre_of_every_tile_hits_its_own_index(void)
-{
+static void
+test_centre_of_every_tile_hits_its_own_index(void) {
     const int count = 14;
     const int cols = palette_cols(PALETTE_SCREEN_W);
     for (int i = 0; i < count; i++) {
         int x, y, w, h;
-        palette_tile_rect(i, count, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H,
-                          &x, &y, &w, &h);
+        palette_tile_rect(i, count, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H, &x, &y, &w, &h);
 
         const int cx = x + w / 2;
         const int cy = y + h / 2;
 
-        TEST_ASSERT_EQUAL_INT_MESSAGE(i,
-            palette_hit(cx, cy, count, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H),
-            "the centre of a tile's own rect must hit that tile's index");
+        TEST_ASSERT_EQUAL_INT_MESSAGE(i, palette_hit(cx, cy, count, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H),
+                                      "the centre of a tile's own rect must hit that tile's index");
     }
 }
 
@@ -103,21 +100,19 @@ static void test_centre_of_every_tile_hits_its_own_index(void)
  * the panel one tile past the count = 14 case above (app_sand.c's own
  * brushes[] array) - 3 full rows of 4, then a centred row of 3, a
  * differently-shaped partial row than 14's own 2-wide one. */
-static void test_centre_of_every_tile_hits_its_own_index_at_brush_count(void)
-{
+static void
+test_centre_of_every_tile_hits_its_own_index_at_brush_count(void) {
     const int count = 15;
     const int cols = palette_cols(PALETTE_SCREEN_W);
     for (int i = 0; i < count; i++) {
         int x, y, w, h;
-        palette_tile_rect(i, count, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H,
-                          &x, &y, &w, &h);
+        palette_tile_rect(i, count, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H, &x, &y, &w, &h);
 
         const int cx = x + w / 2;
         const int cy = y + h / 2;
 
-        TEST_ASSERT_EQUAL_INT_MESSAGE(i,
-            palette_hit(cx, cy, count, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H),
-            "the centre of a tile's own rect must hit that tile's index");
+        TEST_ASSERT_EQUAL_INT_MESSAGE(i, palette_hit(cx, cy, count, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H),
+                                      "the centre of a tile's own rect must hit that tile's index");
     }
 }
 
@@ -128,34 +123,29 @@ static void test_centre_of_every_tile_hits_its_own_index_at_brush_count(void)
  * palette_tile_rect() and palette_hit() are checked to agree at both the
  * upright and turned canvas (palette.h's "two views of one layout"). cols
  * is derived from screen_w, matching draw_palette()'s per-frame usage. */
-static void check_hit_round_trips_against_tile_rect_for_every_tile(
-    int screen_w, int screen_h)
-{
+static void
+check_hit_round_trips_against_tile_rect_for_every_tile(int screen_w, int screen_h) {
     const int cols = palette_cols(screen_w);
     for (int count = 1; count <= 16; count++) {
         for (int i = 0; i < count; i++) {
             int x, y, w, h;
-            palette_tile_rect(i, count, cols, screen_w, screen_h,
-                              &x, &y, &w, &h);
+            palette_tile_rect(i, count, cols, screen_w, screen_h, &x, &y, &w, &h);
 
-            const int xs[] = { x, x + w / 2, x + w - 1 };
-            const int ys[] = { y, y + h / 2, y + h - 1 };
+            const int xs[] = {x, x + w / 2, x + w - 1};
+            const int ys[] = {y, y + h / 2, y + h - 1};
             for (int xi = 0; xi < 3; xi++) {
                 for (int yi = 0; yi < 3; yi++) {
-                    TEST_ASSERT_EQUAL_INT_MESSAGE(i,
-                        palette_hit(xs[xi], ys[yi], count, cols, screen_w,
-                                   screen_h),
-                        "a point inside tile i's own rect must hit i");
+                    TEST_ASSERT_EQUAL_INT_MESSAGE(i, palette_hit(xs[xi], ys[yi], count, cols, screen_w, screen_h),
+                                                  "a point inside tile i's own rect must hit i");
                 }
             }
         }
     }
 }
 
-static void test_hit_round_trips_against_tile_rect_for_every_tile(void)
-{
-    check_hit_round_trips_against_tile_rect_for_every_tile(PALETTE_SCREEN_W,
-                                                            PALETTE_SCREEN_H);
+static void
+test_hit_round_trips_against_tile_rect_for_every_tile(void) {
+    check_hit_round_trips_against_tile_rect_for_every_tile(PALETTE_SCREEN_W, PALETTE_SCREEN_H);
 }
 
 /* The rotated canvas: at a quarter turn, ui_width()/ui_height() swap - see
@@ -163,16 +153,15 @@ static void test_hit_round_trips_against_tile_rect_for_every_tile(void)
  * 368x448, with its OWN derived column count (also 4, but computed fresh -
  * see test_palette_cols_at_the_two_real_screen_widths() above). Same
  * property as the test above, at the OTHER orientation. */
-static void test_hit_round_trips_against_tile_rect_for_every_tile_turned(void)
-{
-    check_hit_round_trips_against_tile_rect_for_every_tile(PALETTE_SCREEN_H,
-                                                            PALETTE_SCREEN_W);
+static void
+test_hit_round_trips_against_tile_rect_for_every_tile_turned(void) {
+    check_hit_round_trips_against_tile_rect_for_every_tile(PALETTE_SCREEN_H, PALETTE_SCREEN_W);
 }
 
 /* --- the centred partial row: empty space beside it is a genuine miss --- */
 
-static void test_empty_region_beside_centred_partial_row_misses(void)
-{
+static void
+test_empty_region_beside_centred_partial_row_misses(void) {
     /* count=14, cols=4 (derived - see above): last row (row 3) holds 2 of 4
      * tiles, centred - so it occupies [92,276) horizontally (see
      * PALETTE_TILE) and leaves [0,92) and [276,368) of that row empty. A
@@ -180,56 +169,47 @@ static void test_empty_region_beside_centred_partial_row_misses(void)
     const int count = 14;
     const int cols = palette_cols(PALETTE_SCREEN_W);
     int x, y, w, h;
-    palette_tile_rect(12, count, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H,
-                      &x, &y, &w, &h);               /* first tile, last row */
+    palette_tile_rect(12, count, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H, &x, &y, &w, &h); /* first tile, last row */
     TEST_ASSERT_EQUAL_INT(92, x);
 
     const int row_y = y + h / 2;
 
-    TEST_ASSERT_EQUAL_INT(-1,
-        palette_hit(0, row_y, count, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H));
-    TEST_ASSERT_EQUAL_INT(-1,
-        palette_hit(x - 1, row_y, count, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H));
-    TEST_ASSERT_EQUAL_INT(-1,
-        palette_hit(367, row_y, count, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H));
+    TEST_ASSERT_EQUAL_INT(-1, palette_hit(0, row_y, count, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H));
+    TEST_ASSERT_EQUAL_INT(-1, palette_hit(x - 1, row_y, count, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H));
+    TEST_ASSERT_EQUAL_INT(-1, palette_hit(367, row_y, count, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H));
 }
 
 /* --- outside the panel entirely, and negative coordinates -------------- */
 
-static void test_points_outside_the_panel_miss(void)
-{
+static void
+test_points_outside_the_panel_miss(void) {
     const int count = 14;
     const int cols = palette_cols(PALETTE_SCREEN_W);
     int px, py, pw, ph;
-    palette_panel_rect(count, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H,
-                       &px, &py, &pw, &ph);
+    palette_panel_rect(count, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H, &px, &py, &pw, &ph);
 
-    TEST_ASSERT_EQUAL_INT(-1, palette_hit(px + pw / 2, py - 1, count, cols,
-        PALETTE_SCREEN_W, PALETTE_SCREEN_H));                                /* above */
-    TEST_ASSERT_EQUAL_INT(-1, palette_hit(px + pw / 2, py + ph, count, cols,
-        PALETTE_SCREEN_W, PALETTE_SCREEN_H));                                /* below */
-    TEST_ASSERT_EQUAL_INT(-1, palette_hit(px - 1, py + ph / 2, count, cols,
-        PALETTE_SCREEN_W, PALETTE_SCREEN_H));                                /* left */
-    TEST_ASSERT_EQUAL_INT(-1, palette_hit(px + pw, py + ph / 2, count, cols,
-        PALETTE_SCREEN_W, PALETTE_SCREEN_H));                                /* right */
+    TEST_ASSERT_EQUAL_INT(
+        -1, palette_hit(px + pw / 2, py - 1, count, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H)); /* above */
+    TEST_ASSERT_EQUAL_INT(
+        -1, palette_hit(px + pw / 2, py + ph, count, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H)); /* below */
+    TEST_ASSERT_EQUAL_INT(-1,
+                          palette_hit(px - 1, py + ph / 2, count, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H)); /* left */
+    TEST_ASSERT_EQUAL_INT(
+        -1, palette_hit(px + pw, py + ph / 2, count, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H)); /* right */
 }
 
-static void test_negative_coordinates_miss(void)
-{
+static void
+test_negative_coordinates_miss(void) {
     const int cols = palette_cols(PALETTE_SCREEN_W);
-    TEST_ASSERT_EQUAL_INT(-1,
-        palette_hit(-1, -1, 14, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H));
-    TEST_ASSERT_EQUAL_INT(-1,
-        palette_hit(-1, 100, 14, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H));
-    TEST_ASSERT_EQUAL_INT(-1,
-        palette_hit(100, -1, 14, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H));
+    TEST_ASSERT_EQUAL_INT(-1, palette_hit(-1, -1, 14, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H));
+    TEST_ASSERT_EQUAL_INT(-1, palette_hit(-1, 100, 14, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H));
+    TEST_ASSERT_EQUAL_INT(-1, palette_hit(100, -1, 14, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H));
 }
 
 /* --- tiles never overlap, and always sit inside the screen ------------- */
 
-static bool rects_overlap(int ax, int ay, int aw, int ah,
-                          int bx, int by, int bw, int bh)
-{
+static bool
+rects_overlap(int ax, int ay, int aw, int ah, int bx, int by, int bw, int bh) {
     return ax < bx + bw && bx < ax + aw && ay < by + bh && by < ay + ah;
 }
 
@@ -240,38 +220,35 @@ static bool rects_overlap(int ax, int ay, int aw, int ah,
  * on-screen bound here at 448x368 would mean PALETTE_FITS()'s reasoning
  * (see palette.h) was wrong in practice, not just unproven. cols is derived
  * from screen_w, same as the round-trip check above. */
-static void check_tile_rects_never_overlap_and_stay_on_screen(int screen_w,
-                                                               int screen_h)
-{
+static void
+check_tile_rects_never_overlap_and_stay_on_screen(int screen_w, int screen_h) {
     const int cols = palette_cols(screen_w);
     for (int count = 1; count <= 16; count++) {
         int rects[16][4];
         for (int i = 0; i < count; i++) {
             int x, y, w, h;
-            palette_tile_rect(i, count, cols, screen_w, screen_h,
-                              &x, &y, &w, &h);
-            rects[i][0] = x; rects[i][1] = y;
-            rects[i][2] = w; rects[i][3] = h;
+            palette_tile_rect(i, count, cols, screen_w, screen_h, &x, &y, &w, &h);
+            rects[i][0] = x;
+            rects[i][1] = y;
+            rects[i][2] = w;
+            rects[i][3] = h;
 
-            TEST_ASSERT_TRUE_MESSAGE(x >= 0 && y >= 0 &&
-                x + w <= screen_w && y + h <= screen_h,
-                "a tile rect must stay entirely on screen");
+            TEST_ASSERT_TRUE_MESSAGE(x >= 0 && y >= 0 && x + w <= screen_w && y + h <= screen_h,
+                                     "a tile rect must stay entirely on screen");
         }
         for (int i = 0; i < count; i++) {
             for (int j = i + 1; j < count; j++) {
-                TEST_ASSERT_FALSE_MESSAGE(
-                    rects_overlap(rects[i][0], rects[i][1], rects[i][2], rects[i][3],
-                                  rects[j][0], rects[j][1], rects[j][2], rects[j][3]),
-                    "two tiles in the same panel must never overlap");
+                TEST_ASSERT_FALSE_MESSAGE(rects_overlap(rects[i][0], rects[i][1], rects[i][2], rects[i][3], rects[j][0],
+                                                        rects[j][1], rects[j][2], rects[j][3]),
+                                          "two tiles in the same panel must never overlap");
             }
         }
     }
 }
 
-static void test_tile_rects_never_overlap_and_stay_on_screen(void)
-{
-    check_tile_rects_never_overlap_and_stay_on_screen(PALETTE_SCREEN_W,
-                                                       PALETTE_SCREEN_H);
+static void
+test_tile_rects_never_overlap_and_stay_on_screen(void) {
+    check_tile_rects_never_overlap_and_stay_on_screen(PALETTE_SCREEN_W, PALETTE_SCREEN_H);
 }
 
 /* The rotated canvas - 448x368, ui_width()/ui_height()'s swapped pair at an
@@ -281,21 +258,19 @@ static void test_tile_rects_never_overlap_and_stay_on_screen(void)
  * check_tile_rects_never_overlap_and_stay_on_screen() itself - and
  * palette_hit() still round-trips against palette_tile_rect(), covered by
  * test_hit_round_trips_against_tile_rect_for_every_tile_turned() above. */
-static void test_tile_rects_never_overlap_and_stay_on_screen_turned(void)
-{
-    check_tile_rects_never_overlap_and_stay_on_screen(PALETTE_SCREEN_H,
-                                                       PALETTE_SCREEN_W);
+static void
+test_tile_rects_never_overlap_and_stay_on_screen_turned(void) {
+    check_tile_rects_never_overlap_and_stay_on_screen(PALETTE_SCREEN_H, PALETTE_SCREEN_W);
 }
 
 /* --- a full grid (16, no partial row) leaves no gap --------------------- */
 
-static void test_full_grid_of_sixteen_leaves_no_gap(void)
-{
+static void
+test_full_grid_of_sixteen_leaves_no_gap(void) {
     const int count = 16;
     const int cols = palette_cols(PALETTE_SCREEN_W);
     int px, py, pw, ph;
-    palette_panel_rect(count, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H,
-                       &px, &py, &pw, &ph);
+    palette_panel_rect(count, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H, &px, &py, &pw, &ph);
 
     TEST_ASSERT_EQUAL_INT(cols * PALETTE_TILE, pw);
     TEST_ASSERT_EQUAL_INT(PALETTE_ROWS(count, cols) * PALETTE_TILE, ph);
@@ -303,18 +278,15 @@ static void test_full_grid_of_sixteen_leaves_no_gap(void)
     /* Every pixel of the panel belongs to exactly one tile - sample the
      * centre of every PALETTE_TILE x PALETTE_TILE cell in the panel and
      * confirm each one hits a distinct, valid index. */
-    bool seen[16] = { false };
+    bool seen[16] = {false};
     for (int row = 0; row < PALETTE_ROWS(count, cols); row++) {
         for (int col = 0; col < cols; col++) {
             const int cx = px + col * PALETTE_TILE + PALETTE_TILE / 2;
             const int cy = py + row * PALETTE_TILE + PALETTE_TILE / 2;
-            const int hit = palette_hit(cx, cy, count, cols,
-                                        PALETTE_SCREEN_W, PALETTE_SCREEN_H);
+            const int hit = palette_hit(cx, cy, count, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H);
 
-            TEST_ASSERT_TRUE_MESSAGE(hit >= 0 && hit < count,
-                "every cell of a full grid must hit a valid tile");
-            TEST_ASSERT_FALSE_MESSAGE(seen[hit],
-                "a full grid must not have two cells hitting the same tile");
+            TEST_ASSERT_TRUE_MESSAGE(hit >= 0 && hit < count, "every cell of a full grid must hit a valid tile");
+            TEST_ASSERT_FALSE_MESSAGE(seen[hit], "a full grid must not have two cells hitting the same tile");
             seen[hit] = true;
         }
     }
@@ -322,12 +294,11 @@ static void test_full_grid_of_sixteen_leaves_no_gap(void)
 
 /* --- a single tile still lands somewhere sensible ----------------------- */
 
-static void test_count_of_one_lands_sensibly(void)
-{
+static void
+test_count_of_one_lands_sensibly(void) {
     const int cols = palette_cols(PALETTE_SCREEN_W);
     int x, y, w, h;
-    palette_tile_rect(0, 1, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H,
-                      &x, &y, &w, &h);
+    palette_tile_rect(0, 1, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H, &x, &y, &w, &h);
 
     TEST_ASSERT_EQUAL_INT(PALETTE_TILE, w);
     TEST_ASSERT_EQUAL_INT(PALETTE_TILE, h);
@@ -336,12 +307,9 @@ static void test_count_of_one_lands_sensibly(void)
 
     /* A single tile is its own (trivially centred) partial row, so its
      * centre must hit it and its own top-left corner must too. */
-    TEST_ASSERT_EQUAL_INT(0, palette_hit(x + w / 2, y + h / 2, 1, cols,
-                                         PALETTE_SCREEN_W, PALETTE_SCREEN_H));
-    TEST_ASSERT_EQUAL_INT(0, palette_hit(x, y, 1, cols,
-                                         PALETTE_SCREEN_W, PALETTE_SCREEN_H));
-    TEST_ASSERT_EQUAL_INT(-1, palette_hit(x - 1, y, 1, cols,
-                                          PALETTE_SCREEN_W, PALETTE_SCREEN_H));
+    TEST_ASSERT_EQUAL_INT(0, palette_hit(x + w / 2, y + h / 2, 1, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H));
+    TEST_ASSERT_EQUAL_INT(0, palette_hit(x, y, 1, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H));
+    TEST_ASSERT_EQUAL_INT(-1, palette_hit(x - 1, y, 1, cols, PALETTE_SCREEN_W, PALETTE_SCREEN_H));
 }
 
 /* --- the panel never overflows the canvas it was derived from ---------- */
@@ -351,26 +319,22 @@ static void test_count_of_one_lands_sensibly(void)
  * here (cols == 1, so 16 rows). A failure can then only mean
  * palette_panel_rect() put the panel somewhere wrong, never that the real
  * panel lacks room - which PALETTE_FITS already asserts at build time. */
-static void test_panel_never_overflows_the_canvas_across_a_width_sweep(void)
-{
+static void
+test_panel_never_overflows_the_canvas_across_a_width_sweep(void) {
     const int screen_h = 16 * PALETTE_TILE;
 
-    for (int screen_w = PALETTE_TILE; screen_w <= 20 * PALETTE_TILE;
-         screen_w += PALETTE_TILE) {
+    for (int screen_w = PALETTE_TILE; screen_w <= 20 * PALETTE_TILE; screen_w += PALETTE_TILE) {
         const int cols = palette_cols(screen_w);
         TEST_ASSERT_TRUE_MESSAGE(cols >= 1 && cols <= PALETTE_COLS_MAX,
-            "palette_cols() must stay within its own documented clamp");
+                                 "palette_cols() must stay within its own documented clamp");
 
         for (int count = 1; count <= 16; count++) {
             int px, py, pw, ph;
-            palette_panel_rect(count, cols, screen_w, screen_h,
-                               &px, &py, &pw, &ph);
+            palette_panel_rect(count, cols, screen_w, screen_h, &px, &py, &pw, &ph);
 
-            TEST_ASSERT_TRUE_MESSAGE(
-                px >= 0 && py >= 0 &&
-                px + pw <= screen_w && py + ph <= screen_h,
-                "the panel must stay entirely inside the canvas it was "
-                "derived from, at every width in the sweep");
+            TEST_ASSERT_TRUE_MESSAGE(px >= 0 && py >= 0 && px + pw <= screen_w && py + ph <= screen_h,
+                                     "the panel must stay entirely inside the canvas it was "
+                                     "derived from, at every width in the sweep");
         }
     }
 }
@@ -384,34 +348,33 @@ static void test_panel_never_overflows_the_canvas_across_a_width_sweep(void)
  * label_bbox() below reconstructs it by walking the origin the way
  * gfx_text_turned() does. */
 
-static void label_bbox(int ox, int oy, int len, int turn,
-                       int *bx, int *by, int *bw, int *bh)
-{
+static void
+label_bbox(int ox, int oy, int len, int turn, int* bx, int* by, int* bw, int* bh) {
     switch (turn) {
-    case 0:                                    /* upright: walks +x from ox,oy */
-        *bx = ox;
-        *by = oy;
-        *bw = len * PALETTE_CHAR_W;
-        *bh = PALETTE_CHAR_H;
-        break;
-    case 2:                                    /* upside down: walks -x from ox,oy */
-        *bx = ox - (len - 1) * PALETTE_CHAR_W;
-        *by = oy;
-        *bw = len * PALETTE_CHAR_W;
-        *bh = PALETTE_CHAR_H;
-        break;
-    case 1:                                    /* top-to-bottom: walks +y from ox,oy */
-        *bx = ox;
-        *by = oy;
-        *bw = PALETTE_CHAR_H;
-        *bh = len * PALETTE_CHAR_W;
-        break;
-    default:                                   /* turn 3, bottom-to-top: walks -y */
-        *bx = ox;
-        *by = oy - (len - 1) * PALETTE_CHAR_W;
-        *bw = PALETTE_CHAR_H;
-        *bh = len * PALETTE_CHAR_W;
-        break;
+        case 0: /* upright: walks +x from ox,oy */
+            *bx = ox;
+            *by = oy;
+            *bw = len * PALETTE_CHAR_W;
+            *bh = PALETTE_CHAR_H;
+            break;
+        case 2: /* upside down: walks -x from ox,oy */
+            *bx = ox - (len - 1) * PALETTE_CHAR_W;
+            *by = oy;
+            *bw = len * PALETTE_CHAR_W;
+            *bh = PALETTE_CHAR_H;
+            break;
+        case 1: /* top-to-bottom: walks +y from ox,oy */
+            *bx = ox;
+            *by = oy;
+            *bw = PALETTE_CHAR_H;
+            *bh = len * PALETTE_CHAR_W;
+            break;
+        default: /* turn 3, bottom-to-top: walks -y */
+            *bx = ox;
+            *by = oy - (len - 1) * PALETTE_CHAR_W;
+            *bw = PALETTE_CHAR_H;
+            *bh = len * PALETTE_CHAR_W;
+            break;
     }
 }
 
@@ -419,13 +382,15 @@ static void label_bbox(int ox, int oy, int len, int turn,
  * that is not itself square (unlike a real palette tile) so a formula that
  * only happens to work when w == h cannot pass by accident. */
 
-static void test_label_centred_in_rect_at_every_turn(void)
-{
-    struct { int x, y, w, h, len; } cases[] = {
-        {   0,  40,  92,  92, 5 },   /* a real tile: 5-char name, 92x92 */
-        {   0,  40,  92,  92, 1 },   /* shortest real name */
-        { 100, 200, 120,  80, 3 },   /* non-square rect */
-        {  10,  10,  61,  74, 4 },   /* odd dimensions - LOW quality's cell math shows up elsewhere as odd numbers too */
+static void
+test_label_centred_in_rect_at_every_turn(void) {
+    struct {
+        int x, y, w, h, len;
+    } cases[] = {
+        {0, 40, 92, 92, 5},     /* a real tile: 5-char name, 92x92 */
+        {0, 40, 92, 92, 1},     /* shortest real name */
+        {100, 200, 120, 80, 3}, /* non-square rect */
+        {10, 10, 61, 74, 4},    /* odd dimensions - LOW quality's cell math shows up elsewhere as odd numbers too */
     };
 
     for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
@@ -439,16 +404,14 @@ static void test_label_centred_in_rect_at_every_turn(void)
             int bx, by, bw, bh;
             label_bbox(ox, oy, len, turn, &bx, &by, &bw, &bh);
 
-            TEST_ASSERT_EQUAL_INT_MESSAGE(x + (w - bw) / 2, bx,
-                "label box must be horizontally centred in the rect");
-            TEST_ASSERT_EQUAL_INT_MESSAGE(y + (h - bh) / 2, by,
-                "label box must be vertically centred in the rect");
+            TEST_ASSERT_EQUAL_INT_MESSAGE(x + (w - bw) / 2, bx, "label box must be horizontally centred in the rect");
+            TEST_ASSERT_EQUAL_INT_MESSAGE(y + (h - bh) / 2, by, "label box must be vertically centred in the rect");
         }
     }
 }
 
-static void test_label_box_swaps_dimensions_at_turns_one_and_three(void)
-{
+static void
+test_label_box_swaps_dimensions_at_turns_one_and_three(void) {
     const int len = 5;
     int ox, oy, bx, by, bw, bh;
 
@@ -463,8 +426,8 @@ static void test_label_box_swaps_dimensions_at_turns_one_and_three(void)
     TEST_ASSERT_EQUAL_INT(len * PALETTE_CHAR_W, bh);
 }
 
-static void test_turn_zero_and_two_share_a_box_but_not_an_origin(void)
-{
+static void
+test_turn_zero_and_two_share_a_box_but_not_an_origin(void) {
     const int len = 5;
     int ox0, oy0, ox2, oy2;
 
@@ -486,8 +449,8 @@ static void test_turn_zero_and_two_share_a_box_but_not_an_origin(void)
     TEST_ASSERT_EQUAL_INT(bh0, bh2);
 }
 
-void run_palette_suite(void)
-{
+void
+run_palette_suite(void) {
     RUN_TEST(test_palette_cols_at_the_two_real_screen_widths);
     RUN_TEST(test_palette_cols_spans_the_tile_size_boundary);
     RUN_TEST(test_palette_cols_clamps_to_at_least_one);

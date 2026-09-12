@@ -11,9 +11,9 @@
  * change.
  */
 
-#include "unity.h"
-#include "suites.h"
 #include "display/display.h"
+#include "suites.h"
+#include "unity.h"
 
 /* A magnitude comfortably past every threshold this module uses, so a vector
  * built from it reads as "unambiguously" pointing one way. */
@@ -25,8 +25,8 @@
  * only ever move one quarter, so settling into a fully opposite orientation
  * from a strong start can take a second call. Four calls is more than any
  * reachable case needs. */
-static void settle(display_t *d, int gx, int gy)
-{
+static void
+settle(display_t* d, int gx, int gy) {
     for (int i = 0; i < 4; i++) {
         if (!display_update(d, gx, gy)) {
             return;
@@ -36,32 +36,32 @@ static void settle(display_t *d, int gx, int gy)
 
 /* --- the four unambiguous orientations ----------------------------------- */
 
-void test_gravity_straight_down_reads_upright(void)
-{
+void
+test_gravity_straight_down_reads_upright(void) {
     display_t d;
     display_init(&d);
     settle(&d, 0, STRONG);
     TEST_ASSERT_EQUAL_INT(0, display_quarter(&d));
 }
 
-void test_gravity_to_the_left_reads_quarter_one(void)
-{
+void
+test_gravity_to_the_left_reads_quarter_one(void) {
     display_t d;
     display_init(&d);
     settle(&d, -STRONG, 0);
     TEST_ASSERT_EQUAL_INT(1, display_quarter(&d));
 }
 
-void test_gravity_straight_up_reads_upside_down(void)
-{
+void
+test_gravity_straight_up_reads_upside_down(void) {
     display_t d;
     display_init(&d);
     settle(&d, 0, -STRONG);
     TEST_ASSERT_EQUAL_INT(2, display_quarter(&d));
 }
 
-void test_gravity_to_the_right_reads_quarter_three(void)
-{
+void
+test_gravity_to_the_right_reads_quarter_three(void) {
     display_t d;
     display_init(&d);
     settle(&d, STRONG, 0);
@@ -70,10 +70,10 @@ void test_gravity_to_the_right_reads_quarter_three(void)
 
 /* --- the test that matters: a slow sweep changes orientation ONCE --------- */
 
-void test_a_slow_sweep_through_a_boundary_flips_exactly_once(void)
-{
+void
+test_a_slow_sweep_through_a_boundary_flips_exactly_once(void) {
     display_t d;
-    display_init(&d);   /* quarter 0: down is down */
+    display_init(&d); /* quarter 0: down is down */
 
     /* gy held fixed while gx climbs from 0 well past the old 45-degree snap
      * point (gx == gy) and on past the 60-degree hysteresis trigger, in
@@ -86,89 +86,85 @@ void test_a_slow_sweep_through_a_boundary_flips_exactly_once(void)
         }
     }
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(1, changes,
-        "a smooth sweep across one boundary must report exactly one change");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, changes, "a smooth sweep across one boundary must report exactly one change");
     TEST_ASSERT_EQUAL_INT(3, display_quarter(&d));
 }
 
 /* --- parked exactly on a boundary does not oscillate ---------------------- */
 
-void test_parked_on_the_old_boundary_does_not_oscillate(void)
-{
+void
+test_parked_on_the_old_boundary_does_not_oscillate(void) {
     display_t d;
-    display_init(&d);   /* quarter 0 */
+    display_init(&d); /* quarter 0 */
 
     /* |gx| == |gy| is the OLD snap-to-nearest boundary (45 degrees) - well
      * inside this module's 30..60 degree hysteresis band either way, so it
      * must never be enough to switch. */
     for (int i = 0; i < 20; i++) {
         TEST_ASSERT_FALSE_MESSAGE(display_update(&d, STRONG, STRONG),
-            "a vector held exactly on the old boundary must not flip");
+                                  "a vector held exactly on the old boundary must not flip");
     }
     TEST_ASSERT_EQUAL_INT(0, display_quarter(&d));
 }
 
-void test_parked_on_the_boundary_from_the_other_side_does_not_oscillate(void)
-{
+void
+test_parked_on_the_boundary_from_the_other_side_does_not_oscillate(void) {
     display_t d;
     display_init(&d);
-    settle(&d, STRONG, 0);   /* quarter 3 */
+    settle(&d, STRONG, 0); /* quarter 3 */
     TEST_ASSERT_EQUAL_INT(3, display_quarter(&d));
 
     for (int i = 0; i < 20; i++) {
         TEST_ASSERT_FALSE_MESSAGE(display_update(&d, STRONG, STRONG),
-            "the same parked vector must not flip quarter 3 back either");
+                                  "the same parked vector must not flip quarter 3 back either");
     }
     TEST_ASSERT_EQUAL_INT(3, display_quarter(&d));
 }
 
 /* --- returning partway does not flip until past the inner threshold ------- */
 
-void test_returning_partway_does_not_flip_until_the_inner_threshold(void)
-{
+void
+test_returning_partway_does_not_flip_until_the_inner_threshold(void) {
     display_t d;
     display_init(&d);
-    settle(&d, STRONG, 0);   /* quarter 3: down is to the right */
+    settle(&d, STRONG, 0); /* quarter 3: down is to the right */
     TEST_ASSERT_EQUAL_INT(3, display_quarter(&d));
 
     /* Tilting back toward "down is down", but only a little - angle from the
      * x axis is arctan(700/1000) =~ 35 degrees, short of the 60-degree
      * threshold this module needs to leave quarter 3. Must hold. */
-    TEST_ASSERT_FALSE_MESSAGE(display_update(&d, 1000, 700),
-        "a partial return must not flip the orientation yet");
+    TEST_ASSERT_FALSE_MESSAGE(display_update(&d, 1000, 700), "a partial return must not flip the orientation yet");
     TEST_ASSERT_EQUAL_INT(3, display_quarter(&d));
 
     /* Further still - angle from the x axis is now arctan(1000/500) =~ 63
      * degrees, past the threshold (equivalently, ~27 degrees from "down is
      * down", inside the 30-degree inner band) - now it must flip. */
-    TEST_ASSERT_TRUE_MESSAGE(display_update(&d, 500, 1000),
-        "a return well past the inner threshold must flip back");
+    TEST_ASSERT_TRUE_MESSAGE(display_update(&d, 500, 1000), "a return well past the inner threshold must flip back");
     TEST_ASSERT_EQUAL_INT(0, display_quarter(&d));
 }
 
 /* --- display_update() reports true only on an actual change --------------- */
 
-void test_update_reports_true_only_on_an_actual_change(void)
-{
+void
+test_update_reports_true_only_on_an_actual_change(void) {
     display_t d;
-    display_init(&d);   /* already quarter 0 */
+    display_init(&d); /* already quarter 0 */
 
     TEST_ASSERT_FALSE_MESSAGE(display_update(&d, 0, STRONG),
-        "feeding the orientation the module already reports must not claim a change");
+                              "feeding the orientation the module already reports must not claim a change");
 
-    TEST_ASSERT_TRUE_MESSAGE(display_update(&d, STRONG, 0),
-        "a genuine switch must report true");
+    TEST_ASSERT_TRUE_MESSAGE(display_update(&d, STRONG, 0), "a genuine switch must report true");
     TEST_ASSERT_EQUAL_INT(3, display_quarter(&d));
 
     TEST_ASSERT_FALSE_MESSAGE(display_update(&d, STRONG, 0),
-        "holding the same tilt steady after the switch must not report true again");
+                              "holding the same tilt steady after the switch must not report true again");
     TEST_ASSERT_EQUAL_INT(3, display_quarter(&d));
 }
 
 /* --- suite ---------------------------------------------------------------- */
 
-void run_display_suite(void)
-{
+void
+run_display_suite(void) {
     RUN_TEST(test_gravity_straight_down_reads_upright);
     RUN_TEST(test_gravity_to_the_left_reads_quarter_one);
     RUN_TEST(test_gravity_straight_up_reads_upside_down);

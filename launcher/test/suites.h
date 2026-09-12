@@ -35,11 +35,10 @@
 typedef void (*suite_fn)(void);
 
 /* Called by SUITE_REGISTER before main(). */
-void suite_register(const char *name, suite_fn fn);
+void suite_register(const char* name, suite_fn fn);
 
-#define SUITE_REGISTER(fn)                                          \
-    __attribute__((constructor))                                    \
-    static void fn##_register(void) { suite_register(#fn, fn); }
+#define SUITE_REGISTER(fn)                                                                                             \
+    __attribute__((constructor)) static void fn##_register(void) { suite_register(#fn, fn); }
 
 /* Runs every registered suite, in name order so the output is stable. */
 void suites_run_all(void);
@@ -51,7 +50,7 @@ void suites_run_all(void);
  *
  * Returns false (nothing run) if no suite matches `name` exactly, so the
  * caller can report that back rather than silently doing nothing. */
-bool suites_run_one(const char *name);
+bool suites_run_one(const char* name);
 
 /* How many suites did NOT fit and were dropped - see suite_register().
  *

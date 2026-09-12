@@ -16,7 +16,7 @@
  * counter. timing.c calls this before and after a test; a rise means the
  * test leaked (freed fewer blocks than it allocated), which is exactly the
  * assert-before-free failure mode this arena exists to catch. */
-void heap_arena_snapshot(size_t *out_blocks, size_t *out_bytes);
+void heap_arena_snapshot(size_t* out_blocks, size_t* out_bytes);
 
 /* Highest outstanding-byte total observed since the last reset. Not zeroed
  * by the reset - floored at whatever is already outstanding, so one test's

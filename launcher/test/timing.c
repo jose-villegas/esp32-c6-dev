@@ -33,10 +33,10 @@
  * file's own situation, since it is what RUN_TEST now expands to. The real
  * definition lives in Unity's own unity.c/UnityDefaultTestRun and is
  * untouched; this is only the prototype, hand-matched to it. */
-extern void UnityDefaultTestRun(void (*Func)(void), const char *FuncName, const int FuncLineNum);
+extern void UnityDefaultTestRun(void (*Func)(void), const char* FuncName, const int FuncLineNum);
 
-void suite_run_test_timed(void (*func)(void), const char *name, int line)
-{
+void
+suite_run_test_timed(void (*func)(void), const char* name, int line) {
 #ifdef HOST_HEAP_ARENA
     /* Outside the timed window on both ends, same as the timer itself -
      * this must never be what widens it. */
@@ -67,10 +67,8 @@ void suite_run_test_timed(void (*func)(void), const char *name, int line)
      * clearest. */
     size_t blocks_after, bytes_after;
     heap_arena_snapshot(&blocks_after, &bytes_after);
-    if (blocks_after > blocks_before)
-    {
-        printf("LEAK test=%s blocks=%zu bytes=%zu\n", name,
-               blocks_after - blocks_before, bytes_after - bytes_before);
+    if (blocks_after > blocks_before) {
+        printf("LEAK test=%s blocks=%zu bytes=%zu\n", name, blocks_after - blocks_before, bytes_after - bytes_before);
     }
 #endif
 

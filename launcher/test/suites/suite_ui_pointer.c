@@ -205,7 +205,8 @@ test_a_too_small_buffer_returns_zero_and_leaves_state_untouched(void) {
     press_through_hover(10, 20);
 
     n = step(true, false, false, 10, 20);
-    TEST_ASSERT_EQUAL_INT_MESSAGE(2, n, "the DOWN must still follow, proving the rejected call left press_stage untouched");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(2, n,
+                                  "the DOWN must still follow, proving the rejected call left press_stage untouched");
     TEST_ASSERT_EQUAL_INT(UI_POINTER_DOWN, ev[1].kind);
 }
 

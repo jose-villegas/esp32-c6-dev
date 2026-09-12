@@ -27,8 +27,8 @@ typedef struct {
     bool down;
     bool pressed;
     bool released;
-    int  x, y;              /* current position, or the last one seen */
-    int  press_x, press_y;  /* where the current touch began */
+    int x, y;             /* current position, or the last one seen */
+    int press_x, press_y; /* where the current touch began */
 
     /* The two physical buttons, delivered the same way touch is so an app
      * never has to poll anything itself. See buttons.h - PWR is an event from
@@ -38,8 +38,8 @@ typedef struct {
 } input_t;
 
 typedef struct {
-    const char *name;
-    const char *summary;    /* one line, shown in the launcher list */
+    const char* name;
+    const char* summary; /* one line, shown in the launcher list */
 
     /* Called once as the app starts. Use it to reset state; there is no
      * guarantee the app has not run before. */
@@ -48,7 +48,7 @@ typedef struct {
     /* Called once per frame. Draw into the shared framebuffer via gfx.
      * `dt_ms` is the time since the previous frame, for animation that should
      * not depend on framerate. */
-    void (*frame)(uint32_t dt_ms, const input_t *input);
+    void (*frame)(uint32_t dt_ms, const input_t* input);
 
     /* Called once as the app stops. Release anything enter() acquired. */
     void (*exit)(void);
@@ -71,7 +71,7 @@ typedef struct {
      * `len` bytes, NUL-terminated). Spliced into the capture's
      * device-state JSON as a new "app" key. Diagnostic only - nothing
      * about the app's own behaviour depends on this. */
-    void (*diagnostic_json)(char *out, size_t len);
+    void (*diagnostic_json)(char* out, size_t len);
 } app_t;
 
 /*
@@ -89,12 +89,11 @@ typedef struct {
 
 /* Called by APP_REGISTER before main(). Ignores anything past APP_MAX, having
  * complained about it. */
-void app_register(const app_t *app);
+void app_register(const app_t* app);
 
-#define APP_REGISTER(symbol)                                        \
-    __attribute__((constructor))                                    \
-    static void symbol##_register(void) { app_register(&symbol); }
+#define APP_REGISTER(symbol)                                                                                           \
+    __attribute__((constructor)) static void symbol##_register(void) { app_register(&symbol); }
 
 /* Registered apps, sorted by name. Valid from the first line of app_main(). */
-const app_t *const *app_list(void);
+const app_t* const* app_list(void);
 int app_list_count(void);

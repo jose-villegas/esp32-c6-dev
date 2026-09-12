@@ -63,4 +63,4 @@ typedef struct {
 void buttons_start(void);
 
 /* Reads and CONSUMES the edges accumulated since the last call. */
-void buttons_read(button_t *boot, button_t *power);
+void buttons_read(button_t* boot, button_t* power);

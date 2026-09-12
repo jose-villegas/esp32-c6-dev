@@ -6,7 +6,7 @@
  * past 32,000 lines across 500+ tests. Shared fixtures and assertion helpers
  * live in suite_sand_common.{c,h} - see that header.
  */
-#include <math.h>   /* not every file in the split still needs atan2()/M_PI,
+#include <math.h> /* not every file in the split still needs atan2()/M_PI,
                      * but every file inherited suite_sand.c's own include
                      * block rather than being pruned by hand, to keep the
                      * split itself mechanical and low-risk */
@@ -21,13 +21,13 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-#include "unity.h"
 #include "suites.h"
+#include "unity.h"
 
 #include "sand.h"
 #include "sand_priv.h"
-#include "util/intmath.h"
 #include "suite_sand_common.h"
+#include "util/intmath.h"
 
 /* ===================================================================
  * The extended range: sixteen materials behind the last slot.
@@ -39,8 +39,8 @@
  *
  * Steam is the tell, and a sharper assertion than the oil count, because oil
  * has no business producing any at all. */
-static void test_heat_through_a_pan_lights_oil_rather_than_boiling_it(void)
-{
+static void
+test_heat_through_a_pan_lights_oil_rather_than_boiling_it(void) {
     fixture();
     sand_clear(&s);
     sand_set_flammability(&s, SAND_FLAMMABILITY_PER_MATERIAL);
@@ -48,7 +48,7 @@ static void test_heat_through_a_pan_lights_oil_rather_than_boiling_it(void)
 
     for (int x = 0; x < W; x++) {
         sand_set(&s, x, H - 1, STONE);
-        sand_set(&s, x, H - 3, STONE);            /* the pan */
+        sand_set(&s, x, H - 3, STONE); /* the pan */
     }
     for (int x = 1; x < W - 1; x++) {
         sand_set(&s, x, H - 4, CELL_MAKE(MAT_OIL, MASS_MAX));
@@ -64,18 +64,17 @@ static void test_heat_through_a_pan_lights_oil_rather_than_boiling_it(void)
         sand_step(&s, 0, 1000, 0);
 
         TEST_ASSERT_EQUAL_INT_MESSAGE(0, count_cells_of(MAT_STEAM),
-            "oil must never make steam - it is fuel, not a kettle, and "
-            "steam here means heat is evaporating it instead of lighting "
-            "it");
+                                      "oil must never make steam - it is fuel, not a kettle, and "
+                                      "steam here means heat is evaporating it instead of lighting "
+                                      "it");
         if (count_cells_of(MAT_OIL) < W - 2) {
             lit = true;
         }
     }
 
-    TEST_ASSERT_TRUE_MESSAGE(lit,
-        "and the heat must actually reach it - oil in a pan over a held "
-        "fire has to catch, or this passes on a board where nothing "
-        "happened at all");
+    TEST_ASSERT_TRUE_MESSAGE(lit, "and the heat must actually reach it - oil in a pan over a held "
+                                  "fire has to catch, or this passes on a board where nothing "
+                                  "happened at all");
 }
 
 /* A powder lands ON another powder, and still sinks through a liquid.
@@ -87,14 +86,14 @@ static void test_heat_through_a_pan_lights_oil_rather_than_boiling_it(void)
  * Both halves in one test, because "powders stack" passes just as well on
  * a board where nothing displaces anything at all - which would leave sand
  * sitting on top of water. */
-static void test_a_powder_lands_on_a_powder_but_sinks_in_a_liquid(void)
-{
-    static const struct { uint8_t bed, dropped; bool sinks; } cases[] = {
-        { MAT_SNOW,  MAT_DIRT,  false },
-        { MAT_SNOW,  MAT_SAND,  false },
-        { MAT_SAND,  MAT_DIRT,  false },
-        { MAT_WATER, MAT_SAND,  true  },
-        { MAT_WATER, MAT_DIRT,  true  },
+static void
+test_a_powder_lands_on_a_powder_but_sinks_in_a_liquid(void) {
+    static const struct {
+        uint8_t bed, dropped;
+        bool sinks;
+    } cases[] = {
+        {MAT_SNOW, MAT_DIRT, false}, {MAT_SNOW, MAT_SAND, false}, {MAT_SAND, MAT_DIRT, false},
+        {MAT_WATER, MAT_SAND, true}, {MAT_WATER, MAT_DIRT, true},
     };
 
     for (unsigned k = 0; k < sizeof cases / sizeof cases[0]; k++) {
@@ -107,8 +106,8 @@ static void test_a_powder_lands_on_a_powder_but_sinks_in_a_liquid(void)
         for (int y = H - 4; y < H - 1; y++) {
             for (int x = 0; x < W; x++) {
                 sand_set(&s, x, y,
-                         material_by_id((material_id_t)bed)->kind == KIND_LIQUID
-                             ? CELL_MAKE(bed, MASS_MAX) : CELL_MAKE(bed, 4));
+                         material_by_id((material_id_t)bed)->kind == KIND_LIQUID ? CELL_MAKE(bed, MASS_MAX)
+                                                                                 : CELL_MAKE(bed, 4));
             }
         }
         for (int x = 2; x < W - 2; x++) {
@@ -141,8 +140,7 @@ static void test_a_powder_lands_on_a_powder_but_sinks_in_a_liquid(void)
         }
 
         char why[160];
-        snprintf(why, sizeof why,
-                 "%s dropped on %s should %s", material_by_id((material_id_t)dropped)->name,
+        snprintf(why, sizeof why, "%s dropped on %s should %s", material_by_id((material_id_t)dropped)->name,
                  material_by_id((material_id_t)bed)->name,
                  cases[k].sinks ? "sink through it - density decides fluids"
                                 : "land on top of it - grains do not pass "
@@ -162,8 +160,8 @@ static void test_a_powder_lands_on_a_powder_but_sinks_in_a_liquid(void)
  * resource, its life. What it does do is make heat reach where
  * conduction cannot: on a stone flue with a fire at the bottom, the top
  * sits at ambient without it and one to two levels above with it. */
-static void test_hot_gas_warms_what_it_touches(void)
-{
+static void
+test_hot_gas_warms_what_it_touches(void) {
     fixture();
     sand_clear(&s);
     /* This scene refills a whole row of steam every step for 300 steps -
@@ -195,9 +193,9 @@ static void test_hot_gas_warms_what_it_touches(void)
     }
 
     TEST_ASSERT_GREATER_THAN_INT_MESSAGE(SAND_AMBIENT_HEAT, hottest,
-        "steam resting against stone must warm it - there is no fire here "
-        "and nothing to conduct through, so the gas is the only thing that "
-        "could have");
+                                         "steam resting against stone must warm it - there is no fire here "
+                                         "and nothing to conduct through, so the gas is the only thing that "
+                                         "could have");
 }
 
 /* But it is not a fire: it lights nothing.
@@ -206,8 +204,8 @@ static void test_hot_gas_warms_what_it_touches(void)
  * have made a chimney full of smoke set light to a wooden roof. Convection
  * is a separate field for that reason, and the difference is worth a test
  * rather than a comment. */
-static void test_hot_gas_does_not_set_fire_to_anything(void)
-{
+static void
+test_hot_gas_does_not_set_fire_to_anything(void) {
     fixture();
     sand_clear(&s);
     sand_set_flammability(&s, SAND_FLAMMABILITY_PER_MATERIAL);
@@ -226,14 +224,14 @@ static void test_hot_gas_does_not_set_fire_to_anything(void)
 
     for (int x = 0; x < W; x++) {
         TEST_ASSERT_FALSE_MESSAGE(cell_is_burning(sand_at(&s, x, H - 2)),
-            "smoke must not light wood - it warms things that hold a "
-            "temperature and does nothing else, which is the whole reason "
-            "it is not simply `burns`");
+                                  "smoke must not light wood - it warms things that hold a "
+                                  "temperature and does nothing else, which is the whole reason "
+                                  "it is not simply `burns`");
     }
 }
 
-void run_sand_extended_range_suite(void)
-{
+void
+run_sand_extended_range_suite(void) {
     RUN_TEST(test_heat_through_a_pan_lights_oil_rather_than_boiling_it);
     RUN_TEST(test_a_powder_lands_on_a_powder_but_sinks_in_a_liquid);
     RUN_TEST(test_hot_gas_warms_what_it_touches);

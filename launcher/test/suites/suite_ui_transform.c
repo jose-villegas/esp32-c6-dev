@@ -16,8 +16,8 @@
 
 #include <stdbool.h>
 
-#include "unity.h"
 #include "suites.h"
+#include "unity.h"
 
 #include "ui/ui_transform.h"
 
@@ -26,45 +26,41 @@
 
 /* Identity */
 
-static void test_identity_maps_every_point_to_itself(void)
-{
+static void
+test_identity_maps_every_point_to_itself(void) {
     const ui_transform_t id = ui_transform_identity();
-    const int xs[] = { 0, 1, -1, 100, VIEW_W, -VIEW_H, 12345 };
-    const int ys[] = { 0, -1, 1, 200, VIEW_H, -VIEW_W, -6789 };
+    const int xs[] = {0, 1, -1, 100, VIEW_W, -VIEW_H, 12345};
+    const int ys[] = {0, -1, 1, 200, VIEW_H, -VIEW_W, -6789};
 
     for (size_t i = 0; i < sizeof(xs) / sizeof(xs[0]); i++) {
         int ox, oy;
         ui_transform_point(id, xs[i], ys[i], &ox, &oy);
-        TEST_ASSERT_EQUAL_INT_MESSAGE(xs[i], ox,
-            "identity must not move a point's x");
-        TEST_ASSERT_EQUAL_INT_MESSAGE(ys[i], oy,
-            "identity must not move a point's y");
+        TEST_ASSERT_EQUAL_INT_MESSAGE(xs[i], ox, "identity must not move a point's x");
+        TEST_ASSERT_EQUAL_INT_MESSAGE(ys[i], oy, "identity must not move a point's y");
     }
 }
 
-static void test_identity_maps_every_rect_to_itself(void)
-{
+static void
+test_identity_maps_every_rect_to_itself(void) {
     const ui_transform_t id = ui_transform_identity();
-    const mu_Rect r = { 16, 80, 336, 64 };
+    const mu_Rect r = {16, 80, 336, 64};
     const mu_Rect out = ui_transform_rect(id, r);
 
     TEST_ASSERT_EQUAL_INT(r.x, out.x);
     TEST_ASSERT_EQUAL_INT(r.y, out.y);
-    TEST_ASSERT_EQUAL_INT_MESSAGE(r.w, out.w,
-        "identity must not resize a rect");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(r.w, out.w, "identity must not resize a rect");
     TEST_ASSERT_EQUAL_INT(r.h, out.h);
 }
 
 /* Round trips: point -> transform -> inverse -> back to the start */
 
-static void assert_round_trips(ui_transform_t t, const char *msg)
-{
+static void
+assert_round_trips(ui_transform_t t, const char* msg) {
     ui_transform_t inv;
-    TEST_ASSERT_TRUE_MESSAGE(ui_transform_invert(t, &inv),
-        "a quarter turn is never singular");
+    TEST_ASSERT_TRUE_MESSAGE(ui_transform_invert(t, &inv), "a quarter turn is never singular");
 
-    const int xs[] = { 0, 1, 37, VIEW_W / 2, VIEW_W, VIEW_H, 5, 200 };
-    const int ys[] = { 0, 1, 200, VIEW_H / 2, VIEW_H, VIEW_W, 400, 9 };
+    const int xs[] = {0, 1, 37, VIEW_W / 2, VIEW_W, VIEW_H, 5, 200};
+    const int ys[] = {0, 1, 200, VIEW_H / 2, VIEW_H, VIEW_W, 400, 9};
 
     for (size_t i = 0; i < sizeof(xs) / sizeof(xs[0]); i++) {
         int mx, my, bx, by;
@@ -75,16 +71,15 @@ static void assert_round_trips(ui_transform_t t, const char *msg)
     }
 }
 
-static void test_a_point_round_trips_through_every_quarter_turn(void)
-{
-    assert_round_trips(ui_transform_identity(),
-        "turn 0: a point mapped and inverse-mapped must return to itself");
+static void
+test_a_point_round_trips_through_every_quarter_turn(void) {
+    assert_round_trips(ui_transform_identity(), "turn 0: a point mapped and inverse-mapped must return to itself");
     assert_round_trips(ui_transform_quarter_turn(1, VIEW_W, VIEW_H),
-        "turn 1: a point mapped and inverse-mapped must return to itself");
+                       "turn 1: a point mapped and inverse-mapped must return to itself");
     assert_round_trips(ui_transform_quarter_turn(2, VIEW_W, VIEW_H),
-        "turn 2: a point mapped and inverse-mapped must return to itself");
+                       "turn 2: a point mapped and inverse-mapped must return to itself");
     assert_round_trips(ui_transform_quarter_turn(3, VIEW_W, VIEW_H),
-        "turn 3: a point mapped and inverse-mapped must return to itself");
+                       "turn 3: a point mapped and inverse-mapped must return to itself");
 }
 
 /*
@@ -97,56 +92,55 @@ static void test_a_point_round_trips_through_every_quarter_turn(void)
  * the next one clockwise, once per quarter turn.
  */
 
-static void check_point(ui_transform_t t, int x, int y, int ex, int ey,
-                        const char *msg)
-{
+static void
+check_point(ui_transform_t t, int x, int y, int ex, int ey, const char* msg) {
     int ox, oy;
     ui_transform_point(t, x, y, &ox, &oy);
     TEST_ASSERT_EQUAL_INT_MESSAGE(ex, ox, msg);
     TEST_ASSERT_EQUAL_INT_MESSAGE(ey, oy, msg);
 }
 
-static void test_turn_0_leaves_corners_where_they_are(void)
-{
+static void
+test_turn_0_leaves_corners_where_they_are(void) {
     const ui_transform_t t = ui_transform_quarter_turn(0, VIEW_W, VIEW_H);
-    check_point(t, 0,      0,      0,      0,      "turn 0: top-left");
-    check_point(t, VIEW_W, 0,      VIEW_W, 0,      "turn 0: top-right");
-    check_point(t, 0,      VIEW_H, 0,      VIEW_H, "turn 0: bottom-left");
+    check_point(t, 0, 0, 0, 0, "turn 0: top-left");
+    check_point(t, VIEW_W, 0, VIEW_W, 0, "turn 0: top-right");
+    check_point(t, 0, VIEW_H, 0, VIEW_H, "turn 0: bottom-left");
     check_point(t, VIEW_W, VIEW_H, VIEW_W, VIEW_H, "turn 0: bottom-right");
 }
 
-static void test_turn_1_rotates_corners_one_step_clockwise(void)
-{
+static void
+test_turn_1_rotates_corners_one_step_clockwise(void) {
     /* Domain is VIEW_H wide, VIEW_W tall - the swap odd turns imply. */
     const ui_transform_t t = ui_transform_quarter_turn(1, VIEW_W, VIEW_H);
-    check_point(t, 0,      0,      VIEW_W, 0,      "turn 1: logical top-left -> physical top-right");
-    check_point(t, VIEW_H, 0,      VIEW_W, VIEW_H, "turn 1: logical top-right -> physical bottom-right");
-    check_point(t, 0,      VIEW_W, 0,      0,      "turn 1: logical bottom-left -> physical top-left");
-    check_point(t, VIEW_H, VIEW_W, 0,      VIEW_H, "turn 1: logical bottom-right -> physical bottom-left");
+    check_point(t, 0, 0, VIEW_W, 0, "turn 1: logical top-left -> physical top-right");
+    check_point(t, VIEW_H, 0, VIEW_W, VIEW_H, "turn 1: logical top-right -> physical bottom-right");
+    check_point(t, 0, VIEW_W, 0, 0, "turn 1: logical bottom-left -> physical top-left");
+    check_point(t, VIEW_H, VIEW_W, 0, VIEW_H, "turn 1: logical bottom-right -> physical bottom-left");
 }
 
-static void test_turn_2_rotates_corners_two_steps(void)
-{
+static void
+test_turn_2_rotates_corners_two_steps(void) {
     const ui_transform_t t = ui_transform_quarter_turn(2, VIEW_W, VIEW_H);
-    check_point(t, 0,      0,      VIEW_W, VIEW_H, "turn 2: top-left -> bottom-right");
-    check_point(t, VIEW_W, 0,      0,      VIEW_H, "turn 2: top-right -> bottom-left");
-    check_point(t, 0,      VIEW_H, VIEW_W, 0,      "turn 2: bottom-left -> top-right");
-    check_point(t, VIEW_W, VIEW_H, 0,      0,      "turn 2: bottom-right -> top-left");
+    check_point(t, 0, 0, VIEW_W, VIEW_H, "turn 2: top-left -> bottom-right");
+    check_point(t, VIEW_W, 0, 0, VIEW_H, "turn 2: top-right -> bottom-left");
+    check_point(t, 0, VIEW_H, VIEW_W, 0, "turn 2: bottom-left -> top-right");
+    check_point(t, VIEW_W, VIEW_H, 0, 0, "turn 2: bottom-right -> top-left");
 }
 
-static void test_turn_3_rotates_corners_three_steps_clockwise(void)
-{
+static void
+test_turn_3_rotates_corners_three_steps_clockwise(void) {
     const ui_transform_t t = ui_transform_quarter_turn(3, VIEW_W, VIEW_H);
-    check_point(t, 0,      0,      0,      VIEW_H, "turn 3: logical top-left -> physical bottom-left");
-    check_point(t, VIEW_H, 0,      0,      0,      "turn 3: logical top-right -> physical top-left");
-    check_point(t, 0,      VIEW_W, VIEW_W, VIEW_H, "turn 3: logical bottom-left -> physical bottom-right");
-    check_point(t, VIEW_H, VIEW_W, VIEW_W, 0,      "turn 3: logical bottom-right -> physical top-right");
+    check_point(t, 0, 0, 0, VIEW_H, "turn 3: logical top-left -> physical bottom-left");
+    check_point(t, VIEW_H, 0, 0, 0, "turn 3: logical top-right -> physical top-left");
+    check_point(t, 0, VIEW_W, VIEW_W, VIEW_H, "turn 3: logical bottom-left -> physical bottom-right");
+    check_point(t, VIEW_H, VIEW_W, VIEW_W, 0, "turn 3: logical bottom-right -> physical top-right");
 }
 
 /* A rect stays axis-aligned and inside the viewport after any quarter turn */
 
-static void assert_rect_fits(ui_transform_t t, mu_Rect r, const char *msg)
-{
+static void
+assert_rect_fits(ui_transform_t t, mu_Rect r, const char* msg) {
     const mu_Rect out = ui_transform_rect(t, r);
 
     TEST_ASSERT_TRUE_MESSAGE(out.w > 0 && out.h > 0, msg);
@@ -155,29 +149,29 @@ static void assert_rect_fits(ui_transform_t t, mu_Rect r, const char *msg)
     TEST_ASSERT_TRUE_MESSAGE(out.y + out.h <= VIEW_H, msg);
 }
 
-static void test_a_mapped_rect_stays_axis_aligned_and_inside_the_viewport(void)
-{
-    const mu_Rect even_domain_rect = { 16, 80, 100, 64 };
-    const mu_Rect odd_domain_rect  = { 16, 80, 100, 64 }; /* fits both domains */
+static void
+test_a_mapped_rect_stays_axis_aligned_and_inside_the_viewport(void) {
+    const mu_Rect even_domain_rect = {16, 80, 100, 64};
+    const mu_Rect odd_domain_rect = {16, 80, 100, 64}; /* fits both domains */
 
-    assert_rect_fits(ui_transform_quarter_turn(0, VIEW_W, VIEW_H),
-                     even_domain_rect, "turn 0 rect must land inside the viewport");
-    assert_rect_fits(ui_transform_quarter_turn(1, VIEW_W, VIEW_H),
-                     odd_domain_rect, "turn 1 rect must land inside the viewport");
-    assert_rect_fits(ui_transform_quarter_turn(2, VIEW_W, VIEW_H),
-                     even_domain_rect, "turn 2 rect must land inside the viewport");
-    assert_rect_fits(ui_transform_quarter_turn(3, VIEW_W, VIEW_H),
-                     odd_domain_rect, "turn 3 rect must land inside the viewport");
+    assert_rect_fits(ui_transform_quarter_turn(0, VIEW_W, VIEW_H), even_domain_rect,
+                     "turn 0 rect must land inside the viewport");
+    assert_rect_fits(ui_transform_quarter_turn(1, VIEW_W, VIEW_H), odd_domain_rect,
+                     "turn 1 rect must land inside the viewport");
+    assert_rect_fits(ui_transform_quarter_turn(2, VIEW_W, VIEW_H), even_domain_rect,
+                     "turn 2 rect must land inside the viewport");
+    assert_rect_fits(ui_transform_quarter_turn(3, VIEW_W, VIEW_H), odd_domain_rect,
+                     "turn 3 rect must land inside the viewport");
 }
 
-static void test_a_mapped_rect_swaps_width_and_height_on_an_odd_turn(void)
-{
-    const mu_Rect r = { 16, 80, 100, 64 };
+static void
+test_a_mapped_rect_swaps_width_and_height_on_an_odd_turn(void) {
+    const mu_Rect r = {16, 80, 100, 64};
     const mu_Rect t1 = ui_transform_rect(ui_transform_quarter_turn(1, VIEW_W, VIEW_H), r);
     const mu_Rect t3 = ui_transform_rect(ui_transform_quarter_turn(3, VIEW_W, VIEW_H), r);
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(r.h, t1.w,
-        "a quarter turn is a pure rotation - it must swap w and h, not scale them");
+                                  "a quarter turn is a pure rotation - it must swap w and h, not scale them");
     TEST_ASSERT_EQUAL_INT(r.w, t1.h);
     TEST_ASSERT_EQUAL_INT(r.h, t3.w);
     TEST_ASSERT_EQUAL_INT(r.w, t3.h);
@@ -203,14 +197,14 @@ static const uint8_t icon_l_rows[4] = {
 
 typedef struct {
     icon_rect_t runs[4];
-    int         count;
+    int count;
 } icon_collect_t;
 
-static void icon_collect_emit(void *ctx, int x, int y, int w, int h)
-{
-    icon_collect_t *ic = ctx;
+static void
+icon_collect_emit(void* ctx, int x, int y, int w, int h) {
+    icon_collect_t* ic = ctx;
     TEST_ASSERT_TRUE(ic->count < 4);
-    ic->runs[ic->count] = (icon_rect_t){ x, y, w, h };
+    ic->runs[ic->count] = (icon_rect_t){x, y, w, h};
     ic->count++;
 }
 
@@ -220,12 +214,11 @@ static void icon_collect_emit(void *ctx, int x, int y, int w, int h)
  * comment) - not through ui_transform_rect(), so a bug shared between it
  * and the function under test cannot hide behind agreement between the
  * two. The cross-check test below covers that angle separately. */
-static void assert_icon_blocks_at_quarter(int quarter, const icon_rect_t *expected,
-                                          const char *msg)
-{
+static void
+assert_icon_blocks_at_quarter(int quarter, const icon_rect_t* expected, const char* msg) {
     const ui_transform_t t = ui_transform_quarter_turn(quarter, VIEW_W, VIEW_H);
-    const mu_Rect box = { 10, 20, 4, 4 };
-    icon_collect_t ic = { .count = 0 };
+    const mu_Rect box = {10, 20, 4, 4};
+    icon_collect_t ic = {.count = 0};
 
     ui_transform_icon_blocks(t, icon_l_rows, 4, 4, 1, box, icon_collect_emit, &ic);
 
@@ -238,60 +231,75 @@ static void assert_icon_blocks_at_quarter(int quarter, const icon_rect_t *expect
     }
 }
 
-static void test_icon_blocks_at_turn_0_are_unrotated(void)
-{
+static void
+test_icon_blocks_at_turn_0_are_unrotated(void) {
     const icon_rect_t expected[4] = {
-        { 10, 20, 1, 1 }, { 10, 21, 1, 1 }, { 10, 22, 1, 1 }, { 10, 23, 3, 1 },
+        {10, 20, 1, 1},
+        {10, 21, 1, 1},
+        {10, 22, 1, 1},
+        {10, 23, 3, 1},
     };
     assert_icon_blocks_at_quarter(0, expected, "turn 0: runs must match the box exactly");
 }
 
-static void test_icon_blocks_at_turn_1_rotate_one_step_clockwise(void)
-{
+static void
+test_icon_blocks_at_turn_1_rotate_one_step_clockwise(void) {
     const icon_rect_t expected[4] = {
-        { 347, 10, 1, 1 }, { 346, 10, 1, 1 }, { 345, 10, 1, 1 }, { 344, 10, 1, 3 },
+        {347, 10, 1, 1},
+        {346, 10, 1, 1},
+        {345, 10, 1, 1},
+        {344, 10, 1, 3},
     };
     assert_icon_blocks_at_quarter(1, expected,
-        "turn 1: each run must rotate with the glyph, not stay upright inside a rotated box");
+                                  "turn 1: each run must rotate with the glyph, not stay upright inside a rotated box");
 }
 
-static void test_icon_blocks_at_turn_2_rotate_two_steps(void)
-{
+static void
+test_icon_blocks_at_turn_2_rotate_two_steps(void) {
     const icon_rect_t expected[4] = {
-        { 357, 427, 1, 1 }, { 357, 426, 1, 1 }, { 357, 425, 1, 1 }, { 355, 424, 3, 1 },
+        {357, 427, 1, 1},
+        {357, 426, 1, 1},
+        {357, 425, 1, 1},
+        {355, 424, 3, 1},
     };
     assert_icon_blocks_at_quarter(2, expected, "turn 2: runs must rotate a half turn");
 }
 
-static void test_icon_blocks_at_turn_3_rotate_three_steps_clockwise(void)
-{
+static void
+test_icon_blocks_at_turn_3_rotate_three_steps_clockwise(void) {
     const icon_rect_t expected[4] = {
-        { 20, 437, 1, 1 }, { 21, 437, 1, 1 }, { 22, 437, 1, 1 }, { 23, 435, 1, 3 },
+        {20, 437, 1, 1},
+        {21, 437, 1, 1},
+        {22, 437, 1, 1},
+        {23, 435, 1, 3},
     };
     assert_icon_blocks_at_quarter(3, expected,
-        "turn 3: each run must rotate with the glyph, not stay upright inside a rotated box");
+                                  "turn 3: each run must rotate with the glyph, not stay upright inside a rotated box");
 }
 
 /* CROSS-CHECK, independent of the hand-derived expectations above: every
  * run, treated as its own rect and mapped straight through
  * ui_transform_rect() - the function every other MU_COMMAND already
  * trusts - must equal what ui_transform_icon_blocks() produced for it. */
-static void test_icon_blocks_match_ui_transform_rect_run_by_run(void)
-{
-    const mu_Rect box = { 10, 20, 4, 4 };
+static void
+test_icon_blocks_match_ui_transform_rect_run_by_run(void) {
+    const mu_Rect box = {10, 20, 4, 4};
     const icon_rect_t local[4] = {
-        { 0, 0, 1, 1 }, { 0, 1, 1, 1 }, { 0, 2, 1, 1 }, { 0, 3, 3, 1 },
+        {0, 0, 1, 1},
+        {0, 1, 1, 1},
+        {0, 2, 1, 1},
+        {0, 3, 3, 1},
     };
 
     for (int quarter = 0; quarter < 4; quarter++) {
         const ui_transform_t t = ui_transform_quarter_turn(quarter, VIEW_W, VIEW_H);
-        icon_collect_t ic = { .count = 0 };
+        icon_collect_t ic = {.count = 0};
         ui_transform_icon_blocks(t, icon_l_rows, 4, 4, 1, box, icon_collect_emit, &ic);
 
         TEST_ASSERT_EQUAL_INT(4, ic.count);
         for (int i = 0; i < 4; i++) {
-            const mu_Rect truth = ui_transform_rect(t, (mu_Rect){
-                box.x + local[i].x, box.y + local[i].y, local[i].w, local[i].h });
+            const mu_Rect truth =
+                ui_transform_rect(t, (mu_Rect){box.x + local[i].x, box.y + local[i].y, local[i].w, local[i].h});
             TEST_ASSERT_EQUAL_INT(truth.x, ic.runs[i].x);
             TEST_ASSERT_EQUAL_INT(truth.y, ic.runs[i].y);
             TEST_ASSERT_EQUAL_INT(truth.w, ic.runs[i].w);
@@ -307,15 +315,15 @@ static void test_icon_blocks_match_ui_transform_rect_run_by_run(void)
  * equal to cell_w); its atlas is unread and left zeroed.
  */
 
-static const uint8_t glyph0_atlas[4 * 10] = { 0 };   /* 4 glyphs * cell_h rows, unread */
-static const uint8_t glyph0_advance[4] = { 3, 5, 4, 6 };
+static const uint8_t glyph0_atlas[4 * 10] = {0}; /* 4 glyphs * cell_h rows, unread */
+static const uint8_t glyph0_advance[4] = {3, 5, 4, 6};
 static const gfx_font_t glyph0_font = {
-    .atlas   = glyph0_atlas,
-    .bpp     = 1,
-    .cell_w  = 6,
-    .cell_h  = 10,
-    .first   = (uint8_t)'A',
-    .count   = 4,
+    .atlas = glyph0_atlas,
+    .bpp = 1,
+    .cell_w = 6,
+    .cell_h = 10,
+    .first = (uint8_t)'A',
+    .count = 4,
     .advance = glyph0_advance,
 };
 
@@ -326,35 +334,29 @@ static const gfx_font_t glyph0_font = {
  * dispute - must describe exactly where the function under test says
  * glyph 0 belongs, at every quarter, not just the two (2 and 3) that get an
  * explicit correction. */
-static void assert_glyph0_matches_ground_truth(int logical_x, int logical_y,
-                                               const char *text, int quarter,
-                                               const char *msg)
-{
-    const ui_transform_t t =
-        ui_transform_quarter_turn(quarter, VIEW_W, VIEW_H);
+static void
+assert_glyph0_matches_ground_truth(int logical_x, int logical_y, const char* text, int quarter, const char* msg) {
+    const ui_transform_t t = ui_transform_quarter_turn(quarter, VIEW_W, VIEW_H);
     const int tw = gfx_font_text_width(&glyph0_font, text, -1, 1);
     const int th = gfx_font_height(&glyph0_font, 1);
-    const mu_Rect box = ui_transform_rect(
-        t, (mu_Rect){ logical_x, logical_y, tw, th });
+    const mu_Rect box = ui_transform_rect(t, (mu_Rect){logical_x, logical_y, tw, th});
 
     int mx, my;
     ui_text_glyph0_origin(&glyph0_font, box, quarter, 1, &mx, &my);
 
-    const mu_Rect truth = ui_transform_rect(
-        t, (mu_Rect){ logical_x, logical_y, glyph0_font.cell_w,
-                      glyph0_font.cell_h });
+    const mu_Rect truth = ui_transform_rect(t, (mu_Rect){logical_x, logical_y, glyph0_font.cell_w, glyph0_font.cell_h});
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(truth.x, mx, msg);
     TEST_ASSERT_EQUAL_INT_MESSAGE(truth.y, my, msg);
 }
 
-static void test_glyph0_origin_matches_ground_truth_at_every_quarter(void)
-{
+static void
+test_glyph0_origin_matches_ground_truth_at_every_quarter(void) {
     for (int quarter = 0; quarter < 4; quarter++) {
         assert_glyph0_matches_ground_truth(20, 30, "ABCD", quarter,
-            "glyph 0's origin must land exactly where mapping its own "
-            "cell independently through ui_transform_rect() says it "
-            "should, for a non-square proportional font");
+                                           "glyph 0's origin must land exactly where mapping its own "
+                                           "cell independently through ui_transform_rect() says it "
+                                           "should, for a non-square proportional font");
     }
 
     /* And again with strings of every length 1..4, including the single-
@@ -362,8 +364,8 @@ static void test_glyph0_origin_matches_ground_truth_at_every_quarter(void)
      * expose an off-by-one in whichever correction is applied). */
     for (int len = 1; len <= 4; len++) {
         for (int quarter = 0; quarter < 4; quarter++) {
-            assert_glyph0_matches_ground_truth(20, 30, "ABCD" + (4 - len),
-                quarter, "same check, at a shorter string length");
+            assert_glyph0_matches_ground_truth(20, 30, "ABCD" + (4 - len), quarter,
+                                               "same check, at a shorter string length");
         }
     }
 }
@@ -373,9 +375,9 @@ static void test_glyph0_origin_matches_ground_truth_at_every_quarter(void)
  * than against ui_transform_rect() ground truth (which the test above
  * already covers) so THIS test states the "no correction" contract in the
  * plainest possible terms. */
-static void test_glyph0_origin_needs_no_correction_at_turn_0_or_1(void)
-{
-    const mu_Rect box = { 50, 60, 30, 12 };
+static void
+test_glyph0_origin_needs_no_correction_at_turn_0_or_1(void) {
+    const mu_Rect box = {50, 60, 30, 12};
     int mx, my;
 
     ui_text_glyph0_origin(&glyph0_font, box, 0, 1, &mx, &my);
@@ -391,42 +393,37 @@ static void test_glyph0_origin_needs_no_correction_at_turn_0_or_1(void)
  * corrects box.h where quarter 2 corrects box.w. No mutation is needed to
  * show this test would catch it: 6 and 10 make the two formulas disagree,
  * so the real answer not being the cell_h one is the evidence. */
-static void test_glyph0_origin_at_turn_3_is_not_the_cell_h_mistake(void)
-{
+static void
+test_glyph0_origin_at_turn_3_is_not_the_cell_h_mistake(void) {
     const int quarter = 3;
-    const ui_transform_t t =
-        ui_transform_quarter_turn(quarter, VIEW_W, VIEW_H);
+    const ui_transform_t t = ui_transform_quarter_turn(quarter, VIEW_W, VIEW_H);
     const int tw = gfx_font_text_width(&glyph0_font, "ABCD", -1, 1);
     const int th = gfx_font_height(&glyph0_font, 1);
-    const mu_Rect box = ui_transform_rect(t, (mu_Rect){ 20, 30, tw, th });
+    const mu_Rect box = ui_transform_rect(t, (mu_Rect){20, 30, tw, th});
 
     int mx, my;
     ui_text_glyph0_origin(&glyph0_font, box, quarter, 1, &mx, &my);
 
     const int wrong_my_using_cell_h = box.y + box.h - glyph0_font.cell_h;
     TEST_ASSERT_NOT_EQUAL_MESSAGE(wrong_my_using_cell_h, my,
-        "cell_w (6) != cell_h (10) in this font - a function that read "
-        "cell_h here instead of cell_w would land on `wrong_my_using_"
-        "cell_h`, not on the real answer");
+                                  "cell_w (6) != cell_h (10) in this font - a function that read "
+                                  "cell_h here instead of cell_w would land on `wrong_my_using_"
+                                  "cell_h`, not on the real answer");
 }
 
 /* Composition and the quarter turn a transform represents */
 
-static void test_quarter_reports_the_turn_each_matrix_represents(void)
-{
+static void
+test_quarter_reports_the_turn_each_matrix_represents(void) {
     TEST_ASSERT_EQUAL_INT(0, ui_transform_quarter(ui_transform_identity()));
-    TEST_ASSERT_EQUAL_INT(0,
-        ui_transform_quarter(ui_transform_quarter_turn(0, VIEW_W, VIEW_H)));
-    TEST_ASSERT_EQUAL_INT(1,
-        ui_transform_quarter(ui_transform_quarter_turn(1, VIEW_W, VIEW_H)));
-    TEST_ASSERT_EQUAL_INT(2,
-        ui_transform_quarter(ui_transform_quarter_turn(2, VIEW_W, VIEW_H)));
-    TEST_ASSERT_EQUAL_INT(3,
-        ui_transform_quarter(ui_transform_quarter_turn(3, VIEW_W, VIEW_H)));
+    TEST_ASSERT_EQUAL_INT(0, ui_transform_quarter(ui_transform_quarter_turn(0, VIEW_W, VIEW_H)));
+    TEST_ASSERT_EQUAL_INT(1, ui_transform_quarter(ui_transform_quarter_turn(1, VIEW_W, VIEW_H)));
+    TEST_ASSERT_EQUAL_INT(2, ui_transform_quarter(ui_transform_quarter_turn(2, VIEW_W, VIEW_H)));
+    TEST_ASSERT_EQUAL_INT(3, ui_transform_quarter(ui_transform_quarter_turn(3, VIEW_W, VIEW_H)));
 }
 
-static void test_composing_two_quarter_turns_sums_mod_4(void)
-{
+static void
+test_composing_two_quarter_turns_sums_mod_4(void) {
     const ui_transform_t q1 = ui_transform_quarter_turn(1, VIEW_W, VIEW_H);
     const ui_transform_t q2 = ui_transform_quarter_turn(2, VIEW_W, VIEW_H);
     const ui_transform_t q3 = ui_transform_quarter_turn(3, VIEW_W, VIEW_H);
@@ -445,81 +442,73 @@ static void test_composing_two_quarter_turns_sums_mod_4(void)
 
 /* The backend-vs-type boundary */
 
-static void test_axis_preserving_accepts_identity_and_every_quarter_turn(void)
-{
+static void
+test_axis_preserving_accepts_identity_and_every_quarter_turn(void) {
     TEST_ASSERT_TRUE(ui_transform_is_axis_preserving(ui_transform_identity()));
     for (int turn = 0; turn < 4; turn++) {
-        TEST_ASSERT_TRUE_MESSAGE(
-            ui_transform_is_axis_preserving(
-                ui_transform_quarter_turn(turn, VIEW_W, VIEW_H)),
-            "every quarter turn is exactly what this backend can draw");
+        TEST_ASSERT_TRUE_MESSAGE(ui_transform_is_axis_preserving(ui_transform_quarter_turn(turn, VIEW_W, VIEW_H)),
+                                 "every quarter turn is exactly what this backend can draw");
     }
 }
 
-static void test_axis_preserving_accepts_translation(void)
-{
-    const ui_transform_t translate =
-        { UI_FP_ONE, 0, 0, UI_FP_ONE, 40 * UI_FP_ONE, -12 * UI_FP_ONE };
+static void
+test_axis_preserving_accepts_translation(void) {
+    const ui_transform_t translate = {UI_FP_ONE, 0, 0, UI_FP_ONE, 40 * UI_FP_ONE, -12 * UI_FP_ONE};
     TEST_ASSERT_TRUE_MESSAGE(ui_transform_is_axis_preserving(translate),
-        "a pure translation keeps every rect axis-aligned");
+                             "a pure translation keeps every rect axis-aligned");
 }
 
-static void test_axis_preserving_accepts_integer_scale(void)
-{
-    const ui_transform_t scale_up =
-        { 2 * UI_FP_ONE, 0, 0, 2 * UI_FP_ONE, 0, 0 };
+static void
+test_axis_preserving_accepts_integer_scale(void) {
+    const ui_transform_t scale_up = {2 * UI_FP_ONE, 0, 0, 2 * UI_FP_ONE, 0, 0};
     const ui_transform_t scale_and_swap = /* an integer-scaled quarter turn */
-        { 0, 3 * UI_FP_ONE, -3 * UI_FP_ONE, 0, 100, 0 };
+        {0, 3 * UI_FP_ONE, -3 * UI_FP_ONE, 0, 100, 0};
     TEST_ASSERT_TRUE_MESSAGE(ui_transform_is_axis_preserving(scale_up),
-        "an integer scale keeps every rect axis-aligned");
+                             "an integer scale keeps every rect axis-aligned");
     TEST_ASSERT_TRUE_MESSAGE(ui_transform_is_axis_preserving(scale_and_swap),
-        "a scaled quarter turn is still axis-preserving - it is the "
-        "magnitude of a/b/c/d that carries the scale, the SIGN pattern "
-        "that carries the rotation, and this checks only the pattern");
+                             "a scaled quarter turn is still axis-preserving - it is the "
+                             "magnitude of a/b/c/d that carries the scale, the SIGN pattern "
+                             "that carries the rotation, and this checks only the pattern");
 }
 
-static void test_axis_preserving_rejects_a_shear(void)
-{
+static void
+test_axis_preserving_rejects_a_shear(void) {
     /* c and d unrotated, but b is nonzero too: the y-axis now has a
      * component along x as well as y, which is exactly a shear. */
-    const ui_transform_t shear =
-        { UI_FP_ONE, UI_FP_ONE / 2, 0, UI_FP_ONE, 0, 0 };
+    const ui_transform_t shear = {UI_FP_ONE, UI_FP_ONE / 2, 0, UI_FP_ONE, 0, 0};
     TEST_ASSERT_FALSE_MESSAGE(ui_transform_is_axis_preserving(shear),
-        "a shear must be rejected - it turns an axis-aligned rect into a "
-        "parallelogram, which gfx_fill_rect() cannot draw");
+                              "a shear must be rejected - it turns an axis-aligned rect into a "
+                              "parallelogram, which gfx_fill_rect() cannot draw");
 }
 
-static void test_axis_preserving_rejects_a_non_90_degree_rotation(void)
-{
+static void
+test_axis_preserving_rejects_a_non_90_degree_rotation(void) {
     /* All four entries nonzero: neither axis maps cleanly onto x or y. This
      * is not a real rotation matrix (its rows are not unit length), but the
      * classifier only needs to see that both columns are mixed to reject
      * it, which is exactly what a genuine 45 degree rotation would also
      * present. */
-    const ui_transform_t skew_rotation =
-        { UI_FP_ONE, UI_FP_ONE / 2, UI_FP_ONE / 2, UI_FP_ONE, 0, 0 };
-    TEST_ASSERT_FALSE_MESSAGE(
-        ui_transform_is_axis_preserving(skew_rotation),
-        "a rotation that is not a multiple of 90 degrees must be rejected - "
-        "gfx_text_turned() only has four quarters to offer it");
+    const ui_transform_t skew_rotation = {UI_FP_ONE, UI_FP_ONE / 2, UI_FP_ONE / 2, UI_FP_ONE, 0, 0};
+    TEST_ASSERT_FALSE_MESSAGE(ui_transform_is_axis_preserving(skew_rotation),
+                              "a rotation that is not a multiple of 90 degrees must be rejected - "
+                              "gfx_text_turned() only has four quarters to offer it");
 }
 
 /* Inversion of a singular matrix */
 
-static void test_invert_fails_on_a_singular_matrix(void)
-{
-    const ui_transform_t zero_scale = { UI_FP_ONE, 0, 0, 0, 0, 0 };
-    const ui_transform_t all_zero   = { 0, 0, 0, 0, 0, 0 };
+static void
+test_invert_fails_on_a_singular_matrix(void) {
+    const ui_transform_t zero_scale = {UI_FP_ONE, 0, 0, 0, 0, 0};
+    const ui_transform_t all_zero = {0, 0, 0, 0, 0, 0};
     ui_transform_t out;
 
     TEST_ASSERT_FALSE_MESSAGE(ui_transform_invert(zero_scale, &out),
-        "a matrix with a zeroed axis has no inverse - determinant is zero");
-    TEST_ASSERT_FALSE_MESSAGE(ui_transform_invert(all_zero, &out),
-        "the zero matrix is singular");
+                              "a matrix with a zeroed axis has no inverse - determinant is zero");
+    TEST_ASSERT_FALSE_MESSAGE(ui_transform_invert(all_zero, &out), "the zero matrix is singular");
 }
 
-void suite_ui_transform(void)
-{
+void
+suite_ui_transform(void) {
     RUN_TEST(test_identity_maps_every_point_to_itself);
     RUN_TEST(test_identity_maps_every_rect_to_itself);
     RUN_TEST(test_a_point_round_trips_through_every_quarter_turn);

@@ -4,13 +4,13 @@
 
 sand_work_counters_t sand_work_counters;
 
-void sand_work_counters_reset(void)
-{
-    sand_work_counters = (sand_work_counters_t){ 0 };
+void
+sand_work_counters_reset(void) {
+    sand_work_counters = (sand_work_counters_t){0};
 }
 
-void sand_work_counters_dump(void (*emit)(const char *name, uint32_t value))
-{
+void
+sand_work_counters_dump(void (*emit)(const char* name, uint32_t value)) {
     emit("xflow_calls", sand_work_counters.xflow_calls);
     emit("rows_walked", sand_work_counters.rows_walked);
     emit("blocks_considered", sand_work_counters.blocks_considered);

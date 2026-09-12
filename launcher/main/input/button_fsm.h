@@ -35,7 +35,7 @@
  * has stopped responding. Must stay well clear of BUTTON_DEBOUNCE_US above -
  * it times from the debounced edge, not the first raw sample, so the two
  * windows do not compete. */
-#define BUTTON_HOLD_US (600 * 1000)
+#define BUTTON_HOLD_US     (600 * 1000)
 
 /*
  * `held` fires EXACTLY ONCE, once the button has been continuously down for
@@ -47,31 +47,31 @@
  */
 
 typedef struct {
-    bool    stable;        /* the level currently believed */
-    bool    candidate;     /* a level seen recently but not yet believed */
-    int64_t candidate_us;  /* when the candidate first appeared */
-    bool    primed;
+    bool stable;          /* the level currently believed */
+    bool candidate;       /* a level seen recently but not yet believed */
+    int64_t candidate_us; /* when the candidate first appeared */
+    bool primed;
 
     int64_t down_since_us; /* when `stable` last became true - the hold clock */
-    bool    hold_fired;    /* whether this press has already delivered `held` */
+    bool hold_fired;       /* whether this press has already delivered `held` */
 
     /* Edges, true only on the update that produced them. Cleared by
      * button_fsm_take_*, so an edge is consumed by whoever reads it first. */
-    bool    pressed;
-    bool    released;
-    bool    held;
+    bool pressed;
+    bool released;
+    bool held;
 } button_fsm_t;
 
-void button_fsm_reset(button_fsm_t *b);
+void button_fsm_reset(button_fsm_t* b);
 
 /* Feed one raw sample. `now_us` is a monotonic microsecond clock. */
-void button_fsm_update(button_fsm_t *b, bool raw_down, int64_t now_us);
+void button_fsm_update(button_fsm_t* b, bool raw_down, int64_t now_us);
 
-bool button_fsm_is_down(const button_fsm_t *b);
+bool button_fsm_is_down(const button_fsm_t* b);
 
 /* Read and clear the pending edges. Reading consumes them, so a press cannot
  * be handled twice by two different readers - the same contract touch_fsm
  * uses, and for the same reason. */
-bool button_fsm_take_pressed(button_fsm_t *b);
-bool button_fsm_take_released(button_fsm_t *b);
-bool button_fsm_take_held(button_fsm_t *b);
+bool button_fsm_take_pressed(button_fsm_t* b);
+bool button_fsm_take_released(button_fsm_t* b);
+bool button_fsm_take_held(button_fsm_t* b);

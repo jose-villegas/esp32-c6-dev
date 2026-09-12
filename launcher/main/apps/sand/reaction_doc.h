@@ -49,5 +49,4 @@
 
 #include "material.h"
 
-#define REACTION_DOC(field, why) \
-    ((void)sizeof(((const reaction_t *)0)->field))
+#define REACTION_DOC(field, why) ((void)sizeof(((const reaction_t*)0)->field))

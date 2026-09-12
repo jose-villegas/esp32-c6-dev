@@ -67,17 +67,17 @@ typedef struct {
  * to its native upright, and the table above confirms that is quarter
  * 1, independent of which edge USB sits on. It was a first guess when
  * written; it no longer is. */
-#define DISPLAY_DEFAULT_QUARTER DISPLAY_LANDSCAPE
+#define DISPLAY_DEFAULT_QUARTER       DISPLAY_LANDSCAPE
 
-void display_init(display_t *d);
+void display_init(display_t* d);
 
 /* Feed the current gravity vector, in whatever consistent units the caller's
  * IMU reading uses (screen X/Y axes, not raw sensor axes - see main.c's own
  * mapping). Returns true when d->quarter actually changed, which is main.c's
  * cue to push a new ui_set_transform(). */
-bool display_update(display_t *d, int gx, int gy);
+bool display_update(display_t* d, int gx, int gy);
 
-int display_quarter(const display_t *d);
+int display_quarter(const display_t* d);
 
 /* The shell's own orientation - the quarter main.c last set the UI
  * transform to. Declared here but defined in main.c, not display.c:

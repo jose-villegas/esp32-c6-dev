@@ -32,10 +32,10 @@
 #define CANVAS_H 448
 
 /* A button big enough that no rounding puts the touch point outside it. */
-#define BTN_X 40
-#define BTN_Y 80
-#define BTN_W 280
-#define BTN_H 64
+#define BTN_X    40
+#define BTN_Y    80
+#define BTN_W    280
+#define BTN_H    64
 
 /* Heap, not a file-scope object: a mu_Context is 10,744 bytes, and the
  * diagnostics build links every suite into firmware, where the
@@ -45,25 +45,25 @@
  * with a laptop's memory behind them, cannot notice. Allocated once and
  * reset per test rather than per-test malloc/free: the runner has no
  * teardown hook to free it in. */
-static mu_Context *ctx;
+static mu_Context* ctx;
 static ui_pointer_t pointer;
 
 /* microui measures text through the context; the real shell hands it a font
  * atlas, and nothing here cares how wide a glyph is. */
-static int stub_text_width(mu_Font font, const char *str, int len)
-{
+static int
+stub_text_width(mu_Font font, const char* str, int len) {
     (void)font;
     return (len < 0 ? (int)strlen(str) : len) * 8;
 }
 
-static int stub_text_height(mu_Font font)
-{
+static int
+stub_text_height(mu_Font font) {
     (void)font;
     return 8;
 }
 
-static void fixture(void)
-{
+static void
+fixture(void) {
     if (ctx == NULL) {
         ctx = malloc(sizeof *ctx);
         TEST_ASSERT_NOT_NULL(ctx);
@@ -71,16 +71,16 @@ static void fixture(void)
     memset(ctx, 0, sizeof *ctx);
     memset(&pointer, 0, sizeof pointer);
     mu_init(ctx);
-    ctx->text_width  = stub_text_width;
+    ctx->text_width = stub_text_width;
     ctx->text_height = stub_text_height;
 }
 
 /* One frame of the real bridge: translate input_t exactly as ui.c's
  * feed_input() does, then build a full-screen window holding one button.
  * Returns whether the button submitted this frame. */
-static bool frame(bool down, bool pressed, bool released, int x, int y)
-{
-    input_t in = { 0 };
+static bool
+frame(bool down, bool pressed, bool released, int x, int y) {
+    input_t in = {0};
     in.down = down;
     in.pressed = pressed;
     in.released = released;
@@ -91,23 +91,16 @@ static bool frame(bool down, bool pressed, bool released, int x, int y)
     const int n = ui_pointer_step(&pointer, &in, ev, UI_POINTER_MAX_EVENTS);
     for (int i = 0; i < n; i++) {
         switch (ev[i].kind) {
-        case UI_POINTER_MOVE:
-            mu_input_mousemove(ctx, ev[i].x, ev[i].y);
-            break;
-        case UI_POINTER_DOWN:
-            mu_input_mousedown(ctx, ev[i].x, ev[i].y, MU_MOUSE_LEFT);
-            break;
-        case UI_POINTER_UP:
-            mu_input_mouseup(ctx, ev[i].x, ev[i].y, MU_MOUSE_LEFT);
-            break;
+            case UI_POINTER_MOVE: mu_input_mousemove(ctx, ev[i].x, ev[i].y); break;
+            case UI_POINTER_DOWN: mu_input_mousedown(ctx, ev[i].x, ev[i].y, MU_MOUSE_LEFT); break;
+            case UI_POINTER_UP: mu_input_mouseup(ctx, ev[i].x, ev[i].y, MU_MOUSE_LEFT); break;
         }
     }
 
     bool submitted = false;
     mu_begin(ctx);
     if (mu_begin_window_ex(ctx, "screen", mu_rect(0, 0, CANVAS_W, CANVAS_H),
-                           MU_OPT_NOTITLE | MU_OPT_NORESIZE | MU_OPT_NOCLOSE |
-                           MU_OPT_NOFRAME)) {
+                           MU_OPT_NOTITLE | MU_OPT_NORESIZE | MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
         mu_layout_set_next(ctx, mu_rect(BTN_X, BTN_Y, BTN_W, BTN_H), 0);
         if (mu_button(ctx, "GO")) {
             submitted = true;
@@ -120,8 +113,8 @@ static bool frame(bool down, bool pressed, bool released, int x, int y)
 
 /* Frames with nothing touching, so the pointer parks off-screen exactly as
  * it does whenever a finger is not on the glass. */
-static void idle_frames(int count)
-{
+static void
+idle_frames(int count) {
     for (int i = 0; i < count; i++) {
         frame(false, false, false, 0, 0);
     }
@@ -129,37 +122,43 @@ static void idle_frames(int count)
 
 /* A tap as touch_fsm actually delivers one: a pressed edge, some frames of
  * being held, then a released edge. */
-static int taps_counted(int held_frames)
-{
+static int
+taps_counted(int held_frames) {
     const int cx = BTN_X + BTN_W / 2;
     const int cy = BTN_Y + BTN_H / 2;
     int submits = 0;
 
-    if (frame(true, true, false, cx, cy)) { submits++; }
-    for (int i = 0; i < held_frames; i++) {
-        if (frame(true, false, false, cx, cy)) { submits++; }
+    if (frame(true, true, false, cx, cy)) {
+        submits++;
     }
-    if (frame(false, false, true, cx, cy)) { submits++; }
+    for (int i = 0; i < held_frames; i++) {
+        if (frame(true, false, false, cx, cy)) {
+            submits++;
+        }
+    }
+    if (frame(false, false, true, cx, cy)) {
+        submits++;
+    }
     return submits;
 }
 
 /* The regression this suite was written for. */
 
-static void test_a_tap_submits_the_button_underneath_it(void)
-{
+static void
+test_a_tap_submits_the_button_underneath_it(void) {
     fixture();
     idle_frames(2);
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(1, taps_counted(4),
-        "a tap must submit the button under it exactly once - this is the "
-        "assertion a held-DOWN policy broke while every event-list test "
-        "stayed green, leaving no app reachable from the launcher");
+                                  "a tap must submit the button under it exactly once - this is the "
+                                  "assertion a held-DOWN policy broke while every event-list test "
+                                  "stayed green, leaving no app reachable from the launcher");
 }
 
 /* However long the finger rests, one press is one click. Holding must not
  * re-fire the control it is resting on. */
-static void test_holding_does_not_resubmit(void)
-{
+static void
+test_holding_does_not_resubmit(void) {
     fixture();
     idle_frames(2);
 
@@ -174,29 +173,35 @@ static void test_holding_does_not_resubmit(void)
  * (suite_ui_pointer.c asserts that) - the click is simply not resolvable,
  * and only touch_fsm's TOUCH_RELEASE_QUIET_US (60ms) makes it reachable at
  * all. */
-static void test_a_one_frame_tap_cannot_resolve_a_control(void)
-{
+static void
+test_a_one_frame_tap_cannot_resolve_a_control(void) {
     fixture();
     idle_frames(2);
 
     const int cx = BTN_X + BTN_W / 2;
     const int cy = BTN_Y + BTN_H / 2;
     TEST_ASSERT_FALSE_MESSAGE(frame(true, true, true, cx, cy),
-        "microui has no hover_root for a position it is seeing for the "
-        "first time, so nothing can take focus on that frame");
+                              "microui has no hover_root for a position it is seeing for the "
+                              "first time, so nothing can take focus on that frame");
 }
 
-static void test_a_tap_outside_the_button_submits_nothing(void)
-{
+static void
+test_a_tap_outside_the_button_submits_nothing(void) {
     fixture();
     idle_frames(2);
 
     int submits = 0;
-    if (frame(true, true, false, 10, 400)) { submits++; }
-    for (int i = 0; i < 4; i++) {
-        if (frame(true, false, false, 10, 400)) { submits++; }
+    if (frame(true, true, false, 10, 400)) {
+        submits++;
     }
-    if (frame(false, false, true, 10, 400)) { submits++; }
+    for (int i = 0; i < 4; i++) {
+        if (frame(true, false, false, 10, 400)) {
+            submits++;
+        }
+    }
+    if (frame(false, false, true, 10, 400)) {
+        submits++;
+    }
 
     TEST_ASSERT_EQUAL_INT(0, submits);
 }
@@ -207,8 +212,8 @@ static void test_a_tap_outside_the_button_submits_nothing(void)
  * its value while (mouse_down | mouse_pressed) is set. This is what the
  * whole hold policy was introduced for, and it must keep working alongside
  * the hover frames the fix added. */
-static void test_a_drag_moves_a_slider_microui_would_not_track_on_a_tap(void)
-{
+static void
+test_a_drag_moves_a_slider_microui_would_not_track_on_a_tap(void) {
     fixture();
     idle_frames(2);
 
@@ -220,7 +225,7 @@ static void test_a_drag_moves_a_slider_microui_would_not_track_on_a_tap(void)
      * has something that only responds while genuinely held. */
     int x = track_x + 10;
     for (int f = 0; f < 12; f++) {
-        input_t in = { 0 };
+        input_t in = {0};
         in.down = true;
         in.pressed = (f == 0);
         in.x = x;
@@ -240,8 +245,7 @@ static void test_a_drag_moves_a_slider_microui_would_not_track_on_a_tap(void)
 
         mu_begin(ctx);
         if (mu_begin_window_ex(ctx, "screen", mu_rect(0, 0, CANVAS_W, CANVAS_H),
-                               MU_OPT_NOTITLE | MU_OPT_NORESIZE | MU_OPT_NOCLOSE |
-                               MU_OPT_NOFRAME)) {
+                               MU_OPT_NOTITLE | MU_OPT_NORESIZE | MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
             mu_layout_set_next(ctx, mu_rect(track_x, BTN_Y, track_w, BTN_H), 0);
             mu_slider(ctx, &value, 0, 100);
             mu_end_window(ctx);
@@ -255,13 +259,12 @@ static void test_a_drag_moves_a_slider_microui_would_not_track_on_a_tap(void)
         }
     }
 
-    TEST_ASSERT_TRUE_MESSAGE(value > 0,
-        "dragging must move a slider - microui only tracks one while the "
-        "mouse stays down, which is the reason the pointer holds DOWN at all");
+    TEST_ASSERT_TRUE_MESSAGE(value > 0, "dragging must move a slider - microui only tracks one while the "
+                                        "mouse stays down, which is the reason the pointer holds DOWN at all");
 }
 
-void run_ui_pointer_microui_suite(void)
-{
+void
+run_ui_pointer_microui_suite(void) {
     RUN_TEST(test_a_tap_submits_the_button_underneath_it);
     RUN_TEST(test_holding_does_not_resubmit);
     RUN_TEST(test_a_one_frame_tap_cannot_resolve_a_control);

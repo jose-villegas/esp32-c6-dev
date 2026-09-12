@@ -34,8 +34,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "sand.h"
 #include "material.h"
+#include "sand.h"
 #include "sand_work_counters.h"
 
 /* Mirrors suite_sand_common.h's REAL_W/REAL_H - the shipped grid size, not
@@ -44,8 +44,8 @@
  * predate that header existing at all (suite_sand.c was still one file),
  * and the figure itself has been the same 184x224 across the whole range
  * this counter set has been checked against. */
-#define REAL_W 184
-#define REAL_H 224
+#define REAL_W          184
+#define REAL_H          224
 #define REAL_BLOCK_COLS ((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
 #define REAL_BLOCK_ROWS ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
 
@@ -63,7 +63,7 @@ print_counter_line(const char* name, uint32_t value) {
  * called there. */
 static int
 run_water_scene(int steps) {
-    uint8_t* big    = malloc((size_t)REAL_W * (size_t)REAL_H);
+    uint8_t* big = malloc((size_t)REAL_W * (size_t)REAL_H);
     uint8_t* blocks = malloc((size_t)REAL_BLOCK_COLS * (size_t)REAL_BLOCK_ROWS);
     if (big == NULL || blocks == NULL) {
         fprintf(stderr, "counters_scene_main: grid allocation failed\n");
@@ -100,8 +100,10 @@ main(int argc, char** argv) {
     const int steps = (argc > 2) ? atoi(argv[2]) : 20;
 
     if (strcmp(scene, "water") != 0) {
-        fprintf(stderr, "counters_scene_main: unknown scene '%s' "
-                "(only 'water' is wired up)\n", scene);
+        fprintf(stderr,
+                "counters_scene_main: unknown scene '%s' "
+                "(only 'water' is wired up)\n",
+                scene);
         return 1;
     }
     return run_water_scene(steps);

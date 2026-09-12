@@ -31,29 +31,28 @@
  * NEVER MEAN - an RTOS tick inside a timed step only ever adds.
  */
 typedef struct {
-    const char *name;
+    const char* name;
     /* EVERYTHING THE BUDGET ROW DOES, not just its builder. The first use of
      * this harness measured a soak stage at 1 us because the row it copied
      * calls sand_set_soak() BEFORE the builder and the harness did not - so
      * nothing soaked, and the gate had nothing to skip. A scene is its setup
      * plus its builder plus whatever it does mid-settle; leave any of that
      * out and the number is of a different scene. */
-    void      (*setup)(sand_t *s);   /* NULL when the scene needs none */
-    void      (*build)(sand_t *s);   /* suite_sand_scenes.h shape */
-    void      (*during)(sand_t *s, int step);  /* pours, rain - NULL if none */
-    uint32_t    seed;
-    int         sgx, sgy;            /* gravity while settling */
-    int         gx, gy;              /* gravity for the timed step - differs
+    void (*setup)(sand_t* s);            /* NULL when the scene needs none */
+    void (*build)(sand_t* s);            /* suite_sand_scenes.h shape */
+    void (*during)(sand_t* s, int step); /* pours, rain - NULL if none */
+    uint32_t seed;
+    int sgx, sgy; /* gravity while settling */
+    int gx, gy;   /* gravity for the timed step - differs
                                         from the above for a flip scene, whose
                                         whole cost is the turn */
-    int         settle;              /* steps with everything on first */
+    int settle;   /* steps with everything on first */
 } split_scene_t;
 
-static int64_t split_single_step_us(const split_scene_t *sc,
-                                    volatile bool *gate, int repeats)
-{
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+static int64_t
+split_single_step_us(const split_scene_t* sc, volatile bool* gate, int repeats) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     if (big == NULL || blocks == NULL) {
         free(big);
         free(blocks);
@@ -84,7 +83,7 @@ static int64_t split_single_step_us(const split_scene_t *sc,
         sand_step(&real, sc->gx, sc->gy, 0);
         const int64_t dt = esp_timer_get_time() - t0;
         if (gate != NULL) {
-            *gate = true;   /* restored before anything else runs */
+            *gate = true; /* restored before anything else runs */
         }
 
         if (dt < best) {
@@ -101,20 +100,17 @@ static int64_t split_single_step_us(const split_scene_t *sc,
  * round actually reads: what each phase costs and what share of the step it
  * is. The caller owns the gate list because WHICH gates exist is the round's
  * entire content. */
-static void split_report(const split_scene_t *sc, const char *const *names,
-                         volatile bool *const *gates, int n, int repeats)
-{
+static void
+split_report(const split_scene_t* sc, const char* const* names, volatile bool* const* gates, int n, int repeats) {
     const int64_t whole = split_single_step_us(sc, NULL, repeats);
-    ESP_LOGI("device_tests", "split %s: whole step %lld us (min of %d)",
-             sc->name, (long long)whole, repeats);
+    ESP_LOGI("device_tests", "split %s: whole step %lld us (min of %d)", sc->name, (long long)whole, repeats);
 
     int64_t accounted = 0;
     for (int i = 0; i < n; i++) {
         const int64_t off = split_single_step_us(sc, gates[i], repeats);
         const int64_t phase = whole - off;
         accounted += phase;
-        ESP_LOGI("device_tests", "split %s: %-16s %lld us  %d%%",
-                 sc->name, names[i], (long long)phase,
+        ESP_LOGI("device_tests", "split %s: %-16s %lld us  %d%%", sc->name, names[i], (long long)phase,
                  whole > 0 ? (int)((phase * 100) / whole) : 0);
     }
 
@@ -126,8 +122,8 @@ static void split_report(const split_scene_t *sc, const char *const *names,
      * move_liquid_grain left its mass to the slides and read -18%. Gates
      * partition between passes, not inside one function sharing a budget
      * across its branches. */
-    ESP_LOGI("device_tests", "split %s: residual %lld us of %lld",
-             sc->name, (long long)(whole - accounted), (long long)whole);
+    ESP_LOGI("device_tests", "split %s: residual %lld us of %lld", sc->name, (long long)(whole - accounted),
+             (long long)whole);
 }
 
 #endif

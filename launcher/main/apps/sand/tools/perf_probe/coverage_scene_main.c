@@ -108,8 +108,7 @@ main(int argc, char** argv) {
     for (int a = 1; a < argc; a++) {
         const probe_scene_t* scene = find_scene(argv[a]);
         if (!scene) {
-            fprintf(stderr, "coverage_probe: unknown scene '%s' (try --list)\n",
-                    argv[a]);
+            fprintf(stderr, "coverage_probe: unknown scene '%s' (try --list)\n", argv[a]);
             return 1;
         }
         suite_run_test_timed(scene->fn, scene->name, 0);

@@ -23,7 +23,7 @@
 #define LERP_CH(lo, hi, shift, sh)                                                                                     \
     ((((((lo) >> (shift)) & 0xFF) * (15 - (sh)) + (((hi) >> (shift)) & 0xFF) * (sh)) / 15) & 0xFF)
 
-#define LERP(lo, hi, sh)  ((LERP_CH(lo, hi, 16, sh) << 16) | (LERP_CH(lo, hi, 8, sh) << 8) | LERP_CH(lo, hi, 0, sh))
+#define LERP(lo, hi, sh) ((LERP_CH(lo, hi, 16, sh) << 16) | (LERP_CH(lo, hi, 8, sh) << 8) | LERP_CH(lo, hi, 0, sh))
 
 /* glass MAT_GLASS case needs small tilt for finer gradient than palette steps */
 #define LERP8_CH(lo, hi, shift, fr)                                                                                    \
@@ -39,19 +39,18 @@
 /* Wet soil darker, 7 point cap. */
 
 /* Removes slot sharing: variant 0 only needs to be paler than variant 1. */
-#define DIRT_DRY 0x9A7B52
-#define DIRT_WET 0x3A2A18
+#define DIRT_DRY          0x9A7B52
+#define DIRT_WET          0x3A2A18
 
-#define SOIL_SHADES                                                                                                   \
-    GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 0)), GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 1)),                                       \
-        GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 2)), GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 3)),                                   \
-        GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 4)), GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 5)),                                   \
-        GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 6)), GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 7)),                                   \
-        GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 8)), GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 9)),                                   \
-        GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 10)), GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 11)),                                 \
-        GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 12)), GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 13)),                                 \
-        GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 15)), /* variant 14: saturated */                                            \
-        GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 15))  /* variant 15: unused - same as 14 */
+#define SOIL_SHADES                                                                                                    \
+    GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 0)), GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 1)), GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 2)),  \
+        GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 3)), GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 4)),                                    \
+        GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 5)), GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 6)),                                    \
+        GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 7)), GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 8)),                                    \
+        GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 9)), GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 10)),                                   \
+        GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 11)), GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 12)),                                  \
+        GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 13)), GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 15)), /* variant 14: saturated */      \
+        GFX_RGB(LERP(DIRT_DRY, DIRT_WET, 15)) /* variant 15: unused - same as 14 */
 
 /* Ember ramp: dying char through glowing orange, redder and darker than
  * fire's yellow-white. */
@@ -76,13 +75,13 @@
 #define WOOD_LEAF_TINT_HI LERP(0x468F26, 0x8CD24E, 3)
 
 /* Hot walls appear visibly hot now. */
-#define STONE_FROST   0xCEDCE8
-#define STONE_AMBIENT 0x5F6673
-#define STONE_NEUTRAL 0x8A7466
-#define STONE_GLOW    0x9E3A18
-#define STONE_MOLTEN  0xE8752A
+#define STONE_FROST       0xCEDCE8
+#define STONE_AMBIENT     0x5F6673
+#define STONE_NEUTRAL     0x8A7466
+#define STONE_GLOW        0x9E3A18
+#define STONE_MOLTEN      0xE8752A
 
-#define STONE_COOL(v) LERP(STONE_FROST, STONE_AMBIENT, ((v) * 15) / (SAND_AMBIENT_HEAT > 0 ? SAND_AMBIENT_HEAT : 1))
+#define STONE_COOL(v)     LERP(STONE_FROST, STONE_AMBIENT, ((v) * 15) / (SAND_AMBIENT_HEAT > 0 ? SAND_AMBIENT_HEAT : 1))
 #define STONE_WARM(v)                                                                                                  \
     LERP(STONE_AMBIENT, STONE_NEUTRAL,                                                                                 \
          (((v) - SAND_AMBIENT_HEAT) * 15)                                                                              \
@@ -158,13 +157,13 @@ _Static_assert(SAND_AMBIENT_HEAT > 0 && SAND_AMBIENT_HEAT < SAND_SHOCK_HEAT && S
  * never calls material_set_cullet_phase() (a host test) still shows the
  * same cullet a running frame does at rest. GLINT is pure white for one
  * phase. */
-#define CULLET_CYCLE_A 0xCFEAF2 /* pale cyan */
-#define CULLET_CYCLE_B 0xD8D0F0 /* lilac */
-#define CULLET_CYCLE_C 0xF0D6DC /* rose */
-#define CULLET_CYCLE_D 0xE2F0D2 /* mint */
+#define CULLET_CYCLE_A      0xCFEAF2 /* pale cyan */
+#define CULLET_CYCLE_B      0xD8D0F0 /* lilac */
+#define CULLET_CYCLE_C      0xF0D6DC /* rose */
+#define CULLET_CYCLE_D      0xE2F0D2 /* mint */
 
 /* What a glinting grain shows: full white, the panel's highest radiance. */
-#define CULLET_GLINT GFX_RGB(0xFFFFFF)
+#define CULLET_GLINT        GFX_RGB(0xFFFFFF)
 
 /* Odds one in 192. Modulo for flexibility. More glints with lower value. */
 #define CULLET_GLINT_ONE_IN 192
@@ -400,7 +399,7 @@ static const gfx_color_t palette[256] = {
                               * REVISION 2 spent this code on the lit state */
 };
 
-#define GLASS_RGB(v)      ((v) <= SAND_AMBIENT_HEAT ? GLASS_COOL(v) : (v) < SAND_SHOCK_HEAT ? GLASS_WARM(v) : GLASS_HOT(v))
+#define GLASS_RGB(v)        ((v) <= SAND_AMBIENT_HEAT ? GLASS_COOL(v) : (v) < SAND_SHOCK_HEAT ? GLASS_WARM(v) : GLASS_HOT(v))
 
 /* Blends towards ambient, not endpoints like STONE_EDGE_RGB. */
 
@@ -411,21 +410,21 @@ static const gfx_color_t palette[256] = {
 #define GLASS_EDGE_V_RAW(v) ((v) + (((int)(SAND_AMBIENT_HEAT) - (int)(v)) * 10) / 15)
 
 /* Clamped to SAND_SHOCK_HEAT if already HOT. */
-#define GLASS_EDGE_V(v)                                                                                               \
+#define GLASS_EDGE_V(v)                                                                                                \
     (((v) >= SAND_SHOCK_HEAT && GLASS_EDGE_V_RAW(v) < SAND_SHOCK_HEAT) ? SAND_SHOCK_HEAT : GLASS_EDGE_V_RAW(v))
-#define GLASS_EDGE_RGB(v) GLASS_RGB(GLASS_EDGE_V(v))
-#define STONE_EDGE_RGB(v) LERP(STONE_RGB(v), STONE_RGB(SAND_AMBIENT_HEAT), 10)
+#define GLASS_EDGE_RGB(v)    GLASS_RGB(GLASS_EDGE_V(v))
+#define STONE_EDGE_RGB(v)    LERP(STONE_RGB(v), STONE_RGB(SAND_AMBIENT_HEAT), 10)
 
 /* GLASS_SHIMMER via COOL. Mix WARM/HOT for icy blue to muddy yellow-green.
  * White stays, brighter. */
 #define GLASS_GRADIENT_HI(v) ((v) <= SAND_AMBIENT_HEAT ? GLASS_SHIMMER : 0xFFFFFF)
 
-#define STONE_DARK(rgb)     LERP((rgb), 0x000000, 3)
-#define STONE_LIGHT(rgb)    LERP((rgb), 0xFFFFFF, 3)
+#define STONE_DARK(rgb)      LERP((rgb), 0x000000, 3)
+#define STONE_LIGHT(rgb)     LERP((rgb), 0xFFFFFF, 3)
 
-#define STONE_GRAIN(rgb, k) GFX_RGB(LERP(STONE_DARK(rgb), STONE_LIGHT(rgb), (k) * 15 / 7))
+#define STONE_GRAIN(rgb, k)  GFX_RGB(LERP(STONE_DARK(rgb), STONE_LIGHT(rgb), (k) * 15 / 7))
 
-#define STONE_SPECKLE(v, k) STONE_GRAIN(STONE_RGB(v), k)
+#define STONE_SPECKLE(v, k)  STONE_GRAIN(STONE_RGB(v), k)
 
 #define STONE_SPECKLE_ROW(v)                                                                                           \
     {STONE_SPECKLE(v, 0), STONE_SPECKLE(v, 1), STONE_SPECKLE(v, 2), STONE_SPECKLE(v, 3),                               \
@@ -460,25 +459,25 @@ static const gfx_color_t wood_grain[8] = {
  * since real foliage is a messier mix than ice, whose variation is facets on
  * one substance. The stem is deliberately OLIVE rather than green, closer to
  * wood's own colour, since every stem cell is on its way to becoming wood. */
-#define PLANT_DARK        0x495422
-#define PLANT_LIGHT       0x778746
+#define PLANT_DARK         0x495422
+#define PLANT_LIGHT        0x778746
 
 /* Non-uniform green creates half canopy. Now one material. Gold-brown chain
  * removed for cost. */
-#define LEAF_DARK         0x468F26
-#define LEAF_LIGHT        0x8CD24E
+#define LEAF_DARK          0x468F26
+#define LEAF_LIGHT         0x8CD24E
 
-#define ICE_DARK          0x93C9DE
-#define ICE_LIGHT         0xDEF5FD
+#define ICE_DARK           0x93C9DE
+#define ICE_LIGHT          0xDEF5FD
 
 /* Metal: Like ice, minimal movement; position hash varies, simulating uniform
  * surface. */
-#define METAL_DARK        0x7C8794
-#define METAL_LIGHT       0xB9C4D2
+#define METAL_DARK         0x7C8794
+#define METAL_LIGHT        0xB9C4D2
 
 /* ROOT_DARK is pale; ROOT_LIGHT matches METAL_LIGHT for consistency. */
-#define ROOT_DARK         0xBFA58A
-#define ROOT_LIGHT        0xDCC5A8
+#define ROOT_DARK          0xBFA58A
+#define ROOT_LIGHT         0xDCC5A8
 
 /* A root's shade comes from its live neighbour-root count (`depth`, see
  * material_colours()), not a stored age: age would fade fresh tips too, and
@@ -487,16 +486,16 @@ static const gfx_color_t wood_grain[8] = {
  * root, not trunk. The grain's light end needs its OWN old colour
  * (ROOT_OLD_LIGHT), not ROOT_OLD too, or the oldest row's grain collapses to
  * one flat colour - see test_the_right_extended_materials_are_grained. */
-#define ROOT_OLD          0x7A5535
-#define ROOT_OLD_LIGHT    0x976D48
-#define ROOT_SHADES       4
+#define ROOT_OLD           0x7A5535
+#define ROOT_OLD_LIGHT     0x976D48
+#define ROOT_SHADES        4
 
 #define ROOT_STEP(k)       LERP(ROOT_DARK, ROOT_OLD, (k) * 15 / (ROOT_SHADES - 1))
 #define ROOT_STEP_LIGHT(k) LERP(ROOT_LIGHT, ROOT_OLD_LIGHT, (k) * 15 / (ROOT_SHADES - 1))
 
 /* 0 or 1: tip; 2: one child; 3: junction; >3: collar or thicket middle. */
-static inline unsigned root_shade(unsigned n)
-{
+static inline unsigned
+root_shade(unsigned n) {
     return n <= 1u ? 0u : n == 2u ? 1u : n == 3u ? 2u : (ROOT_SHADES - 1u);
 }
 
@@ -593,7 +592,7 @@ material_set_gravity(int gx, int gy) {
 }
 
 void
-material_shine_direction(int gx, int gy, int *ux_q8, int *uy_q8) {
+material_shine_direction(int gx, int gy, int* ux_q8, int* uy_q8) {
     const int len = im_len(gx, gy);
     if (len == 0) {
         *ux_q8 = 181;
@@ -609,7 +608,7 @@ material_shine_direction(int gx, int gy, int *ux_q8, int *uy_q8) {
  * device is held, the same reasoning material_shine_direction() already
  * uses for its own band. Flat: defaults to grid-x. */
 void
-material_wood_leaf_wind_axis(int gx, int gy, int *ux_q8, int *uy_q8) {
+material_wood_leaf_wind_axis(int gx, int gy, int* ux_q8, int* uy_q8) {
     const int len = im_len(gx, gy);
     if (len == 0) {
         *ux_q8 = 256;
@@ -633,7 +632,7 @@ static const int8_t wood_leaf_ring[8][2] = {
  * not remove it". `*last_down` is the caller's own state, like
  * glass_last_phase. */
 void
-material_wood_leaf_top5(int gx, int gy, int *last_down, int8_t top5[5][2]) {
+material_wood_leaf_top5(int gx, int gy, int* last_down, int8_t top5[5][2]) {
     const int len = im_len(gx, gy);
     const long margin = len / 4;
     int down = *last_down & 7;
@@ -713,11 +712,11 @@ material_set_glass_phase(int phase) {
  * pulse. SCREEN_SPAN_MS is a multiple of PERIOD_MS so several bands show
  * at once. `hash` salts each cell's phase - see glass's own `(hash & 0xFF)
  * + glass_phase`. */
-#define WOOD_LEAF_WAVE_PERIOD_MS       600u
+#define WOOD_LEAF_WAVE_PERIOD_MS        600u
 #define WOOD_LEAF_WAVE_RISE_MS          60u
-#define WOOD_LEAF_WAVE_FALL_MS         140u
-#define WOOD_LEAF_WAVE_SCREEN_SPAN_MS 4000u
-#define WOOD_LEAF_WAVE_SALT_MS         150u
+#define WOOD_LEAF_WAVE_FALL_MS          140u
+#define WOOD_LEAF_WAVE_SCREEN_SPAN_MS   4000u
+#define WOOD_LEAF_WAVE_SALT_MS          150u
 
 /* Percent chance a cell actually shows a gust it is otherwise due for -
  * every eligible cell lighting up together read as one shine sweeping
@@ -843,8 +842,8 @@ material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_col
             if (v < SAND_CULLET_BASE) {
                 break;
             }
-            const unsigned i = ((v - SAND_CULLET_BASE) * (CULLET_CYCLE_LEN / SAND_CULLET_SHADES) + cullet_phase) &
-                                (CULLET_CYCLE_LEN - 1);
+            const unsigned i = ((v - SAND_CULLET_BASE) * (CULLET_CYCLE_LEN / SAND_CULLET_SHADES) + cullet_phase)
+                               & (CULLET_CYCLE_LEN - 1);
 
             /* GLINT: Flash white; mix uses hash & phase, not RNG. Rarity
              * controlled by CULLET_GLINT_ONE_IN. */

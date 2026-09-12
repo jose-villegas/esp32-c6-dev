@@ -38,16 +38,21 @@
 #include <stdint.h>
 
 #define S3L_PIXEL_FUNCTION boot_anim_unused_pixel
-#define S3L_RESOLUTION_X 368   /* GFX_WIDTH - see gfx.h; host compile
+#define S3L_RESOLUTION_X                                                                                               \
+    368                      /* GFX_WIDTH - see gfx.h; host compile
                                 * constraint. */
-#define S3L_RESOLUTION_Y 448   /* GFX_HEIGHT */
-#define S3L_Z_BUFFER 0         /* no rasterizer, no depth buffer to keep */
-#define S3L_SORT 0             /* no rasterizer, nothing to sort */
-#define S3L_MAX_TRIANGES_DRAWN 1   /* the rasterizer is never called; small3dlib
+#define S3L_RESOLUTION_Y 448 /* GFX_HEIGHT */
+#define S3L_Z_BUFFER     0   /* no rasterizer, no depth buffer to keep */
+#define S3L_SORT         0   /* no rasterizer, nothing to sort */
+#define S3L_MAX_TRIANGES_DRAWN                                                                                         \
+    1 /* the rasterizer is never called; small3dlib
                                     * still sizes an internal array off this */
 #include "small3dlib.h"
 
-static inline void boot_anim_unused_pixel(S3L_PixelInfo *pixel) { (void)pixel; }
+static inline void
+boot_anim_unused_pixel(S3L_PixelInfo* pixel) {
+    (void)pixel;
+}
 
 #include "boot/boot_anim_curve.h"
 #include "boot/boot_anim_timeline.h"
@@ -55,9 +60,9 @@ static inline void boot_anim_unused_pixel(S3L_PixelInfo *pixel) { (void)pixel; }
 #include "util/intmath.h"
 #include "util/tween.h"
 
-#define BOOT_ANIM_Q    12
-#define BOOT_ANIM_ONE  (1 << BOOT_ANIM_Q)   /* 4096 == 1.0 */
-#define BOOT_ANIM_TQ   8                    /* t's own fixed point */
+#define BOOT_ANIM_Q   12
+#define BOOT_ANIM_ONE (1 << BOOT_ANIM_Q) /* 4096 == 1.0 */
+#define BOOT_ANIM_TQ  8                  /* t's own fixed point */
 
 /*
  * The timeline
@@ -74,31 +79,33 @@ typedef struct {
     S3L_Transform3D space;
 } boot_anim_timeline_state_t;
 
-static inline uint8_t boot_anim_timeline_ease(uint8_t linear, uint8_t ease)
-{
+static inline uint8_t
+boot_anim_timeline_ease(uint8_t linear, uint8_t ease) {
     switch (ease) {
-    case BOOT_ANIM_EASE_OUT: return tween_ease_out(linear);
-    case BOOT_ANIM_EASE_IN:  return tween_ease_in(linear);
-    default:                 return linear;
+        case BOOT_ANIM_EASE_OUT: return tween_ease_out(linear);
+        case BOOT_ANIM_EASE_IN: return tween_ease_in(linear);
+        default: return linear;
     }
 }
 
-static inline S3L_Transform3D boot_anim_kf_transform(const int32_t pos[3],
-                                                      const int32_t rot[3],
-                                                      const int32_t scale[3])
-{
+static inline S3L_Transform3D
+boot_anim_kf_transform(const int32_t pos[3], const int32_t rot[3], const int32_t scale[3]) {
     S3L_Transform3D t;
-    t.translation.x = pos[0]; t.translation.y = pos[1]; t.translation.z = pos[2];
-    t.rotation.x = rot[0];    t.rotation.y = rot[1];    t.rotation.z = rot[2];
-    t.scale.x = scale[0];     t.scale.y = scale[1];     t.scale.z = scale[2];
+    t.translation.x = pos[0];
+    t.translation.y = pos[1];
+    t.translation.z = pos[2];
+    t.rotation.x = rot[0];
+    t.rotation.y = rot[1];
+    t.rotation.z = rot[2];
+    t.scale.x = scale[0];
+    t.scale.y = scale[1];
+    t.scale.z = scale[2];
     t.translation.w = t.rotation.w = t.scale.w = 0;
     return t;
 }
 
-static inline S3L_Transform3D boot_anim_lerp_transform(S3L_Transform3D a,
-                                                        S3L_Transform3D b,
-                                                        uint8_t u8)
-{
+static inline S3L_Transform3D
+boot_anim_lerp_transform(S3L_Transform3D a, S3L_Transform3D b, uint8_t u8) {
     S3L_Transform3D t;
     t.translation.x = tween_lerp_i32(a.translation.x, b.translation.x, u8);
     t.translation.y = tween_lerp_i32(a.translation.y, b.translation.y, u8);
@@ -114,17 +121,16 @@ static inline S3L_Transform3D boot_anim_lerp_transform(S3L_Transform3D a,
 }
 
 /* Clamps ends, like boot_anim_sample. Table short, linear scan sufficient. */
-static inline boot_anim_timeline_state_t boot_anim_timeline_sample(uint32_t now_ms)
-{
-    const boot_anim_keyframe_t *first = &boot_anim_keyframes[0];
-    const boot_anim_keyframe_t *last =
-        &boot_anim_keyframes[BOOT_ANIM_KEYFRAME_COUNT - 1];
+static inline boot_anim_timeline_state_t
+boot_anim_timeline_sample(uint32_t now_ms) {
+    const boot_anim_keyframe_t* first = &boot_anim_keyframes[0];
+    const boot_anim_keyframe_t* last = &boot_anim_keyframes[BOOT_ANIM_KEYFRAME_COUNT - 1];
     boot_anim_timeline_state_t s;
 
     if (now_ms <= first->ms || now_ms >= last->ms) {
-        const boot_anim_keyframe_t *k = now_ms <= first->ms ? first : last;
+        const boot_anim_keyframe_t* k = now_ms <= first->ms ? first : last;
         s.camera = boot_anim_kf_transform(k->camera_pos, k->camera_rot, k->camera_scale);
-        s.space  = boot_anim_kf_transform(k->space_pos,  k->space_rot,  k->space_scale);
+        s.space = boot_anim_kf_transform(k->space_pos, k->space_rot, k->space_scale);
         return s;
     }
 
@@ -132,8 +138,8 @@ static inline boot_anim_timeline_state_t boot_anim_timeline_sample(uint32_t now_
     while (boot_anim_keyframes[i].ms < now_ms) {
         i++;
     }
-    const boot_anim_keyframe_t *a = &boot_anim_keyframes[i - 1];
-    const boot_anim_keyframe_t *b = &boot_anim_keyframes[i];
+    const boot_anim_keyframe_t* a = &boot_anim_keyframes[i - 1];
+    const boot_anim_keyframe_t* b = &boot_anim_keyframes[i];
 
     const uint8_t linear = tween_ramp(now_ms, a->ms, b->ms - a->ms);
     const uint8_t u8 = boot_anim_timeline_ease(linear, b->ease);
@@ -144,7 +150,7 @@ static inline boot_anim_timeline_state_t boot_anim_timeline_sample(uint32_t now_
     const S3L_Transform3D sb = boot_anim_kf_transform(b->space_pos, b->space_rot, b->space_scale);
 
     s.camera = boot_anim_lerp_transform(ca, cb, u8);
-    s.space  = boot_anim_lerp_transform(sa, sb, u8);
+    s.space = boot_anim_lerp_transform(sa, sb, u8);
     return s;
 }
 
@@ -157,21 +163,17 @@ static inline boot_anim_timeline_state_t boot_anim_timeline_sample(uint32_t now_
  */
 
 static const int16_t boot_anim_sin_quarter[65] = {
-         0,    804,   1608,   2410,   3212,   4011,   4808,   5602,
-      6393,   7179,   7962,   8739,   9512,  10278,  11039,  11793,
-     12539,  13279,  14010,  14732,  15446,  16151,  16846,  17530,
-     18204,  18868,  19519,  20159,  20787,  21403,  22005,  22594,
-     23170,  23731,  24279,  24811,  25329,  25832,  26319,  26790,
-     27245,  27683,  28105,  28510,  28898,  29268,  29621,  29956,
-     30273,  30571,  30852,  31113,  31356,  31580,  31785,  31971,
-     32137,  32285,  32412,  32521,  32609,  32678,  32728,  32757,
-     32767,
+    0,     804,   1608,  2410,  3212,  4011,  4808,  5602,  6393,  7179,  7962,  8739,  9512,
+    10278, 11039, 11793, 12539, 13279, 14010, 14732, 15446, 16151, 16846, 17530, 18204, 18868,
+    19519, 20159, 20787, 21403, 22005, 22594, 23170, 23731, 24279, 24811, 25329, 25832, 26319,
+    26790, 27245, 27683, 28105, 28510, 28898, 29268, 29621, 29956, 30273, 30571, 30852, 31113,
+    31356, 31580, 31785, 31971, 32137, 32285, 32412, 32521, 32609, 32678, 32728, 32757, 32767,
 };
 
 /* Interpolated, not snapped. Table: 256 steps, 1.4 degrees. Snapping errors
  * compound. */
-static inline int32_t boot_anim_sin_quadrant(uint32_t r)
-{
+static inline int32_t
+boot_anim_sin_quadrant(uint32_t r) {
     const uint32_t i = r >> 8;
     if (i >= 64) {
         return boot_anim_sin_quarter[64];
@@ -182,21 +184,21 @@ static inline int32_t boot_anim_sin_quadrant(uint32_t r)
 }
 
 /* sin of a 16-bit phase (65536 == one turn), Q15. */
-static inline int32_t boot_anim_sin(uint16_t phase)
-{
+static inline int32_t
+boot_anim_sin(uint16_t phase) {
     const uint32_t quadrant = (uint32_t)phase >> 14;
-    const uint32_t rest     = (uint32_t)phase & 0x3FFF;
+    const uint32_t rest = (uint32_t)phase & 0x3FFF;
 
     switch (quadrant) {
-    case 0:  return  boot_anim_sin_quadrant(rest);
-    case 1:  return  boot_anim_sin_quadrant(16384u - rest);
-    case 2:  return -boot_anim_sin_quadrant(rest);
-    default: return -boot_anim_sin_quadrant(16384u - rest);
+        case 0: return boot_anim_sin_quadrant(rest);
+        case 1: return boot_anim_sin_quadrant(16384u - rest);
+        case 2: return -boot_anim_sin_quadrant(rest);
+        default: return -boot_anim_sin_quadrant(16384u - rest);
     }
 }
 
-static inline int32_t boot_anim_cos(uint16_t phase)
-{
+static inline int32_t
+boot_anim_cos(uint16_t phase) {
     return boot_anim_sin((uint16_t)(phase + 16384u));
 }
 
@@ -213,10 +215,10 @@ static inline int32_t boot_anim_cos(uint16_t phase)
  * scale, so it is BOOT_ANIM_CAMERA_FOCAL set to 0.
  */
 
-#define BOOT_ANIM_T_MAX 126    /* the top of the climb            */
+#define BOOT_ANIM_T_MAX          126 /* the top of the climb            */
 
 /* KEEP: Must match tools/gen_zeta_curve.py's PHASE1_T_MAX. */
-#define BOOT_ANIM_T_MAX_PHASE1 35
+#define BOOT_ANIM_T_MAX_PHASE1   35
 
 /* RINGS is how far the fade reaches, not the floor size - quarter-unit
  * spacing (not whole) so it reads as a dense ripple rather than
@@ -224,15 +226,15 @@ static inline int32_t boot_anim_cos(uint16_t phase)
  * boot_anim_timeline.h, STEP_Q12 with it. FADE is its own name for what
  * boot_anim_grid_alpha() means, but must equal RINGS exactly - short of
  * it is a hard edge, past it divides by a count nothing reaches. */
-#define BOOT_ANIM_GRID_FADE BOOT_ANIM_GRID_RINGS
+#define BOOT_ANIM_GRID_FADE      BOOT_ANIM_GRID_RINGS
 
 #define BOOT_ANIM_ZETA_TO_S3L(v) ((v) >> 3)
 
 /* Preserved as Q8 multiplier for SPIRAL effect. */
-#define BOOT_ANIM_T_TO_S3L_Q8 132
+#define BOOT_ANIM_T_TO_S3L_Q8    132
 
-static inline int32_t boot_anim_t_to_s3l(int32_t t_q8)
-{
+static inline int32_t
+boot_anim_t_to_s3l(int32_t t_q8) {
     return (t_q8 * BOOT_ANIM_T_TO_S3L_Q8) >> 8;
 }
 
@@ -242,8 +244,8 @@ typedef struct {
     S3L_Unit focal;
 } boot_anim_view_t;
 
-static inline boot_anim_view_t boot_anim_view(int w, int h, uint32_t now_ms)
-{
+static inline boot_anim_view_t
+boot_anim_view(int w, int h, uint32_t now_ms) {
     (void)w;
     (void)h;
 
@@ -262,24 +264,20 @@ static inline boot_anim_view_t boot_anim_view(int w, int h, uint32_t now_ms)
 
 /* CAMERA space transform; boot_anim_project() refactored for z check. Q12
  * re/im, Q8 t. Uses boot_anim_curve[] as fixed point in small3dlib. */
-static inline S3L_Vec4 boot_anim_to_camera_space(int32_t re_q12,
-                                                  int32_t im_q12,
-                                                  int32_t t_q8,
-                                                  const boot_anim_view_t *view)
-{
+static inline S3L_Vec4
+boot_anim_to_camera_space(int32_t re_q12, int32_t im_q12, int32_t t_q8, const boot_anim_view_t* view) {
     S3L_Vec4 p;
     p.x = BOOT_ANIM_ZETA_TO_S3L(re_q12);
     p.y = boot_anim_t_to_s3l(t_q8);
     p.z = BOOT_ANIM_ZETA_TO_S3L(im_q12);
     p.w = S3L_F;
 
-    S3L_vec3Xmat4(&p, (S3L_Unit (*)[4])view->matrix);
+    S3L_vec3Xmat4(&p, (S3L_Unit(*)[4])view->matrix);
     return p;
 }
 
-static inline void boot_anim_camera_to_screen(S3L_Vec4 p, S3L_Unit focal,
-                                              int *screen_x, int *screen_y)
-{
+static inline void
+boot_anim_camera_to_screen(S3L_Vec4 p, S3L_Unit focal, int* screen_x, int* screen_y) {
     p.z = S3L_nonZero(p.z);
     S3L_perspectiveDivide(&p, focal);
 
@@ -290,17 +288,13 @@ static inline void boot_anim_camera_to_screen(S3L_Vec4 p, S3L_Unit focal,
      * near-camera point's already-divided p.x/p.y can be large enough to
      * overflow a 32-bit product here even though the final on/off-panel
      * result never does - gfx.c's clip_line() leans on the same trick. */
-    *screen_x = (int)(S3L_HALF_RESOLUTION_X +
-        ((int64_t)p.x * S3L_HALF_RESOLUTION_X) / S3L_F);
-    *screen_y = (int)(S3L_HALF_RESOLUTION_Y -
-        ((int64_t)p.y * S3L_HALF_RESOLUTION_X) / S3L_F);
+    *screen_x = (int)(S3L_HALF_RESOLUTION_X + ((int64_t)p.x * S3L_HALF_RESOLUTION_X) / S3L_F);
+    *screen_y = (int)(S3L_HALF_RESOLUTION_Y - ((int64_t)p.y * S3L_HALF_RESOLUTION_X) / S3L_F);
 }
 
-static inline void boot_anim_project(int32_t re_q12, int32_t im_q12,
-                                     int32_t t_q8,
-                                     const boot_anim_view_t *view,
-                                     int *screen_x, int *screen_y)
-{
+static inline void
+boot_anim_project(int32_t re_q12, int32_t im_q12, int32_t t_q8, const boot_anim_view_t* view, int* screen_x,
+                  int* screen_y) {
     const S3L_Vec4 p = boot_anim_to_camera_space(re_q12, im_q12, t_q8, view);
     boot_anim_camera_to_screen(p, view->focal, screen_x, screen_y);
 }
@@ -309,11 +303,9 @@ static inline void boot_anim_project(int32_t re_q12, int32_t im_q12,
 #define BOOT_ANIM_NEAR_Z (S3L_F / 10)
 
 /* Draws if point is in front; checks visibility, avoids invalid coordinates. */
-static inline bool boot_anim_project_point(int32_t re_q12, int32_t im_q12,
-                                           int32_t t_q8,
-                                           const boot_anim_view_t *view,
-                                           int *screen_x, int *screen_y)
-{
+static inline bool
+boot_anim_project_point(int32_t re_q12, int32_t im_q12, int32_t t_q8, const boot_anim_view_t* view, int* screen_x,
+                        int* screen_y) {
     const S3L_Vec4 p = boot_anim_to_camera_space(re_q12, im_q12, t_q8, view);
     if (p.z <= BOOT_ANIM_NEAR_Z) {
         return false;
@@ -324,10 +316,9 @@ static inline bool boot_anim_project_point(int32_t re_q12, int32_t im_q12,
 
 /* Clips to near plane; avoids screen wrap. Returns false if segment is at or
  * behind the plane. */
-static inline bool boot_anim_project_segment_cs(
-    S3L_Vec4 p0, S3L_Vec4 p1, const boot_anim_view_t *view,
-    int *ax, int *ay, int *bx, int *by)
-{
+static inline bool
+boot_anim_project_segment_cs(S3L_Vec4 p0, S3L_Vec4 p1, const boot_anim_view_t* view, int* ax, int* ay, int* bx,
+                             int* by) {
     const bool front0 = p0.z > BOOT_ANIM_NEAR_Z;
     const bool front1 = p1.z > BOOT_ANIM_NEAR_Z;
 
@@ -338,16 +329,12 @@ static inline bool boot_anim_project_segment_cs(
     if (front0 != front1) {
         /* Replace endpoint with crossing point using linear interpolation in
          * camera space. */
-        S3L_Vec4 *behind = front0 ? &p1 : &p0;
-        const S3L_Vec4 *front = front0 ? &p0 : &p1;
-        const int64_t frac_q16 =
-            ((int64_t)(BOOT_ANIM_NEAR_Z - behind->z) << 16) /
-            (front->z - behind->z);
+        S3L_Vec4* behind = front0 ? &p1 : &p0;
+        const S3L_Vec4* front = front0 ? &p0 : &p1;
+        const int64_t frac_q16 = ((int64_t)(BOOT_ANIM_NEAR_Z - behind->z) << 16) / (front->z - behind->z);
 
-        behind->x += (int32_t)(((int64_t)(front->x - behind->x) *
-                                frac_q16) >> 16);
-        behind->y += (int32_t)(((int64_t)(front->y - behind->y) *
-                                frac_q16) >> 16);
+        behind->x += (int32_t)(((int64_t)(front->x - behind->x) * frac_q16) >> 16);
+        behind->y += (int32_t)(((int64_t)(front->y - behind->y) * frac_q16) >> 16);
         behind->z = BOOT_ANIM_NEAR_Z;
     }
 
@@ -358,16 +345,11 @@ static inline bool boot_anim_project_segment_cs(
 
 /* See boot_anim_project_segment_cs() for clipping. draw_curve() keeps points
  * in camera space. */
-static inline bool boot_anim_project_segment(
-    int32_t re0, int32_t im0, int32_t t0,
-    int32_t re1, int32_t im1, int32_t t1,
-    const boot_anim_view_t *view,
-    int *ax, int *ay, int *bx, int *by)
-{
-    return boot_anim_project_segment_cs(
-        boot_anim_to_camera_space(re0, im0, t0, view),
-        boot_anim_to_camera_space(re1, im1, t1, view),
-        view, ax, ay, bx, by);
+static inline bool
+boot_anim_project_segment(int32_t re0, int32_t im0, int32_t t0, int32_t re1, int32_t im1, int32_t t1,
+                          const boot_anim_view_t* view, int* ax, int* ay, int* bx, int* by) {
+    return boot_anim_project_segment_cs(boot_anim_to_camera_space(re0, im0, t0, view),
+                                        boot_anim_to_camera_space(re1, im1, t1, view), view, ax, ay, bx, by);
 }
 
 /*
@@ -387,18 +369,16 @@ static inline bool boot_anim_project_segment(
 
 /* BOOT_ANIM_WAVE_IN_MS, BOOT_ANIM_WAVE_ENVELOPE_RAMP_MS,
  * BOOT_ANIM_WAVE_OUT_MS define shape. Q0 scales strength. Timing independent. */
-static inline uint8_t boot_anim_wave_envelope(uint32_t now_ms)
-{
-    const uint8_t in = tween_ramp(now_ms, BOOT_ANIM_WAVE_IN_MS,
-                                  BOOT_ANIM_WAVE_ENVELOPE_RAMP_MS);
-    const uint8_t out = (uint8_t)(255u - tween_ramp(now_ms,
-        BOOT_ANIM_WAVE_OUT_MS, BOOT_ANIM_WAVE_ENVELOPE_RAMP_MS));
+static inline uint8_t
+boot_anim_wave_envelope(uint32_t now_ms) {
+    const uint8_t in = tween_ramp(now_ms, BOOT_ANIM_WAVE_IN_MS, BOOT_ANIM_WAVE_ENVELOPE_RAMP_MS);
+    const uint8_t out = (uint8_t)(255u - tween_ramp(now_ms, BOOT_ANIM_WAVE_OUT_MS, BOOT_ANIM_WAVE_ENVELOPE_RAMP_MS));
 
     return (in < out) ? in : out;
 }
 
-static inline int32_t boot_anim_zeta_to_t_q8(int32_t zeta_q12)
-{
+static inline int32_t
+boot_anim_zeta_to_t_q8(int32_t zeta_q12) {
     return (int32_t)(((int64_t)zeta_q12 << 5) / BOOT_ANIM_T_TO_S3L_Q8);
 }
 
@@ -408,26 +388,21 @@ static inline int32_t boot_anim_zeta_to_t_q8(int32_t zeta_q12)
  * test can drive the ripple with values of its own choosing regardless of
  * the compiled seed - the same "pass the environment in" split
  * docs/Testing-Guide.md asks for. */
-static inline int32_t boot_anim_wave_height(int32_t r_q12, uint32_t now_ms,
-                                            int32_t amp_q12,
-                                            int32_t wavelength_q12,
-                                            uint32_t period_ms)
-{
+static inline int32_t
+boot_anim_wave_height(int32_t r_q12, uint32_t now_ms, int32_t amp_q12, int32_t wavelength_q12, uint32_t period_ms) {
     if (amp_q12 == 0 || wavelength_q12 <= 0) {
         return 0;
     }
 
-    const uint32_t space_phase =
-        (uint32_t)(((int64_t)r_q12 * 65536) / wavelength_q12);
-    const uint32_t time_phase = (period_ms == 0) ? 0u :
-        (uint32_t)(((uint64_t)(now_ms % period_ms) * 65536u) / period_ms);
+    const uint32_t space_phase = (uint32_t)(((int64_t)r_q12 * 65536) / wavelength_q12);
+    const uint32_t time_phase =
+        (period_ms == 0) ? 0u : (uint32_t)(((uint64_t)(now_ms % period_ms) * 65536u) / period_ms);
 
     /* Wraps mod 65536 by uint16_t truncation */
     const uint16_t phase = (uint16_t)(space_phase - time_phase);
     const int32_t sin_q15 = boot_anim_sin(phase);
 
-    const int32_t amp_zeta_q12 =
-        (int32_t)(((int64_t)amp_q12 * sin_q15) >> 15);
+    const int32_t amp_zeta_q12 = (int32_t)(((int64_t)amp_q12 * sin_q15) >> 15);
 
     return boot_anim_zeta_to_t_q8(amp_zeta_q12);
 }
@@ -441,33 +416,30 @@ static inline int32_t boot_anim_wave_height(int32_t r_q12, uint32_t now_ms,
  * the ones there are get drawn as a spline.
  */
 
-#define BOOT_ANIM_SPLINE_STEPS 4
+#define BOOT_ANIM_SPLINE_STEPS          4
 
-#define BOOT_ANIM_LOD_CHORD_PX 3
+#define BOOT_ANIM_LOD_CHORD_PX          3
 
-#define BOOT_ANIM_LOD_STRIDE2_PX 192
-#define BOOT_ANIM_LOD_STRIDE4_PX 96
+#define BOOT_ANIM_LOD_STRIDE2_PX        192
+#define BOOT_ANIM_LOD_STRIDE4_PX        96
 
 #define BOOT_ANIM_DISSOLVE_HALF_LEVEL   4
 #define BOOT_ANIM_DISSOLVE_COARSE_LEVEL 8
 
 typedef struct {
-    int32_t re, im;   /* Q12 */
-    int32_t t;        /* Q8  */
+    int32_t re, im; /* Q12 */
+    int32_t t;      /* Q8  */
 } boot_anim_pt_t;
 
 /* A quadratic B-spline through c0, c1, c2 at `t_q12` for BOOT_ANIM_ONE.
  * Avoids Catmull-Rom's overshoot, staying convex. Quadratic for simpler
  * normalization (shift vs divide). */
-static inline boot_anim_pt_t boot_anim_spline(boot_anim_pt_t c0,
-                                              boot_anim_pt_t c1,
-                                              boot_anim_pt_t c2,
-                                              int32_t t_q12)
-{
+static inline boot_anim_pt_t
+boot_anim_spline(boot_anim_pt_t c0, boot_anim_pt_t c1, boot_anim_pt_t c2, int32_t t_q12) {
     /* 32-bit throughout, deliberately not util/fixed.h's widening helpers:
      * the operands are sized so the product cannot overflow an int32, on a
      * path that runs several thousand times a frame. */
-    const int32_t u  = BOOT_ANIM_ONE - t_q12;
+    const int32_t u = BOOT_ANIM_ONE - t_q12;
     const int32_t w0 = (u * u) >> BOOT_ANIM_Q;
     const int32_t w2 = (t_q12 * t_q12) >> BOOT_ANIM_Q;
 
@@ -479,7 +451,7 @@ static inline boot_anim_pt_t boot_anim_spline(boot_anim_pt_t c0,
     boot_anim_pt_t p;
     p.re = (w0 * c0.re + w1 * c1.re + w2 * c2.re) >> (BOOT_ANIM_Q + 1);
     p.im = (w0 * c0.im + w1 * c1.im + w2 * c2.im) >> (BOOT_ANIM_Q + 1);
-    p.t  = (w0 * c0.t  + w1 * c1.t  + w2 * c2.t ) >> (BOOT_ANIM_Q + 1);
+    p.t = (w0 * c0.t + w1 * c1.t + w2 * c2.t) >> (BOOT_ANIM_Q + 1);
     return p;
 }
 
@@ -491,29 +463,23 @@ static inline boot_anim_pt_t boot_anim_spline(boot_anim_pt_t c0,
  * pixel). Weighted sum is int64_t, unlike boot_anim_spline()'s 32-bit: a
  * camera-space coordinate has no known-small-range promise a raw
  * curve-table value does. */
-static inline S3L_Vec4 boot_anim_spline_cs(S3L_Vec4 c0, S3L_Vec4 c1,
-                                           S3L_Vec4 c2, int32_t t_q12)
-{
-    const int32_t u  = BOOT_ANIM_ONE - t_q12;
+static inline S3L_Vec4
+boot_anim_spline_cs(S3L_Vec4 c0, S3L_Vec4 c1, S3L_Vec4 c2, int32_t t_q12) {
+    const int32_t u = BOOT_ANIM_ONE - t_q12;
     const int32_t w0 = (u * u) >> BOOT_ANIM_Q;
     const int32_t w2 = (t_q12 * t_q12) >> BOOT_ANIM_Q;
     const int32_t w1 = 2 * BOOT_ANIM_ONE - w0 - w2;
 
     S3L_Vec4 p;
-    p.x = (S3L_Unit)(((int64_t)w0 * c0.x + (int64_t)w1 * c1.x +
-                       (int64_t)w2 * c2.x) >> (BOOT_ANIM_Q + 1));
-    p.y = (S3L_Unit)(((int64_t)w0 * c0.y + (int64_t)w1 * c1.y +
-                       (int64_t)w2 * c2.y) >> (BOOT_ANIM_Q + 1));
-    p.z = (S3L_Unit)(((int64_t)w0 * c0.z + (int64_t)w1 * c1.z +
-                       (int64_t)w2 * c2.z) >> (BOOT_ANIM_Q + 1));
+    p.x = (S3L_Unit)(((int64_t)w0 * c0.x + (int64_t)w1 * c1.x + (int64_t)w2 * c2.x) >> (BOOT_ANIM_Q + 1));
+    p.y = (S3L_Unit)(((int64_t)w0 * c0.y + (int64_t)w1 * c1.y + (int64_t)w2 * c2.y) >> (BOOT_ANIM_Q + 1));
+    p.z = (S3L_Unit)(((int64_t)w0 * c0.z + (int64_t)w1 * c1.z + (int64_t)w2 * c2.z) >> (BOOT_ANIM_Q + 1));
     p.w = S3L_F;
     return p;
 }
 
-static inline bool boot_anim_screen_chord_lt(S3L_Vec4 a, S3L_Vec4 c,
-                                             const boot_anim_view_t *view,
-                                             int32_t px)
-{
+static inline bool
+boot_anim_screen_chord_lt(S3L_Vec4 a, S3L_Vec4 c, const boot_anim_view_t* view, int32_t px) {
     if (a.z <= BOOT_ANIM_NEAR_Z || c.z <= BOOT_ANIM_NEAR_Z) {
         return false;
     }
@@ -524,23 +490,20 @@ static inline bool boot_anim_screen_chord_lt(S3L_Vec4 a, S3L_Vec4 c,
         return m * S3L_HALF_RESOLUTION_X < (int64_t)px * S3L_F;
     }
     const int32_t zmin = a.z < c.z ? a.z : c.z;
-    return m * view->focal * S3L_HALF_RESOLUTION_X <
-           (int64_t)px * zmin * S3L_F;
+    return m * view->focal * S3L_HALF_RESOLUTION_X < (int64_t)px * zmin * S3L_F;
 }
 
 /* Do NOT subdivide if span ends within BOOT_ANIM_LOD_CHORD_PX. Uses
  * boot_anim_screen_chord_lt(). */
-static inline int boot_anim_curve_lod_steps(S3L_Vec4 a, S3L_Vec4 c,
-                                            const boot_anim_view_t *view)
-{
-    return boot_anim_screen_chord_lt(a, c, view, BOOT_ANIM_LOD_CHORD_PX)
-        ? 1 : BOOT_ANIM_SPLINE_STEPS;
+static inline int
+boot_anim_curve_lod_steps(S3L_Vec4 a, S3L_Vec4 c, const boot_anim_view_t* view) {
+    return boot_anim_screen_chord_lt(a, c, view, BOOT_ANIM_LOD_CHORD_PX) ? 1 : BOOT_ANIM_SPLINE_STEPS;
 }
 
 /* Clamping pins spline to ends. Repeated first control point starts first
  * span at first sample. */
-static inline boot_anim_pt_t boot_anim_sample(int i)
-{
+static inline boot_anim_pt_t
+boot_anim_sample(int i) {
     if (i < 0) {
         i = 0;
     } else if (i >= BOOT_ANIM_CURVE_POINTS) {
@@ -549,12 +512,12 @@ static inline boot_anim_pt_t boot_anim_sample(int i)
     boot_anim_pt_t p;
     p.re = boot_anim_curve[i].re;
     p.im = boot_anim_curve[i].im;
-    p.t  = boot_anim_curve[i].t;
+    p.t = boot_anim_curve[i].t;
     return p;
 }
 
-static inline int boot_anim_lod_stride_for_extent(int32_t manhattan_px)
-{
+static inline int
+boot_anim_lod_stride_for_extent(int32_t manhattan_px) {
     if (manhattan_px < BOOT_ANIM_LOD_STRIDE4_PX) {
         return 4;
     }
@@ -564,10 +527,12 @@ static inline int boot_anim_lod_stride_for_extent(int32_t manhattan_px)
     return 1;
 }
 
-static inline int boot_anim_curve_stride(const boot_anim_view_t *view)
-{
+static inline int
+boot_anim_curve_stride(const boot_anim_view_t* view) {
     static const int probe_idx[3] = {
-        0, BOOT_ANIM_CURVE_POINTS / 2, BOOT_ANIM_CURVE_POINTS - 1,
+        0,
+        BOOT_ANIM_CURVE_POINTS / 2,
+        BOOT_ANIM_CURVE_POINTS - 1,
     };
     int min_x = 0, max_x = 0, min_y = 0, max_y = 0;
 
@@ -577,10 +542,18 @@ static inline int boot_anim_curve_stride(const boot_anim_view_t *view)
         if (!boot_anim_project_point(p.re, p.im, p.t, view, &sx, &sy)) {
             return 1;
         }
-        if (k == 0 || sx < min_x) min_x = sx;
-        if (k == 0 || sx > max_x) max_x = sx;
-        if (k == 0 || sy < min_y) min_y = sy;
-        if (k == 0 || sy > max_y) max_y = sy;
+        if (k == 0 || sx < min_x) {
+            min_x = sx;
+        }
+        if (k == 0 || sx > max_x) {
+            max_x = sx;
+        }
+        if (k == 0 || sy < min_y) {
+            min_y = sy;
+        }
+        if (k == 0 || sy > max_y) {
+            max_y = sy;
+        }
     }
 
     return boot_anim_lod_stride_for_extent((max_x - min_x) + (max_y - min_y));
@@ -596,8 +569,8 @@ static inline int boot_anim_curve_stride(const boot_anim_view_t *view)
  */
 
 /* A FRACTION, not a pixel count: arms have different lengths. */
-static inline uint8_t boot_anim_axis_reach(uint32_t now_ms)
-{
+static inline uint8_t
+boot_anim_axis_reach(uint32_t now_ms) {
     return tween_ease_out(tween_ramp(now_ms, 0, BOOT_ANIM_AXES_MS));
 }
 
@@ -609,36 +582,31 @@ static inline uint8_t boot_anim_axis_reach(uint32_t now_ms)
  * together: hue alone fixes muddiness, not peak brightness. Climbs from
  * the floor's appearance to BOOT_ANIM_MS, linear so it reads as steadily
  * adding up. */
-static inline uint8_t boot_anim_grid_climb(uint32_t now_ms)
-{
-    return tween_ramp(now_ms, BOOT_ANIM_GRID_START_MS,
-                      BOOT_ANIM_MS - BOOT_ANIM_GRID_START_MS);
+static inline uint8_t
+boot_anim_grid_climb(uint32_t now_ms) {
+    return tween_ramp(now_ms, BOOT_ANIM_GRID_START_MS, BOOT_ANIM_MS - BOOT_ANIM_GRID_START_MS);
 }
 
-static inline uint8_t boot_anim_grid_alpha(uint32_t now_ms, int ring)
-{
+static inline uint8_t
+boot_anim_grid_alpha(uint32_t now_ms, int ring) {
     if (ring >= BOOT_ANIM_GRID_FADE) {
         return 0;
     }
-    const uint32_t start = BOOT_ANIM_GRID_START_MS +
-                           (uint32_t)ring * BOOT_ANIM_GRID_RING_MS;
-    const uint32_t arrived = tween_ramp(now_ms, start,
-                                            BOOT_ANIM_GRID_FADE_MS);
+    const uint32_t start = BOOT_ANIM_GRID_START_MS + (uint32_t)ring * BOOT_ANIM_GRID_RING_MS;
+    const uint32_t arrived = tween_ramp(now_ms, start, BOOT_ANIM_GRID_FADE_MS);
 
     /* left/FADE, bounded rings. Squared dims too much. Linear keeps depth. */
     const uint32_t left = (uint32_t)(BOOT_ANIM_GRID_FADE - ring);
-    const uint32_t ceiling = (uint32_t)tween_lerp_i32(
-        BOOT_ANIM_GRID_MAX, BOOT_ANIM_GRID_CEILING_MAX,
-        boot_anim_grid_climb(now_ms));
+    const uint32_t ceiling =
+        (uint32_t)tween_lerp_i32(BOOT_ANIM_GRID_MAX, BOOT_ANIM_GRID_CEILING_MAX, boot_anim_grid_climb(now_ms));
     const uint32_t near = left * ceiling / (uint32_t)BOOT_ANIM_GRID_FADE;
 
     return (uint8_t)((arrived * near) / 255u);
 }
 
-static inline uint8_t boot_anim_grid_spoke_reach(uint32_t now_ms)
-{
-    return tween_ramp(now_ms, BOOT_ANIM_GRID_SPOKE_START_MS,
-                      BOOT_ANIM_GRID_SPOKE_DRAW_MS);
+static inline uint8_t
+boot_anim_grid_spoke_reach(uint32_t now_ms) {
+    return tween_ramp(now_ms, BOOT_ANIM_GRID_SPOKE_START_MS, BOOT_ANIM_GRID_SPOKE_DRAW_MS);
 }
 
 /* NOT linear in `reach`: a point projects to roughly 1/r on screen, so
@@ -648,10 +616,8 @@ static inline uint8_t boot_anim_grid_spoke_reach(uint32_t now_ms)
  * positive radius to anchor to, and 1/0 does not exist. Algebraically:
  * target = (near*far) / (far - (far-near)*frac). Plain math (not
  * boot_anim.c) so it is host-testable - see suite_boot_anim.c. */
-static inline int32_t boot_anim_spoke_reveal_target(int32_t near,
-                                                     int32_t far,
-                                                     uint8_t reach)
-{
+static inline int32_t
+boot_anim_spoke_reveal_target(int32_t near, int32_t far, uint8_t reach) {
     if (reach == 0) {
         return 0;
     }
@@ -664,20 +630,17 @@ static inline int32_t boot_anim_spoke_reveal_target(int32_t near,
         return (int32_t)(((int64_t)far * reach) / 255);
     }
 
-    const int32_t frac_q8 =
-        (int32_t)(((int64_t)(reach - r0) << 8) / (255 - r0));
-    const int64_t denom_q8 =
-        ((int64_t)far << 8) - (int64_t)(far - near) * frac_q8;
+    const int32_t frac_q8 = (int32_t)(((int64_t)(reach - r0) << 8) / (255 - r0));
+    const int64_t denom_q8 = ((int64_t)far << 8) - (int64_t)(far - near) * frac_q8;
     if (denom_q8 <= 0) {
-        return far;   /* degenerate - clamp rather than divide by <=0 */
+        return far; /* degenerate - clamp rather than divide by <=0 */
     }
     return (int32_t)((((int64_t)near * far) << 8) / denom_q8);
 }
 
-static inline uint8_t boot_anim_grid_whiten(uint32_t now_ms)
-{
-    return (uint8_t)tween_lerp_i32(0, BOOT_ANIM_GRID_WHITEN_MAX,
-                                   boot_anim_grid_climb(now_ms));
+static inline uint8_t
+boot_anim_grid_whiten(uint32_t now_ms) {
+    return (uint8_t)tween_lerp_i32(0, BOOT_ANIM_GRID_WHITEN_MAX, boot_anim_grid_climb(now_ms));
 }
 
 /* "Phase 1 must finish before the picture starts fading" is enforced by
@@ -701,11 +664,11 @@ static inline uint8_t boot_anim_grid_whiten(uint32_t now_ms)
 #define BOOT_ANIM_TITLE     "Autana"
 #define BOOT_ANIM_TITLE_LEN 6
 
-#define BOOT_ANIM_TITLE_GAP   3    /* extra px of tracking between glyphs */
+#define BOOT_ANIM_TITLE_GAP 3 /* extra px of tracking between glyphs */
 
 typedef enum {
     BOOT_ANIM_TITLE_FONT_LMROMAN_40 = 0,
-    BOOT_ANIM_TITLE_FONT_8X8        = 1,
+    BOOT_ANIM_TITLE_FONT_8X8 = 1,
 } boot_anim_title_font_id_t;
 
 #define BOOT_ANIM_TITLE_VIEW_W 448
@@ -719,42 +682,37 @@ typedef enum {
  * revisited. test_the_title_stays_on_the_panel_once_visible() pins the
  * result within BOOT_ANIM_TITLE_VIEW_W. */
 
-static inline int boot_anim_title_wobble(int32_t d_q12)
-{
+static inline int
+boot_anim_title_wobble(int32_t d_q12) {
     if (d_q12 <= 0) {
         return 0;
     }
     const int32_t d2_q12 = (d_q12 * d_q12) >> BOOT_ANIM_Q;
 
-    const uint16_t phase = (uint16_t)
-        ((d2_q12 * BOOT_ANIM_TITLE_TURNS_PHASE) >> BOOT_ANIM_Q);
+    const uint16_t phase = (uint16_t)((d2_q12 * BOOT_ANIM_TITLE_TURNS_PHASE) >> BOOT_ANIM_Q);
 
     const int32_t amp = (BOOT_ANIM_TITLE_AMPLITUDE_PX * d_q12) >> BOOT_ANIM_Q;
     return (int)((amp * boot_anim_sin(phase)) >> 15);
 }
 
 typedef struct {
-    int x, y;   /* pixels */
+    int x, y; /* pixels */
 } boot_anim_title_pos_t;
 
 /* Amplitude under 22, don't hurt legibility. In sequence, staggered phase.
  * See boot_anim_timeline.h. */
 
 /* Decay by ear, linear ramp, no easing. */
-static inline uint8_t boot_anim_title_wave_reach(uint32_t now_ms)
-{
-    return (uint8_t)(255u - tween_ramp(now_ms, BOOT_ANIM_TITLE_WAVE_OUT_MS,
-                                       BOOT_ANIM_TITLE_WAVE_FADE_MS));
+static inline uint8_t
+boot_anim_title_wave_reach(uint32_t now_ms) {
+    return (uint8_t)(255u - tween_ramp(now_ms, BOOT_ANIM_TITLE_WAVE_OUT_MS, BOOT_ANIM_TITLE_WAVE_FADE_MS));
 }
 
-static inline int boot_anim_title_wave(int i, uint32_t now_ms)
-{
-    const uint32_t t = (now_ms + (uint32_t)i * BOOT_ANIM_TITLE_WAVE_STAGGER_MS)
-                       % BOOT_ANIM_TITLE_WAVE_PERIOD_MS;
-    const uint16_t phase =
-        (uint16_t)((t * 65536u) / BOOT_ANIM_TITLE_WAVE_PERIOD_MS);
-    const int32_t amp = (BOOT_ANIM_TITLE_WAVE_AMPLITUDE_PX *
-                         boot_anim_title_wave_reach(now_ms)) / 255;
+static inline int
+boot_anim_title_wave(int i, uint32_t now_ms) {
+    const uint32_t t = (now_ms + (uint32_t)i * BOOT_ANIM_TITLE_WAVE_STAGGER_MS) % BOOT_ANIM_TITLE_WAVE_PERIOD_MS;
+    const uint16_t phase = (uint16_t)((t * 65536u) / BOOT_ANIM_TITLE_WAVE_PERIOD_MS);
+    const int32_t amp = (BOOT_ANIM_TITLE_WAVE_AMPLITUDE_PX * boot_anim_title_wave_reach(now_ms)) / 255;
     return (int)((amp * boot_anim_sin(phase)) >> 15);
 }
 
@@ -764,33 +722,26 @@ static inline int boot_anim_title_wave(int i, uint32_t now_ms)
  * `i * cell_w`: a fixed per-cell reckoning is wrong for a proportional
  * font, where narrow/wide glyphs do not share one width - see
  * test_final_x_matches_the_advance_sum() in suite_boot_anim.c. */
-static inline boot_anim_title_pos_t boot_anim_title_letter(
-    const gfx_font_t *font, int i, uint32_t now_ms)
-{
-    const uint32_t start = BOOT_ANIM_TITLE_START_MS +
-                           (uint32_t)i * BOOT_ANIM_TITLE_STAGGER_MS;
-    const uint8_t u8 = tween_ease_out(
-        tween_ramp(now_ms, start, BOOT_ANIM_TITLE_FLIGHT_MS));
+static inline boot_anim_title_pos_t
+boot_anim_title_letter(const gfx_font_t* font, int i, uint32_t now_ms) {
+    const uint32_t start = BOOT_ANIM_TITLE_START_MS + (uint32_t)i * BOOT_ANIM_TITLE_STAGGER_MS;
+    const uint8_t u8 = tween_ease_out(tween_ramp(now_ms, start, BOOT_ANIM_TITLE_FLIGHT_MS));
 
-    const int prefix_w = gfx_font_text_width(font, BOOT_ANIM_TITLE, i,
-                                             BOOT_ANIM_TITLE_SCALE);
-    const int final_x = BOOT_ANIM_TITLE_VIEW_X + prefix_w +
-                        i * BOOT_ANIM_TITLE_GAP;
+    const int prefix_w = gfx_font_text_width(font, BOOT_ANIM_TITLE, i, BOOT_ANIM_TITLE_SCALE);
+    const int final_x = BOOT_ANIM_TITLE_VIEW_X + prefix_w + i * BOOT_ANIM_TITLE_GAP;
     const int start_x = final_x - BOOT_ANIM_TITLE_ENTRY_PX;
 
     boot_anim_title_pos_t p;
     p.x = tween_lerp_i32(start_x, final_x, u8);
 
     const int32_t d_q12 = BOOT_ANIM_ONE - tween_lerp_i32(0, BOOT_ANIM_ONE, u8);
-    p.y = BOOT_ANIM_TITLE_VIEW_Y + boot_anim_title_wobble(d_q12) +
-          boot_anim_title_wave(i, now_ms);
+    p.y = BOOT_ANIM_TITLE_VIEW_Y + boot_anim_title_wobble(d_q12) + boot_anim_title_wave(i, now_ms);
     return p;
 }
 
 /* Swap and negate offset for shadow. Pure, host-testable function. */
-static inline void boot_anim_title_shadow_offset(int dx, int dy,
-                                                  int *panel_dx, int *panel_dy)
-{
+static inline void
+boot_anim_title_shadow_offset(int dx, int dy, int* panel_dx, int* panel_dy) {
     *panel_dx = -dy;
     *panel_dy = dx;
 }
@@ -818,33 +769,32 @@ static inline void boot_anim_title_shadow_offset(int dx, int dy,
 #define BOOT_ANIM_HUE_TURN 1536
 
 /* 0xRRGGBB at full saturation and full brightness. */
-static inline uint32_t boot_anim_hue_rgb(int hue)
-{
+static inline uint32_t
+boot_anim_hue_rgb(int hue) {
     hue %= BOOT_ANIM_HUE_TURN;
     if (hue < 0) {
         hue += BOOT_ANIM_HUE_TURN;
     }
 
-    const uint32_t ramp = (uint32_t)(hue & 0xFF);   /* rising edge, 0..255 */
+    const uint32_t ramp = (uint32_t)(hue & 0xFF); /* rising edge, 0..255 */
     const uint32_t fall = 255u - ramp;
 
     switch (hue >> 8) {
-    case 0:  return (0xFFu << 16) | (ramp << 8);            /* red     -> yellow  */
-    case 1:  return (fall << 16) | (0xFFu << 8);            /* yellow  -> green   */
-    case 2:  return (0xFFu << 8) | ramp;                    /* green   -> cyan    */
-    case 3:  return (fall << 8) | 0xFFu;                    /* cyan    -> blue    */
-    case 4:  return (ramp << 16) | 0xFFu;                   /* blue    -> magenta */
-    default: return (0xFFu << 16) | fall;                   /* magenta -> red     */
+        case 0: return (0xFFu << 16) | (ramp << 8); /* red     -> yellow  */
+        case 1: return (fall << 16) | (0xFFu << 8); /* yellow  -> green   */
+        case 2: return (0xFFu << 8) | ramp;         /* green   -> cyan    */
+        case 3: return (fall << 8) | 0xFFu;         /* cyan    -> blue    */
+        case 4: return (ramp << 16) | 0xFFu;        /* blue    -> magenta */
+        default: return (0xFFu << 16) | fall;       /* magenta -> red     */
     }
 }
 
 /* Grid hues shift. Floor stays still. Rings change in waves. GENERATED:
  * BOOT_ANIM_GRID_HUE_MS/HUE_SPREAD. */
 
-static inline int boot_anim_grid_hue(uint32_t now_ms, int ring)
-{
-    const uint32_t turn = (now_ms % BOOT_ANIM_GRID_HUE_MS) *
-                          BOOT_ANIM_HUE_TURN / BOOT_ANIM_GRID_HUE_MS;
+static inline int
+boot_anim_grid_hue(uint32_t now_ms, int ring) {
+    const uint32_t turn = (now_ms % BOOT_ANIM_GRID_HUE_MS) * BOOT_ANIM_HUE_TURN / BOOT_ANIM_GRID_HUE_MS;
     return (int)turn + ring * BOOT_ANIM_GRID_HUE_SPREAD;
 }
 
@@ -856,37 +806,32 @@ static inline int boot_anim_grid_hue(uint32_t now_ms, int ring)
  * finish exactly when the dissolve begins. Left uncapped against the
  * fade: the generator only warns, since a curve still drawing as it
  * dissolves might be wanted. */
-#define BOOT_ANIM_CURVE_PHASE1_FRACTION \
-    ((int32_t)(((int64_t)(BOOT_ANIM_CURVE_PHASE1_POINTS - 1) * BOOT_ANIM_ONE) / \
-               (BOOT_ANIM_CURVE_POINTS - 1)))
+#define BOOT_ANIM_CURVE_PHASE1_FRACTION                                                                                \
+    ((int32_t)(((int64_t)(BOOT_ANIM_CURVE_PHASE1_POINTS - 1) * BOOT_ANIM_ONE) / (BOOT_ANIM_CURVE_POINTS - 1)))
 
-static inline int32_t boot_anim_pen(uint32_t now_ms)
-{
+static inline int32_t
+boot_anim_pen(uint32_t now_ms) {
     const uint32_t phase1_end_ms = BOOT_ANIM_PEN_START_MS + BOOT_ANIM_PEN_MS;
 
     if (now_ms <= phase1_end_ms) {
-        const uint8_t linear = tween_ramp(now_ms, BOOT_ANIM_PEN_START_MS,
-                                              BOOT_ANIM_PEN_MS);
+        const uint8_t linear = tween_ramp(now_ms, BOOT_ANIM_PEN_START_MS, BOOT_ANIM_PEN_MS);
         return tween_lerp_i32(0, BOOT_ANIM_CURVE_PHASE1_FRACTION, linear);
     }
 
-    const uint8_t linear2 = tween_ramp(
-        now_ms, phase1_end_ms, BOOT_ANIM_PEN_FINISH_MS - phase1_end_ms);
-    return tween_lerp_i32(BOOT_ANIM_CURVE_PHASE1_FRACTION, BOOT_ANIM_ONE,
-                          linear2);
+    const uint8_t linear2 = tween_ramp(now_ms, phase1_end_ms, BOOT_ANIM_PEN_FINISH_MS - phase1_end_ms);
+    return tween_lerp_i32(BOOT_ANIM_CURVE_PHASE1_FRACTION, BOOT_ANIM_ONE, linear2);
 }
 
-static inline int32_t boot_anim_colour_progress(uint32_t now_ms)
-{
-    const int32_t span        = (int32_t)(BOOT_ANIM_CURVE_POINTS - 1);
+static inline int32_t
+boot_anim_colour_progress(uint32_t now_ms) {
+    const int32_t span = (int32_t)(BOOT_ANIM_CURVE_POINTS - 1);
     const int32_t phase1_span = (int32_t)(BOOT_ANIM_CURVE_PHASE1_POINTS - 1);
     return (int32_t)(((int64_t)boot_anim_pen(now_ms) * span) / phase1_span);
 }
 
-static inline uint8_t boot_anim_ink(uint32_t now_ms)
-{
-    return (uint8_t)(255u - tween_ramp(now_ms, BOOT_ANIM_FADE_START_MS,
-                                           BOOT_ANIM_MS - BOOT_ANIM_FADE_START_MS));
+static inline uint8_t
+boot_anim_ink(uint32_t now_ms) {
+    return (uint8_t)(255u - tween_ramp(now_ms, BOOT_ANIM_FADE_START_MS, BOOT_ANIM_MS - BOOT_ANIM_FADE_START_MS));
 }
 
 /* Crossfade to the photograph, 0..255, over BOOT_ANIM_IMAGE_START_MS/
@@ -894,10 +839,9 @@ static inline uint8_t boot_anim_ink(uint32_t now_ms)
  * is NOT 255 at every r, so easing either half of a cross-dissolve makes
  * the midpoint read brighter than either end - linear is what keeps the
  * two halves summing to one whole picture throughout. */
-static inline uint8_t boot_anim_image_reveal(uint32_t now_ms)
-{
-    return tween_ramp(now_ms, BOOT_ANIM_IMAGE_START_MS,
-                      BOOT_ANIM_IMAGE_FADE_MS);
+static inline uint8_t
+boot_anim_image_reveal(uint32_t now_ms) {
+    return tween_ramp(now_ms, BOOT_ANIM_IMAGE_START_MS, BOOT_ANIM_IMAGE_FADE_MS);
 }
 
 /* Exact complement of boot_anim_image_reveal(), not a second
@@ -908,43 +852,43 @@ static inline uint8_t boot_anim_image_reveal(uint32_t now_ms)
  * in boot_anim.c as composite order: draw_* calls mix off constant
  * black with no framebuffer read, so a fading alpha over the photo
  * would paint an opaque scratch instead. */
-static inline uint8_t boot_anim_scene_reach(uint32_t now_ms)
-{
+static inline uint8_t
+boot_anim_scene_reach(uint32_t now_ms) {
     return (uint8_t)(255u - boot_anim_image_reveal(now_ms));
 }
 
-#define BOOT_ANIM_HUE_START 875    /* azure, at the foot of the climb */
-#define BOOT_ANIM_HUE_SWEEP 1200   /* most of a turn by the top       */
+#define BOOT_ANIM_HUE_START   875  /* azure, at the foot of the climb */
+#define BOOT_ANIM_HUE_SWEEP   1200 /* most of a turn by the top       */
 
 /* Five pens show gamut with colour wash */
-#define BOOT_ANIM_TRAILS    5
+#define BOOT_ANIM_TRAILS      5
 
 /* How far apart the pens run, as a Q12 fraction of the whole curve. */
-#define BOOT_ANIM_TRAIL_GAP 768
+#define BOOT_ANIM_TRAIL_GAP   768
 
 #define BOOT_ANIM_TRAIL_SHIFT 10
 #define BOOT_ANIM_TRAIL_Q12   (1 << BOOT_ANIM_TRAIL_SHIFT)
 
 /* Heavy strokes drawn wider for visibility. */
-#define BOOT_ANIM_FAT_TRAIL 150
-#define BOOT_ANIM_FAT_WIDTH 3
+#define BOOT_ANIM_FAT_TRAIL   150
+#define BOOT_ANIM_FAT_WIDTH   3
 
-static inline int32_t boot_anim_trail_pos(int32_t pen_q12, int k)
-{
+static inline int32_t
+boot_anim_trail_pos(int32_t pen_q12, int k) {
     return pen_q12 - (int32_t)k * BOOT_ANIM_TRAIL_GAP;
 }
 
 /* The wheel position pen `k` carries, spread evenly round it. */
-static inline int boot_anim_trail_hue(int k)
-{
+static inline int
+boot_anim_trail_hue(int k) {
     return k * (BOOT_ANIM_HUE_TURN / BOOT_ANIM_TRAILS);
 }
 
 typedef struct {
-    int     hue;     /* wheel position; boot_anim_hue_rgb() wraps it */
-    uint8_t bloom;   /* mix that far toward white                    */
-    uint8_t glow;    /* mix that far up from the background          */
-    uint8_t width;   /* pixels across                                */
+    int hue;       /* wheel position; boot_anim_hue_rgb() wraps it */
+    uint8_t bloom; /* mix that far toward white                    */
+    uint8_t glow;  /* mix that far up from the background          */
+    uint8_t width; /* pixels across                                */
 } boot_anim_stroke_t;
 
 /* BASE depends on position. Strongest pen wins outright rather than
@@ -954,25 +898,22 @@ typedef struct {
  * Falloff is linear, not squared: squared piles glow right behind the
  * head and is over almost at once, and a slow fade is the point of a
  * trail. */
-static inline boot_anim_stroke_t boot_anim_stroke(int32_t along_q12,
-                                                  int32_t pen_q12)
-{
+static inline boot_anim_stroke_t
+boot_anim_stroke(int32_t along_q12, int32_t pen_q12) {
     boot_anim_stroke_t s;
 
-    const int32_t base_along = along_q12 > BOOT_ANIM_ONE ?
-                               BOOT_ANIM_ONE : along_q12;
-    const int32_t base_glow  = 132 + ((base_along * 60) >> BOOT_ANIM_Q);
+    const int32_t base_along = along_q12 > BOOT_ANIM_ONE ? BOOT_ANIM_ONE : along_q12;
+    const int32_t base_glow = 132 + ((base_along * 60) >> BOOT_ANIM_Q);
     const int32_t base_bloom = (base_along * 24) >> BOOT_ANIM_Q;
-    const int base_hue = BOOT_ANIM_HUE_START +
-                         (int)((along_q12 * BOOT_ANIM_HUE_SWEEP) >> BOOT_ANIM_Q);
+    const int base_hue = BOOT_ANIM_HUE_START + (int)((along_q12 * BOOT_ANIM_HUE_SWEEP) >> BOOT_ANIM_Q);
 
     int32_t best = 0;
-    int     best_hue = 0;
+    int best_hue = 0;
 
     for (int k = 0; k < BOOT_ANIM_TRAILS; k++) {
         const int32_t behind = boot_anim_trail_pos(pen_q12, k) - along_q12;
         if (behind < 0 || behind >= BOOT_ANIM_TRAIL_Q12) {
-            continue;   /* this piece is ahead of that pen, or long past it */
+            continue; /* this piece is ahead of that pen, or long past it */
         }
         const int32_t trail = 255 - ((behind * 255) >> BOOT_ANIM_TRAIL_SHIFT);
         if (trail > best) {
@@ -982,8 +923,8 @@ static inline boot_anim_stroke_t boot_anim_stroke(int32_t along_q12,
     }
 
     /* Shift is cheaper, +1 ensures full brightness. */
-    s.hue   = base_hue + ((best_hue * (best + 1)) >> 8);
-    s.glow  = (uint8_t)(base_glow  + (((255 - base_glow) * (best + 1)) >> 8));
+    s.hue = base_hue + ((best_hue * (best + 1)) >> 8);
+    s.glow = (uint8_t)(base_glow + (((255 - base_glow) * (best + 1)) >> 8));
     s.bloom = (uint8_t)(base_bloom + (((90 - base_bloom) * (best + 1)) >> 8));
     s.width = best >= BOOT_ANIM_FAT_TRAIL ? BOOT_ANIM_FAT_WIDTH : 1;
 
@@ -1004,10 +945,9 @@ static inline boot_anim_stroke_t boot_anim_stroke(int32_t along_q12,
  * rather than two.
  */
 
-static inline uint8_t boot_anim_finale_reach(uint32_t now_ms)
-{
-    return tween_ease_out(tween_ramp(
-        now_ms, BOOT_ANIM_FADE_START_MS, BOOT_ANIM_MS - BOOT_ANIM_FADE_START_MS));
+static inline uint8_t
+boot_anim_finale_reach(uint32_t now_ms) {
+    return tween_ease_out(tween_ramp(now_ms, BOOT_ANIM_FADE_START_MS, BOOT_ANIM_MS - BOOT_ANIM_FADE_START_MS));
 }
 
 /* Axes run well past the panel and let clipping do the work - RINGS

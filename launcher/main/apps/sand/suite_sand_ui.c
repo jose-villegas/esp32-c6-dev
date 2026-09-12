@@ -11,8 +11,8 @@
 
 #include <string.h>
 
-#include "unity.h"
 #include "suites.h"
+#include "unity.h"
 
 #include "sand_ui.h"
 
@@ -25,28 +25,28 @@
  * see material.c. */
 #define STUB_BRUSH_COUNT 4
 static const cell_t stub_brushes[STUB_BRUSH_COUNT] = {
-    CELL_MAKE(MAT_SAND, 0),    /* 0: emits */
-    CELL_MAKE(MAT_STONE, 0),   /* 1: static, cannot emit */
-    CELL_MAKE(MAT_WATER, 0),   /* 2: emits */
-    CELL_MAKE(MAT_STONE, 0),   /* 3: static, cannot emit */
+    CELL_MAKE(MAT_SAND, 0),  /* 0: emits */
+    CELL_MAKE(MAT_STONE, 0), /* 1: static, cannot emit */
+    CELL_MAKE(MAT_WATER, 0), /* 2: emits */
+    CELL_MAKE(MAT_STONE, 0), /* 3: static, cannot emit */
 };
 
 static uint8_t stub_modes[STUB_BRUSH_COUNT];
 
-static void fixture(sand_ui_t *ui)
-{
+static void
+fixture(sand_ui_t* ui) {
     memset(stub_modes, BRUSH_POUR, sizeof stub_modes);
     *ui = (sand_ui_t){
-        .brushes      = stub_brushes,
-        .modes        = stub_modes,
-        .brush_count  = STUB_BRUSH_COUNT,
-        .screen       = SAND_UI_RUNNING,
-        .brush        = 0,
-        .mode         = SAND_MODE_PAINT,
+        .brushes = stub_brushes,
+        .modes = stub_modes,
+        .brush_count = STUB_BRUSH_COUNT,
+        .screen = SAND_UI_RUNNING,
+        .brush = 0,
+        .mode = SAND_MODE_PAINT,
         .swallow_release = false,
         .opened_brush = 0,
-        .opened_mode  = BRUSH_POUR,
-        .radius_px = { 0 },
+        .opened_mode = BRUSH_POUR,
+        .radius_px = {0},
         .opened_sand_mode = SAND_MODE_PAINT,
         .opened_radius = 0,
     };
@@ -56,17 +56,17 @@ static void fixture(sand_ui_t *ui)
  * on this rather than zero-initialising input_t themselves, so a field
  * neither this suite nor input_t itself has thought about yet still starts
  * from an explicit, known value. */
-static input_t no_input(void)
-{
-    const input_t in = { 0 };
+static input_t
+no_input(void) {
+    const input_t in = {0};
     return in;
 }
 
 /* An out-of-bounds point, named so the test below reads as "a tap,
  * somewhere" rather than two magic numbers - see its own comment for why
  * the exact coordinates don't matter. */
-static void outside_every_tile(int *px, int *py)
-{
+static void
+outside_every_tile(int* px, int* py) {
     *px = -5;
     *py = -5;
 }
@@ -81,15 +81,15 @@ static void outside_every_tile(int *px, int *py)
  * name the difference). sand_ui_step() never reads input->boot.held at
  * all in SAND_UI_RUNNING - see its own comment - so a hold is
  * structurally unable to change anything here, however long it lasts. */
-static void test_a_boot_hold_in_running_changes_nothing_at_all(void)
-{
+static void
+test_a_boot_hold_in_running_changes_nothing_at_all(void) {
     sand_ui_t ui;
     fixture(&ui);
     ui.brush = 2;
     ui.mode = SAND_MODE_ERASE;
 
     input_t in = no_input();
-    in.boot.held = true;   /* released and pressed both false, as button_fsm
+    in.boot.held = true; /* released and pressed both false, as button_fsm
                             * guarantees once a press has become a hold */
 
     const unsigned actions = sand_ui_step(&ui, &in);
@@ -104,8 +104,8 @@ static void test_a_boot_hold_in_running_changes_nothing_at_all(void)
  * leaving the matching release to arrive a frame later in RUNNING. So
  * closing only ever happens on `.released`: a `.pressed` while the panel is
  * open must do nothing, and the brush must come through untouched. */
-static void test_closing_the_palette_leaves_brush_exactly_as_it_was(void)
-{
+static void
+test_closing_the_palette_leaves_brush_exactly_as_it_was(void) {
     sand_ui_t ui;
     fixture(&ui);
     ui.brush = 2;
@@ -139,14 +139,14 @@ static void test_closing_the_palette_leaves_brush_exactly_as_it_was(void)
  * swallow - and the flag ate the player's first genuine tap on a tile
  * instead, leaving the panel silently unresponsive until a second tap.
  * Opening with the finger already UP must leave a tap free to select. */
-static void test_opening_with_no_finger_down_then_tapping_a_tile_selects_that_tile(void)
-{
+static void
+test_opening_with_no_finger_down_then_tapping_a_tile_selects_that_tile(void) {
     sand_ui_t ui;
     fixture(&ui);
 
     input_t boot_release = no_input();
     boot_release.boot.released = true;
-    boot_release.down = false;     /* no finger on the glass as BOOT lifts */
+    boot_release.down = false; /* no finger on the glass as BOOT lifts */
     const unsigned open_actions = sand_ui_step(&ui, &boot_release);
 
     TEST_ASSERT_TRUE(open_actions & SAND_UI_OPEN_PALETTE);
@@ -168,15 +168,15 @@ static void test_opening_with_no_finger_down_then_tapping_a_tile_selects_that_ti
  * without swallowing it, it would land on whatever tile happens to be
  * under the finger the instant the panel appears - see
  * open_palette()/sand_ui_tile_clicked()'s own comments in sand_ui.c. */
-static void test_opening_with_a_finger_already_down_then_lifting_selects_nothing(void)
-{
+static void
+test_opening_with_a_finger_already_down_then_lifting_selects_nothing(void) {
     sand_ui_t ui;
     fixture(&ui);
     ui.brush = 0;
 
     input_t boot_release = no_input();
     boot_release.boot.released = true;
-    boot_release.down = true;      /* a pour is in progress as BOOT lifts */
+    boot_release.down = true; /* a pour is in progress as BOOT lifts */
     const unsigned open_actions = sand_ui_step(&ui, &boot_release);
 
     TEST_ASSERT_TRUE(open_actions & SAND_UI_OPEN_PALETTE);
@@ -199,7 +199,7 @@ static void test_opening_with_a_finger_already_down_then_lifting_selects_nothing
 
     TEST_ASSERT_EQUAL_UINT(0, lift_actions);
     TEST_ASSERT_EQUAL_INT(0, ui.brush);
-    TEST_ASSERT_FALSE(ui.swallow_release);   /* consumed, not still armed */
+    TEST_ASSERT_FALSE(ui.swallow_release); /* consumed, not still armed */
 }
 
 /* The family invariant every one of the above is a special case of: a press
@@ -209,8 +209,8 @@ static void test_opening_with_a_finger_already_down_then_lifting_selects_nothing
  * touch starts in SAND_UI_RUNNING (which has no release consumer of its own
  * to begin with) and its release lands in SAND_UI_PALETTE, where the
  * swallow guard is the sole consumer. */
-static void test_a_release_arriving_after_the_screen_changed_is_consumed_exactly_once(void)
-{
+static void
+test_a_release_arriving_after_the_screen_changed_is_consumed_exactly_once(void) {
     sand_ui_t ui;
     fixture(&ui);
 
@@ -249,29 +249,29 @@ static void test_a_release_arriving_after_the_screen_changed_is_consumed_exactly
     release.down = false;
     const unsigned release_actions = sand_ui_step(&ui, &release);
 
-    TEST_ASSERT_EQUAL_UINT(0, release_actions);   /* swallowed, not a selection */
-    TEST_ASSERT_FALSE(ui.swallow_release);        /* consumed exactly once */
-    TEST_ASSERT_EQUAL_INT(0, ui.brush);           /* RUNNING never saw it either */
+    TEST_ASSERT_EQUAL_UINT(0, release_actions); /* swallowed, not a selection */
+    TEST_ASSERT_FALSE(ui.swallow_release);      /* consumed exactly once */
+    TEST_ASSERT_EQUAL_INT(0, ui.brush);         /* RUNNING never saw it either */
 }
 
 /* =====================================================================
  * Ordinary behaviour
  * ===================================================================== */
 
-static void test_tapping_a_different_tile_selects_it_and_preserves_its_mode(void)
-{
+static void
+test_tapping_a_different_tile_selects_it_and_preserves_its_mode(void) {
     sand_ui_t ui;
     fixture(&ui);
     ui.screen = SAND_UI_PALETTE;
     ui.brush = 0;
-    ui.mode = SAND_MODE_ERASE;     /* selecting a material must clear this */
-    ui.modes[2] = BRUSH_SPAWN;     /* tile 2's own remembered mode */
+    ui.mode = SAND_MODE_ERASE; /* selecting a material must clear this */
+    ui.modes[2] = BRUSH_SPAWN; /* tile 2's own remembered mode */
 
     const unsigned actions = sand_ui_tile_clicked(&ui, 2);
 
     TEST_ASSERT_TRUE(actions & SAND_UI_REDRAW_PALETTE);
     TEST_ASSERT_EQUAL_INT(2, ui.brush);
-    TEST_ASSERT_EQUAL_UINT8(BRUSH_SPAWN, ui.modes[2]);   /* untouched */
+    TEST_ASSERT_EQUAL_UINT8(BRUSH_SPAWN, ui.modes[2]); /* untouched */
     TEST_ASSERT_EQUAL_INT(SAND_MODE_PAINT, ui.mode);
 }
 
@@ -281,8 +281,8 @@ static void test_tapping_a_different_tile_selects_it_and_preserves_its_mode(void
  * cycles all three but handle_palette_input() only ever assigns PAINT
  * directly - nothing here proves it does that from EVERY starting mode
  * until it is actually exercised from each one. */
-static void test_selecting_a_tile_while_detonating_resets_to_paint(void)
-{
+static void
+test_selecting_a_tile_while_detonating_resets_to_paint(void) {
     sand_ui_t ui;
     fixture(&ui);
     ui.screen = SAND_UI_PALETTE;
@@ -302,13 +302,13 @@ static void test_selecting_a_tile_while_detonating_resets_to_paint(void)
     TEST_ASSERT_EQUAL_INT(SAND_MODE_PAINT, ui.mode);
 }
 
-static void test_tapping_the_selected_tile_toggles_pour_and_spawn(void)
-{
+static void
+test_tapping_the_selected_tile_toggles_pour_and_spawn(void) {
     sand_ui_t ui;
     fixture(&ui);
     ui.screen = SAND_UI_PALETTE;
-    ui.brush = 0;                  /* MAT_SAND: emit-capable */
-    ui.mode = SAND_MODE_ERASE;     /* a toggle is not a selection - must stay */
+    ui.brush = 0;              /* MAT_SAND: emit-capable */
+    ui.mode = SAND_MODE_ERASE; /* a toggle is not a selection - must stay */
     ui.modes[0] = BRUSH_POUR;
 
     const unsigned actions = sand_ui_tile_clicked(&ui, 0);
@@ -316,7 +316,7 @@ static void test_tapping_the_selected_tile_toggles_pour_and_spawn(void)
     TEST_ASSERT_TRUE(actions & SAND_UI_REDRAW_PALETTE);
     TEST_ASSERT_EQUAL_INT(0, ui.brush);
     TEST_ASSERT_EQUAL_UINT8(BRUSH_SPAWN, ui.modes[0]);
-    TEST_ASSERT_EQUAL_INT(SAND_MODE_ERASE, ui.mode);  /* untouched by a toggle */
+    TEST_ASSERT_EQUAL_INT(SAND_MODE_ERASE, ui.mode); /* untouched by a toggle */
 
     /* And back again. */
     const unsigned actions2 = sand_ui_tile_clicked(&ui, 0);
@@ -329,12 +329,12 @@ static void test_tapping_the_selected_tile_toggles_pour_and_spawn(void)
  * leaving ERASE alone does not by itself prove it leaves DETONATE alone,
  * since handle_palette_input()'s toggle branch never touches `mode` at all
  * and that has to be checked from each starting mode, not assumed. */
-static void test_tapping_the_selected_tile_is_untouched_by_detonate(void)
-{
+static void
+test_tapping_the_selected_tile_is_untouched_by_detonate(void) {
     sand_ui_t ui;
     fixture(&ui);
     ui.screen = SAND_UI_PALETTE;
-    ui.brush = 0;                  /* MAT_SAND: emit-capable */
+    ui.brush = 0; /* MAT_SAND: emit-capable */
     ui.mode = SAND_MODE_DETONATE;
     ui.modes[0] = BRUSH_POUR;
 
@@ -348,12 +348,12 @@ static void test_tapping_the_selected_tile_is_untouched_by_detonate(void)
     TEST_ASSERT_EQUAL_INT(SAND_MODE_DETONATE, ui.mode);
 }
 
-static void test_tapping_the_selected_tile_when_it_cannot_emit_does_nothing(void)
-{
+static void
+test_tapping_the_selected_tile_when_it_cannot_emit_does_nothing(void) {
     sand_ui_t ui;
     fixture(&ui);
     ui.screen = SAND_UI_PALETTE;
-    ui.brush = 1;                  /* MAT_STONE: KIND_STATIC, cannot emit */
+    ui.brush = 1; /* MAT_STONE: KIND_STATIC, cannot emit */
     ui.modes[1] = BRUSH_POUR;
 
     const unsigned actions = sand_ui_tile_clicked(&ui, 1);
@@ -371,8 +371,8 @@ static void test_tapping_the_selected_tile_when_it_cannot_emit_does_nothing(void
  * sand_ui_tile_clicked(). Driving it through sand_ui_step() with an
  * ordinary touch frame still exercises that guarantee; the coordinates
  * themselves do no work. */
-static void test_tapping_outside_every_tile_does_nothing(void)
-{
+static void
+test_tapping_outside_every_tile_does_nothing(void) {
     sand_ui_t ui;
     fixture(&ui);
     ui.screen = SAND_UI_PALETTE;
@@ -397,8 +397,8 @@ static void test_tapping_outside_every_tile_does_nothing(void)
  * history for that version of this test). It now opens the brush screen
  * instead, and leaves `mode` exactly as it found it - the segments decide
  * mode now, not PWR. */
-static void test_pwr_from_running_opens_the_brush_screen_and_does_not_cycle_the_mode(void)
-{
+static void
+test_pwr_from_running_opens_the_brush_screen_and_does_not_cycle_the_mode(void) {
     sand_ui_t ui;
     fixture(&ui);
     ui.screen = SAND_UI_RUNNING;
@@ -417,8 +417,8 @@ static void test_pwr_from_running_opens_the_brush_screen_and_does_not_cycle_the_
 /* The hazard this file's top comment warns about: PWR opens and closes on
  * the SAME kind of edge (buttons.h - PWR has no release), so the open must
  * not also resolve as a close within the very call that produced it. */
-static void test_the_pwr_press_that_opens_the_brush_screen_does_not_also_close_it(void)
-{
+static void
+test_the_pwr_press_that_opens_the_brush_screen_does_not_also_close_it(void) {
     sand_ui_t ui;
     fixture(&ui);
     ui.screen = SAND_UI_RUNNING;
@@ -430,11 +430,11 @@ static void test_the_pwr_press_that_opens_the_brush_screen_does_not_also_close_i
 
     TEST_ASSERT_TRUE(actions & SAND_UI_OPEN_BRUSH);
     TEST_ASSERT_FALSE(actions & SAND_UI_CLOSE_BRUSH);
-    TEST_ASSERT_EQUAL_INT(SAND_UI_BRUSH, ui.screen);   /* survives the frame */
+    TEST_ASSERT_EQUAL_INT(SAND_UI_BRUSH, ui.screen); /* survives the frame */
 }
 
-static void test_a_later_pwr_press_closes_the_brush_screen(void)
-{
+static void
+test_a_later_pwr_press_closes_the_brush_screen(void) {
     sand_ui_t ui;
     fixture(&ui);
     ui.screen = SAND_UI_BRUSH;
@@ -451,8 +451,8 @@ static void test_a_later_pwr_press_closes_the_brush_screen(void)
     TEST_ASSERT_EQUAL_INT(SAND_UI_RUNNING, ui.screen);
 }
 
-static void test_a_segment_tap_sets_the_mode_and_the_selected_segment_is_harmless(void)
-{
+static void
+test_a_segment_tap_sets_the_mode_and_the_selected_segment_is_harmless(void) {
     sand_ui_t ui;
     fixture(&ui);
     ui.screen = SAND_UI_BRUSH;
@@ -468,8 +468,8 @@ static void test_a_segment_tap_sets_the_mode_and_the_selected_segment_is_harmles
     TEST_ASSERT_EQUAL_INT(SAND_MODE_ERASE, ui.mode);
 }
 
-static void test_radius_is_remembered_per_mode(void)
-{
+static void
+test_radius_is_remembered_per_mode(void) {
     sand_ui_t ui;
     fixture(&ui);
 
@@ -488,8 +488,8 @@ static void test_radius_is_remembered_per_mode(void)
     TEST_ASSERT_EQUAL_UINT8(20, sand_ui_radius(&ui));
 }
 
-static void test_radius_clamps_at_both_ends_rather_than_wrapping(void)
-{
+static void
+test_radius_clamps_at_both_ends_rather_than_wrapping(void) {
     sand_ui_t ui;
     fixture(&ui);
     ui.mode = SAND_MODE_DETONATE;
@@ -504,8 +504,8 @@ static void test_radius_clamps_at_both_ends_rather_than_wrapping(void)
 /* The brush screen's own version of
  * test_opening_with_a_finger_already_down_then_lifting_selects_nothing
  * above - same guard, same reason, a different panel. */
-static void test_opening_the_brush_screen_with_a_finger_already_down_then_lifting_selects_nothing(void)
-{
+static void
+test_opening_the_brush_screen_with_a_finger_already_down_then_lifting_selects_nothing(void) {
     sand_ui_t ui;
     fixture(&ui);
     ui.screen = SAND_UI_RUNNING;
@@ -513,7 +513,7 @@ static void test_opening_the_brush_screen_with_a_finger_already_down_then_liftin
 
     input_t press = no_input();
     press.power.pressed = true;
-    press.down = true;     /* a pour in progress as PWR fires */
+    press.down = true; /* a pour in progress as PWR fires */
     const unsigned open_actions = sand_ui_step(&ui, &press);
 
     TEST_ASSERT_TRUE(open_actions & SAND_UI_OPEN_BRUSH);
@@ -533,8 +533,8 @@ static void test_opening_the_brush_screen_with_a_finger_already_down_then_liftin
 
 /* The two panels are siblings, never both open - BOOT belongs to the
  * palette and must be inert while the brush screen has the floor. */
-static void test_boot_while_the_brush_screen_is_open_does_nothing(void)
-{
+static void
+test_boot_while_the_brush_screen_is_open_does_nothing(void) {
     sand_ui_t ui;
     fixture(&ui);
     ui.screen = SAND_UI_BRUSH;
@@ -555,8 +555,8 @@ static void test_boot_while_the_brush_screen_is_open_does_nothing(void)
     TEST_ASSERT_EQUAL_INT(2, ui.brush);
 }
 
-static void test_closing_the_brush_screen_without_changing_anything_requests_no_label(void)
-{
+static void
+test_closing_the_brush_screen_without_changing_anything_requests_no_label(void) {
     sand_ui_t ui;
     fixture(&ui);
     ui.screen = SAND_UI_BRUSH;
@@ -573,8 +573,8 @@ static void test_closing_the_brush_screen_without_changing_anything_requests_no_
     TEST_ASSERT_FALSE(actions & SAND_UI_SHOW_LABEL);
 }
 
-static void test_closing_the_brush_screen_after_a_real_change_requests_the_label(void)
-{
+static void
+test_closing_the_brush_screen_after_a_real_change_requests_the_label(void) {
     sand_ui_t ui;
     fixture(&ui);
     ui.screen = SAND_UI_BRUSH;
@@ -582,7 +582,7 @@ static void test_closing_the_brush_screen_after_a_real_change_requests_the_label
     ui.opened_sand_mode = SAND_MODE_PAINT;
     ui.opened_radius = ui.radius_px[SAND_MODE_PAINT];
 
-    sand_ui_set_radius(&ui, 30);   /* the real change - radius, not mode */
+    sand_ui_set_radius(&ui, 30); /* the real change - radius, not mode */
 
     input_t close = no_input();
     close.power.pressed = true;
@@ -592,8 +592,8 @@ static void test_closing_the_brush_screen_after_a_real_change_requests_the_label
     TEST_ASSERT_TRUE(actions & SAND_UI_SHOW_LABEL);
 }
 
-static void test_closing_without_changing_anything_requests_no_label(void)
-{
+static void
+test_closing_without_changing_anything_requests_no_label(void) {
     sand_ui_t ui;
     fixture(&ui);
     ui.brush = 1;
@@ -611,8 +611,8 @@ static void test_closing_without_changing_anything_requests_no_label(void)
     TEST_ASSERT_FALSE(actions & SAND_UI_SHOW_LABEL);
 }
 
-static void test_closing_after_selecting_a_different_tile_requests_the_label(void)
-{
+static void
+test_closing_after_selecting_a_different_tile_requests_the_label(void) {
     sand_ui_t ui;
     fixture(&ui);
     ui.brush = 0;
@@ -631,11 +631,11 @@ static void test_closing_after_selecting_a_different_tile_requests_the_label(voi
     TEST_ASSERT_TRUE(actions & SAND_UI_SHOW_LABEL);
 }
 
-static void test_closing_after_toggling_the_selected_tiles_mode_requests_the_label(void)
-{
+static void
+test_closing_after_toggling_the_selected_tiles_mode_requests_the_label(void) {
     sand_ui_t ui;
     fixture(&ui);
-    ui.brush = 0;                  /* MAT_SAND: emit-capable */
+    ui.brush = 0; /* MAT_SAND: emit-capable */
     ui.modes[0] = BRUSH_POUR;
     ui.screen = SAND_UI_PALETTE;
     ui.opened_brush = 0;
@@ -652,8 +652,8 @@ static void test_closing_after_toggling_the_selected_tiles_mode_requests_the_lab
     TEST_ASSERT_TRUE(actions & SAND_UI_SHOW_LABEL);
 }
 
-void run_sand_ui_suite(void)
-{
+void
+run_sand_ui_suite(void) {
     RUN_TEST(test_a_boot_hold_in_running_changes_nothing_at_all);
     RUN_TEST(test_closing_the_palette_leaves_brush_exactly_as_it_was);
     RUN_TEST(test_opening_with_no_finger_down_then_tapping_a_tile_selects_that_tile);

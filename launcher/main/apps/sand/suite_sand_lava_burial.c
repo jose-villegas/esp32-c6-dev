@@ -6,7 +6,7 @@
  * past 32,000 lines across 500+ tests. Shared fixtures and assertion helpers
  * live in suite_sand_common.{c,h} - see that header.
  */
-#include <math.h>   /* not every file in the split still needs atan2()/M_PI,
+#include <math.h> /* not every file in the split still needs atan2()/M_PI,
                      * but every file inherited suite_sand.c's own include
                      * block rather than being pruned by hand, to keep the
                      * split itself mechanical and low-risk */
@@ -21,13 +21,13 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-#include "unity.h"
 #include "suites.h"
+#include "unity.h"
 
 #include "sand.h"
 #include "sand_priv.h"
-#include "util/intmath.h"
 #include "suite_sand_common.h"
+#include "util/intmath.h"
 
 /* Burying lava does not delete it. smothered() clears a burning cell
  * outright when all four neighbours are denser and solid, which is right
@@ -36,8 +36,8 @@
  *
  * The vessel has to be an irregular one: a clean rectangle has no cell
  * with four solid neighbours, so it shows nothing. */
-static void test_lava_buried_in_stone_is_not_deleted(void)
-{
+static void
+test_lava_buried_in_stone_is_not_deleted(void) {
     fixture();
     sand_clear(&s);
     for (int y = 0; y < H; y++) {
@@ -53,16 +53,16 @@ static void test_lava_buried_in_stone_is_not_deleted(void)
     sand_set_lava_burst(&s, 0);
     const int before = liquid_mass_of(MAT_LAVA);
     TEST_ASSERT_EQUAL_INT_MESSAGE(MASS_MAX, before,
-        "fixture check: one full cell of lava, walled in on all four sides");
+                                  "fixture check: one full cell of lava, walled in on all four sides");
 
     for (int i = 0; i < 90; i++) {
         sand_step(&s, 0, 1000, 0);
     }
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(before, liquid_mass_of(MAT_LAVA),
-        "lava walled in by stone must still be there - smothering puts a "
-        "FLAME out because burial starves it of air, and lava is not "
-        "burning anything");
+                                  "lava walled in by stone must still be there - smothering puts a "
+                                  "FLAME out because burial starves it of air, and lava is not "
+                                  "burning anything");
 }
 
 /* bd esp32c6-mqt: a lava cell with a complete gravity-relative lid
@@ -73,8 +73,8 @@ static void test_lava_buried_in_stone_is_not_deleted(void)
  * flight entry - at radius 8 and divisor 5 that core is 1 cell, so the
  * MAT_STONE just written at the centre gets overwritten by fire, asserted
  * directly. */
-static void test_buried_lava_bursts_into_stone_and_fire(void)
-{
+static void
+test_buried_lava_bursts_into_stone_and_fire(void) {
     fixture();
     sand_clear(&s);
     for (int y = 0; y < H; y++) {
@@ -85,10 +85,9 @@ static void test_buried_lava_bursts_into_stone_and_fire(void)
     const int cx = W / 2, cy = H / 2;
     sand_set(&s, cx, cy, CELL_MAKE(MAT_LAVA, MASS_MAX));
 
-    impulse_t *buf = malloc((size_t)(W * H) * sizeof *buf);
-    TEST_ASSERT_NOT_NULL_MESSAGE(buf,
-        "buried-lava-burst impulse queue must fit in what the framebuffer "
-        "leaves");
+    impulse_t* buf = malloc((size_t)(W * H) * sizeof *buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(buf, "buried-lava-burst impulse queue must fit in what the framebuffer "
+                                      "leaves");
     sand_enable_impulses(&s, buf, W * H);
     sand_set_lava_burst(&s, 255);
 
@@ -104,31 +103,38 @@ static void test_buried_lava_bursts_into_stone_and_fire(void)
      * the covering must no longer be plain, undisturbed stone, or nothing
      * actually exploded outward from the centre. */
     int cover_disturbed = 0;
-    if (CELL_MATERIAL(sand_at(&s, cx - 1, cy)) != MAT_STONE) cover_disturbed++;
-    if (CELL_MATERIAL(sand_at(&s, cx + 1, cy)) != MAT_STONE) cover_disturbed++;
-    if (CELL_MATERIAL(sand_at(&s, cx, cy - 1)) != MAT_STONE) cover_disturbed++;
-    if (CELL_MATERIAL(sand_at(&s, cx, cy + 1)) != MAT_STONE) cover_disturbed++;
+    if (CELL_MATERIAL(sand_at(&s, cx - 1, cy)) != MAT_STONE) {
+        cover_disturbed++;
+    }
+    if (CELL_MATERIAL(sand_at(&s, cx + 1, cy)) != MAT_STONE) {
+        cover_disturbed++;
+    }
+    if (CELL_MATERIAL(sand_at(&s, cx, cy - 1)) != MAT_STONE) {
+        cover_disturbed++;
+    }
+    if (CELL_MATERIAL(sand_at(&s, cx, cy + 1)) != MAT_STONE) {
+        cover_disturbed++;
+    }
 
     /* Freed BEFORE the assertions: Unity longjmps out of a failure, so a
      * free() after one never runs - see drop_impulse_buf's own comment
      * above. */
     free(buf);
 
-    TEST_ASSERT_TRUE_MESSAGE(burst,
-        "a lava cell covered on all four sides, with the burst chance "
-        "pinned to its maximum, must stop being lava within this budget");
+    TEST_ASSERT_TRUE_MESSAGE(burst, "a lava cell covered on all four sides, with the burst chance "
+                                    "pinned to its maximum, must stop being lava within this budget");
     TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_FIRE, centre_material,
-        "sand_explode()'s own core fill (SAND_EXPLODE_CORE_DIVISOR, "
-        "sand.h) overwrites the centre cell with fire on its very first "
-        "line, occupied or not - the MAT_STONE this feature just wrote "
-        "there does not survive to be seen, and that is expected, pinned "
-        "behaviour, not a bug");
+                                  "sand_explode()'s own core fill (SAND_EXPLODE_CORE_DIVISOR, "
+                                  "sand.h) overwrites the centre cell with fire on its very first "
+                                  "line, occupied or not - the MAT_STONE this feature just wrote "
+                                  "there does not survive to be seen, and that is expected, pinned "
+                                  "behaviour, not a bug");
     TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, impulse_count,
-        "a real burst must also queue its own outward annulus, not just "
-        "fill a core of fire in place");
+                                         "a real burst must also queue its own outward annulus, not just "
+                                         "fill a core of fire in place");
     TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, cover_disturbed,
-        "the burst must disturb at least one of the four cells that were "
-        "covering it, or nothing actually exploded outward");
+                                         "the burst must disturb at least one of the four cells that were "
+                                         "covering it, or nothing actually exploded outward");
 }
 
 /* A LID WITH GAPS IS NOT A LID - green only while covered_at() wants all
@@ -139,33 +145,33 @@ static void test_buried_lava_bursts_into_stone_and_fire(void)
  * above it empty; under a solid column, only the cell above. Every column
  * is one of the two, so no cell in the row ever has all three, however
  * the liquid moves. */
-static void test_lava_under_a_lid_with_gaps_never_bursts(void)
-{
+static void
+test_lava_under_a_lid_with_gaps_never_bursts(void) {
     fixture();
     sand_clear(&s);
     const int y = H / 2;
     for (int x = 0; x < W; x++) {
         if (x % 2 == 0) {
-            sand_set(&s, x, y - 1, STONE);   /* solid ceiling column */
-        }                                    /* odd columns: left open */
-        sand_set(&s, x, y + 1, STONE);       /* floor, holds the pool down */
+            sand_set(&s, x, y - 1, STONE); /* solid ceiling column */
+        } /* odd columns: left open */
+        sand_set(&s, x, y + 1, STONE); /* floor, holds the pool down */
         sand_set(&s, x, y, CELL_MAKE(MAT_LAVA, MASS_MAX));
     }
     sand_set_lava_burst(&s, 255);
     const int before = liquid_mass_of(MAT_LAVA);
     TEST_ASSERT_EQUAL_INT_MESSAGE(W * MASS_MAX, before,
-        "fixture check: a full-width row of lava, floored throughout and "
-        "ceiled only on every other column");
+                                  "fixture check: a full-width row of lava, floored throughout and "
+                                  "ceiled only on every other column");
 
     for (int i = 0; i < 500; i++) {
         sand_step(&s, 0, 1000, 0);
     }
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(before, liquid_mass_of(MAT_LAVA),
-        "a lava cell under a lid with a gap in it - both diagonals covered "
-        "and the cell above open, or the cell above covered and both "
-        "diagonals open - must never burst, no matter how high the chance "
-        "is pinned or how long it runs: all three lid cells, not any two");
+                                  "a lava cell under a lid with a gap in it - both diagonals covered "
+                                  "and the cell above open, or the cell above covered and both "
+                                  "diagonals open - must never burst, no matter how high the chance "
+                                  "is pinned or how long it runs: all three lid cells, not any two");
 }
 
 /* THE SIDES OF A BASIN ARE NOT A LID. A finger-drawn wall is never flat:
@@ -177,20 +183,20 @@ static void test_lava_under_a_lid_with_gaps_never_bursts(void)
  *
  * The rule is lid only: the three anti-gravity cells, never the two
  * perpendiculars. */
-static void test_lava_in_a_wall_notch_never_bursts(void)
-{
+static void
+test_lava_in_a_wall_notch_never_bursts(void) {
     fixture();
     sand_clear(&s);
     for (int y = 0; y < H; y++) {
-        sand_set(&s, 0, y, STONE);   /* left wall, two thick */
+        sand_set(&s, 0, y, STONE); /* left wall, two thick */
         sand_set(&s, 1, y, STONE);
-        sand_set(&s, 6, y, STONE);   /* right wall, two thick */
+        sand_set(&s, 6, y, STONE); /* right wall, two thick */
         sand_set(&s, 7, y, STONE);
     }
     for (int x = 0; x < W; x++) {
-        sand_set(&s, x, 7, STONE);   /* floor */
+        sand_set(&s, x, 7, STONE); /* floor */
     }
-    sand_set(&s, 2, 2, STONE);       /* the brush bulge over each notch */
+    sand_set(&s, 2, 2, STONE); /* the brush bulge over each notch */
     sand_set(&s, 5, 2, STONE);
     for (int y = 3; y <= 6; y++) {
         for (int x = 2; x <= 5; x++) {
@@ -205,10 +211,9 @@ static void test_lava_in_a_wall_notch_never_bursts(void)
      *   ##LLLL##
      *   ##LLLL##
      *   ########                                                        */
-    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 3, 2)) &&
-                             CELL_IS_EMPTY(sand_at(&s, 4, 2)),
-        "fixture check: the pool's surface is open to the air between the "
-        "two bulges - this is a basin, not a sealed pocket");
+    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 3, 2)) && CELL_IS_EMPTY(sand_at(&s, 4, 2)),
+                             "fixture check: the pool's surface is open to the air between the "
+                             "two bulges - this is a basin, not a sealed pocket");
 
     int stone_before = 0;
     for (int y = 0; y < H; y++) {
@@ -217,9 +222,8 @@ static void test_lava_in_a_wall_notch_never_bursts(void)
         }
     }
 
-    impulse_t *buf = malloc((size_t)(W * H) * sizeof *buf);
-    TEST_ASSERT_NOT_NULL_MESSAGE(buf,
-        "wall-notch impulse queue must fit in what the framebuffer leaves");
+    impulse_t* buf = malloc((size_t)(W * H) * sizeof *buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(buf, "wall-notch impulse queue must fit in what the framebuffer leaves");
     sand_enable_impulses(&s, buf, W * H);
     sand_set_lava_burst(&s, 255);
 
@@ -235,11 +239,11 @@ static void test_lava_in_a_wall_notch_never_bursts(void)
     }
     free(buf);
     TEST_ASSERT_EQUAL_INT_MESSAGE(stone_before, stone_after,
-        "lava settled into a notch on a basin's inner wall - wall to its "
-        "side, wall on the diagonal above that side, wall directly above, "
-        "open air a cell over - must never burst, however high the chance "
-        "is pinned: the two perpendiculars are not part of the lid, and a "
-        "burst here is what blows the side out of every hand-drawn basin");
+                                  "lava settled into a notch on a basin's inner wall - wall to its "
+                                  "side, wall on the diagonal above that side, wall directly above, "
+                                  "open air a cell over - must never burst, however high the chance "
+                                  "is pinned: the two perpendiculars are not part of the lid, and a "
+                                  "burst here is what blows the side out of every hand-drawn basin");
 }
 
 /* THE EXHAUSTIVE SHAPE TABLE. A rule that rotates with gravity and is
@@ -250,8 +254,8 @@ static void test_lava_in_a_wall_notch_never_bursts(void)
  * The expected mask is built independently from the combo's own bits, so
  * the 5 cells gravity excludes are proved IGNORED, not merely never asked
  * about. covered_at() is true for exactly 32 of the 256, everywhere. */
-static void test_cover_primitive_matches_the_exhaustive_shape_table(void)
-{
+static void
+test_cover_primitive_matches_the_exhaustive_shape_table(void) {
     fixture();
     sand_clear(&s);
     const int cx = W / 2, cy = H / 2;
@@ -259,20 +263,17 @@ static void test_cover_primitive_matches_the_exhaustive_shape_table(void)
     const uint8_t density = material_by_id((material_id_t)MAT_LAVA)->density;
 
     for (int g = 0; g < 8; g++) {
-        const int *grav = ring_dir(g);
+        const int* grav = ring_dir(g);
         s.last_load_dx = grav[0];
         s.last_load_dy = grav[1];
-        const int anti = g + 4;   /* ring_of(grav) is just g */
-        const unsigned lid_ring_bits = (1u << ((anti + 7) & 7)) |
-                                       (1u << (anti & 7)) |
-                                       (1u << ((anti + 1) & 7));
+        const int anti = g + 4; /* ring_of(grav) is just g */
+        const unsigned lid_ring_bits = (1u << ((anti + 7) & 7)) | (1u << (anti & 7)) | (1u << ((anti + 1) & 7));
 
         int sealed = 0;
         for (unsigned combo = 0; combo < 256u; combo++) {
             for (int i = 0; i < 8; i++) {
-                const int *d = ring_dir(i);
-                sand_set(&s, cx + d[0], cy + d[1],
-                        (combo & (1u << i)) ? STONE : CELL_EMPTY);
+                const int* d = ring_dir(i);
+                sand_set(&s, cx + d[0], cy + d[1], (combo & (1u << i)) ? STONE : CELL_EMPTY);
             }
 
             const unsigned mask = cover_mask(&s, cx, cy, W, H, density);
@@ -283,23 +284,22 @@ static void test_cover_primitive_matches_the_exhaustive_shape_table(void)
                 }
             }
             TEST_ASSERT_EQUAL_INT_MESSAGE((int)expected, (int)mask,
-                "cover_mask() must depend only on the 3 lid ring positions, "
-                "read in ring order, and nothing else - not the "
-                "perpendiculars, not anything gravity-ward");
+                                          "cover_mask() must depend only on the 3 lid ring positions, "
+                                          "read in ring order, and nothing else - not the "
+                                          "perpendiculars, not anything gravity-ward");
 
             const bool lid_complete = (combo & lid_ring_bits) == lid_ring_bits;
-            TEST_ASSERT_EQUAL_MESSAGE(lid_complete,
-                covered_at(&s, cx, cy, W, H, density),
-                "covered_at() must be true exactly when all three lid cells "
-                "are covered, whatever the other five hold");
+            TEST_ASSERT_EQUAL_MESSAGE(lid_complete, covered_at(&s, cx, cy, W, H, density),
+                                      "covered_at() must be true exactly when all three lid cells "
+                                      "are covered, whatever the other five hold");
             sealed += lid_complete;
         }
 
         TEST_ASSERT_EQUAL_INT_MESSAGE(32, sealed,
-            "exactly 32 of the 256 ring paintings carry a complete lid (the "
-            "other five cells free to be anything), at every gravity "
-            "direction alike - there is no axis-aligned/diagonal asymmetry "
-            "left in this rule");
+                                      "exactly 32 of the 256 ring paintings carry a complete lid (the "
+                                      "other five cells free to be anything), at every gravity "
+                                      "direction alike - there is no axis-aligned/diagonal asymmetry "
+                                      "left in this rule");
     }
 }
 
@@ -310,13 +310,13 @@ static void test_cover_primitive_matches_the_exhaustive_shape_table(void)
  * never counts), so only the gravity-relative up-left/up/up-right lid
  * (this file's header comment) can cover it - all three crust, regardless
  * of what the pool does below or beside the tested cell. */
-static void test_a_wide_pool_under_a_crust_bursts(void)
-{
+static void
+test_a_wide_pool_under_a_crust_bursts(void) {
     fixture();
     sand_clear(&s);
     for (int x = 0; x < W; x++) {
-        sand_set(&s, x, 1, STONE);   /* the crust: a wide, solid lid */
-        sand_set(&s, x, 4, STONE);   /* floor, keeps the pool from draining */
+        sand_set(&s, x, 1, STONE); /* the crust: a wide, solid lid */
+        sand_set(&s, x, 4, STONE); /* floor, keeps the pool from draining */
     }
     for (int y = 2; y <= 3; y++) {
         for (int x = 1; x <= 6; x++) {
@@ -324,28 +324,23 @@ static void test_a_wide_pool_under_a_crust_bursts(void)
         }
     }
 
-    const int tx = 3, ty = 2;   /* interior: not touching the pool's own
+    const int tx = 3, ty = 2; /* interior: not touching the pool's own
                                   * left/right edge, so both diagonal
                                   * neighbours above it are genuine crust */
-    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA,
-        CELL_MATERIAL(sand_at(&s, tx, ty)),
-        "fixture check: lava at the cell under test");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA,
-        CELL_MATERIAL(sand_at(&s, tx - 1, ty)),
-        "fixture check: more lava to its left, not stone or open air - a "
-        "genuine pool interior, not an isolated cell in a solid pocket");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA,
-        CELL_MATERIAL(sand_at(&s, tx + 1, ty)),
-        "fixture check: more lava to its right too");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA,
-        CELL_MATERIAL(sand_at(&s, tx, ty + 1)),
-        "fixture check: and more lava directly below it - this cell has "
-        "no support of its own, only the crust above seals it in");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA, CELL_MATERIAL(sand_at(&s, tx, ty)),
+                                  "fixture check: lava at the cell under test");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA, CELL_MATERIAL(sand_at(&s, tx - 1, ty)),
+                                  "fixture check: more lava to its left, not stone or open air - a "
+                                  "genuine pool interior, not an isolated cell in a solid pocket");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA, CELL_MATERIAL(sand_at(&s, tx + 1, ty)),
+                                  "fixture check: more lava to its right too");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA, CELL_MATERIAL(sand_at(&s, tx, ty + 1)),
+                                  "fixture check: and more lava directly below it - this cell has "
+                                  "no support of its own, only the crust above seals it in");
 
-    impulse_t *buf = malloc((size_t)(W * H) * sizeof *buf);
-    TEST_ASSERT_NOT_NULL_MESSAGE(buf,
-        "wide-pool-burst impulse queue must fit in what the framebuffer "
-        "leaves");
+    impulse_t* buf = malloc((size_t)(W * H) * sizeof *buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(buf, "wide-pool-burst impulse queue must fit in what the framebuffer "
+                                      "leaves");
     sand_enable_impulses(&s, buf, W * H);
     sand_set_lava_burst(&s, 255);
 
@@ -356,12 +351,11 @@ static void test_a_wide_pool_under_a_crust_bursts(void)
     }
 
     free(buf);
-    TEST_ASSERT_TRUE_MESSAGE(burst,
-        "an interior cell of a wide, deep lava pool, sealed only by a "
-        "crust directly above it, must still burst within this budget - "
-        "the case cover_count()'s screen-fixed cardinal rule could never "
-        "fire for, because it counted 'down' (more lava, never counted) "
-        "instead of the two upper diagonals (crust, which do)");
+    TEST_ASSERT_TRUE_MESSAGE(burst, "an interior cell of a wide, deep lava pool, sealed only by a "
+                                    "crust directly above it, must still burst within this budget - "
+                                    "the case cover_count()'s screen-fixed cardinal rule could never "
+                                    "fire for, because it counted 'down' (more lava, never counted) "
+                                    "instead of the two upper diagonals (crust, which do)");
 }
 
 /* GRAVITY-RELATIVE, NOT SCREEN-RELATIVE - the risk covered_at() inherits
@@ -372,13 +366,13 @@ static void test_a_wide_pool_under_a_crust_bursts(void)
  * The same shape TRANSPOSED: crust to the LEFT, gravity sideways
  * (gx=1000), so gravity-relative "up" is screen-left. Hardcoded to
  * screen-up, only one of the cell's three lid cells is stone. */
-static void test_a_wide_pool_under_a_sideways_crust_bursts(void)
-{
+static void
+test_a_wide_pool_under_a_sideways_crust_bursts(void) {
     fixture();
     sand_clear(&s);
     for (int y = 0; y < H; y++) {
-        sand_set(&s, 1, y, STONE);   /* crust: a tall wall to the left */
-        sand_set(&s, 4, y, STONE);   /* wall, keeps the pool from draining */
+        sand_set(&s, 1, y, STONE); /* crust: a tall wall to the left */
+        sand_set(&s, 4, y, STONE); /* wall, keeps the pool from draining */
     }
     for (int x = 2; x <= 3; x++) {
         for (int y = 1; y <= 6; y++) {
@@ -386,51 +380,46 @@ static void test_a_wide_pool_under_a_sideways_crust_bursts(void)
         }
     }
 
-    const int tx = 2, ty = 3;   /* interior: touching the crust directly
+    const int tx = 2, ty = 3; /* interior: touching the crust directly
                                   * to its left, but not the pool's own
                                   * top/bottom edge, so both diagonal
                                   * neighbours toward the crust are
                                   * genuine crust too */
-    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA,
-        CELL_MATERIAL(sand_at(&s, tx, ty)),
-        "fixture check: lava at the cell under test");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA,
-        CELL_MATERIAL(sand_at(&s, tx, ty - 1)),
-        "fixture check: more lava above it - screen-up is NOT "
-        "gravity-relative up in this scene");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA,
-        CELL_MATERIAL(sand_at(&s, tx, ty + 1)),
-        "fixture check: and more lava below it too");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA, CELL_MATERIAL(sand_at(&s, tx, ty)),
+                                  "fixture check: lava at the cell under test");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA, CELL_MATERIAL(sand_at(&s, tx, ty - 1)),
+                                  "fixture check: more lava above it - screen-up is NOT "
+                                  "gravity-relative up in this scene");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA, CELL_MATERIAL(sand_at(&s, tx, ty + 1)),
+                                  "fixture check: and more lava below it too");
 
-    impulse_t *buf = malloc((size_t)(W * H) * sizeof *buf);
-    TEST_ASSERT_NOT_NULL_MESSAGE(buf,
-        "sideways-pool-burst impulse queue must fit in what the "
-        "framebuffer leaves");
+    impulse_t* buf = malloc((size_t)(W * H) * sizeof *buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(buf, "sideways-pool-burst impulse queue must fit in what the "
+                                      "framebuffer leaves");
     sand_enable_impulses(&s, buf, W * H);
     sand_set_lava_burst(&s, 255);
 
     bool burst = false;
     for (int i = 0; i < 10 && !burst; i++) {
-        sand_step(&s, 1000, 0, 0);   /* gravity pulls RIGHT, not down */
+        sand_step(&s, 1000, 0, 0); /* gravity pulls RIGHT, not down */
         burst = CELL_MATERIAL(sand_at(&s, tx, ty)) != MAT_LAVA;
     }
 
     free(buf);
-    TEST_ASSERT_TRUE_MESSAGE(burst,
-        "under sideways gravity, a lava cell sealed by a crust to its "
-        "gravity-relative up (screen-LEFT here) must still burst - if "
-        "this fails while test_a_wide_pool_under_a_crust_bursts (its "
-        "downward-gravity sibling) still passes, the cover gate "
-        "regressed to a fixed screen direction instead of "
-        "s->last_load_dx/dy");
+    TEST_ASSERT_TRUE_MESSAGE(burst, "under sideways gravity, a lava cell sealed by a crust to its "
+                                    "gravity-relative up (screen-LEFT here) must still burst - if "
+                                    "this fails while test_a_wide_pool_under_a_crust_bursts (its "
+                                    "downward-gravity sibling) still passes, the cover gate "
+                                    "regressed to a fixed screen direction instead of "
+                                    "s->last_load_dx/dy");
 }
 
 /* THE NEGATIVE COUNTERPART: an ordinary, uncovered open pool - a floor
  * beneath it, open air above and to both sides - must never burst either,
  * however high the chance is pinned. Guards against this firing on scenes
  * it must not touch at all, not just against the threshold being wrong. */
-static void test_an_open_lava_pool_never_bursts(void)
-{
+static void
+test_an_open_lava_pool_never_bursts(void) {
     fixture();
     sand_clear(&s);
     for (int x = 0; x < W; x++) {
@@ -441,17 +430,16 @@ static void test_an_open_lava_pool_never_bursts(void)
     }
     sand_set_lava_burst(&s, 255);
     const int before = liquid_mass_of(MAT_LAVA);
-    TEST_ASSERT_TRUE_MESSAGE(before > 0,
-        "fixture check: an open pool of lava sitting on a floor");
+    TEST_ASSERT_TRUE_MESSAGE(before > 0, "fixture check: an open pool of lava sitting on a floor");
 
     for (int i = 0; i < 500; i++) {
         sand_step(&s, 0, 1000, 0);
     }
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(before, liquid_mass_of(MAT_LAVA),
-        "an ordinary open lava pool - a floor beneath it, open air above "
-        "and to both sides - must never burst, however high the chance "
-        "is pinned");
+                                  "an ordinary open lava pool - a floor beneath it, open air above "
+                                  "and to both sides - must never burst, however high the chance "
+                                  "is pinned");
 }
 
 /* sand_explode() is a documented no-op without sand_enable_impulses(), so
@@ -459,8 +447,8 @@ static void test_an_open_lava_pool_never_bursts(void)
  * simply throw nothing. Leaving the burst itself ungated is correct
  * rather than a gap: no impulses means no explosions anywhere else in the
  * simulation either. */
-static void test_buried_lava_still_becomes_stone_with_impulses_off(void)
-{
+static void
+test_buried_lava_still_becomes_stone_with_impulses_off(void) {
     fixture();
     sand_clear(&s);
     for (int y = 0; y < H; y++) {
@@ -478,20 +466,20 @@ static void test_buried_lava_still_becomes_stone_with_impulses_off(void)
         converted = CELL_MATERIAL(sand_at(&s, cx, cy)) != MAT_LAVA;
     }
 
-    TEST_ASSERT_TRUE_MESSAGE(converted,
-        "a covered lava cell must still convert away from lava within "
-        "this budget even with impulses never enabled");
+    TEST_ASSERT_TRUE_MESSAGE(converted, "a covered lava cell must still convert away from lava within "
+                                        "this budget even with impulses never enabled");
     TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STONE, CELL_MATERIAL(sand_at(&s, cx, cy)),
-        "with no impulse buffer, sand_explode() is a pure no-op - the "
-        "centre cell must become stone and stay stone, not fire, since "
-        "nothing was thrown to fill any core with");
+                                  "with no impulse buffer, sand_explode() is a pure no-op - the "
+                                  "centre cell must become stone and stay stone, not fire, since "
+                                  "nothing was thrown to fill any core with");
     for (int dy = -1; dy <= 1; dy++) {
         for (int dx = -1; dx <= 1; dx++) {
-            if (dx == 0 && dy == 0) continue;
-            TEST_ASSERT_NOT_EQUAL_INT_MESSAGE(MAT_FIRE,
-                CELL_MATERIAL(sand_at(&s, cx + dx, cy + dy)),
-                "no impulse buffer means no explosion at all - fire must "
-                "not appear anywhere around the converted cell either");
+            if (dx == 0 && dy == 0) {
+                continue;
+            }
+            TEST_ASSERT_NOT_EQUAL_INT_MESSAGE(MAT_FIRE, CELL_MATERIAL(sand_at(&s, cx + dx, cy + dy)),
+                                              "no impulse buffer means no explosion at all - fire must "
+                                              "not appear anywhere around the converted cell either");
         }
     }
 }
@@ -504,8 +492,8 @@ static void test_buried_lava_still_becomes_stone_with_impulses_off(void)
  * The vessel needs stone running through it, the way a drawn one has: a
  * plain pool has no conductor and shows nothing. A pillared one lost 83%
  * of its lava in 200 steps where a flat-floored one lost none. */
-static void test_lava_is_not_boiled_by_its_own_conducted_heat(void)
-{
+static void
+test_lava_is_not_boiled_by_its_own_conducted_heat(void) {
     fixture();
     sand_clear(&s);
     for (int x = 0; x < W; x++) {
@@ -528,16 +516,16 @@ static void test_lava_is_not_boiled_by_its_own_conducted_heat(void)
     }
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(before, liquid_mass_of(MAT_LAVA),
-        "lava must not be boiled into steam by heat conducted from other "
-        "lava - a liquid that BURNS is a heat source, and a heat source is "
-        "not a kettle");
+                                  "lava must not be boiled into steam by heat conducted from other "
+                                  "lava - a liquid that BURNS is a heat source, and a heat source is "
+                                  "not a kettle");
     TEST_ASSERT_EQUAL_INT_MESSAGE(0, count_cells_of(MAT_STEAM),
-        "and no steam at all should come off it: there is no water here, "
-        "so steam is the visible symptom of lava being boiled");
+                                  "and no steam at all should come off it: there is no water here, "
+                                  "so steam is the visible symptom of lava being boiled");
 }
 
-void run_sand_lava_burial_suite(void)
-{
+void
+run_sand_lava_burial_suite(void) {
     RUN_TEST(test_lava_buried_in_stone_is_not_deleted);
     RUN_TEST(test_buried_lava_bursts_into_stone_and_fire);
     RUN_TEST(test_lava_under_a_lid_with_gaps_never_bursts);

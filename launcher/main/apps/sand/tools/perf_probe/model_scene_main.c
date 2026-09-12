@@ -21,14 +21,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "sand.h"
 #include "material.h"
+#include "sand.h"
 
 void __gcov_reset(void);
 void __gcov_dump(void);
 
-#define REAL_W 184
-#define REAL_H 224
+#define REAL_W          184
+#define REAL_H          224
 #define REAL_BLOCK_COLS ((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
 #define REAL_BLOCK_ROWS ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
 

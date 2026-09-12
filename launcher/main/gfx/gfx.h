@@ -11,8 +11,8 @@
  */
 #pragma once
 
-#include <stdint.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #ifdef ESP_PLATFORM
 #include "bsp/esp-bsp.h"
@@ -28,11 +28,11 @@
  * reason gfx_dirty.h already hardcodes them - a BSP header is exactly
  * what a host build cannot include. */
 #ifdef ESP_PLATFORM
-#define GFX_WIDTH   BSP_LCD_H_RES   /* 368 */
-#define GFX_HEIGHT  BSP_LCD_V_RES   /* 448 */
+#define GFX_WIDTH  BSP_LCD_H_RES /* 368 */
+#define GFX_HEIGHT BSP_LCD_V_RES /* 448 */
 #else
-#define GFX_WIDTH   368
-#define GFX_HEIGHT  448
+#define GFX_WIDTH  368
+#define GFX_HEIGHT 448
 #endif
 
 /* QSPI clock for the panel - the largest single cost in a frame: 16.5 ms of
@@ -67,7 +67,7 @@ gfx_color_t gfx_rgb(uint32_t rgb);
 
 /* Direct access, for renderers that write pixels in bulk (the 3D rasterizer
  * writes here directly rather than going through gfx_pixel per fragment). */
-gfx_color_t *gfx_framebuffer(void);
+gfx_color_t* gfx_framebuffer(void);
 
 void gfx_clear(gfx_color_t color);
 
@@ -96,8 +96,7 @@ void gfx_fill_rect(int x, int y, int w, int h, gfx_color_t color);
  * it has no blending anywhere. See gfx.c's own comment above the
  * definition for the dither table and why 255 is guaranteed to be
  * exactly as solid as gfx_fill_rect(). */
-void gfx_fill_rect_dither(int x, int y, int w, int h, gfx_color_t color,
-                          uint8_t alpha);
+void gfx_fill_rect_dither(int x, int y, int w, int h, gfx_color_t color, uint8_t alpha);
 
 /* Like gfx_fill_rect(), but MIXED with the destination via
  * gfx_color_mix() (gfx_color.h) at `alpha` (0 leaves the framebuffer
@@ -107,8 +106,7 @@ void gfx_fill_rect_dither(int x, int y, int w, int h, gfx_color_t color,
  * text-sized areas (this exists for an 8bpp coverage-atlas font), NOT
  * for full-frame work - see gfx_blit_dither() for why a full-frame
  * composite dithers instead. */
-void gfx_fill_rect_blend(int x, int y, int w, int h, gfx_color_t color,
-                         uint8_t alpha);
+void gfx_fill_rect_blend(int x, int y, int w, int h, gfx_color_t color, uint8_t alpha);
 
 /* Composite a source IMAGE over the framebuffer at alpha's own dithered
  * coverage - gfx_fill_rect_dither()'s sibling for a bitmap instead of a
@@ -118,8 +116,7 @@ void gfx_fill_rect_blend(int x, int y, int w, int h, gfx_color_t color,
  * `src` and uses the image's own width as stride. See gfx.c's own
  * comment above the definition for why this is cheap even as a
  * full-frame crossfade. */
-void gfx_blit_dither(int x, int y, int w, int h, const gfx_color_t *src,
-                     int src_stride, uint8_t alpha);
+void gfx_blit_dither(int x, int y, int w, int h, const gfx_color_t* src, int src_stride, uint8_t alpha);
 
 /* Both clip to the framebuffer, so callers need not bounds-check. */
 void gfx_pixel(int x, int y, gfx_color_t color);
@@ -148,7 +145,7 @@ void gfx_line(int x0, int y0, int x1, int y1, gfx_color_t color);
 /* Add to what is already in the framebuffer instead of replacing it, so two
  * strokes crossing on a black field make a brighter, mixed colour rather than
  * whichever was drawn second. Costs a read as well as a write per pixel. */
-#define GFX_LINE_ADD    (1u << 0)
+#define GFX_LINE_ADD  (1u << 0)
 
 /* Leave the STARTING pixel undrawn. For chaining segments into a
  * polyline: two segments that meet share a pixel, and under GFX_LINE_ADD
@@ -156,30 +153,27 @@ void gfx_line(int x0, int y0, int x1, int y1, gfx_color_t color);
  * segments comes out beaded, with a brighter dot at every joint. Drawing
  * each segment half-open puts exactly one contribution on every pixel of
  * the chain. Only useful from the second segment onward. */
-#define GFX_LINE_OPEN   (1u << 1)
+#define GFX_LINE_OPEN (1u << 1)
 
-void gfx_line_ex(int x0, int y0, int x1, int y1, gfx_color_t color,
-                 unsigned flags);
+void gfx_line_ex(int x0, int y0, int x1, int y1, gfx_color_t color, unsigned flags);
 
 /* Draws at GFX_GLYPH_SCALE - the size the UI is laid out around. */
-void gfx_text(int x, int y, const char *text, gfx_color_t color);
+void gfx_text(int x, int y, const char* text, gfx_color_t color);
 
 /* Same, at an explicit glyph scale. Scale 1 gives 8x8 glyphs and 46 columns
  * across the panel, which is what makes a dense report like the POST table fit
  * on screen at all. */
-void gfx_text_scaled(int x, int y, const char *text, gfx_color_t color,
-                     int scale);
+void gfx_text_scaled(int x, int y, const char* text, gfx_color_t color, int scale);
 
 /* Same, turned in 90-degree steps: 0 is upright, 1 reads top-to-bottom, 2
  * is upside down, 3 reads bottom-to-top. (x, y) is where the first
  * glyph's cell begins, and the string runs away from it in whichever
  * direction the rotation implies. Exists because "the top of the screen"
  * stops meaning the top edge once the device is turned. */
-void gfx_text_turned(int x, int y, const char *text, gfx_color_t color,
-                     int scale, int quarter_turns);
+void gfx_text_turned(int x, int y, const char* text, gfx_color_t color, int scale, int quarter_turns);
 
 /* Text metrics. Kept here so the UI layer and the renderer cannot disagree. */
-int gfx_text_width(const char *text, int len);
+int gfx_text_width(const char* text, int len);
 int gfx_text_height(void);
 
 /* The font every gfx_text*() call above draws with is gfx_font_ui()
@@ -195,24 +189,22 @@ int gfx_text_height(void);
  * silently skipped rather than drawn wrong - see draw_glyph_font()'s own
  * comment in gfx.c for why those are the only two layouts with a defined
  * meaning. */
-void gfx_text_font(int x, int y, const char *text, gfx_color_t color,
-                   int scale, int quarter_turns, const gfx_font_t *font);
+void gfx_text_font(int x, int y, const char* text, gfx_color_t color, int scale, int quarter_turns,
+                   const gfx_font_t* font);
 
 /* gfx_text_font(), but every glyph pixel is drawn through
  * gfx_fill_rect_dither() at `alpha` instead of solid - text that fades
  * rather than cuts. A deliberately separate function, not a parameter
  * added to gfx_text_font() itself - see gfx.c's own comment above the
  * definition for why. */
-void gfx_text_font_dither(int x, int y, const char *text, gfx_color_t color,
-                          int scale, int quarter_turns,
-                          const gfx_font_t *font, uint8_t alpha);
+void gfx_text_font_dither(int x, int y, const char* text, gfx_color_t color, int scale, int quarter_turns,
+                          const gfx_font_t* font, uint8_t alpha);
 
 /* gfx_text_width()'s general form: the width `text` would draw at in
  * `font`, at `scale`. gfx_text_width() is this called with gfx_font_ui().
  * See gfx_font_text_width() in gfx_font.h for the pure metric this wraps,
  * and its own comment for the `len < 0` contract. */
-int gfx_font_width(const gfx_font_t *font, const char *text, int len,
-                   int scale);
+int gfx_font_width(const gfx_font_t* font, const char* text, int len, int scale);
 
 /* Restrict subsequent drawing to a rectangle. microui emits clip commands
  * around every container, and honouring them is what stops a scrolled panel
@@ -290,8 +282,7 @@ bool gfx_debug_leaf_overlay(void);
  * from the number alone. Reset explicitly, not by gfx_present() itself,
  * so a caller can accumulate across exactly the frames it is measuring. */
 void gfx_reset_strip_send_counts(void);
-void gfx_get_strip_send_counts(int *full_bands, int *gathered,
-                               int *partial_bands);
+void gfx_get_strip_send_counts(int* full_bands, int* gathered, int* partial_bands);
 
 /* Test-only: one raw esp_lcd_panel_draw_bitmap() of the whole framebuffer,
  * bypassing every dirty-tracking decision gfx_present() makes - see gfx.c

@@ -33,10 +33,10 @@
 #include <stdio.h>
 
 #include "../../app.h"
+#include "../../boot/post_ui.h"
 #include "../../display/display.h"
 #include "../../gfx/gfx.h"
 #include "../../input/imu.h"
-#include "../../boot/post_ui.h"
 #if CONFIG_LAUNCHER_SELFTEST
 #include "../../boot/selftest.h"
 #endif
@@ -77,11 +77,11 @@ static bool selftest_pending;
  * separate work this toggle does not need. This copy exists so the
  * numbers shown here are the exact gx/gy display_update() actually
  * decides orientation from. */
-#define ORIENTATION_GRAVITY_X(s)  (-(s)->ay)
-#define ORIENTATION_GRAVITY_Y(s)  ( (s)->ax)
+#define ORIENTATION_GRAVITY_X(s) (-(s)->ay)
+#define ORIENTATION_GRAVITY_Y(s) ((s)->ax)
 
-static void diagnostics_enter(void)
-{
+static void
+diagnostics_enter(void) {
     /* Always open on the report - the page you came here for by default,
      * and the same screen every time regardless of where a previous visit
      * left off. */
@@ -93,36 +93,34 @@ static void diagnostics_enter(void)
     post_rerun();
 }
 
-static void draw_toggles_page(const input_t *input)
-{
-    mu_Context *ctx = ui_context();
+static void
+draw_toggles_page(const input_t* input) {
+    mu_Context* ctx = ui_context();
     ui_begin(input);
 
     /* ui_width()/ui_height(), not GFX_WIDTH/GFX_HEIGHT - see ui.h: the
      * logical canvas swaps dimensions under a quarter-turn transform. */
-    if (ui_begin_screen(ctx, "Developer Toggles",
-                        MU_OPT_NOTITLE | MU_OPT_NORESIZE |
-                        MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
+    if (ui_begin_screen(ctx, "Developer Toggles", MU_OPT_NOTITLE | MU_OPT_NORESIZE | MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
 
-        mu_layout_row(ctx, 1, (int[]){ -1 }, gfx_text_height() + 8);
+        mu_layout_row(ctx, 1, (int[]){-1}, gfx_text_height() + 8);
         mu_text(ctx, "DEVELOPER TOGGLES");
 
-        mu_layout_row(ctx, 1, (int[]){ -1 }, UI_ROW_HEIGHT);
+        mu_layout_row(ctx, 1, (int[]){-1}, UI_ROW_HEIGHT);
         int overlay_on = gfx_debug_overlay();
         mu_checkbox(ctx, "gfx panel-grid overlay", &overlay_on);
         gfx_set_debug_overlay(overlay_on);
 
-        mu_layout_row(ctx, 1, (int[]){ -1 }, UI_ROW_HEIGHT);
+        mu_layout_row(ctx, 1, (int[]){-1}, UI_ROW_HEIGHT);
         int leaf_on = gfx_debug_leaf_overlay();
         mu_checkbox(ctx, "gfx leaf-rect overlay", &leaf_on);
         gfx_set_leaf_overlay(leaf_on);
 
-        mu_layout_row(ctx, 1, (int[]){ -1 }, UI_ROW_HEIGHT);
+        mu_layout_row(ctx, 1, (int[]){-1}, UI_ROW_HEIGHT);
         int interlace_on = gfx_interlace_enabled();
         mu_checkbox(ctx, "gfx interlace mode", &interlace_on);
         gfx_set_interlace(interlace_on);
 
-        mu_layout_row(ctx, 1, (int[]){ -1 }, UI_ROW_HEIGHT);
+        mu_layout_row(ctx, 1, (int[]){-1}, UI_ROW_HEIGHT);
         mu_checkbox(ctx, "show orientation", &show_orientation);
 
         /* Read once per frame, only while the toggle is on - imu_read()
@@ -136,17 +134,15 @@ static void draw_toggles_page(const input_t *input)
          * the arithmetic by hand. */
         if (show_orientation) {
             char line[64];
-            mu_layout_row(ctx, 1, (int[]){ -1 }, gfx_text_height() + 4);
+            mu_layout_row(ctx, 1, (int[]){-1}, gfx_text_height() + 4);
 
             if (imu_ready()) {
                 imu_sample_t sample;
                 if (imu_read(&sample)) {
-                    snprintf(line, sizeof line, "accel ax=%d ay=%d az=%d",
-                             sample.ax, sample.ay, sample.az);
+                    snprintf(line, sizeof line, "accel ax=%d ay=%d az=%d", sample.ax, sample.ay, sample.az);
                     mu_text(ctx, line);
-                    mu_layout_row(ctx, 1, (int[]){ -1 }, gfx_text_height() + 4);
-                    snprintf(line, sizeof line, "gravity gx=%d gy=%d",
-                             ORIENTATION_GRAVITY_X(&sample),
+                    mu_layout_row(ctx, 1, (int[]){-1}, gfx_text_height() + 4);
+                    snprintf(line, sizeof line, "gravity gx=%d gy=%d", ORIENTATION_GRAVITY_X(&sample),
                              ORIENTATION_GRAVITY_Y(&sample));
                     mu_text(ctx, line);
                 } else {
@@ -156,9 +152,8 @@ static void draw_toggles_page(const input_t *input)
                 mu_text(ctx, "no IMU");
             }
 
-            mu_layout_row(ctx, 1, (int[]){ -1 }, gfx_text_height() + 4);
-            snprintf(line, sizeof line, "shell quarter=%d",
-                     display_shell_quarter());
+            mu_layout_row(ctx, 1, (int[]){-1}, gfx_text_height() + 4);
+            snprintf(line, sizeof line, "shell quarter=%d", display_shell_quarter());
             mu_text(ctx, line);
         }
 
@@ -170,25 +165,24 @@ static void draw_toggles_page(const input_t *input)
          * diagnostics_frame(), outside this page's own
          * ui_begin()/ui_end() bracket - see the comment there for why
          * it cannot run from inside this if-block. */
-        mu_layout_row(ctx, 1, (int[]){ -1 }, UI_ROW_HEIGHT);
+        mu_layout_row(ctx, 1, (int[]){-1}, UI_ROW_HEIGHT);
         if (mu_button(ctx, "run self test suite")) {
             selftest_pending = true;
         }
 
-        mu_layout_row(ctx, 1, (int[]){ -1 }, gfx_text_height() + 4);
+        mu_layout_row(ctx, 1, (int[]){-1}, gfx_text_height() + 4);
         char selftest_line[48];
         if (selftest_failures < 0) {
             snprintf(selftest_line, sizeof selftest_line, "self test: not run yet");
         } else if (selftest_failures == 0) {
             snprintf(selftest_line, sizeof selftest_line, "self test: all passed");
         } else {
-            snprintf(selftest_line, sizeof selftest_line, "self test: %d failure(s)",
-                     selftest_failures);
+            snprintf(selftest_line, sizeof selftest_line, "self test: %d failure(s)", selftest_failures);
         }
         mu_text(ctx, selftest_line);
 #endif /* CONFIG_LAUNCHER_SELFTEST */
 
-        mu_layout_row(ctx, 1, (int[]){ -1 }, gfx_text_height() + 8);
+        mu_layout_row(ctx, 1, (int[]){-1}, gfx_text_height() + 8);
         mu_text(ctx, "BOOT for the POST report");
 
         mu_end_window(ctx);
@@ -197,8 +191,8 @@ static void draw_toggles_page(const input_t *input)
     ui_end(COL_BACKGROUND);
 }
 
-static void diagnostics_frame(uint32_t dt_ms, const input_t *input)
-{
+static void
+diagnostics_frame(uint32_t dt_ms, const input_t* input) {
     (void)dt_ms;
 
 #if CONFIG_LAUNCHER_SELFTEST
@@ -218,8 +212,7 @@ static void diagnostics_frame(uint32_t dt_ms, const input_t *input)
          * immediately, one frame of latency before draw_toggles_page()
          * ever opens its own frame, the same deferral gfx_resume()
          * uses. */
-        ui_set_transform(ui_transform_quarter_turn(
-            display_shell_quarter(), GFX_WIDTH, GFX_HEIGHT));
+        ui_set_transform(ui_transform_quarter_turn(display_shell_quarter(), GFX_WIDTH, GFX_HEIGHT));
     }
 #endif /* CONFIG_LAUNCHER_SELFTEST */
 
@@ -244,14 +237,15 @@ static void diagnostics_frame(uint32_t dt_ms, const input_t *input)
     }
 }
 
-static void diagnostics_exit(void) { }
+static void
+diagnostics_exit(void) {}
 
 const app_t app_diagnostics = {
-    .name         = "Diagnostics",
-    .summary      = "Hardware self-test report",
-    .enter        = diagnostics_enter,
-    .frame        = diagnostics_frame,
-    .exit         = diagnostics_exit,
+    .name = "Diagnostics",
+    .summary = "Hardware self-test report",
+    .enter = diagnostics_enter,
+    .frame = diagnostics_frame,
+    .exit = diagnostics_exit,
     .home_gesture = true,
 };
 

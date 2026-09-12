@@ -60,7 +60,7 @@ void sand_work_counters_reset(void);
  * sink - kept free of printf/ESP_LOG so a host driver (stdio) and a future
  * device probe (ESP_LOGI) can both read it without a second copy of the
  * field list living in each. */
-void sand_work_counters_dump(void (*emit)(const char *name, uint32_t value));
+void sand_work_counters_dump(void (*emit)(const char* name, uint32_t value));
 
 #define SAND_WORK_COUNT(field) (sand_work_counters.field++)
 

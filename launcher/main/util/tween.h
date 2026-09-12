@@ -33,9 +33,8 @@
 /* 0 before `start_ms`, 255 from `start_ms + dur_ms` on, linear between.
  * `dur_ms` of 0 jumps straight to 255 the instant `now_ms` passes
  * `start_ms`, rather than dividing by zero. */
-static inline uint8_t tween_ramp(uint32_t now_ms, uint32_t start_ms,
-                                 uint32_t dur_ms)
-{
+static inline uint8_t
+tween_ramp(uint32_t now_ms, uint32_t start_ms, uint32_t dur_ms) {
     if (now_ms <= start_ms) {
         return 0;
     }
@@ -51,8 +50,8 @@ static inline uint8_t tween_ramp(uint32_t now_ms, uint32_t start_ms,
  * enough to stop it looking like a progress bar. Endpoints are exact
  * (0 stays 0, 255 stays 255), so composing this with tween_ramp() never
  * drifts a settled value off its target. */
-static inline uint8_t tween_ease_out(uint8_t linear)
-{
+static inline uint8_t
+tween_ease_out(uint8_t linear) {
     const uint32_t left = 255u - linear;
     return (uint8_t)(255u - (left * left) / 255u);
 }
@@ -65,8 +64,8 @@ static inline uint8_t tween_ease_out(uint8_t linear)
  * reading as one smooth apex rather than a flat hold with a corner at
  * each end - the whole reason this exists over reusing tween_ease_out()
  * for both halves. */
-static inline uint8_t tween_ease_in(uint8_t linear)
-{
+static inline uint8_t
+tween_ease_in(uint8_t linear) {
     return (uint8_t)(((uint32_t)linear * linear) / 255u);
 }
 
@@ -78,7 +77,7 @@ static inline uint8_t tween_ease_in(uint8_t linear)
  * (b - a) can be tens of thousands, a naive int32_t product won't
  * overflow today, but the cost of being wrong later is a silent
  * wraparound, not a compiler error. */
-static inline int32_t tween_lerp_i32(int32_t a, int32_t b, uint8_t u8)
-{
+static inline int32_t
+tween_lerp_i32(int32_t a, int32_t b, uint8_t u8) {
     return a + (int32_t)(((int64_t)(b - a) * u8) / 255);
 }

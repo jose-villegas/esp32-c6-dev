@@ -33,7 +33,7 @@ is_kin(cell_t a, cell_t self, const reaction_t* r) {
 
 /* Leaf-to-roots mimic, efficient on crowded boards. Larger bodies shed outer
  * cells. */
-#define SUPPORT_MAX 48
+#define SUPPORT_MAX   48
 
 /* Membership index over body[], which stays a queue because the walk order is
  * its job. A power of two over SUPPORT_MAX leaves a full body a quarter of the

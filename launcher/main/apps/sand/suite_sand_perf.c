@@ -14,7 +14,7 @@
  * live in suite_sand_common.{c,h}; the scene builders these frame-budget
  * tests measure live in suite_sand_scenes.{c,h} - see those headers.
  */
-#include <math.h>   /* not every file in the split still needs atan2()/M_PI,
+#include <math.h> /* not every file in the split still needs atan2()/M_PI,
                      * but every file inherited suite_sand.c's own include
                      * block rather than being pruned by hand, to keep the
                      * split itself mechanical and low-risk */
@@ -29,28 +29,27 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-#include "unity.h"
 #include "suites.h"
+#include "unity.h"
 
+#include "material_palette.h"
 #include "sand.h"
 #include "sand_priv.h"
-#include "util/intmath.h"
 #include "suite_sand_common.h"
 #include "suite_sand_scenes.h"
-#include "material_palette.h"
-#include "tilt.h"      /* TILT_TAU_*_MS - the turn below follows the real
+#include "tilt.h" /* TILT_TAU_*_MS - the turn below follows the real
                        * filter shape rather than a straight line */
-
+#include "util/intmath.h"
 
 #ifdef DEVICE_BUILD
 #include <stdlib.h>
+#include "../../gfx/gfx.h"
 #include "esp_cpu.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "row_runs.h"
 #include "soc/extmem_reg.h"
 #include "soc/soc.h"
-#include "row_runs.h"
-#include "../../gfx/gfx.h"
 #define REAL_BLOCK_COLS ((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
 #define REAL_BLOCK_ROWS ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
 #include "suite_sand_split.h"
@@ -61,6 +60,7 @@
  * layout - loosen this budget rather than treat one flaky run as a
  * regression if that reappears. */
 #define FULL_STEP_BUDGET_US 5800
+
 /* Every frame budget in this file targets measured * 0.9, rounded - a
  * fixed 10% demand, not a ceiling matching whatever the code costs today;
  * the measured number beside each assertion is the anchor, the target is a
@@ -69,11 +69,10 @@
  * percolation) - holding it frozen would conflate a feature's real cost
  * with a regression. This one: measured 6434 us -> target 5800. */
 
-static void test_a_full_size_step_fits_in_the_frame_budget(void)
-{
-    uint8_t *big = malloc(REAL_W * REAL_H);
-    TEST_ASSERT_NOT_NULL_MESSAGE(big,
-        "the real grid must fit in what the framebuffer leaves behind");
+static void
+test_a_full_size_step_fits_in_the_frame_budget(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(big, "the real grid must fit in what the framebuffer leaves behind");
 
     sand_t real;
     sand_init(&real, big, REAL_W, REAL_H, 99u);
@@ -97,27 +96,25 @@ static void test_a_full_size_step_fits_in_the_frame_budget(void)
     }
     const int64_t per_step = (esp_timer_get_time() - start) / steps;
 
-    ESP_LOGI("device_tests", "sand_step on %dx%d with %d grains: %lld us",
-             REAL_W, REAL_H, grains, (long long)per_step);
+    ESP_LOGI("device_tests", "sand_step on %dx%d with %d grains: %lld us", REAL_W, REAL_H, grains, (long long)per_step);
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(grains, sand_count(&real),
-        "the full-size grid must conserve grains too");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(grains, sand_count(&real), "the full-size grid must conserve grains too");
 
     free(big);
 
     TEST_ASSERT_LESS_THAN_MESSAGE(FULL_STEP_BUDGET_US, (int)per_step,
-        "the simulation no longer fits in its share of the frame");
+                                  "the simulation no longer fits in its share of the frame");
 }
 
 #ifdef SAND_HOST_PROBE
-void sand_host_probe_run_full_step_control(void)
-{
+void
+sand_host_probe_run_full_step_control(void) {
     test_a_full_size_step_fits_in_the_frame_budget();
 }
 #endif
 
-static void build_water_scene(sand_t *real, uint8_t *big, uint8_t *blocks)
-{
+static void
+build_water_scene(sand_t* real, uint8_t* big, uint8_t* blocks) {
     sand_init(real, big, REAL_W, REAL_H, 11u);
     sand_enable_sleeping(real, blocks);
 
@@ -130,10 +127,10 @@ static void build_water_scene(sand_t *real, uint8_t *big, uint8_t *blocks)
     }
 }
 
-static int64_t water_scene_us_per_step(void)
-{
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+static int64_t
+water_scene_us_per_step(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
 
@@ -152,15 +149,14 @@ static int64_t water_scene_us_per_step(void)
     return per_step;
 }
 
-static void test_a_screen_of_water_fits_in_the_frame_budget(void)
-{
+static void
+test_a_screen_of_water_fits_in_the_frame_budget(void) {
     /* Measured separately from sand, because water takes an entirely different
      * path through the step - and the one part of it that is not local, the
      * search across the flow, runs per cell. Something has to watch that. */
     const int64_t per_step = water_scene_us_per_step();
 
-    ESP_LOGI("device_tests", "water flowing on %dx%d: %lld us per step",
-             REAL_W, REAL_H, (long long)per_step);
+    ESP_LOGI("device_tests", "water flowing on %dx%d: %lld us per step", REAL_W, REAL_H, (long long)per_step);
 
     /* Water gets a larger budget than the full-step case: it moves an amount
      * rather than a cell, and takes a second sweep across the flow (the only
@@ -169,8 +165,8 @@ static void test_a_screen_of_water_fits_in_the_frame_budget(void)
      * sustained, argue the budget down instead of up. Re-pegged perf-scoped:
      * measured 10743 -> target 9600. */
     TEST_ASSERT_LESS_THAN_MESSAGE(9600, (int)per_step,
-        "a screen-wide collapse of water must still land inside a frame or "
-        "two - the search across the flow is the thing to suspect");
+                                  "a screen-wide collapse of water must still land inside a frame or "
+                                  "two - the search across the flow is the thing to suspect");
 }
 
 #ifdef DEVICE_BUILD
@@ -180,37 +176,32 @@ static void test_a_screen_of_water_fits_in_the_frame_budget(void)
  * never reaches this cache; code and flash-resident const do. Scheduler ticks
  * inside the window count too, biasing misses UP - a small reading is the
  * trustworthy direction. */
-static void cache_counters_begin(void)
-{
-    REG_WRITE(EXTMEM_L1_CACHE_ACS_CNT_CTRL_REG,
-              EXTMEM_L1_IBUS_CNT_CLR | EXTMEM_L1_DBUS_CNT_CLR);
-    REG_WRITE(EXTMEM_L1_CACHE_ACS_CNT_CTRL_REG,
-              EXTMEM_L1_IBUS_CNT_ENA | EXTMEM_L1_DBUS_CNT_ENA);
+static void
+cache_counters_begin(void) {
+    REG_WRITE(EXTMEM_L1_CACHE_ACS_CNT_CTRL_REG, EXTMEM_L1_IBUS_CNT_CLR | EXTMEM_L1_DBUS_CNT_CLR);
+    REG_WRITE(EXTMEM_L1_CACHE_ACS_CNT_CTRL_REG, EXTMEM_L1_IBUS_CNT_ENA | EXTMEM_L1_DBUS_CNT_ENA);
 }
 
-static void cache_counters_report(const char *what, int steps,
-                                  uint32_t cycles)
-{
-    const uint32_t ihit  = REG_READ(EXTMEM_L1_IBUS_ACS_HIT_CNT_REG);
+static void
+cache_counters_report(const char* what, int steps, uint32_t cycles) {
+    const uint32_t ihit = REG_READ(EXTMEM_L1_IBUS_ACS_HIT_CNT_REG);
     const uint32_t imiss = REG_READ(EXTMEM_L1_IBUS_ACS_MISS_CNT_REG);
-    const uint32_t dhit  = REG_READ(EXTMEM_L1_DBUS_ACS_HIT_CNT_REG);
+    const uint32_t dhit = REG_READ(EXTMEM_L1_DBUS_ACS_HIT_CNT_REG);
     const uint32_t dmiss = REG_READ(EXTMEM_L1_DBUS_ACS_MISS_CNT_REG);
     REG_WRITE(EXTMEM_L1_CACHE_ACS_CNT_CTRL_REG, 0);
 
     ESP_LOGI("device_tests",
              "cache %s: %lu cycles/step, ibus %lu hit %lu miss, "
              "dbus %lu hit %lu miss (per step)",
-             what, (unsigned long)(cycles / (uint32_t)steps),
-             (unsigned long)(ihit / (uint32_t)steps),
-             (unsigned long)(imiss / (uint32_t)steps),
-             (unsigned long)(dhit / (uint32_t)steps),
+             what, (unsigned long)(cycles / (uint32_t)steps), (unsigned long)(ihit / (uint32_t)steps),
+             (unsigned long)(imiss / (uint32_t)steps), (unsigned long)(dhit / (uint32_t)steps),
              (unsigned long)(dmiss / (uint32_t)steps));
 }
 
-static void test_the_cache_counters_over_a_water_step(void)
-{
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+static void
+test_the_cache_counters_over_a_water_step(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
 
@@ -230,9 +221,9 @@ static void test_the_cache_counters_over_a_water_step(void)
     free(blocks);
 }
 
-static void test_the_cache_counters_over_a_settled_sand_step(void)
-{
-    uint8_t *big = malloc(REAL_W * REAL_H);
+static void
+test_the_cache_counters_over_a_settled_sand_step(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
     TEST_ASSERT_NOT_NULL(big);
 
     sand_t real;
@@ -257,8 +248,8 @@ static void test_the_cache_counters_over_a_settled_sand_step(void)
     free(big);
 }
 
-static void build_fire_scene(sand_t *real, uint8_t *big, uint8_t *blocks)
-{
+static void
+build_fire_scene(sand_t* real, uint8_t* big, uint8_t* blocks) {
     sand_init(real, big, REAL_W, REAL_H, 19u);
     sand_enable_sleeping(real, blocks);
 
@@ -276,12 +267,11 @@ static void build_fire_scene(sand_t *real, uint8_t *big, uint8_t *blocks)
 #define FIRE_REPEATS      2
 #endif /* DEVICE_BUILD */
 
-
 #ifdef SAND_HOST_PROBE
 /* Host-only timing probe (see the full-step control's own wrapper above,
  * and main/apps/sand/tools/perf_probe/). */
-void sand_host_probe_run_water(void)
-{
+void
+sand_host_probe_run_water(void) {
     test_a_screen_of_water_fits_in_the_frame_budget();
 }
 #endif
@@ -289,14 +279,14 @@ void sand_host_probe_run_water(void)
 #endif /* DEVICE_BUILD */
 
 #ifdef DEVICE_BUILD
-static void test_the_gas_random_walk_against_the_exhaustive_mover(void)
-{
-    int64_t best[2] = { -1, -1 };
+static void
+test_the_gas_random_walk_against_the_exhaustive_mover(void) {
+    int64_t best[2] = {-1, -1};
 
     for (int arm = 0; arm < 2; arm++) {
         for (int r = 0; r < FIRE_REPEATS; r++) {
-            uint8_t *big    = malloc(REAL_W * REAL_H);
-            uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+            uint8_t* big = malloc(REAL_W * REAL_H);
+            uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
             TEST_ASSERT_NOT_NULL(big);
             TEST_ASSERT_NOT_NULL(blocks);
 
@@ -319,23 +309,20 @@ static void test_the_gas_random_walk_against_the_exhaustive_mover(void)
         }
     }
 
-    ESP_LOGI("device_tests", "gas mover, fire scene: exhaustive %lld us",
-             (long long)best[0]);
-    ESP_LOGI("device_tests", "gas mover, fire scene: random walk %lld us",
-             (long long)best[1]);
+    ESP_LOGI("device_tests", "gas mover, fire scene: exhaustive %lld us", (long long)best[0]);
+    ESP_LOGI("device_tests", "gas mover, fire scene: random walk %lld us", (long long)best[1]);
     if (best[0] > 0) {
-        ESP_LOGI("device_tests",
-                 "gas mover, fire scene: walk is %lld%% of the exhaustive cost",
+        ESP_LOGI("device_tests", "gas mover, fire scene: walk is %lld%% of the exhaustive cost",
                  (long long)((best[1] * 100) / best[0]));
     }
 }
 
-static void test_a_screen_of_settled_sand_costs_almost_nothing(void)
-{
+static void
+test_a_screen_of_settled_sand_costs_almost_nothing(void) {
     /* The user-visible complaint this answers: adding lots of sand dropped the
      * framerate, even though most of it was just sitting there. */
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
 
@@ -349,7 +336,7 @@ static void test_a_screen_of_settled_sand_costs_almost_nothing(void)
             sand_set(&real, x, y, SAND_FIRST_SHADE);
         }
     }
-    sand_step(&real, 0, 1, 0);          /* one step to notice it is settled */
+    sand_step(&real, 0, 1, 0); /* one step to notice it is settled */
 
     const int64_t start = esp_timer_get_time();
     const int steps = 50;
@@ -358,15 +345,13 @@ static void test_a_screen_of_settled_sand_costs_almost_nothing(void)
     }
     const int64_t per_step = (esp_timer_get_time() - start) / steps;
 
-    ESP_LOGI("device_tests", "settled %dx%d grid: %lld us per step",
-             REAL_W, REAL_H, (long long)per_step);
+    ESP_LOGI("device_tests", "settled %dx%d grid: %lld us per step", REAL_W, REAL_H, (long long)per_step);
 
     const int grains = sand_count(&real);
     free(big);
     free(blocks);
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(REAL_W * REAL_H, grains,
-        "and nothing may have moved");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(REAL_W * REAL_H, grains, "and nothing may have moved");
     /* Re-pegged at measured * 0.9 from the first capture after the sweep
      * stopped building a per-row context for a block row it was going to
      * skip whole (esp32c6-lgc): 58 us, where the same board cost 269.
@@ -374,8 +359,8 @@ static void test_a_screen_of_settled_sand_costs_almost_nothing(void)
      * means more of them to scan, and that was accepted because a still
      * board has no motion for the cost to lag. Do not raise it to suit. */
     TEST_ASSERT_LESS_THAN_MESSAGE(52, (int)per_step,
-        "sand that is not moving must cost almost nothing - if this fails, "
-        "rows are being examined that had no reason to be");
+                                  "sand that is not moving must cost almost nothing - if this fails, "
+                                  "rows are being examined that had no reason to be");
 }
 
 #ifdef SAND_HOST_PROBE
@@ -383,17 +368,17 @@ static void test_a_screen_of_settled_sand_costs_almost_nothing(void)
  * always been decided on - a smaller block scans more of them on a board
  * where nothing moves - so a candidate shape that is not ranked here has
  * not been ranked at all. */
-void sand_host_probe_run_settled_screen(void)
-{
+void
+sand_host_probe_run_settled_screen(void) {
     test_a_screen_of_settled_sand_costs_almost_nothing();
 }
 #endif
 
-static void test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget(void)
-{
+static void
+test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget(void) {
     /* Worst case pouring: all blocks wake at once. */
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
 
@@ -425,34 +410,34 @@ static void test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget(voi
     }
     const int64_t per_step = (esp_timer_get_time() - start) / steps;
 
-    ESP_LOGI("device_tests", "gravity flip on a %d-grain pile, %dx%d: %lld us "
-                             "per step", grains, REAL_W, REAL_H,
-             (long long)per_step);
+    ESP_LOGI("device_tests",
+             "gravity flip on a %d-grain pile, %dx%d: %lld us "
+             "per step",
+             grains, REAL_W, REAL_H, (long long)per_step);
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(grains, sand_count(&real),
-        "flipping gravity must conserve grains too");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(grains, sand_count(&real), "flipping gravity must conserve grains too");
 
     free(big);
     free(blocks);
 
     TEST_ASSERT_LESS_THAN_MESSAGE(5900, (int)per_step,
-        "reversing gravity on a settled pile must still fit in a frame or "
-        "two - this is the real worst case pouring and tilting produces");
+                                  "reversing gravity on a settled pile must still fit in a frame or "
+                                  "two - this is the real worst case pouring and tilting produces");
 }
 
 #ifdef SAND_HOST_PROBE
 /* Host-only timing probe - the other liquid-free control (see the
  * full-step control's own wrapper for the pattern). */
-void sand_host_probe_run_settled_flip_control(void)
-{
+void
+sand_host_probe_run_settled_flip_control(void) {
     test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget();
 }
 #endif
 
 /* Mass invariant for liquid scenes; water cell variant holds 1..15, diffusion
  * model adjusts amounts without changing cell count. */
-static int settled_pool_total_mass(const sand_t *s, int w, int h)
-{
+static int
+settled_pool_total_mass(const sand_t* s, int w, int h) {
     int total = 0;
     for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
@@ -471,10 +456,10 @@ static int settled_pool_total_mass(const sand_t *s, int w, int h)
  * costs the most for. Swept one step per degree because the expensive
  * frames are the mid-re-level ones. The worst step is logged alongside the
  * asserted mean, since a mean alone can hide a spike. */
-static void test_turning_a_settled_pool_to_landscape_fits_in_the_frame_budget(void)
-{
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+static void
+test_turning_a_settled_pool_to_landscape_fits_in_the_frame_budget(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
 
@@ -514,10 +499,11 @@ static void test_turning_a_settled_pool_to_landscape_fits_in_the_frame_budget(vo
     }
     const int64_t per_step = (esp_timer_get_time() - start) / steps;
 
-    ESP_LOGI("device_tests", "portrait->landscape turn on a settled %d-mass "
-                             "pool, %dx%d: %lld us per step, worst single "
-                             "step %lld us", mass, REAL_W, REAL_H,
-             (long long)per_step, (long long)worst);
+    ESP_LOGI("device_tests",
+             "portrait->landscape turn on a settled %d-mass "
+             "pool, %dx%d: %lld us per step, worst single "
+             "step %lld us",
+             mass, REAL_W, REAL_H, (long long)per_step, (long long)worst);
 
     const int mass_after = settled_pool_total_mass(&real, REAL_W, REAL_H);
 
@@ -525,8 +511,8 @@ static void test_turning_a_settled_pool_to_landscape_fits_in_the_frame_budget(vo
     free(blocks);
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(mass, mass_after,
-        "turning the board must move water, not create or destroy it - the "
-        "cell COUNT changes as the pool re-levels, the mass must not");
+                                  "turning the board must move water, not create or destroy it - the "
+                                  "cell COUNT changes as the pool re-levels, the mass must not");
 
     /* MEASURED 9,763 us per step on device, perf-scoped, after the block
      * narrowed to 16x32. Budget is that x 0.9 rounded DOWN to 8,700. */
@@ -541,19 +527,19 @@ static void test_turning_a_settled_pool_to_landscape_fits_in_the_frame_budget(vo
      * host-counted 2026-09-06 - and a host pass map puts ~48% of the cost
      * in cross-flow, ~1% reactions, ~1.5% gas. */
     TEST_ASSERT_LESS_THAN_MESSAGE(8700, (int)per_step,
-        "turning the board a quarter turn with a settled pool on it must "
-        "still fit in a frame or two - the pool re-levels across the whole "
-        "grid width, so the cross-flow search is the thing to suspect, and "
-        "a host pass map agrees at ~48%. A reduction target at measured x "
-        "0.9, so failing means the work is not done yet");
+                                  "turning the board a quarter turn with a settled pool on it must "
+                                  "still fit in a frame or two - the pool re-levels across the whole "
+                                  "grid width, so the cross-flow search is the thing to suspect, and "
+                                  "a host pass map agrees at ~48%. A reduction target at measured x "
+                                  "0.9, so failing means the work is not done yet");
 }
 
 /* Tilt shape uses exponential moving average with tau interpolating between
  * TILT_TAU_MOVING_MS and TILT_TAU_STILL_MS. Moving tau prioritizes demanding
  * case with largest gravity delta. Returns mean and worst single step. */
-static int64_t time_a_quarter_turn(sand_t *real, int steps, int64_t *worst_out)
-{
-    const int dt_ms  = 24;
+static int64_t
+time_a_quarter_turn(sand_t* real, int steps, int64_t* worst_out) {
+    const int dt_ms = 24;
     const int tau_ms = TILT_TAU_MOVING_MS;
 
     int32_t gx_q8 = 0;
@@ -584,9 +570,9 @@ static int64_t time_a_quarter_turn(sand_t *real, int steps, int64_t *worst_out)
  * way paint_row_n() walks it: the scan and the wave, not the framebuffer
  * writes nor the extra paint_row() calls the gust's wake tick causes.
  * Prints; asserts no budget, since half the cost is out of reach. */
-static void test_the_wood_leaf_shading_on_a_grove(void)
-{
-    uint8_t *big = malloc(REAL_W * REAL_H);
+static void
+test_the_wood_leaf_shading_on_a_grove(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
     TEST_ASSERT_NOT_NULL(big);
 
     sand_t real;
@@ -603,30 +589,34 @@ static void test_the_wood_leaf_shading_on_a_grove(void)
     const int64_t start = esp_timer_get_time();
     for (int rep = 0; rep < 20; rep++) {
         for (int y = 0; y < REAL_H; y++) {
-            const uint8_t *row = big + (size_t)y * REAL_W;
-            const uint8_t *above = (y > 0) ? row - REAL_W : NULL;
-            const uint8_t *below = (y < REAL_H - 1) ? row + REAL_W : NULL;
+            const uint8_t* row = big + (size_t)y * REAL_W;
+            const uint8_t* above = (y > 0) ? row - REAL_W : NULL;
+            const uint8_t* below = (y < REAL_H - 1) ? row + REAL_W : NULL;
             int lit = 0;
             for (int x = 0; x < REAL_W; x++) {
                 const unsigned hash = material_grain_hash(x, y);
                 const bool is_leaf = row[x] == MATX(MATX_LEAF);
                 const bool tinted = is_leaf
-                    || (row[x] == CELL_MAKE(MAT_WOOD, 0)
-                        && material_wood_near_leaf(above, row, below, x,
-                                                   REAL_W, top5, hash, 5u));
+                                    || (row[x] == CELL_MAKE(MAT_WOOD, 0)
+                                        && material_wood_near_leaf(above, row, below, x, REAL_W, top5, hash, 5u));
                 if (tinted) {
                     sink += material_wood_leaf_wave(rep * 40u, x, REAL_W, hash);
                     lit = 1;
                 }
                 if (rep == 0) {
-                    if (is_leaf) { leaf++; }
-                    else if (row[x] == CELL_MAKE(MAT_WOOD, 0)) {
+                    if (is_leaf) {
+                        leaf++;
+                    } else if (row[x] == CELL_MAKE(MAT_WOOD, 0)) {
                         wood++;
-                        if (tinted) { near_leaf++; }
+                        if (tinted) {
+                            near_leaf++;
+                        }
                     }
                 }
             }
-            if (rep == 0) { rows_lit += lit; }
+            if (rep == 0) {
+                rows_lit += lit;
+            }
         }
     }
     const int64_t per_pass = (esp_timer_get_time() - start) / 20;
@@ -634,11 +624,10 @@ static void test_the_wood_leaf_shading_on_a_grove(void)
     const int64_t c0 = esp_timer_get_time();
     for (int rep = 0; rep < 20; rep++) {
         for (int y = 0; y < REAL_H; y++) {
-            const uint8_t *row = big + (size_t)y * REAL_W;
+            const uint8_t* row = big + (size_t)y * REAL_W;
             for (int x = 0; x < REAL_W; x++) {
                 sink += material_grain_hash(x, y);
-                sink += (row[x] == MATX(MATX_LEAF))
-                     || (row[x] == CELL_MAKE(MAT_WOOD, 0));
+                sink += (row[x] == MATX(MATX_LEAF)) || (row[x] == CELL_MAKE(MAT_WOOD, 0));
             }
         }
     }
@@ -649,9 +638,8 @@ static void test_the_wood_leaf_shading_on_a_grove(void)
              "control %lld us, so the shading is %lld us "
              "(wood %d, of which %d beside a leaf; leaf %d; %d of %d rows "
              "carry foliage and so wake every gust tick) [%u]",
-             (long long)per_pass, (long long)control_pass,
-             (long long)(per_pass - control_pass),
-             wood, near_leaf, leaf, rows_lit, REAL_H, sink & 1u);
+             (long long)per_pass, (long long)control_pass, (long long)(per_pass - control_pass), wood, near_leaf, leaf,
+             rows_lit, REAL_H, sink & 1u);
 
     free(big);
 }
@@ -662,10 +650,10 @@ static void test_the_wood_leaf_shading_on_a_grove(void)
  * quiet window, so the pair brackets what a player sees - the DIFFERENCE
  * between the two rows is the point, a number from either alone describes
  * half the experience. */
-static void test_pouring_water_onto_a_plant_bed_costs_more_than_steady_growth(void)
-{
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+static void
+test_pouring_water_onto_a_plant_bed_costs_more_than_steady_growth(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
 
@@ -701,18 +689,18 @@ static void test_pouring_water_onto_a_plant_bed_costs_more_than_steady_growth(vo
 
     ESP_LOGI("device_tests",
              "plant bed pour: steady %lld us, first %d steps after a pour "
-             "%lld us (%lld us more, %lld%%)", (long long)steady, steps,
-             (long long)poured, (long long)(poured - steady),
+             "%lld us (%lld us more, %lld%%)",
+             (long long)steady, steps, (long long)poured, (long long)(poured - steady),
              steady > 0 ? (long long)(((poured - steady) * 100) / steady) : 0);
 
     free(big);
     free(blocks);
 }
 
-static void test_a_growing_plant_bed_fits_in_the_frame_budget(void)
-{
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+static void
+test_a_growing_plant_bed_fits_in_the_frame_budget(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
 
@@ -736,8 +724,7 @@ static void test_a_growing_plant_bed_fits_in_the_frame_budget(void)
     }
     const int64_t per_step = (esp_timer_get_time() - start) / steps;
 
-    ESP_LOGI("device_tests", "growing plant bed, %dx%d: %lld us per step",
-             REAL_W, REAL_H, (long long)per_step);
+    ESP_LOGI("device_tests", "growing plant bed, %dx%d: %lld us per step", REAL_W, REAL_H, (long long)per_step);
 
     free(big);
     free(blocks);
@@ -745,23 +732,23 @@ static void test_a_growing_plant_bed_fits_in_the_frame_budget(void)
     /* RED ON PURPOSE, reduction target, not regression guard. Soak/dry is 28%
      * of this step. Re-pegged perf-scoped: measured 63,397 -> target 57,000. */
     TEST_ASSERT_LESS_THAN_MESSAGE(57000, (int)per_step,
-        "a bed of growing plants costs three frames a step - a reduction "
-        "target at measured x 0.9, so failing means the work is not done yet");
+                                  "a bed of growing plants costs three frames a step - a reduction "
+                                  "target at measured x 0.9, so failing means the work is not done yet");
 }
 
 #ifdef SAND_HOST_PROBE
 /* Host-only timing probe - the growing plant bed (see the full-step control's
  * own wrapper for the pattern). */
-void sand_host_probe_run_plant_bed(void)
-{
+void
+sand_host_probe_run_plant_bed(void) {
     test_a_growing_plant_bed_fits_in_the_frame_budget();
 }
 #endif
 
-static void test_a_campfire_on_a_sand_bed_fits_in_the_frame_budget(void)
-{
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+static void
+test_a_campfire_on_a_sand_bed_fits_in_the_frame_budget(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
 
@@ -784,8 +771,7 @@ static void test_a_campfire_on_a_sand_bed_fits_in_the_frame_budget(void)
     }
     const int64_t per_step = (esp_timer_get_time() - start) / steps;
 
-    ESP_LOGI("device_tests", "campfire on a sand bed, %dx%d: %lld us per step",
-             REAL_W, REAL_H, (long long)per_step);
+    ESP_LOGI("device_tests", "campfire on a sand bed, %dx%d: %lld us per step", REAL_W, REAL_H, (long long)per_step);
 
     free(big);
     free(blocks);
@@ -794,16 +780,16 @@ static void test_a_campfire_on_a_sand_bed_fits_in_the_frame_budget(void)
      * narrowed to 16x32. Budget is that x 0.9 = 32,366, rounded DOWN to
      * 32,300 so the target is never looser than the convention. */
     TEST_ASSERT_LESS_THAN_MESSAGE(32300, (int)per_step,
-        "a small fire on a settled sand bed is the shape the app is usually "
-        "in - a reduction target at measured x 0.9, so failing means the work "
-        "is not done yet");
+                                  "a small fire on a settled sand bed is the shape the app is usually "
+                                  "in - a reduction target at measured x 0.9, so failing means the work "
+                                  "is not done yet");
 }
 
 #ifdef SAND_HOST_PROBE
 /* Host-only timing probe - the campfire scene (see the full-step control's
  * own wrapper for the pattern). */
-void sand_host_probe_run_campfire(void)
-{
+void
+sand_host_probe_run_campfire(void) {
     test_a_campfire_on_a_sand_bed_fits_in_the_frame_budget();
 }
 #endif
@@ -813,10 +799,10 @@ void sand_host_probe_run_campfire(void)
  * gas_run_t's carry runs only where py == 0. Packed bounds the worst case
  * and is the only shape that fires the row skip; the half-screen scene below
  * is the realistic counterpart, and the pair is the point. */
-static void test_turning_a_packed_screen_of_gas_fits_in_the_frame_budget(void)
-{
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+static void
+test_turning_a_packed_screen_of_gas_fits_in_the_frame_budget(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
 
@@ -830,8 +816,9 @@ static void test_turning_a_packed_screen_of_gas_fits_in_the_frame_budget(void)
     int64_t worst = 0;
     const int64_t per_step = time_a_quarter_turn(&real, 24, &worst);
 
-    ESP_LOGI("device_tests", "quarter turn on a PACKED screen of gas, %dx%d: "
-                             "%lld us per step, worst single step %lld us",
+    ESP_LOGI("device_tests",
+             "quarter turn on a PACKED screen of gas, %dx%d: "
+             "%lld us per step, worst single step %lld us",
              REAL_W, REAL_H, (long long)per_step, (long long)worst);
 
     /* Read before the frees, asserted after - Unity longjmps out of a failing
@@ -846,20 +833,20 @@ static void test_turning_a_packed_screen_of_gas_fits_in_the_frame_budget(void)
      * of it: a turning board keeps stirring steam into fresh 2x2 patches,
      * so the loss is larger here and varies run to run. */
     TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(total - total / 8, count,
-        "turning the board must not empty it - steam condensing into water "
-        "loses three cells a patch, but a packed screen that has shed an "
-        "eighth of itself is not the scene this row means to time");
+                                             "turning the board must not empty it - steam condensing into water "
+                                             "loses three cells a patch, but a packed screen that has shed an "
+                                             "eighth of itself is not the scene this row means to time");
 
     TEST_ASSERT_LESS_THAN_MESSAGE(128800, (int)per_step,
-        "a quarter turn on a fully packed screen of gas is the worst case the "
-        "gas passes can be handed - a reduction target at measured x 0.9, so "
-        "failing means the work is not done yet");
+                                  "a quarter turn on a fully packed screen of gas is the worst case the "
+                                  "gas passes can be handed - a reduction target at measured x 0.9, so "
+                                  "failing means the work is not done yet");
 }
 
-static void test_turning_a_half_screen_of_gas_fits_in_the_frame_budget(void)
-{
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+static void
+test_turning_a_half_screen_of_gas_fits_in_the_frame_budget(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
 
@@ -884,8 +871,9 @@ static void test_turning_a_half_screen_of_gas_fits_in_the_frame_budget(void)
     int64_t worst = 0;
     const int64_t per_step = time_a_quarter_turn(&real, 24, &worst);
 
-    ESP_LOGI("device_tests", "quarter turn on a HALF screen of gas, %dx%d: "
-                             "%lld us per step, worst single step %lld us",
+    ESP_LOGI("device_tests",
+             "quarter turn on a HALF screen of gas, %dx%d: "
+             "%lld us per step, worst single step %lld us",
              REAL_W, REAL_H, (long long)per_step, (long long)worst);
 
     const int after = sand_count(&real);
@@ -894,28 +882,28 @@ static void test_turning_a_half_screen_of_gas_fits_in_the_frame_budget(void)
     free(blocks);
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(before, after,
-        "turning the board must move gas, not create or destroy it - decay is "
-        "off by default, so the cell count is conserved across the turn");
+                                  "turning the board must move gas, not create or destroy it - decay is "
+                                  "off by default, so the cell count is conserved across the turn");
 
     TEST_ASSERT_LESS_THAN_MESSAGE(46100, (int)per_step,
-        "a quarter turn on a settled half screen of gas is the realistic "
-        "tilted case - a reduction target at measured x 0.9, so failing "
-        "means the work is not done yet");
+                                  "a quarter turn on a settled half screen of gas is the realistic "
+                                  "tilted case - a reduction target at measured x 0.9, so failing "
+                                  "means the work is not done yet");
 }
 
 #ifdef SAND_HOST_PROBE
 /* Host-only timing probe (see the full-step control's own wrapper for the
  * pattern). */
-void sand_host_probe_run_settled_pool_to_landscape(void)
-{
+void
+sand_host_probe_run_settled_pool_to_landscape(void) {
     test_turning_a_settled_pool_to_landscape_fits_in_the_frame_budget();
 }
 #endif
 
-static void test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget(void)
-{
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+static void
+test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
 
@@ -923,7 +911,7 @@ static void test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget(void
     sand_init(&real, big, REAL_W, REAL_H, 17u);
     sand_enable_sleeping(&real, blocks);
 
-    const int sand_x1  = (REAL_W * 3) / 10;          /* ~30% from the left */
+    const int sand_x1 = (REAL_W * 3) / 10;           /* ~30% from the left */
     const int water_x0 = REAL_W - (REAL_W * 3) / 10; /* ~30% from the right */
 
     for (int y = REAL_H / 2; y < REAL_H; y++) {
@@ -942,9 +930,9 @@ static void test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget(void
         const int xb = water_x0 - 1 - off;
         const int xa2 = (xa + 1 < water_x0) ? xa + 1 : xa;
         const int xb2 = (xb - 1 >= sand_x1) ? xb - 1 : xb;
-        sand_set(&real, xa,  y, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+        sand_set(&real, xa, y, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
         sand_set(&real, xa2, y, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
-        sand_set(&real, xb,  y, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+        sand_set(&real, xb, y, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
         sand_set(&real, xb2, y, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
     }
 
@@ -963,8 +951,9 @@ static void test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget(void
     }
     const int64_t per_step = (esp_timer_get_time() - start) / steps;
 
-    ESP_LOGI("device_tests", "gravity flip on a mixed sand/water/stone-X "
-                             "scene, %dx%d: %lld us per step",
+    ESP_LOGI("device_tests",
+             "gravity flip on a mixed sand/water/stone-X "
+             "scene, %dx%d: %lld us per step",
              REAL_W, REAL_H, (long long)per_step);
 
     /* No grain-conservation check. Water's model can spread mass across
@@ -981,15 +970,15 @@ static void test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget(void
      * 2026-09-11, perf-scoped: measured 9311 -> target 8300, from the
      * 12999 -> 11700 that had stopped asking for anything. */
     TEST_ASSERT_LESS_THAN_MESSAGE(8300, (int)per_step,
-        "reversing gravity over a mixed sand/water/stone scene should come "
-        "down to this - a target to optimize toward, not yet the reality");
+                                  "reversing gravity over a mixed sand/water/stone scene should come "
+                                  "down to this - a target to optimize toward, not yet the reality");
 }
 
 #ifdef SAND_HOST_PROBE
 /* Host-only timing probe (see the full-step control's own wrapper for the
  * pattern). */
-void sand_host_probe_run_mixed_flip(void)
-{
+void
+sand_host_probe_run_mixed_flip(void) {
     test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget();
 }
 #endif
@@ -997,11 +986,11 @@ void sand_host_probe_run_mixed_flip(void)
 /* Board banded with every material, reactive pairs touch, gravity inverted.
  * Catches combination costs. THE ASSERTION BELOW IS NOT A BUDGET. Replace
  * with real figure from `run_device_tests.sh`. */
-static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
-{
-    uint8_t   *big      = malloc(REAL_W * REAL_H);
-    uint8_t   *blocks   = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
-    impulse_t *impulses = malloc((size_t)ALL_PAIRS_IMPULSE_MAX * sizeof *impulses);
+static void
+test_a_gravity_flip_on_every_material_at_once_stays_sane(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    impulse_t* impulses = malloc((size_t)ALL_PAIRS_IMPULSE_MAX * sizeof *impulses);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
     TEST_ASSERT_NOT_NULL(impulses);
@@ -1016,12 +1005,11 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
      * patches below can never detonate - see ALL_PAIRS_IMPULSE_MAX. */
     sand_enable_impulses(&real, impulses, ALL_PAIRS_IMPULSE_MAX);
 
-
     /* build_all_pairs_scene() (suite_sand_scenes.c) also plants the
      * deliberate gunpowder patches - the tiling alone scatters gunpowder
      * as one cell in nineteen, never enough to form the fuse's 2x2. */
     TEST_ASSERT_GREATER_THAN_INT_MESSAGE(1, ALL_PAIRS_SPAWN_COUNT,
-        "the pattern below needs at least two materials to interleave");
+                                         "the pattern below needs at least two materials to interleave");
 
     build_all_pairs_scene(&real);
 
@@ -1039,8 +1027,9 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
     }
     const int64_t per_step = (esp_timer_get_time() - start) / steps;
 
-    ESP_LOGI("device_tests", "gravity flip with every material at once, "
-                             "%dx%d: %lld us per step",
+    ESP_LOGI("device_tests",
+             "gravity flip with every material at once, "
+             "%dx%d: %lld us per step",
              REAL_W, REAL_H, (long long)per_step);
 
     free(big);
@@ -1055,25 +1044,25 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
      * capture, which is what the 200000 sanity ceiling before it was
      * waiting for. Budget is that x 0.9 rounded DOWN to 81,600. */
     TEST_ASSERT_LESS_THAN_MESSAGE(81600, (int)per_step,
-        "flipping gravity on every material at once, including the "
-        "extended statics and gunpowder, is held to 10% below its first "
-        "measured number as a reduction target - failing means the work "
-        "is not done, not that something broke");
+                                  "flipping gravity on every material at once, including the "
+                                  "extended statics and gunpowder, is held to 10% below its first "
+                                  "measured number as a reduction target - failing means the work "
+                                  "is not done, not that something broke");
 }
 
 #ifdef SAND_HOST_PROBE
 /* Host-only timing probe - the every-material flip scene (see the
  * full-step control's own wrapper for the pattern). */
-void sand_host_probe_run_every_material_flip(void)
-{
+void
+sand_host_probe_run_every_material_flip(void) {
     test_a_gravity_flip_on_every_material_at_once_stays_sane();
 }
 #endif
 
-static void test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget(void)
-{
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+static void
+test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
 
@@ -1093,18 +1082,18 @@ static void test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_b
     sand_step(&real, 0, 1000, 0);
     const int64_t elapsed = esp_timer_get_time() - start;
 
-    ESP_LOGI("device_tests", "fire cascading through a full %dx%d screen of "
-                             "gas: %lld us for the one step",
+    ESP_LOGI("device_tests",
+             "fire cascading through a full %dx%d screen of "
+             "gas: %lld us for the one step",
              REAL_W, REAL_H, (long long)elapsed);
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(total, sand_count(&real),
-        "setup: cells must only ever convert material, never appear or "
-        "vanish, across gas igniting into fire");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_FIRE,
-        CELL_MATERIAL(sand_at(&real, REAL_W - 1, REAL_H - 1)),
-        "setup: the cascade must have reached the far corner - the whole "
-        "grid must have ignited in this one step, or this is not "
-        "actually measuring the worst case it claims to");
+                                  "setup: cells must only ever convert material, never appear or "
+                                  "vanish, across gas igniting into fire");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_FIRE, CELL_MATERIAL(sand_at(&real, REAL_W - 1, REAL_H - 1)),
+                                  "setup: the cascade must have reached the far corner - the whole "
+                                  "grid must have ignited in this one step, or this is not "
+                                  "actually measuring the worst case it claims to");
 
     free(big);
     free(blocks);
@@ -1112,15 +1101,15 @@ static void test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_b
     /* A DELIBERATELY SYNTHETIC WORST CASE: not held to plain-material
      * budgets. Failing by design, not moving goalposts. */
     TEST_ASSERT_LESS_THAN_MESSAGE(222700, (int)elapsed,
-        "a full-screen cascade must stay in the same ballpark as measured "
-        "- a jump here means something got much more expensive, not that "
-        "this specific number is a real-time requirement");
+                                  "a full-screen cascade must stay in the same ballpark as measured "
+                                  "- a jump here means something got much more expensive, not that "
+                                  "this specific number is a real-time requirement");
 }
 
-static void test_a_full_screen_of_fire_fits_in_the_frame_budget(void)
-{
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+static void
+test_a_full_screen_of_fire_fits_in_the_frame_budget(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
 
@@ -1142,29 +1131,30 @@ static void test_a_full_screen_of_fire_fits_in_the_frame_budget(void)
     }
     const int64_t per_step = (esp_timer_get_time() - start) / steps;
 
-    ESP_LOGI("device_tests", "full %dx%d screen already fire, steady "
-                             "state: %lld us per step",
+    ESP_LOGI("device_tests",
+             "full %dx%d screen already fire, steady "
+             "state: %lld us per step",
              REAL_W, REAL_H, (long long)per_step);
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(total, sand_count(&real),
-        "setup: a fully packed screen of same-density fire cannot "
-        "displace, ignite, or smother anything - the count must not "
-        "drift");
+                                  "setup: a fully packed screen of same-density fire cannot "
+                                  "displace, ignite, or smother anything - the count must not "
+                                  "drift");
 
     free(big);
     free(blocks);
 
     TEST_ASSERT_LESS_THAN_MESSAGE(87700, (int)per_step,
-        "steady-state cost of a full screen of fire must stay in the "
-        "same ballpark as measured - not a real-time promise, but a "
-        "real regression guard");
+                                  "steady-state cost of a full screen of fire must stay in the "
+                                  "same ballpark as measured - not a real-time promise, but a "
+                                  "real regression guard");
 }
 
 #ifdef SAND_HOST_PROBE
 /* Host-only timing probe - the full_fire scene (see the full-step control's
  * own wrapper for the pattern). */
-void sand_host_probe_run_full_fire(void)
-{
+void
+sand_host_probe_run_full_fire(void) {
     test_a_full_screen_of_fire_fits_in_the_frame_budget();
 }
 #endif
@@ -1177,10 +1167,10 @@ void sand_host_probe_run_full_fire(void)
  * sand_set_mobility(SAND_MOBILITY_PER_MATERIAL) - the setting app_sand.c
  * itself uses - so this holds the app's own liquid path to any real
  * ceiling. */
-static void test_four_liquids_reacting_at_once_fits_in_the_frame_budget(void)
-{
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+static void
+test_four_liquids_reacting_at_once_fits_in_the_frame_budget(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
 
@@ -1206,8 +1196,9 @@ static void test_four_liquids_reacting_at_once_fits_in_the_frame_budget(void)
     }
     const int64_t per_step = (esp_timer_get_time() - start) / steps;
 
-    ESP_LOGI("device_tests", "four liquids reacting at once, %dx%d: %lld "
-                             "us per step",
+    ESP_LOGI("device_tests",
+             "four liquids reacting at once, %dx%d: %lld "
+             "us per step",
              REAL_W, REAL_H, (long long)per_step);
 
     free(big);
@@ -1217,25 +1208,25 @@ static void test_four_liquids_reacting_at_once_fits_in_the_frame_budget(void)
      * 89,200 it carried, so that number had stopped being a target.
      * x 0.9 rounded DOWN -> 78,200. */
     TEST_ASSERT_LESS_THAN_MESSAGE(78200, (int)per_step,
-        "four liquids reacting under the app's own per-material mobility "
-        "is held to 10% below its last measured number, as a reduction "
-        "target - failing means the work is not done, not that something "
-        "broke");
+                                  "four liquids reacting under the app's own per-material mobility "
+                                  "is held to 10% below its last measured number, as a reduction "
+                                  "target - failing means the work is not done, not that something "
+                                  "broke");
 }
 
 #ifdef SAND_HOST_PROBE
 /* Host-only timing probe - the four-liquids scene (see the full-step
  * control's own wrapper for the pattern). */
-void sand_host_probe_run_four_liquids(void)
-{
+void
+sand_host_probe_run_four_liquids(void) {
     test_four_liquids_reacting_at_once_fits_in_the_frame_budget();
 }
 #endif
 
-static void test_the_lava_stress_scene_fits_in_the_frame_budget(void)
-{
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+static void
+test_the_lava_stress_scene_fits_in_the_frame_budget(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
 
@@ -1259,8 +1250,7 @@ static void test_the_lava_stress_scene_fits_in_the_frame_budget(void)
     }
     const int64_t per_step = (esp_timer_get_time() - start) / steps;
 
-    ESP_LOGI("device_tests", "lava stress scene, %dx%d: %lld us per step",
-             REAL_W, REAL_H, (long long)per_step);
+    ESP_LOGI("device_tests", "lava stress scene, %dx%d: %lld us per step", REAL_W, REAL_H, (long long)per_step);
 
     free(big);
     free(blocks);
@@ -1268,24 +1258,24 @@ static void test_the_lava_stress_scene_fits_in_the_frame_budget(void)
     /* RE-PEGGED 2026-09-11, perf-scoped: 106,354 us measured, inside the
      * 109,000 it carried. x 0.9 rounded DOWN -> 95,700. */
     TEST_ASSERT_LESS_THAN_MESSAGE(95700, (int)per_step,
-        "the lava stress scene is held to 10% below its last measured "
-        "number, as a reduction target - failing means the work is not "
-        "done, not that something broke");
+                                  "the lava stress scene is held to 10% below its last measured "
+                                  "number, as a reduction target - failing means the work is not "
+                                  "done, not that something broke");
 }
 
 #ifdef SAND_HOST_PROBE
 /* Host-only timing probe - the lava stress scene (see the full-step
  * control's own wrapper for the pattern). */
-void sand_host_probe_run_lava_stress(void)
-{
+void
+sand_host_probe_run_lava_stress(void) {
     test_the_lava_stress_scene_fits_in_the_frame_budget();
 }
 #endif
 
-static void test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget(void)
-{
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+static void
+test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
 
@@ -1303,8 +1293,9 @@ static void test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget(void)
     }
     const int64_t per_step = (esp_timer_get_time() - start) / steps;
 
-    ESP_LOGI("device_tests", "screen of smoke and steam, %dx%d: %lld us "
-                             "per step",
+    ESP_LOGI("device_tests",
+             "screen of smoke and steam, %dx%d: %lld us "
+             "per step",
              REAL_W, REAL_H, (long long)per_step);
 
     /* Read before the frees below, asserted after - the same fix
@@ -1321,23 +1312,23 @@ static void test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget(void)
      * with condensation running. Screen did not quietly empty into unmeasured
      * state. */
     TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(total - total / 16, count,
-        "setup: a screen of smoke and steam must still be essentially full "
-        "at the end of the window - steam condensing into water loses three "
-        "cells a patch, but losing an appreciable fraction of the board "
-        "means it decayed into something else");
+                                             "setup: a screen of smoke and steam must still be essentially full "
+                                             "at the end of the window - steam condensing into water loses three "
+                                             "cells a patch, but losing an appreciable fraction of the board "
+                                             "means it decayed into something else");
     /* RE-PEGGED 2026-09-10: 115,178 us measured, inside the 127000 it
      * carried. x 0.9 rounded DOWN -> 103,600. */
     TEST_ASSERT_LESS_THAN_MESSAGE(103600, (int)per_step,
-        "a full screen of smoke and steam is held to 10% below its last "
-        "measured number, as a reduction target - failing means the work "
-        "is not done, not that something broke");
+                                  "a full screen of smoke and steam is held to 10% below its last "
+                                  "measured number, as a reduction target - failing means the work "
+                                  "is not done, not that something broke");
 }
 
 #ifdef SAND_HOST_PROBE
 /* Host-only timing probe - the smoke+steam scene (see the full-step
  * control's own wrapper for the pattern). */
-void sand_host_probe_run_smoke_and_steam(void)
-{
+void
+sand_host_probe_run_smoke_and_steam(void) {
     test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget();
 }
 #endif
@@ -1348,10 +1339,10 @@ void sand_host_probe_run_smoke_and_steam(void)
  * touching from step 1, so the lattice is already at its most active the
  * moment it's painted. Clean measurement 98738 us -> target 89000
  * (file-wide 0.9 rule, see FULL_STEP_BUDGET_US's comment). */
-static void test_the_thermal_shock_scene_fits_in_the_frame_budget(void)
-{
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+static void
+test_the_thermal_shock_scene_fits_in_the_frame_budget(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
     /* Step count is fixed at 10 by the host guard beside this test (its own
@@ -1375,23 +1366,24 @@ static void test_the_thermal_shock_scene_fits_in_the_frame_budget(void)
     }
     const int64_t per_step = (esp_timer_get_time() - start) / steps;
 
-    ESP_LOGI("device_tests", "thermal shock lattice, %dx%d: %lld us per "
-                             "step",
+    ESP_LOGI("device_tests",
+             "thermal shock lattice, %dx%d: %lld us per "
+             "step",
              REAL_W, REAL_H, (long long)per_step);
 
     free(big);
     free(blocks);
 
     TEST_ASSERT_LESS_THAN_MESSAGE(89000, (int)per_step,
-        "the thermal shock lattice is held to 10% below its first "
-        "measured number, as a reduction target - failing means the work "
-        "is not done, not that something broke");
+                                  "the thermal shock lattice is held to 10% below its first "
+                                  "measured number, as a reduction target - failing means the work "
+                                  "is not done, not that something broke");
 }
 
-static void test_the_boiler_scene_fits_in_the_frame_budget(void)
-{
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+static void
+test_the_boiler_scene_fits_in_the_frame_budget(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
 
@@ -1415,8 +1407,7 @@ static void test_the_boiler_scene_fits_in_the_frame_budget(void)
     }
     const int64_t per_step = (esp_timer_get_time() - start) / steps;
 
-    ESP_LOGI("device_tests", "boiler scene, %dx%d: %lld us per step",
-             REAL_W, REAL_H, (long long)per_step);
+    ESP_LOGI("device_tests", "boiler scene, %dx%d: %lld us per step", REAL_W, REAL_H, (long long)per_step);
 
     free(big);
     free(blocks);
@@ -1424,16 +1415,16 @@ static void test_the_boiler_scene_fits_in_the_frame_budget(void)
     /* RE-PEGGED 2026-09-11, perf-scoped: 28,125 us measured, inside the
      * 28,500 it carried. x 0.9 rounded DOWN -> 25,300. */
     TEST_ASSERT_LESS_THAN_MESSAGE(25300, (int)per_step,
-        "the boiler scene is held to 10% below its last measured "
-        "number, as a reduction target - failing means the work is not "
-        "done, not that something broke");
+                                  "the boiler scene is held to 10% below its last measured "
+                                  "number, as a reduction target - failing means the work is not "
+                                  "done, not that something broke");
 }
 
 #ifdef SAND_HOST_PROBE
 /* Host-only timing probe - the boiler (see the full-step control's own
  * wrapper for the pattern). */
-void sand_host_probe_run_boiler(void)
-{
+void
+sand_host_probe_run_boiler(void) {
     test_the_boiler_scene_fits_in_the_frame_budget();
 }
 #endif
@@ -1445,10 +1436,10 @@ void sand_host_probe_run_boiler(void)
  * fire/heat (see the builder's own comment on may_have_moisture). 35
  * settle steps then 30 measured, matching the host test's own window (see
  * that test's comment for why 35). */
-static void test_the_wet_earth_scene_fits_in_the_frame_budget(void)
-{
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+static void
+test_the_wet_earth_scene_fits_in_the_frame_budget(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
     /* Measured 100367 us/30 steps -> target 80000 (measured * 0.8, NOT this
@@ -1476,8 +1467,7 @@ static void test_the_wet_earth_scene_fits_in_the_frame_budget(void)
     }
     const int64_t per_step = (esp_timer_get_time() - start) / steps;
 
-    ESP_LOGI("device_tests", "wet earth scene, %dx%d: %lld us per step",
-             REAL_W, REAL_H, (long long)per_step);
+    ESP_LOGI("device_tests", "wet earth scene, %dx%d: %lld us per step", REAL_W, REAL_H, (long long)per_step);
 
     free(big);
     free(blocks);
@@ -1485,17 +1475,17 @@ static void test_the_wet_earth_scene_fits_in_the_frame_budget(void)
     /* Measured 59,824 perf-scoped, after the block narrowed to 16x32, x 0.8
      * rounded down - this row's own exception to the file-wide x 0.9. */
     TEST_ASSERT_LESS_THAN_MESSAGE(47800, (int)per_step,
-        "wet earth is held to measured x 0.8 - a deliberately tighter "
-        "reduction target than the rest of the file's x 0.9, set by "
-        "explicit instruction - so failing means the work is not done, "
-        "not that something broke");
+                                  "wet earth is held to measured x 0.8 - a deliberately tighter "
+                                  "reduction target than the rest of the file's x 0.9, set by "
+                                  "explicit instruction - so failing means the work is not done, "
+                                  "not that something broke");
 }
 
 #ifdef SAND_HOST_PROBE
 /* Host-only timing probe - the wet earth scene (see the full-step
  * control's own wrapper for the pattern). */
-void sand_host_probe_run_wet_earth(void)
-{
+void
+sand_host_probe_run_wet_earth(void) {
     test_the_wet_earth_scene_fits_in_the_frame_budget();
 }
 #endif
@@ -1507,11 +1497,11 @@ void sand_host_probe_run_wet_earth(void)
  * cool_off_chain() and the burst gate. No settling step: the scene is
  * already at its busiest the instant it's painted (the whole seam touching
  * for the first time). */
-static void test_the_water_over_lava_scene_fits_in_the_frame_budget(void)
-{
-    uint8_t   *big      = malloc((size_t)REAL_W * REAL_H);
-    uint8_t   *blocks   = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
-    impulse_t *impulses = malloc((size_t)WATER_LAVA_IMPULSE_MAX * sizeof *impulses);
+static void
+test_the_water_over_lava_scene_fits_in_the_frame_budget(void) {
+    uint8_t* big = malloc((size_t)REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    impulse_t* impulses = malloc((size_t)WATER_LAVA_IMPULSE_MAX * sizeof *impulses);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
     TEST_ASSERT_NOT_NULL(impulses);
@@ -1533,8 +1523,7 @@ static void test_the_water_over_lava_scene_fits_in_the_frame_budget(void)
     }
     const int64_t per_step = (esp_timer_get_time() - start) / steps;
 
-    ESP_LOGI("device_tests", "water over lava scene, %dx%d: %lld us per step",
-             REAL_W, REAL_H, (long long)per_step);
+    ESP_LOGI("device_tests", "water over lava scene, %dx%d: %lld us per step", REAL_W, REAL_H, (long long)per_step);
 
     free(big);
     free(blocks);
@@ -1544,16 +1533,16 @@ static void test_the_water_over_lava_scene_fits_in_the_frame_budget(void)
      * device number, replacing the provisional ceiling it carried. Budget
      * is that x 0.9 rounded DOWN to 179,300. */
     TEST_ASSERT_LESS_THAN_MESSAGE(179300, (int)per_step,
-        "water poured onto lava is held to 10% below its first measured "
-        "number, as a reduction target - failing means the work is not "
-        "done, not that something broke");
+                                  "water poured onto lava is held to 10% below its first measured "
+                                  "number, as a reduction target - failing means the work is not "
+                                  "done, not that something broke");
 }
 
 #ifdef SAND_HOST_PROBE
 /* Host-only timing probe - the water-over-lava scene (see the full-step
  * control's own wrapper for the pattern). */
-void sand_host_probe_run_water_over_lava(void)
-{
+void
+sand_host_probe_run_water_over_lava(void) {
     test_the_water_over_lava_scene_fits_in_the_frame_budget();
 }
 #endif
@@ -1576,11 +1565,11 @@ void sand_host_probe_run_water_over_lava(void)
 /* SO THIS ROW FAILS BY DESIGN, like every other budget in this section:
  * a reduction target, not a regression guard. Re-peg only from a fresh
  * capture, never to make it green. */
-static void test_the_gunpowder_basin_scene_fits_in_the_frame_budget(void)
-{
-    uint8_t   *big      = malloc((size_t)REAL_W * REAL_H);
-    uint8_t   *blocks   = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
-    impulse_t *impulses = malloc((size_t)GUNPOWDER_BASIN_IMPULSE_MAX * sizeof *impulses);
+static void
+test_the_gunpowder_basin_scene_fits_in_the_frame_budget(void) {
+    uint8_t* big = malloc((size_t)REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    impulse_t* impulses = malloc((size_t)GUNPOWDER_BASIN_IMPULSE_MAX * sizeof *impulses);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
     TEST_ASSERT_NOT_NULL(impulses);
@@ -1602,26 +1591,25 @@ static void test_the_gunpowder_basin_scene_fits_in_the_frame_budget(void)
     }
     const int64_t per_step = (esp_timer_get_time() - start) / steps;
 
-    ESP_LOGI("device_tests", "gunpowder basin scene, %dx%d: %lld us per step",
-             REAL_W, REAL_H, (long long)per_step);
+    ESP_LOGI("device_tests", "gunpowder basin scene, %dx%d: %lld us per step", REAL_W, REAL_H, (long long)per_step);
 
     free(big);
     free(blocks);
     free(impulses);
 
     TEST_ASSERT_LESS_THAN_MESSAGE(28200, (int)per_step,
-        "a chain detonation in a brush-drawn stone vessel, with the "
-        "aftermath reaching fuel outside it, should cost less per step "
-        "than the 31,399us first measured on 2026-09-06 - this is a "
-        "reduction target at measured x 0.9, so failing means the work "
-        "is not done yet, not that something broke");
+                                  "a chain detonation in a brush-drawn stone vessel, with the "
+                                  "aftermath reaching fuel outside it, should cost less per step "
+                                  "than the 31,399us first measured on 2026-09-06 - this is a "
+                                  "reduction target at measured x 0.9, so failing means the work "
+                                  "is not done yet, not that something broke");
 }
 
 #ifdef SAND_HOST_PROBE
 /* Host-only timing probe - the gunpowder basin scene (see the
  * full-step control's own wrapper for the pattern). */
-void sand_host_probe_run_gunpowder_basin(void)
-{
+void
+sand_host_probe_run_gunpowder_basin(void) {
     test_the_gunpowder_basin_scene_fits_in_the_frame_budget();
 }
 #endif
@@ -1638,36 +1626,36 @@ void sand_host_probe_run_gunpowder_basin(void)
  * a guard, as every row here was first set. The host ranked all three right
  * and priced none: 137x, 177x, 176x against the 179-214x its comparable rows
  * predicted. */
-#define PLANT_RUIN_BUDGET_US     74800
-#define FILLING_BASIN_BUDGET_US  10900
-#define SNOWFALL_BUDGET_US       41600
+#define PLANT_RUIN_BUDGET_US    74800
+#define FILLING_BASIN_BUDGET_US 10900
+#define SNOWFALL_BUDGET_US      41600
 
 /* 84,706 us a step, perf-scoped, pegged at that x 0.9 rounded down like the
  * three above - the third dearest scene in the suite, behind water over
  * lava and a packed screen of gas. */
-#define PLANT_POUR_BUDGET_US     76200
+#define PLANT_POUR_BUDGET_US    76200
 
 /* 60 us, pegged the same way, and the number worth writing down: the same
  * board cost 28,362 before a landed plant stopped arming the reaction pass
  * (see may_have_faller/faller_may_move in sand.h). What is left is the
  * sweep's own block scan - knowingly red at 16x32, see that row. */
-#define PLANT_IDLE_BUDGET_US     54
+#define PLANT_IDLE_BUDGET_US    54
 
 /* THE ONE ROW HERE WITH NO DEVICE CAPTURE BEHIND IT: another round held the
  * board. Ranked, not priced - 138 us on the host against the growing bed's
  * 420 for the same board, applied to that row's device figure, then the
  * file-wide x 0.9. Replace it with a capture rather than trusting it. */
-#define MATURE_TREE_BUDGET_US    21600
+#define MATURE_TREE_BUDGET_US   21600
 
 /* A grown plant bed with acid eating down to its roots on one side of a wall
  * and lava burning its canopy on the other (build_plant_ruin_scene(), shared
  * with test_the_plant_ruin_scene_eats_roots_and_burns_a_canopy). The acid
  * leads the lava by PLANT_RUIN_ACID_LEAD_STEPS because the two do not peak
  * together - see that constant. */
-static void test_the_plant_ruin_scene_fits_in_the_frame_budget(void)
-{
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+static void
+test_the_plant_ruin_scene_fits_in_the_frame_budget(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
 
@@ -1710,8 +1698,9 @@ static void test_the_plant_ruin_scene_fits_in_the_frame_budget(void)
     }
     const int64_t per_step = (esp_timer_get_time() - start) / steps;
 
-    ESP_LOGI("device_tests", "plant ruin scene, %dx%d: %lld us per step, "
-                             "worst single step %lld us",
+    ESP_LOGI("device_tests",
+             "plant ruin scene, %dx%d: %lld us per step, "
+             "worst single step %lld us",
              REAL_W, REAL_H, (long long)per_step, (long long)worst);
 
     free(big);
@@ -1721,16 +1710,16 @@ static void test_the_plant_ruin_scene_fits_in_the_frame_budget(void)
      * 68,076 us a step while it is merely drinking rain and 83,173 once acid
      * and lava arrive - 22% for the pours alone. */
     TEST_ASSERT_LESS_THAN_MESSAGE(PLANT_RUIN_BUDGET_US, (int)per_step,
-        "the plant family meeting acid and lava is held to 10% below its "
-        "first measured number, as a reduction target - failing means the "
-        "work is not done, not that something broke");
+                                  "the plant family meeting acid and lava is held to 10% below its "
+                                  "first measured number, as a reduction target - failing means the "
+                                  "work is not done, not that something broke");
 }
 
 #ifdef SAND_HOST_PROBE
 /* Host-only timing probe - the plant ruin scene (see the full-step
  * control's own wrapper for the pattern). */
-void sand_host_probe_run_plant_ruin(void)
-{
+void
+sand_host_probe_run_plant_ruin(void) {
     test_the_plant_ruin_scene_fits_in_the_frame_budget();
 }
 #endif
@@ -1741,10 +1730,10 @@ void sand_host_probe_run_plant_ruin(void)
  * comparable body of water, but settling rather than dropping into vacuum.
  * The slab row is deliberately left exactly as it was: PRs #174 and #175
  * quote its numbers, and redefining it would invalidate that history. */
-static void test_the_filling_basin_scene_fits_in_the_frame_budget(void)
-{
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+static void
+test_the_filling_basin_scene_fits_in_the_frame_budget(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
 
@@ -1779,8 +1768,9 @@ static void test_the_filling_basin_scene_fits_in_the_frame_budget(void)
     }
     const int64_t per_step = (esp_timer_get_time() - start) / steps;
 
-    ESP_LOGI("device_tests", "filling basin scene, %dx%d: %lld us per step, "
-                             "worst single step %lld us",
+    ESP_LOGI("device_tests",
+             "filling basin scene, %dx%d: %lld us per step, "
+             "worst single step %lld us",
              REAL_W, REAL_H, (long long)per_step, (long long)worst);
 
     free(big);
@@ -1792,16 +1782,16 @@ static void test_the_filling_basin_scene_fits_in_the_frame_budget(void)
      * than dropping into vacuum - so the row the water work is tuned on is
      * the cheaper of the two cases by 33%. */
     TEST_ASSERT_LESS_THAN_MESSAGE(FILLING_BASIN_BUDGET_US, (int)per_step,
-        "water running into a pool is held to 10% below its first measured "
-        "number, as a reduction target - failing means the work is not "
-        "done, not that something broke");
+                                  "water running into a pool is held to 10% below its first measured "
+                                  "number, as a reduction target - failing means the work is not "
+                                  "done, not that something broke");
 }
 
 #ifdef SAND_HOST_PROBE
 /* Host-only timing probe - the filling basin scene (see the full-step
  * control's own wrapper for the pattern). */
-void sand_host_probe_run_filling_basin(void)
-{
+void
+sand_host_probe_run_filling_basin(void) {
     test_the_filling_basin_scene_fits_in_the_frame_budget();
 }
 #endif
@@ -1811,10 +1801,10 @@ void sand_host_probe_run_filling_basin(void)
  * crusting_bank_and_a_live_fall). Forced crust - see the builder's own
  * declaration for why a scene left at the shipped rate holds no ice at all
  * inside any window this file times. */
-static void test_the_snowfall_scene_fits_in_the_frame_budget(void)
-{
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+static void
+test_the_snowfall_scene_fits_in_the_frame_budget(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
 
@@ -1847,8 +1837,9 @@ static void test_the_snowfall_scene_fits_in_the_frame_budget(void)
     }
     const int64_t per_step = (esp_timer_get_time() - start) / steps;
 
-    ESP_LOGI("device_tests", "snowfall scene, %dx%d: %lld us per step, "
-                             "worst single step %lld us",
+    ESP_LOGI("device_tests",
+             "snowfall scene, %dx%d: %lld us per step, "
+             "worst single step %lld us",
              REAL_W, REAL_H, (long long)per_step, (long long)worst);
 
     free(big);
@@ -1857,16 +1848,16 @@ static void test_the_snowfall_scene_fits_in_the_frame_budget(void)
     /* 63,371 us a step from a material that had no scene at all: about what
      * a growing plant bed costs, and dearer than a campfire. */
     TEST_ASSERT_LESS_THAN_MESSAGE(SNOWFALL_BUDGET_US, (int)per_step,
-        "snow on earth is held to 10% below its first measured number, as "
-        "a reduction target - failing means the work is not done, not that "
-        "something broke");
+                                  "snow on earth is held to 10% below its first measured number, as "
+                                  "a reduction target - failing means the work is not done, not that "
+                                  "something broke");
 }
 
 #ifdef SAND_HOST_PROBE
 /* Host-only timing probe - the snowfall scene (see the full-step control's
  * own wrapper for the pattern). */
-void sand_host_probe_run_snowfall(void)
-{
+void
+sand_host_probe_run_snowfall(void) {
     test_the_snowfall_scene_fits_in_the_frame_budget();
 }
 #endif
@@ -1877,10 +1868,10 @@ void sand_host_probe_run_snowfall(void)
  *
  * Timed from the first stamp rather than after a settle - a settled heap is
  * the plant bed row over again. */
-static void test_pouring_the_plant_brush_fits_in_the_frame_budget(void)
-{
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+static void
+test_pouring_the_plant_brush_fits_in_the_frame_budget(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
 
@@ -1908,24 +1899,25 @@ static void test_pouring_the_plant_brush_fits_in_the_frame_budget(void)
     }
     const int64_t per_step = (esp_timer_get_time() - start) / steps;
 
-    ESP_LOGI("device_tests", "plant pour, %dx%d: %lld us per step, "
-                             "worst single step %lld us",
+    ESP_LOGI("device_tests",
+             "plant pour, %dx%d: %lld us per step, "
+             "worst single step %lld us",
              REAL_W, REAL_H, (long long)per_step, (long long)worst);
 
     free(big);
     free(blocks);
 
     TEST_ASSERT_LESS_THAN_MESSAGE(PLANT_POUR_BUDGET_US, (int)per_step,
-        "pouring plants is held to 10% below its first measured number, as "
-        "a reduction target - failing means the work is not done, not that "
-        "something broke");
+                                  "pouring plants is held to 10% below its first measured number, as "
+                                  "a reduction target - failing means the work is not done, not that "
+                                  "something broke");
 }
 
 #ifdef SAND_HOST_PROBE
 /* Host-only timing probe - the plant pour (see the full-step control's own
  * wrapper for the pattern). */
-void sand_host_probe_run_plant_pour(void)
-{
+void
+sand_host_probe_run_plant_pour(void) {
     test_pouring_the_plant_brush_fits_in_the_frame_budget();
 }
 #endif
@@ -1934,10 +1926,10 @@ void sand_host_probe_run_plant_pour(void)
  * all of its life in, and the one no other row measures. Every plant here is
  * landed or anchored, so the reaction pass has nothing it can do and the
  * number is whatever it costs to find that out. */
-static void test_a_settled_plant_garden_fits_in_the_frame_budget(void)
-{
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+static void
+test_a_settled_plant_garden_fits_in_the_frame_budget(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
 
@@ -1962,23 +1954,22 @@ static void test_a_settled_plant_garden_fits_in_the_frame_budget(void)
     }
     const int64_t per_step = (esp_timer_get_time() - start) / steps;
 
-    ESP_LOGI("device_tests", "settled plant garden, %dx%d: %lld us per step",
-             REAL_W, REAL_H, (long long)per_step);
+    ESP_LOGI("device_tests", "settled plant garden, %dx%d: %lld us per step", REAL_W, REAL_H, (long long)per_step);
 
     free(big);
     free(blocks);
 
     TEST_ASSERT_LESS_THAN_MESSAGE(PLANT_IDLE_BUDGET_US, (int)per_step,
-        "a garden that has stopped moving is held to 10% below its measured "
-        "number, as a reduction target - failing means the work is not done, "
-        "not that something broke");
+                                  "a garden that has stopped moving is held to 10% below its measured "
+                                  "number, as a reduction target - failing means the work is not done, "
+                                  "not that something broke");
 }
 
 #ifdef SAND_HOST_PROBE
 /* Host-only timing probe - the settled garden (see the full-step control's
  * own wrapper for the pattern). */
-void sand_host_probe_run_plant_idle(void)
-{
+void
+sand_host_probe_run_plant_idle(void) {
     test_a_settled_plant_garden_fits_in_the_frame_budget();
 }
 #endif
@@ -1988,10 +1979,10 @@ void sand_host_probe_run_plant_idle(void)
  * the ground dry. Every other plant row here is chosen for something still
  * happening in it; this one is chosen for nothing happening, because that is
  * what a garden does for all but the first few hundred steps of its life. */
-static void test_a_finished_tree_fits_in_the_frame_budget(void)
-{
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+static void
+test_a_finished_tree_fits_in_the_frame_budget(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
 
@@ -2012,23 +2003,22 @@ static void test_a_finished_tree_fits_in_the_frame_budget(void)
     }
     const int64_t per_step = (esp_timer_get_time() - start) / steps;
 
-    ESP_LOGI("device_tests", "finished tree, %dx%d: %lld us per step",
-             REAL_W, REAL_H, (long long)per_step);
+    ESP_LOGI("device_tests", "finished tree, %dx%d: %lld us per step", REAL_W, REAL_H, (long long)per_step);
 
     free(big);
     free(blocks);
 
     TEST_ASSERT_LESS_THAN_MESSAGE(MATURE_TREE_BUDGET_US, (int)per_step,
-        "a tree that has stopped growing is held to a host-RANKED number, "
-        "not a measured one - see MATURE_TREE_BUDGET_US, which wants a "
-        "device capture behind it before either outcome means much");
+                                  "a tree that has stopped growing is held to a host-RANKED number, "
+                                  "not a measured one - see MATURE_TREE_BUDGET_US, which wants a "
+                                  "device capture behind it before either outcome means much");
 }
 
 #ifdef SAND_HOST_PROBE
 /* Host-only timing probe - the finished tree (see the full-step control's own
  * wrapper for the pattern). */
-void sand_host_probe_run_mature_tree(void)
-{
+void
+sand_host_probe_run_mature_tree(void) {
     test_a_finished_tree_fits_in_the_frame_budget();
 }
 #endif
@@ -2043,9 +2033,8 @@ void sand_host_probe_run_mature_tree(void)
 #define LANDSCAPE_DEEP_WATER_BUDGET_US 49000
 #define LANDSCAPE_SAND_BUDGET_US       10400
 
-static int64_t landscape_scene_us_per_step(sand_t *real, bool water,
-                                           int64_t *worst_out)
-{
+static int64_t
+landscape_scene_us_per_step(sand_t* real, bool water, int64_t* worst_out) {
     for (int i = 0; i < LANDSCAPE_PRIME_STEPS; i++) {
         if (water) {
             landscape_water_pour(real, i);
@@ -2079,10 +2068,10 @@ static int64_t landscape_scene_us_per_step(sand_t *real, bool water,
  * (build_landscape_bed_scene(), shared with
  * test_the_landscape_beds_sleep_against_the_landscape_floor). The dearest
  * of the three, and the pairing the palette puts first. */
-static void test_pouring_water_into_a_landscape_sand_bed_fits_in_the_frame_budget(void)
-{
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+static void
+test_pouring_water_into_a_landscape_sand_bed_fits_in_the_frame_budget(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
 
@@ -2097,24 +2086,25 @@ static void test_pouring_water_into_a_landscape_sand_bed_fits_in_the_frame_budge
     int64_t worst = 0;
     const int64_t per_step = landscape_scene_us_per_step(&real, true, &worst);
 
-    ESP_LOGI("device_tests", "landscape water onto a sand bed, %dx%d: %lld "
-                             "us per step, worst single step %lld us",
+    ESP_LOGI("device_tests",
+             "landscape water onto a sand bed, %dx%d: %lld "
+             "us per step, worst single step %lld us",
              REAL_W, REAL_H, (long long)per_step, (long long)worst);
 
     free(big);
     free(blocks);
 
     TEST_ASSERT_LESS_THAN_MESSAGE(LANDSCAPE_WATER_BUDGET_US, (int)per_step,
-        "the orientation the board is actually played in must fit in a "
-        "frame or two - the settled-block skip keeps less of the board here "
-        "than in any portrait row, so that is the thing to suspect");
+                                  "the orientation the board is actually played in must fit in a "
+                                  "frame or two - the settled-block skip keeps less of the board here "
+                                  "than in any portrait row, so that is the thing to suspect");
 }
 
 #ifdef SAND_HOST_PROBE
 /* Host-only timing probe - water into a landscape bed (see the full-step
  * control's own wrapper for the pattern). */
-void sand_host_probe_run_landscape_water(void)
-{
+void
+sand_host_probe_run_landscape_water(void) {
     test_pouring_water_into_a_landscape_sand_bed_fits_in_the_frame_budget();
 }
 #endif
@@ -2122,10 +2112,10 @@ void sand_host_probe_run_landscape_water(void)
 /* The same pour onto a bed holding 65% of the board rather than 40%: a
  * shorter drop, far more settled mass for the skip to win or lose, and the
  * arena's other priced landscape depth. */
-static void test_pouring_water_into_a_deep_landscape_bed_fits_in_the_frame_budget(void)
-{
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+static void
+test_pouring_water_into_a_deep_landscape_bed_fits_in_the_frame_budget(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
 
@@ -2140,25 +2130,25 @@ static void test_pouring_water_into_a_deep_landscape_bed_fits_in_the_frame_budge
     int64_t worst = 0;
     const int64_t per_step = landscape_scene_us_per_step(&real, true, &worst);
 
-    ESP_LOGI("device_tests", "landscape water onto a deep sand bed, %dx%d: "
-                             "%lld us per step, worst single step %lld us",
+    ESP_LOGI("device_tests",
+             "landscape water onto a deep sand bed, %dx%d: "
+             "%lld us per step, worst single step %lld us",
              REAL_W, REAL_H, (long long)per_step, (long long)worst);
 
     free(big);
     free(blocks);
 
-    TEST_ASSERT_LESS_THAN_MESSAGE(LANDSCAPE_DEEP_WATER_BUDGET_US,
-                                  (int)per_step,
-        "a deeper landscape bed leaves less drop and more settled mass - if "
-        "this row and the shallow one ever move in opposite directions, the "
-        "skip's geometry is what changed");
+    TEST_ASSERT_LESS_THAN_MESSAGE(LANDSCAPE_DEEP_WATER_BUDGET_US, (int)per_step,
+                                  "a deeper landscape bed leaves less drop and more settled mass - if "
+                                  "this row and the shallow one ever move in opposite directions, the "
+                                  "skip's geometry is what changed");
 }
 
 #ifdef SAND_HOST_PROBE
 /* Host-only timing probe - water into a deep landscape bed (see the
  * full-step control's own wrapper for the pattern). */
-void sand_host_probe_run_landscape_deep_water(void)
-{
+void
+sand_host_probe_run_landscape_deep_water(void) {
     test_pouring_water_into_a_deep_landscape_bed_fits_in_the_frame_budget();
 }
 #endif
@@ -2166,10 +2156,10 @@ void sand_host_probe_run_landscape_deep_water(void)
 /* The liquid-free landscape row. Without it a geometry change that moved
  * the two rows above could not be told apart from one that moved the liquid
  * passes, since every other liquid-free scene in this file is portrait. */
-static void test_pouring_sand_onto_a_landscape_sand_bed_fits_in_the_frame_budget(void)
-{
-    uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+static void
+test_pouring_sand_onto_a_landscape_sand_bed_fits_in_the_frame_budget(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
 
@@ -2184,24 +2174,25 @@ static void test_pouring_sand_onto_a_landscape_sand_bed_fits_in_the_frame_budget
     int64_t worst = 0;
     const int64_t per_step = landscape_scene_us_per_step(&real, false, &worst);
 
-    ESP_LOGI("device_tests", "landscape sand onto a sand bed, %dx%d: %lld us "
-                             "per step, worst single step %lld us",
+    ESP_LOGI("device_tests",
+             "landscape sand onto a sand bed, %dx%d: %lld us "
+             "per step, worst single step %lld us",
              REAL_W, REAL_H, (long long)per_step, (long long)worst);
 
     free(big);
     free(blocks);
 
     TEST_ASSERT_LESS_THAN_MESSAGE(LANDSCAPE_SAND_BUDGET_US, (int)per_step,
-        "the powder path alone, held landscape - this is the row that says "
-        "whether a change to the block geometry helped the sweep or the "
-        "liquid passes");
+                                  "the powder path alone, held landscape - this is the row that says "
+                                  "whether a change to the block geometry helped the sweep or the "
+                                  "liquid passes");
 }
 
 #ifdef SAND_HOST_PROBE
 /* Host-only timing probe - sand onto a landscape bed (see the full-step
  * control's own wrapper for the pattern). */
-void sand_host_probe_run_landscape_sand(void)
-{
+void
+sand_host_probe_run_landscape_sand(void) {
     test_pouring_sand_onto_a_landscape_sand_bed_fits_in_the_frame_budget();
 }
 #endif
@@ -2220,6 +2211,7 @@ void sand_host_probe_run_landscape_sand(void)
  * tier in app_sand.c's qualities[] table, which is what the pixel math in
  * mirror_app_sand_marking()'s gfx_mark_dirty() calls has to agree with. */
 #define REAL_CELL_PX 2
+
 /* REPRODUCING, NOT CALLING: draw_dirty_rows()/draw_one_row()/paint_row()
  * (app_sand.c) are static, inlined at their one call site - sharing a hot
  * per-call function across a translation-unit boundary previously cost a
@@ -2228,17 +2220,16 @@ void sand_host_probe_run_landscape_sand(void)
  * calls, same order, same dirty gate); paints no pixels, since
  * gfx_present()'s cost depends only on marked regions, never colour. */
 
-static void mirror_app_sand_marking(const uint8_t *cells, int w, int h,
-                                    uint8_t *dirty_rows, uint16_t *row_x0,
-                                    uint16_t *row_x1, uint8_t *row_n)
-{
+static void
+mirror_app_sand_marking(const uint8_t* cells, int w, int h, uint8_t* dirty_rows, uint16_t* row_x0, uint16_t* row_x1,
+                        uint8_t* row_n) {
     for (int cy = 0; cy < h; cy++) {
         if (!dirty_rows[cy]) {
             continue;
         }
         dirty_rows[cy] = 0;
 
-        const uint8_t *row = &cells[(size_t)cy * w];
+        const uint8_t* row = &cells[(size_t)cy * w];
 
         int run_x0[ROW_MAX_RUNS], run_x1[ROW_MAX_RUNS];
         const int n = row_runs_find(row, w, SAND_EMPTY, run_x0, run_x1);
@@ -2259,19 +2250,16 @@ static void mirror_app_sand_marking(const uint8_t *cells, int w, int h,
             cur_n = n;
         }
 
-        uint16_t *rprev_x0 = &row_x0[cy * ROW_MAX_RUNS];
-        uint16_t *rprev_x1 = &row_x1[cy * ROW_MAX_RUNS];
+        uint16_t* rprev_x0 = &row_x0[cy * ROW_MAX_RUNS];
+        uint16_t* rprev_x1 = &row_x1[cy * ROW_MAX_RUNS];
         const int rprev_n = row_n[cy];
 
         uint16_t send_x0[2 * ROW_MAX_RUNS], send_x1[2 * ROW_MAX_RUNS];
-        const int send_n = row_runs_reconcile(cur_x0, cur_x1, cur_n, rprev_x0,
-                                              rprev_x1, rprev_n, send_x0,
-                                              send_x1);
+        const int send_n = row_runs_reconcile(cur_x0, cur_x1, cur_n, rprev_x0, rprev_x1, rprev_n, send_x0, send_x1);
 
         for (int i = 0; i < send_n; i++) {
-            gfx_mark_dirty(send_x0[i] * REAL_CELL_PX, cy * REAL_CELL_PX,
-                          (send_x1[i] - send_x0[i]) * REAL_CELL_PX,
-                          REAL_CELL_PX);
+            gfx_mark_dirty(send_x0[i] * REAL_CELL_PX, cy * REAL_CELL_PX, (send_x1[i] - send_x0[i]) * REAL_CELL_PX,
+                           REAL_CELL_PX);
         }
 
         for (int i = 0; i < cur_n; i++) {
@@ -2282,11 +2270,8 @@ static void mirror_app_sand_marking(const uint8_t *cells, int w, int h,
     }
 }
 
-static void seed_row_runs_full_width_for_gfx_test(uint16_t *row_x0,
-                                                   uint16_t *row_x1,
-                                                   uint8_t *row_n, int w,
-                                                   int h)
-{
+static void
+seed_row_runs_full_width_for_gfx_test(uint16_t* row_x0, uint16_t* row_x1, uint8_t* row_n, int w, int h) {
     for (int i = 0; i < h; i++) {
         row_x0[i * ROW_MAX_RUNS] = 0;
         row_x1[i * ROW_MAX_RUNS] = (uint16_t)w;
@@ -2302,21 +2287,14 @@ static void seed_row_runs_full_width_for_gfx_test(uint16_t *row_x0,
  * in a real frame come to 18,147 us, not 7 x 3,405 = 23,835. suite_gfx.c's
  * ratio tests measure the un-pipelined price; the two do not convert by a
  * band count. */
-static int64_t run_present_against_scene(sand_t *s, const uint8_t *cells,
-                                          int w, int h, uint8_t *dirty_rows,
-                                          uint16_t *row_x0, uint16_t *row_x1,
-                                          uint8_t *row_n, int gx, int gy,
-                                          int gz, int settle_steps,
-                                          int measured_steps, int *full_bands,
-                                          int *gathered, int *partial_bands,
-                                          int64_t *sim_us_out,
-                                          int64_t *mark_us_out,
-                                          int64_t *present_us_out)
-{
+static int64_t
+run_present_against_scene(sand_t* s, const uint8_t* cells, int w, int h, uint8_t* dirty_rows, uint16_t* row_x0,
+                          uint16_t* row_x1, uint8_t* row_n, int gx, int gy, int gz, int settle_steps,
+                          int measured_steps, int* full_bands, int* gathered, int* partial_bands, int64_t* sim_us_out,
+                          int64_t* mark_us_out, int64_t* present_us_out) {
     for (int i = 0; i < settle_steps; i++) {
         sand_step(s, gx, gy, gz);
-        mirror_app_sand_marking(cells, w, h, dirty_rows, row_x0, row_x1,
-                                row_n);
+        mirror_app_sand_marking(cells, w, h, dirty_rows, row_x0, row_x1, row_n);
         gfx_present();
     }
 
@@ -2327,14 +2305,13 @@ static int64_t run_present_against_scene(sand_t *s, const uint8_t *cells,
         const int64_t t0 = esp_timer_get_time();
         sand_step(s, gx, gy, gz);
         const int64_t t1 = esp_timer_get_time();
-        mirror_app_sand_marking(cells, w, h, dirty_rows, row_x0, row_x1,
-                                row_n);
+        mirror_app_sand_marking(cells, w, h, dirty_rows, row_x0, row_x1, row_n);
         const int64_t t2 = esp_timer_get_time();
         gfx_present();
         const int64_t t3 = esp_timer_get_time();
 
-        sim_us     += t1 - t0;
-        mark_us    += t2 - t1;
+        sim_us += t1 - t0;
+        mark_us += t2 - t1;
         present_us += t3 - t2;
     }
 
@@ -2361,15 +2338,12 @@ static int64_t run_present_against_scene(sand_t *s, const uint8_t *cells,
  * test_a_real_frame_is_sim_plus_present_on_a_falling_sand_scene. Allocate
  * `big`, `dirty_rows`, `row_x0`, `row_x1`, `row_n` for sand_init(), tracking,
  * seeding. */
-static void build_falling_sand_present_scene(sand_t *real, uint8_t *big,
-                                              uint8_t *dirty_rows,
-                                              uint16_t *row_x0,
-                                              uint16_t *row_x1, uint8_t *row_n)
-{
+static void
+build_falling_sand_present_scene(sand_t* real, uint8_t* big, uint8_t* dirty_rows, uint16_t* row_x0, uint16_t* row_x1,
+                                 uint8_t* row_n) {
     sand_init(real, big, REAL_W, REAL_H, 99u);
     sand_track_dirty_rows(real, dirty_rows);
-    seed_row_runs_full_width_for_gfx_test(row_x0, row_x1, row_n, REAL_W,
-                                          REAL_H);
+    seed_row_runs_full_width_for_gfx_test(row_x0, row_x1, row_n, REAL_W, REAL_H);
 
     for (int y = 0; y < REAL_H / 2; y++) {
         for (int x = 0; x < REAL_W; x++) {
@@ -2380,13 +2354,13 @@ static void build_falling_sand_present_scene(sand_t *real, uint8_t *big,
     }
 }
 
-static void test_present_cost_against_a_falling_sand_scene(void)
-{
-    uint8_t  *big       = malloc(REAL_W * REAL_H);
-    uint8_t  *dirty_rows = malloc(REAL_H);
-    uint16_t *row_x0    = malloc(REAL_H * ROW_MAX_RUNS * sizeof(uint16_t));
-    uint16_t *row_x1    = malloc(REAL_H * ROW_MAX_RUNS * sizeof(uint16_t));
-    uint8_t  *row_n     = malloc(REAL_H);
+static void
+test_present_cost_against_a_falling_sand_scene(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* dirty_rows = malloc(REAL_H);
+    uint16_t* row_x0 = malloc(REAL_H * ROW_MAX_RUNS * sizeof(uint16_t));
+    uint16_t* row_x1 = malloc(REAL_H * ROW_MAX_RUNS * sizeof(uint16_t));
+    uint8_t* row_n = malloc(REAL_H);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(dirty_rows);
     TEST_ASSERT_NOT_NULL(row_x0);
@@ -2394,21 +2368,20 @@ static void test_present_cost_against_a_falling_sand_scene(void)
     TEST_ASSERT_NOT_NULL(row_n);
 
     sand_t real;
-    build_falling_sand_present_scene(&real, big, dirty_rows, row_x0, row_x1,
-                                     row_n);
+    build_falling_sand_present_scene(&real, big, dirty_rows, row_x0, row_x1, row_n);
 
     int full_bands = 0, gathered = 0, partial_bands = 0;
     const int measured_steps = 20;
-    const int64_t mean_us = run_present_against_scene(&real, big, REAL_W,
-        REAL_H, dirty_rows, row_x0, row_x1, row_n, 0, 1, 0, 5, measured_steps,
-        &full_bands, &gathered, &partial_bands, NULL, NULL, NULL);
+    const int64_t mean_us =
+        run_present_against_scene(&real, big, REAL_W, REAL_H, dirty_rows, row_x0, row_x1, row_n, 0, 1, 0, 5,
+                                  measured_steps, &full_bands, &gathered, &partial_bands, NULL, NULL, NULL);
 
-    ESP_LOGI("device_tests", "present cost, falling sand checkerboard, "
-                             "%dx%d: mean %lld us/frame over %d frames "
-                             "(%d full-band, %d gathered, %d partial-band "
-                             "strip-sends)",
-             REAL_W, REAL_H, (long long)mean_us, measured_steps, full_bands,
-             gathered, partial_bands);
+    ESP_LOGI("device_tests",
+             "present cost, falling sand checkerboard, "
+             "%dx%d: mean %lld us/frame over %d frames "
+             "(%d full-band, %d gathered, %d partial-band "
+             "strip-sends)",
+             REAL_W, REAL_H, (long long)mean_us, measured_steps, full_bands, gathered, partial_bands);
 
     free(big);
     free(dirty_rows);
@@ -2425,21 +2398,21 @@ static void test_present_cost_against_a_falling_sand_scene(void)
      * Bound by different hardware (bus, not flash layout) - do not correct
      * this to 0.9. */
     TEST_ASSERT_LESS_THAN_MESSAGE(9650, (int)mean_us,
-        "present() against a moving falling-sand scene got more expensive "
-        "- check the full-band vs gathered counts in the log line above "
-        "before suspecting the panel");
+                                  "present() against a moving falling-sand scene got more expensive "
+                                  "- check the full-band vs gathered counts in the log line above "
+                                  "before suspecting the panel");
 }
 
 /* Present tests run the sim outside their own timer. Neither measures the
  * frame SUM, needed before justification. PRINTS, no frame budget argued yet.
  * Missing the real pixel writes - a LOWER BOUND only. */
-static void test_a_real_frame_is_sim_plus_present_on_a_falling_sand_scene(void)
-{
-    uint8_t  *big       = malloc(REAL_W * REAL_H);
-    uint8_t  *dirty_rows = malloc(REAL_H);
-    uint16_t *row_x0    = malloc(REAL_H * ROW_MAX_RUNS * sizeof(uint16_t));
-    uint16_t *row_x1    = malloc(REAL_H * ROW_MAX_RUNS * sizeof(uint16_t));
-    uint8_t  *row_n     = malloc(REAL_H);
+static void
+test_a_real_frame_is_sim_plus_present_on_a_falling_sand_scene(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* dirty_rows = malloc(REAL_H);
+    uint16_t* row_x0 = malloc(REAL_H * ROW_MAX_RUNS * sizeof(uint16_t));
+    uint16_t* row_x1 = malloc(REAL_H * ROW_MAX_RUNS * sizeof(uint16_t));
+    uint8_t* row_n = malloc(REAL_H);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(dirty_rows);
     TEST_ASSERT_NOT_NULL(row_x0);
@@ -2447,15 +2420,13 @@ static void test_a_real_frame_is_sim_plus_present_on_a_falling_sand_scene(void)
     TEST_ASSERT_NOT_NULL(row_n);
 
     sand_t real;
-    build_falling_sand_present_scene(&real, big, dirty_rows, row_x0, row_x1,
-                                     row_n);
+    build_falling_sand_present_scene(&real, big, dirty_rows, row_x0, row_x1, row_n);
 
     int full_bands = 0, gathered = 0, partial_bands = 0;
     int64_t sim_us = 0, mark_us = 0, present_us = 0;
     const int measured_steps = 20;
-    run_present_against_scene(&real, big, REAL_W, REAL_H, dirty_rows, row_x0,
-        row_x1, row_n, 0, 1, 0, 5, measured_steps, &full_bands, &gathered,
-        &partial_bands, &sim_us, &mark_us, &present_us);
+    run_present_against_scene(&real, big, REAL_W, REAL_H, dirty_rows, row_x0, row_x1, row_n, 0, 1, 0, 5, measured_steps,
+                              &full_bands, &gathered, &partial_bands, &sim_us, &mark_us, &present_us);
 
     free(big);
     free(dirty_rows);
@@ -2464,35 +2435,26 @@ static void test_a_real_frame_is_sim_plus_present_on_a_falling_sand_scene(void)
     free(row_n);
 
     const int64_t total_us = sim_us + mark_us + present_us;
-    const int present_pct = total_us > 0
-        ? (int)((present_us * 100) / total_us) : 0;
+    const int present_pct = total_us > 0 ? (int)((present_us * 100) / total_us) : 0;
 
-    ESP_LOGI("device_tests",
-             "frame time, falling sand checkerboard: sim %lld us/frame",
-             (long long)sim_us);
-    ESP_LOGI("device_tests",
-             "frame time, falling sand checkerboard: mark %lld us/frame",
-             (long long)mark_us);
-    ESP_LOGI("device_tests",
-             "frame time, falling sand checkerboard: present %lld us/frame",
-             (long long)present_us);
-    ESP_LOGI("device_tests",
-             "frame time, falling sand checkerboard: total %lld us/frame",
-             (long long)total_us);
+    ESP_LOGI("device_tests", "frame time, falling sand checkerboard: sim %lld us/frame", (long long)sim_us);
+    ESP_LOGI("device_tests", "frame time, falling sand checkerboard: mark %lld us/frame", (long long)mark_us);
+    ESP_LOGI("device_tests", "frame time, falling sand checkerboard: present %lld us/frame", (long long)present_us);
+    ESP_LOGI("device_tests", "frame time, falling sand checkerboard: total %lld us/frame", (long long)total_us);
     ESP_LOGI("device_tests",
              "frame time, falling sand checkerboard: present is %d%% of "
              "the total",
              present_pct);
 }
 
-static void test_present_cost_against_the_lava_stress_scene(void)
-{
-    uint8_t  *big        = malloc(REAL_W * REAL_H);
-    uint8_t  *blocks     = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
-    uint8_t  *dirty_rows = malloc(REAL_H);
-    uint16_t *row_x0     = malloc(REAL_H * ROW_MAX_RUNS * sizeof(uint16_t));
-    uint16_t *row_x1     = malloc(REAL_H * ROW_MAX_RUNS * sizeof(uint16_t));
-    uint8_t  *row_n      = malloc(REAL_H);
+static void
+test_present_cost_against_the_lava_stress_scene(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    uint8_t* dirty_rows = malloc(REAL_H);
+    uint16_t* row_x0 = malloc(REAL_H * ROW_MAX_RUNS * sizeof(uint16_t));
+    uint16_t* row_x1 = malloc(REAL_H * ROW_MAX_RUNS * sizeof(uint16_t));
+    uint8_t* row_n = malloc(REAL_H);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
     TEST_ASSERT_NOT_NULL(dirty_rows);
@@ -2507,38 +2469,33 @@ static void test_present_cost_against_the_lava_stress_scene(void)
     sand_set_decay(&real, SAND_DECAY_PER_MATERIAL);
     sand_set_mobility(&real, SAND_MOBILITY_PER_MATERIAL);
     sand_track_dirty_rows(&real, dirty_rows);
-    seed_row_runs_full_width_for_gfx_test(row_x0, row_x1, row_n, REAL_W,
-                                          REAL_H);
+    seed_row_runs_full_width_for_gfx_test(row_x0, row_x1, row_n, REAL_W, REAL_H);
 
     build_lava_stress_scene(&real);
 
     int full_bands = 0, gathered = 0, partial_bands = 0;
     int64_t sim_us = 0, mark_us = 0, present_us = 0;
     const int measured_steps = 20;
-    const int64_t mean_us = run_present_against_scene(&real, big, REAL_W,
-        REAL_H, dirty_rows, row_x0, row_x1, row_n, 0, 1000, 0, 30,
-        measured_steps, &full_bands, &gathered, &partial_bands, &sim_us, &mark_us,
-        &present_us);
+    const int64_t mean_us = run_present_against_scene(&real, big, REAL_W, REAL_H, dirty_rows, row_x0, row_x1, row_n, 0,
+                                                      1000, 0, 30, measured_steps, &full_bands, &gathered,
+                                                      &partial_bands, &sim_us, &mark_us, &present_us);
 
     /* THE WHOLE FRAME, not just the bus. bd esp32c6-e6c: every other
      * row here times sand_step() with no drawing, and the present rows
      * time the bus alone, so nothing measured the frame a user actually
      * sees. The helper already separates these three - this row was
      * discarding them. */
-    ESP_LOGI("device_tests", "frame time, lava stress: sim %lld us/frame",
-             (long long)sim_us);
-    ESP_LOGI("device_tests", "frame time, lava stress: mark %lld us/frame",
-             (long long)mark_us);
-    ESP_LOGI("device_tests", "frame time, lava stress: present %lld us/frame",
-             (long long)present_us);
+    ESP_LOGI("device_tests", "frame time, lava stress: sim %lld us/frame", (long long)sim_us);
+    ESP_LOGI("device_tests", "frame time, lava stress: mark %lld us/frame", (long long)mark_us);
+    ESP_LOGI("device_tests", "frame time, lava stress: present %lld us/frame", (long long)present_us);
     ESP_LOGI("device_tests", "frame time, lava stress: total %lld us/frame",
              (long long)(sim_us + mark_us + present_us));
 
-    ESP_LOGI("device_tests", "present cost, lava stress scene, %dx%d: mean "
-                             "%lld us/frame over %d frames (%d full-band, "
-                             "%d gathered, %d partial-band strip-sends)",
-             REAL_W, REAL_H, (long long)mean_us, measured_steps, full_bands,
-             gathered, partial_bands);
+    ESP_LOGI("device_tests",
+             "present cost, lava stress scene, %dx%d: mean "
+             "%lld us/frame over %d frames (%d full-band, "
+             "%d gathered, %d partial-band strip-sends)",
+             REAL_W, REAL_H, (long long)mean_us, measured_steps, full_bands, gathered, partial_bands);
 
     free(big);
     free(blocks);
@@ -2548,19 +2505,19 @@ static void test_present_cost_against_the_lava_stress_scene(void)
     free(row_n);
 
     TEST_ASSERT_LESS_THAN_MESSAGE(12200, (int)mean_us,
-        "present() against the lava stress scene got more expensive - "
-        "check the full-band vs gathered counts in the log line above "
-        "before suspecting the panel");
+                                  "present() against the lava stress scene got more expensive - "
+                                  "check the full-band vs gathered counts in the log line above "
+                                  "before suspecting the panel");
 }
 
-static void test_present_cost_against_the_thermal_shock_scene(void)
-{
-    uint8_t  *big        = malloc(REAL_W * REAL_H);
-    uint8_t  *blocks     = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
-    uint8_t  *dirty_rows = malloc(REAL_H);
-    uint16_t *row_x0     = malloc(REAL_H * ROW_MAX_RUNS * sizeof(uint16_t));
-    uint16_t *row_x1     = malloc(REAL_H * ROW_MAX_RUNS * sizeof(uint16_t));
-    uint8_t  *row_n      = malloc(REAL_H);
+static void
+test_present_cost_against_the_thermal_shock_scene(void) {
+    uint8_t* big = malloc(REAL_W * REAL_H);
+    uint8_t* blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    uint8_t* dirty_rows = malloc(REAL_H);
+    uint16_t* row_x0 = malloc(REAL_H * ROW_MAX_RUNS * sizeof(uint16_t));
+    uint16_t* row_x1 = malloc(REAL_H * ROW_MAX_RUNS * sizeof(uint16_t));
+    uint8_t* row_n = malloc(REAL_H);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
     TEST_ASSERT_NOT_NULL(dirty_rows);
@@ -2575,39 +2532,34 @@ static void test_present_cost_against_the_thermal_shock_scene(void)
     sand_set_decay(&real, SAND_DECAY_PER_MATERIAL);
     sand_set_mobility(&real, SAND_MOBILITY_PER_MATERIAL);
     sand_track_dirty_rows(&real, dirty_rows);
-    seed_row_runs_full_width_for_gfx_test(row_x0, row_x1, row_n, REAL_W,
-                                          REAL_H);
+    seed_row_runs_full_width_for_gfx_test(row_x0, row_x1, row_n, REAL_W, REAL_H);
 
     build_thermal_shock_scene(&real);
 
     int full_bands = 0, gathered = 0, partial_bands = 0;
     int64_t sim_us = 0, mark_us = 0, present_us = 0;
     const int measured_steps = 10;
-    const int64_t mean_us = run_present_against_scene(&real, big, REAL_W,
-        REAL_H, dirty_rows, row_x0, row_x1, row_n, 0, 1000, 0, 0,
-        measured_steps, &full_bands, &gathered, &partial_bands, &sim_us, &mark_us,
-        &present_us);
+    const int64_t mean_us = run_present_against_scene(&real, big, REAL_W, REAL_H, dirty_rows, row_x0, row_x1, row_n, 0,
+                                                      1000, 0, 0, measured_steps, &full_bands, &gathered,
+                                                      &partial_bands, &sim_us, &mark_us, &present_us);
 
     /* THE WHOLE FRAME, not just the bus. bd esp32c6-e6c: every other
      * row here times sand_step() with no drawing, and the present rows
      * time the bus alone, so nothing measured the frame a user actually
      * sees. The helper already separates these three - this row was
      * discarding them. */
-    ESP_LOGI("device_tests", "frame time, thermal shock: sim %lld us/frame",
-             (long long)sim_us);
-    ESP_LOGI("device_tests", "frame time, thermal shock: mark %lld us/frame",
-             (long long)mark_us);
-    ESP_LOGI("device_tests", "frame time, thermal shock: present %lld us/frame",
-             (long long)present_us);
+    ESP_LOGI("device_tests", "frame time, thermal shock: sim %lld us/frame", (long long)sim_us);
+    ESP_LOGI("device_tests", "frame time, thermal shock: mark %lld us/frame", (long long)mark_us);
+    ESP_LOGI("device_tests", "frame time, thermal shock: present %lld us/frame", (long long)present_us);
     ESP_LOGI("device_tests", "frame time, thermal shock: total %lld us/frame",
              (long long)(sim_us + mark_us + present_us));
 
-    ESP_LOGI("device_tests", "present cost, thermal shock lattice, %dx%d: "
-                             "mean %lld us/frame over %d frames (%d "
-                             "full-band, %d gathered, %d partial-band "
-                             "strip-sends)",
-             REAL_W, REAL_H, (long long)mean_us, measured_steps, full_bands,
-             gathered, partial_bands);
+    ESP_LOGI("device_tests",
+             "present cost, thermal shock lattice, %dx%d: "
+             "mean %lld us/frame over %d frames (%d "
+             "full-band, %d gathered, %d partial-band "
+             "strip-sends)",
+             REAL_W, REAL_H, (long long)mean_us, measured_steps, full_bands, gathered, partial_bands);
 
     free(big);
     free(blocks);
@@ -2625,9 +2577,9 @@ static void test_present_cost_against_the_thermal_shock_scene(void)
      * ~6% of a present is not bus time. A failure most likely means the
      * scene dirties MORE pixels; do not go looking for a slower present. */
     TEST_ASSERT_LESS_THAN_MESSAGE(17450, (int)mean_us,
-        "present() against the thermal shock lattice got more expensive "
-        "than a full-screen send every frame, which is already what it "
-        "costs - check the strip-send counts in the log line above");
+                                  "present() against the thermal shock lattice got more expensive "
+                                  "than a full-screen send every frame, which is already what it "
+                                  "costs - check the strip-send counts in the log line above");
 }
 #endif /* DEVICE_BUILD */
 
@@ -2640,21 +2592,20 @@ static void test_present_cost_against_the_thermal_shock_scene(void)
  * cross-flow reached first - an emergent, self-reinforcing bias with no
  * single buggy line behind it. acid_bubble()'s flat, independent, per-cell
  * roll has no such feedback loop. */
-static void test_acid_bubbles_do_not_favour_one_wall(void)
-{
+static void
+test_acid_bubbles_do_not_favour_one_wall(void) {
     /* NO POUR NEEDED: acid_bubble() checks every acid cell the REACTIONS
      * pass visits, every step, for open space against gravity, so a flat,
      * static pool's own exposed surface alone keeps it rolling. */
     enum { POOL_TOP = 15 };
+
     /* HEAP, not static file scope - see drop_impulse_buf's own comment
      * above for why this file's static test fixtures cannot share the
      * framebuffer's memory budget. */
-    uint8_t *bubble_cells = malloc((size_t)BUBBLE_W * BUBBLE_H);
-    impulse_t *bubble_buf = malloc(512 * sizeof *bubble_buf);
-    TEST_ASSERT_NOT_NULL_MESSAGE(bubble_cells,
-        "acid-bubble pool grid must fit in what the framebuffer leaves");
-    TEST_ASSERT_NOT_NULL_MESSAGE(bubble_buf,
-        "acid-bubble impulse queue must fit in what the framebuffer leaves");
+    uint8_t* bubble_cells = malloc((size_t)BUBBLE_W * BUBBLE_H);
+    impulse_t* bubble_buf = malloc(512 * sizeof *bubble_buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(bubble_cells, "acid-bubble pool grid must fit in what the framebuffer leaves");
+    TEST_ASSERT_NOT_NULL_MESSAGE(bubble_buf, "acid-bubble impulse queue must fit in what the framebuffer leaves");
     sand_init(&fx.bubble_sim, bubble_cells, BUBBLE_W, BUBBLE_H, 3u);
     sand_enable_impulses(&fx.bubble_sim, bubble_buf, 512);
 
@@ -2695,16 +2646,16 @@ static void test_acid_bubbles_do_not_favour_one_wall(void)
     free(bubble_buf);
 
     TEST_ASSERT_GREATER_THAN_MESSAGE(0, left_pops + right_pops,
-        "acid_bubble() must actually pop grains above an exposed surface "
-        "over time - none appeared at all");
+                                     "acid_bubble() must actually pop grains above an exposed surface "
+                                     "over time - none appeared at all");
     TEST_ASSERT_GREATER_THAN_MESSAGE(0, left_pops,
-        "bubbles must reach the left half of the surface, not just the "
-        "right - see this test's own top comment for the exact regression "
-        "this guards against");
+                                     "bubbles must reach the left half of the surface, not just the "
+                                     "right - see this test's own top comment for the exact regression "
+                                     "this guards against");
     TEST_ASSERT_GREATER_THAN_MESSAGE(0, right_pops,
-        "bubbles must reach the right half of the surface, not just the "
-        "left - see this test's own top comment for the exact regression "
-        "this guards against");
+                                     "bubbles must reach the right half of the surface, not just the "
+                                     "left - see this test's own top comment for the exact regression "
+                                     "this guards against");
 }
 
 #define SLEEPY_BLOCK_COLS ((BUBBLE_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
@@ -2718,22 +2669,21 @@ static uint8_t sleepy_bubble_blocks[SLEEPY_BLOCK_COLS * SLEEPY_BLOCK_ROWS];
  * not block-gated, for the same reason dissolving and cooling are not.
  * This pool is settled to a confirmed sand_block_settled() before a single
  * bubble is allowed to count. */
-static void test_acid_bubbles_still_fire_once_the_block_is_asleep(void)
-{
+static void
+test_acid_bubbles_still_fire_once_the_block_is_asleep(void) {
     enum { POOL_TOP = 15 };
+
     /* HEAP, not static file scope - see drop_impulse_buf's own comment
      * above for why this file's static test fixtures cannot share the
      * framebuffer's memory budget. sleepy_bubble_blocks stays static -
      * it is a tiny sleep-state bitmap, not one of the buffers that
      * starved the device heap. */
-    uint8_t *sleepy_bubble_cells = malloc((size_t)BUBBLE_W * BUBBLE_H);
-    impulse_t *sleepy_bubble_buf = malloc(512 * sizeof *sleepy_bubble_buf);
-    TEST_ASSERT_NOT_NULL_MESSAGE(sleepy_bubble_cells,
-        "sleepy acid-bubble pool grid must fit in what the framebuffer "
-        "leaves");
-    TEST_ASSERT_NOT_NULL_MESSAGE(sleepy_bubble_buf,
-        "sleepy acid-bubble impulse queue must fit in what the "
-        "framebuffer leaves");
+    uint8_t* sleepy_bubble_cells = malloc((size_t)BUBBLE_W * BUBBLE_H);
+    impulse_t* sleepy_bubble_buf = malloc(512 * sizeof *sleepy_bubble_buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(sleepy_bubble_cells, "sleepy acid-bubble pool grid must fit in what the framebuffer "
+                                                      "leaves");
+    TEST_ASSERT_NOT_NULL_MESSAGE(sleepy_bubble_buf, "sleepy acid-bubble impulse queue must fit in what the "
+                                                    "framebuffer leaves");
     sand_init(&fx.sleepy_bubble_sim, sleepy_bubble_cells, BUBBLE_W, BUBBLE_H, 3u);
     sand_enable_sleeping(&fx.sleepy_bubble_sim, sleepy_bubble_blocks);
     sand_enable_impulses(&fx.sleepy_bubble_sim, sleepy_bubble_buf, 512);
@@ -2763,10 +2713,9 @@ static void test_acid_bubbles_still_fire_once_the_block_is_asleep(void)
             }
         }
     }
-    TEST_ASSERT_TRUE_MESSAGE(asleep,
-        "setup: the pool must actually fall asleep within 40 quiet steps, "
-        "or this test is not exercising the sleeping path it exists to "
-        "check at all");
+    TEST_ASSERT_TRUE_MESSAGE(asleep, "setup: the pool must actually fall asleep within 40 quiet steps, "
+                                     "or this test is not exercising the sleeping path it exists to "
+                                     "check at all");
 
     for (int x = 0; x < BUBBLE_W; x++) {
         sand_erase(&fx.sleepy_bubble_sim, x, POOL_TOP - 1, 0);
@@ -2793,10 +2742,10 @@ static void test_acid_bubbles_still_fire_once_the_block_is_asleep(void)
     free(sleepy_bubble_buf);
 
     TEST_ASSERT_GREATER_THAN_MESSAGE(0, pops,
-        "acid_bubble() must keep firing even after its block has gone to "
-        "sleep - see this test's own top comment for the exact bug this "
-        "guards against (a real, calm puddle on device that never bubbled "
-        "at all)");
+                                     "acid_bubble() must keep firing even after its block has gone to "
+                                     "sleep - see this test's own top comment for the exact bug this "
+                                     "guards against (a real, calm puddle on device that never bubbled "
+                                     "at all)");
 }
 
 /* --- suite -------------------------------------------------------------- */
@@ -2806,55 +2755,36 @@ static void test_acid_bubbles_still_fire_once_the_block_is_asleep(void)
  * of the host build - hence DEVICE_BUILD around both this declaration and
  * the test. Declared here rather than in a header because one function does
  * not earn an app_sand.h and nothing else calls it. */
-bool sand_app_alloc_selfcheck(size_t *out_largest_free, bool *out_impulses_ok);
+bool sand_app_alloc_selfcheck(size_t* out_largest_free, bool* out_impulses_ok);
 
 /* Runs inside the suite on purpose, not before it. The question worth asking
  * is whether the app can be entered on a heap this suite has already worked
  * over, because that is the state someone actually finds the board in after
  * an autorun image finishes. */
-static void test_the_sand_app_can_still_allocate_everything_it_needs(void)
-{
+static void
+test_the_sand_app_can_still_allocate_everything_it_needs(void) {
     size_t largest_free = 0;
-    bool   impulses_ok  = false;
+    bool impulses_ok = false;
     const bool ok = sand_app_alloc_selfcheck(&largest_free, &impulses_ok);
 
-    ESP_LOGI("device_tests",
-             "app alloc selfcheck: essential=%s impulses=%s largest_free=%u",
-             ok ? "ok" : "FAILED", impulses_ok ? "ok" : "failed",
-             (unsigned)largest_free);
+    ESP_LOGI("device_tests", "app alloc selfcheck: essential=%s impulses=%s largest_free=%u", ok ? "ok" : "FAILED",
+             impulses_ok ? "ok" : "failed", (unsigned)largest_free);
 
     /* impulses are REPORTED, not asserted: the app treats a missing impulse
      * buffer as losing the blast mechanic rather than losing the app, so
      * failing the suite over it would overstate the damage. */
-    TEST_ASSERT_TRUE_MESSAGE(ok,
-        "the sand app could not allocate the grid and buffers a fresh entry "
-        "needs - the simulation every frame-budget row in this file measures "
-        "is one this device can no longer actually run. Read largest_free in "
-        "the line above: the grid alone needs a contiguous 41,216 bytes, and "
-        "this suite has just churned dozens of allocations that size");
+    TEST_ASSERT_TRUE_MESSAGE(ok, "the sand app could not allocate the grid and buffers a fresh entry "
+                                 "needs - the simulation every frame-budget row in this file measures "
+                                 "is one this device can no longer actually run. Read largest_free in "
+                                 "the line above: the grid alone needs a contiguous 41,216 bytes, and "
+                                 "this suite has just churned dozens of allocations that size");
 }
 #endif /* DEVICE_BUILD */
 
-void run_sand_perf_suite(void)
-{
+void
+run_sand_perf_suite(void) {
     RUN_TEST(test_acid_bubbles_do_not_favour_one_wall);
     RUN_TEST(test_acid_bubbles_still_fire_once_the_block_is_asleep);
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 #ifdef DEVICE_BUILD
     RUN_TEST(test_the_sand_app_can_still_allocate_everything_it_needs);

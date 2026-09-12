@@ -3,14 +3,14 @@
 
 #include "bsp/esp-bsp.h"
 #include "driver/gpio.h"
-#include "esp_lcd_touch.h"
 #include "esp_heap_caps.h"
+#include "esp_lcd_touch.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-static const char *TAG = "touch";
+static const char* TAG = "touch";
 
 static esp_lcd_touch_handle_t panel;
 
@@ -24,20 +24,19 @@ static touch_fsm_t fsm;
  * essentially free here. */
 static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 
-static void poll_once(void)
-{
+static void
+poll_once(void) {
     bool have_point = false;
-    int  x = 0, y = 0;
+    int x = 0, y = 0;
 
     /* Only talk to the controller when it says it has something. The FT5x06
      * NACKs register reads while idle, and each failed transaction costs a bus
      * timeout - polling blindly at this rate would swamp the system. */
     if (panel != NULL && gpio_get_level(BSP_LCD_TOUCH_INT) == 0) {
         if (esp_lcd_touch_read_data(panel) == ESP_OK) {
-            esp_lcd_touch_point_data_t point = { 0 };
+            esp_lcd_touch_point_data_t point = {0};
             uint8_t count = 0;
-            if (esp_lcd_touch_get_data(panel, &point, &count, 1) == ESP_OK &&
-                count > 0) {
+            if (esp_lcd_touch_get_data(panel, &point, &count, 1) == ESP_OK && count > 0) {
                 have_point = true;
                 x = point.x;
                 y = point.y;
@@ -52,8 +51,8 @@ static void poll_once(void)
     portEXIT_CRITICAL(&lock);
 }
 
-static void touch_task(void *arg)
-{
+static void
+touch_task(void* arg) {
     const TickType_t period = pdMS_TO_TICKS(1000 / TOUCH_POLL_HZ);
     TickType_t last_wake = xTaskGetTickCount();
 
@@ -63,8 +62,8 @@ static void touch_task(void *arg)
     }
 }
 
-void touch_start(void)
-{
+void
+touch_start(void) {
     touch_fsm_init(&fsm);
 
     if (bsp_touch_new(NULL, &panel) != ESP_OK) {
@@ -78,14 +77,15 @@ void touch_start(void)
      * suite has allocated and freed the heap into a state with no 3 KB run
      * left, so this call can fail and must not fail silently. */
     if (xTaskCreate(touch_task, "touch", 3072, NULL, 6, NULL) != pdPASS) {
-        ESP_LOGE(TAG, "Could not start the touch task (largest free block "
-                      "is %u bytes); input will not work",
+        ESP_LOGE(TAG,
+                 "Could not start the touch task (largest free block "
+                 "is %u bytes); input will not work",
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
     }
 }
 
-void touch_read(input_t *out)
-{
+void
+touch_read(input_t* out) {
     portENTER_CRITICAL(&lock);
     touch_fsm_take(&fsm, out);
     portEXIT_CRITICAL(&lock);

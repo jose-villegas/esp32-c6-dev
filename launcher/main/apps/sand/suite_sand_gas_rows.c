@@ -21,8 +21,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "unity.h"
 #include "suites.h"
+#include "unity.h"
 
 #include "sand.h"
 #include "sand_priv.h"
@@ -31,11 +31,11 @@
 #define GASROW_W 48
 #define GASROW_H 40
 
-static uint8_t *gr_cells;
-static sand_t   gr;
+static uint8_t* gr_cells;
+static sand_t gr;
 
-static void gas_rows_fixture(void)
-{
+static void
+gas_rows_fixture(void) {
     gr_cells = malloc((size_t)GASROW_W * (size_t)GASROW_H);
     TEST_ASSERT_NOT_NULL(gr_cells);
     sand_init(&gr, gr_cells, GASROW_W, GASROW_H, 4242u);
@@ -44,8 +44,8 @@ static void gas_rows_fixture(void)
     sand_gas_row_audit_enable(true);
 }
 
-static void gas_rows_teardown(void)
-{
+static void
+gas_rows_teardown(void) {
     sand_gas_row_audit_enable(false);
     free(gr_cells);
 }
@@ -55,8 +55,8 @@ static void gas_rows_teardown(void)
  * of them. Water gives try_bubble() and the walk's buoyancy fallback
  * something to push through, stone and wood something that refuses, and
  * several gases at once give the gas-displaces-gas swap a chance to run. */
-static void build_mixed_gas_board(bool burnable)
-{
+static void
+build_mixed_gas_board(bool burnable) {
     for (int x = 0; x < GASROW_W; x++) {
         sand_set(&gr, x, GASROW_H - 1, CELL_MAKE(MAT_STONE, 0));
     }
@@ -68,15 +68,12 @@ static void build_mixed_gas_board(bool burnable)
     for (int y = 6; y < GASROW_H - 10; y += 5) {
         for (int x = 2; x < GASROW_W - 2; x += 7) {
             sand_set(&gr, x, y, CELL_MAKE(MAT_STONE, 0));
-            sand_set(&gr, x + 1, y,
-                     CELL_MAKE(burnable ? MAT_WOOD : MAT_SAND, 0));
+            sand_set(&gr, x + 1, y, CELL_MAKE(burnable ? MAT_WOOD : MAT_SAND, 0));
         }
     }
     for (int y = 3; y < GASROW_H - 3; y += 3) {
         for (int x = 1; x < GASROW_W - 1; x += 4) {
-            const material_id_t id = burnable      ? MAT_FIRE
-                                     : (y % 6 == 0) ? MAT_SMOKE
-                                                    : MAT_GAS;
+            const material_id_t id = burnable ? MAT_FIRE : (y % 6 == 0) ? MAT_SMOKE : MAT_GAS;
             if (CELL_IS_EMPTY(sand_at(&gr, x, y))) {
                 sand_set(&gr, x, y, CELL_MAKE(id, MATERIAL_VARIANTS - 1));
             }
@@ -84,13 +81,13 @@ static void build_mixed_gas_board(bool burnable)
     }
 }
 
-static void assert_no_stranded_gas(const char *why)
-{
+static void
+assert_no_stranded_gas(const char* why) {
     TEST_ASSERT_EQUAL_UINT_MESSAGE(0u, sand_gas_row_audit_failures, why);
 }
 
-static void test_the_walk_arms_every_row_it_lands_in(void)
-{
+static void
+test_the_walk_arms_every_row_it_lands_in(void) {
     gas_rows_fixture();
     build_mixed_gas_board(false);
 
@@ -98,9 +95,8 @@ static void test_the_walk_arms_every_row_it_lands_in(void)
         sand_step(&gr, 0, 1, 0);
     }
 
-    assert_no_stranded_gas(
-        "the spread pass was about to skip a row that holds gas - a rise "
-        "sweep mover moved a cell without arming the row it landed in");
+    assert_no_stranded_gas("the spread pass was about to skip a row that holds gas - a rise "
+                           "sweep mover moved a cell without arming the row it landed in");
     gas_rows_teardown();
 }
 
@@ -108,8 +104,8 @@ static void test_the_walk_arms_every_row_it_lands_in(void)
  * takes a second turn there and can do it again, which is the case a fixed
  * widening of the map cannot cover. Straight down is 24 of 256 draws, so this
  * runs long enough for the cascade to happen many times over. */
-static void test_a_downward_walk_cascade_arms_every_row(void)
-{
+static void
+test_a_downward_walk_cascade_arms_every_row(void) {
     gas_rows_fixture();
 
     for (int x = 0; x < GASROW_W; x++) {
@@ -125,18 +121,17 @@ static void test_a_downward_walk_cascade_arms_every_row(void)
         sand_step(&gr, 0, 1, 0);
     }
 
-    assert_no_stranded_gas(
-        "a gas cell walked down into a row the rise sweep had not reached, "
-        "took another turn there, and ended up in a row the spread pass was "
-        "about to skip");
+    assert_no_stranded_gas("a gas cell walked down into a row the rise sweep had not reached, "
+                           "took another turn there, and ended up in a row the spread pass was "
+                           "about to skip");
     gas_rows_teardown();
 }
 
 /* The exhaustive mover (sand_set_gas_walk(false)) is a different set of
  * movers - try_fall_or_scatter, try_slide, try_bubble - under the same
  * obligation. */
-static void test_the_exhaustive_mover_arms_every_row_it_lands_in(void)
-{
+static void
+test_the_exhaustive_mover_arms_every_row_it_lands_in(void) {
     gas_rows_fixture();
     sand_set_gas_walk(&gr, false);
     build_mixed_gas_board(false);
@@ -145,8 +140,7 @@ static void test_the_exhaustive_mover_arms_every_row_it_lands_in(void)
         sand_step(&gr, 0, 1, 0);
     }
 
-    assert_no_stranded_gas(
-        "the exhaustive mover moved gas without arming the row it landed in");
+    assert_no_stranded_gas("the exhaustive mover moved gas without arming the row it landed in");
     gas_rows_teardown();
 }
 
@@ -154,8 +148,8 @@ static void test_the_exhaustive_mover_arms_every_row_it_lands_in(void)
  * many-row ones, and shaking bypasses the mobility roll and wakes every
  * block. Both are swept here rather than left to the scene suites, which
  * would only reach them by accident. */
-static void test_tilted_and_shaken_boards_leave_no_gas_stranded(void)
-{
+static void
+test_tilted_and_shaken_boards_leave_no_gas_stranded(void) {
     static const int dirs[8][2] = {
         {0, 1}, {1, 1}, {1, 0}, {1, -1}, {0, -1}, {-1, -1}, {-1, 0}, {-1, 1},
     };
@@ -168,9 +162,8 @@ static void test_tilted_and_shaken_boards_leave_no_gas_stranded(void)
             sand_step(&gr, dirs[d][0], dirs[d][1], (i % 4 == 0) ? 200 : 0);
         }
 
-        assert_no_stranded_gas(
-            "a tilted or shaken board left gas in a row the spread pass was "
-            "about to skip");
+        assert_no_stranded_gas("a tilted or shaken board left gas in a row the spread pass was "
+                               "about to skip");
         gas_rows_teardown();
     }
 }
@@ -179,8 +172,8 @@ static void test_tilted_and_shaken_boards_leave_no_gas_stranded(void)
  * AFTER the gas pass - so the map they invalidate is next step's, rebuilt by
  * the rise sweep's own scan. This checks the rebuild really is a full one and
  * that nothing carries over. */
-static void test_reaction_made_gas_is_never_stranded(void)
-{
+static void
+test_reaction_made_gas_is_never_stranded(void) {
     gas_rows_fixture();
     build_mixed_gas_board(true);
 
@@ -188,9 +181,8 @@ static void test_reaction_made_gas_is_never_stranded(void)
         sand_step(&gr, 0, 1, 0);
     }
 
-    assert_no_stranded_gas(
-        "gas minted by a reaction after the gas pass was still unaccounted "
-        "for when the next step's spread pass ran");
+    assert_no_stranded_gas("gas minted by a reaction after the gas pass was still unaccounted "
+                           "for when the next step's spread pass ran");
     gas_rows_teardown();
 }
 
@@ -199,8 +191,8 @@ static void test_reaction_made_gas_is_never_stranded(void)
  * clear bit exist, and the audit looked at them. It is also the performance
  * claim, stated as a test - a spread pass with nothing to skip is one this
  * change did not speed up. */
-static void test_the_skip_actually_fires_and_the_audit_sees_it(void)
-{
+static void
+test_the_skip_actually_fires_and_the_audit_sees_it(void) {
     gas_rows_fixture();
     build_mixed_gas_board(false);
     sand_gas_row_audit_skippable = 0;
@@ -210,14 +202,14 @@ static void test_the_skip_actually_fires_and_the_audit_sees_it(void)
     }
 
     TEST_ASSERT_GREATER_THAN_UINT_MESSAGE(0u, sand_gas_row_audit_skippable,
-        "no row was ever skippable, so the audit checked nothing and the "
-        "tests above assert nothing - the fixture no longer has gas-free "
-        "rows, or the map is armed everywhere");
+                                          "no row was ever skippable, so the audit checked nothing and the "
+                                          "tests above assert nothing - the fixture no longer has gas-free "
+                                          "rows, or the map is armed everywhere");
     gas_rows_teardown();
 }
 
-void run_sand_gas_rows_suite(void)
-{
+void
+run_sand_gas_rows_suite(void) {
     RUN_TEST(test_the_walk_arms_every_row_it_lands_in);
     RUN_TEST(test_a_downward_walk_cascade_arms_every_row);
     RUN_TEST(test_the_exhaustive_mover_arms_every_row_it_lands_in);
