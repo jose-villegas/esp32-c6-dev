@@ -29,6 +29,15 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(SDL2)
 
+set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    nlohmann_json
+    URL https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz
+    URL_HASH SHA256=42f6e95cad6ec532fd372391373363b62a14af6d771056dbfc86160e6dfff7aa
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+FetchContent_MakeAvailable(nlohmann_json)
+
 # Docking is maintained as a long-lived upstream branch. Pin it once the
 # editor's first vertical slice establishes the API surface we actually use.
 FetchContent_Declare(
@@ -95,15 +104,29 @@ else()
     )
 endif()
 
+add_library(engine_document STATIC editor/launcher_document.cpp)
+target_include_directories(engine_document PUBLIC editor)
+target_link_libraries(engine_document PUBLIC nlohmann_json::nlohmann_json)
+
+if(MSVC)
+    target_compile_options(engine_document PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(engine_document PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 add_executable(engine
     editor/main.cpp
     preview/preview_surface.c
 )
 target_include_directories(engine PRIVATE include)
 target_link_libraries(engine PRIVATE
+    engine_document
     engine_imgui
     engine_runtime
     ${ENGINE_SDL_TARGET}
+)
+target_compile_definitions(engine PRIVATE
+    ENGINE_PROJECT_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/.."
 )
 
 if(MSVC)
@@ -116,6 +139,13 @@ if(BUILD_TESTING)
     add_executable(engine_runtime_smoke tests/runtime_smoke.c)
     target_link_libraries(engine_runtime_smoke PRIVATE engine_runtime)
     add_test(NAME engine_runtime_smoke COMMAND engine_runtime_smoke)
+
+    add_executable(engine_launcher_document_test tests/launcher_document_test.cpp)
+    target_link_libraries(engine_launcher_document_test PRIVATE engine_document)
+    target_compile_definitions(engine_launcher_document_test PRIVATE
+        ENGINE_TEST_LAYOUT_PATH="${LAUNCHER_DIR}/main/ui/launcher_layout.json"
+    )
+    add_test(NAME engine_launcher_document COMMAND engine_launcher_document_test)
     if(Python3_Interpreter_FOUND)
         add_test(
             NAME launcher_layout_codegen

@@ -20,6 +20,22 @@ main(void) {
 
     const bool portrait = engine_runtime_render_launcher(pixels, portrait_width, portrait_height);
     const bool landscape = engine_runtime_render_launcher(pixels, landscape_width, landscape_height);
+    engine_launcher_layout_t layout = {
+        .canvas_width = landscape_width,
+        .canvas_height = landscape_height,
+        .rects =
+            {
+                {12, 12, 424, 34},
+                {16, 98, 124, 173},
+                {153, 98, 125, 173},
+                {291, 98, 125, 173},
+                {200, 279, 48, 8},
+            },
+    };
+    const bool authored = engine_runtime_render_launcher_layout(pixels, landscape_width, landscape_height, &layout);
+    layout.rects[1].width = landscape_width;
+    const bool invalid_rejected =
+        !engine_runtime_render_launcher_layout(pixels, landscape_width, landscape_height, &layout);
     free(pixels);
-    return portrait && landscape ? 0 : 1;
+    return portrait && landscape && authored && invalid_rejected ? 0 : 1;
 }

@@ -8,6 +8,8 @@
 #include "ui/ui_launcher.h"
 #include "ui/ui_transform.h"
 
+_Static_assert(ENGINE_LAUNCHER_ELEMENT_COUNT == LAUNCHER_ELEMENT_COUNT, "launcher element count mismatch");
+
 static bool initialized;
 
 static const app_t preview_cube = {.name = "3D Cube", .summary = "Real-time 3D rendering"};
@@ -49,8 +51,23 @@ native_rgb565(gfx_color_t color) {
     return (uint16_t)((color >> 8) | (color << 8));
 }
 
-bool
-engine_runtime_render_launcher(uint16_t* pixels, int width, int height) {
+static bool
+valid_authored_layout(const engine_launcher_layout_t* layout, int width, int height) {
+    if (layout->canvas_width != width || layout->canvas_height != height) {
+        return false;
+    }
+    for (int i = 0; i < ENGINE_LAUNCHER_ELEMENT_COUNT; i++) {
+        const engine_launcher_rect_t* rect = &layout->rects[i];
+        if (rect->x < 0 || rect->y < 0 || rect->width <= 0 || rect->height <= 0 || rect->x > width || rect->y > height
+            || rect->width > width - rect->x || rect->height > height - rect->y) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool
+render_launcher(uint16_t* pixels, int width, int height, const engine_launcher_layout_t* authored_layout) {
     if (!pixels || !engine_runtime_init()) {
         return false;
     }
@@ -65,7 +82,27 @@ engine_runtime_render_launcher(uint16_t* pixels, int width, int height) {
         landscape ? ui_transform_quarter_turn(1, GFX_WIDTH, GFX_HEIGHT) : ui_transform_identity();
     const input_t input = {0};
     ui_set_transform(transform);
-    ui_launcher_frame(&input);
+
+    if (authored_layout) {
+        if (!valid_authored_layout(authored_layout, width, height)) {
+            return false;
+        }
+        launcher_layout_t layout = {
+            .canvas_width = (int16_t)authored_layout->canvas_width,
+            .canvas_height = (int16_t)authored_layout->canvas_height,
+        };
+        for (int i = 0; i < ENGINE_LAUNCHER_ELEMENT_COUNT; i++) {
+            layout.rects[i] = (launcher_layout_rect_t){
+                .x = (int16_t)authored_layout->rects[i].x,
+                .y = (int16_t)authored_layout->rects[i].y,
+                .width = (int16_t)authored_layout->rects[i].width,
+                .height = (int16_t)authored_layout->rects[i].height,
+            };
+        }
+        ui_launcher_frame_layout(&input, &layout);
+    } else {
+        ui_launcher_frame(&input);
+    }
 
     const gfx_color_t* framebuffer = gfx_framebuffer();
     for (int y = 0; y < height; y++) {
@@ -76,4 +113,14 @@ engine_runtime_render_launcher(uint16_t* pixels, int width, int height) {
         }
     }
     return true;
+}
+
+bool
+engine_runtime_render_launcher(uint16_t* pixels, int width, int height) {
+    return render_launcher(pixels, width, height, NULL);
+}
+
+bool
+engine_runtime_render_launcher_layout(uint16_t* pixels, int width, int height, const engine_launcher_layout_t* layout) {
+    return render_launcher(pixels, width, height, layout);
 }

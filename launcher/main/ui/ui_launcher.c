@@ -35,7 +35,7 @@ ui_launcher_init(void) {
 }
 
 int
-ui_launcher_frame(const input_t* input) {
+ui_launcher_frame_layout(const input_t* input, const launcher_layout_t* layout) {
     int chosen = -1;
 
     mu_Context* ctx = ui_context();
@@ -49,8 +49,6 @@ ui_launcher_frame(const input_t* input) {
     /* The chrome-free window uses the transformed logical canvas. Its width
      * and height swap under a quarter turn, unlike the physical panel. */
     if (ui_begin_screen(ctx, "Launcher", MU_OPT_NOTITLE | MU_OPT_NORESIZE | MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
-
-        const launcher_layout_t* layout = launcher_layout();
 
         /* The status bar and page indicator are authored slots. They stay
          * blank until their widgets land, without changing any card geometry. */
@@ -81,4 +79,9 @@ ui_launcher_frame(const input_t* input) {
     ui_end(COL_BACKGROUND);
 
     return chosen;
+}
+
+int
+ui_launcher_frame(const input_t* input) {
+    return ui_launcher_frame_layout(input, launcher_layout());
 }

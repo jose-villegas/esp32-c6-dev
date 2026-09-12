@@ -3,8 +3,13 @@
 #include <SDL.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "imgui.h"
@@ -14,49 +19,79 @@
 
 #include "engine/preview_surface.h"
 #include "engine/runtime.h"
+#include "launcher_document.h"
 
 namespace {
 
 struct Preview {
     const char* name;
+    LauncherOrientation orientation;
     int width;
     int height;
     std::vector<uint16_t> pixels;
     SDL_Texture* texture = nullptr;
 };
 
+std::size_t
+index_of(LauncherElement element) {
+    return static_cast<std::size_t>(element);
+}
+
+engine_launcher_layout_t
+runtime_layout(const LauncherLayout& source) {
+    engine_launcher_layout_t result = {
+        source.canvas_width,
+        source.canvas_height,
+        {},
+    };
+    for (std::size_t index = 0; index < source.rects.size(); index++) {
+        const LauncherRect& rect = source.rects[index];
+        result.rects[index] = {rect.x, rect.y, rect.width, rect.height};
+    }
+    return result;
+}
+
 bool
-create_preview(SDL_Renderer* renderer, Preview& preview) {
-    preview.pixels.resize(static_cast<size_t>(preview.width) * static_cast<size_t>(preview.height));
+render_preview(Preview& preview, const LauncherLayout& layout) {
+    const engine_launcher_layout_t authored = runtime_layout(layout);
     engine_preview_surface_t surface = {
         preview.width,
         preview.height,
         preview.pixels.data(),
     };
-    if (!engine_preview_render_launcher(&surface)) {
-        return false;
-    }
+    return engine_preview_render_launcher_layout(&surface, &authored)
+           && SDL_UpdateTexture(preview.texture, nullptr, preview.pixels.data(),
+                                preview.width * static_cast<int>(sizeof(uint16_t)))
+                  == 0;
+}
 
+bool
+create_preview(SDL_Renderer* renderer, Preview& preview, const LauncherLayout& layout) {
+    preview.pixels.resize(static_cast<std::size_t>(preview.width) * static_cast<std::size_t>(preview.height));
     preview.texture =
-        SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STATIC, preview.width, preview.height);
+        SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING, preview.width, preview.height);
     if (!preview.texture) {
         return false;
     }
     SDL_SetTextureScaleMode(preview.texture, SDL_ScaleModeNearest);
-    return SDL_UpdateTexture(preview.texture, nullptr, preview.pixels.data(),
-                             preview.width * static_cast<int>(sizeof(uint16_t)))
-           == 0;
+    return render_preview(preview, layout);
 }
 
 void
-draw_preview(Preview& preview, float available_width) {
+draw_preview(Preview& preview, const LauncherLayout& layout, LauncherElement selected, float available_width) {
     ImGui::TextUnformatted(preview.name);
     ImGui::SameLine();
     ImGui::TextDisabled("%d x %d", preview.width, preview.height);
 
     const float scale = std::min(1.0f, available_width / static_cast<float>(preview.width));
     const ImVec2 size(preview.width * scale, preview.height * scale);
+    const ImVec2 image_position = ImGui::GetCursorScreenPos();
     ImGui::Image(reinterpret_cast<ImTextureID>(preview.texture), size);
+
+    const LauncherRect& rect = layout.rects[index_of(selected)];
+    const ImVec2 minimum(image_position.x + rect.x * scale, image_position.y + rect.y * scale);
+    const ImVec2 maximum(minimum.x + rect.width * scale, minimum.y + rect.height * scale);
+    ImGui::GetWindowDrawList()->AddRect(minimum, maximum, IM_COL32(91, 229, 235, 255), 2.0f, 0, 2.0f);
 }
 
 void
@@ -104,13 +139,37 @@ draw_dockspace(bool reset_layout) {
 }
 
 void
-draw_editor(Preview& landscape, Preview& portrait) {
+constrain_rect(LauncherRect& rect, const LauncherLayout& layout) {
+    rect.width = std::clamp(rect.width, 1, layout.canvas_width);
+    rect.height = std::clamp(rect.height, 1, layout.canvas_height);
+    rect.x = std::clamp(rect.x, 0, layout.canvas_width - rect.width);
+    rect.y = std::clamp(rect.y, 0, layout.canvas_height - rect.height);
+}
+
+bool
+draw_rect_editor(LauncherRect& rect, const LauncherLayout& layout) {
+    bool changed = false;
+    changed |= ImGui::DragInt("X", &rect.x, 1.0f);
+    changed |= ImGui::DragInt("Y", &rect.y, 1.0f);
+    changed |= ImGui::DragInt("Width", &rect.width, 1.0f);
+    changed |= ImGui::DragInt("Height", &rect.height, 1.0f);
+    if (changed) {
+        constrain_rect(rect, layout);
+    }
+    return changed;
+}
+
+bool
+draw_editor(LauncherDocument& document, Preview& landscape, Preview& portrait, LauncherElement& selected,
+            LauncherOrientation& active_orientation, std::string& notice) {
     bool reset_layout = false;
+    bool save_requested = false;
+    bool preview_changed = false;
 
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("File")) {
             ImGui::MenuItem("Open layout...", nullptr, false, false);
-            ImGui::MenuItem("Save", "Ctrl+S", false, false);
+            save_requested = ImGui::MenuItem("Save", "Ctrl+S", false, document.dirty());
             ImGui::Separator();
             ImGui::MenuItem("Build firmware...", nullptr, false, false);
             ImGui::EndMenu();
@@ -121,16 +180,22 @@ draw_editor(Preview& landscape, Preview& portrait) {
         }
         ImGui::EndMainMenuBar();
     }
+    if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false) && document.dirty()) {
+        save_requested = true;
+    }
 
     draw_dockspace(reset_layout);
 
     ImGui::SetNextWindowSize(ImVec2(220, 540), ImGuiCond_FirstUseEver);
     ImGui::Begin("Hierarchy");
-    ImGui::TextDisabled("Layout data will populate this tree.");
+    ImGui::TextDisabled("launcher_layout.json");
     if (ImGui::TreeNodeEx("Launcher", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::BulletText("Status bar");
-        ImGui::BulletText("App rail");
-        ImGui::BulletText("Page indicator");
+        for (std::size_t index = 0; index < static_cast<std::size_t>(LauncherElement::Count); index++) {
+            const LauncherElement element = static_cast<LauncherElement>(index);
+            if (ImGui::Selectable(launcher_element_label(element), selected == element)) {
+                selected = element;
+            }
+        }
         ImGui::TreePop();
     }
     ImGui::End();
@@ -140,36 +205,91 @@ draw_editor(Preview& landscape, Preview& portrait) {
     const float gap = ImGui::GetStyle().ItemSpacing.x;
     const float half = (ImGui::GetContentRegionAvail().x - gap) * 0.5f;
     ImGui::BeginChild("Landscape", ImVec2(half, 0), ImGuiChildFlags_Borders);
-    draw_preview(landscape, ImGui::GetContentRegionAvail().x);
+    draw_preview(landscape, document.layout(LauncherOrientation::Landscape), selected,
+                 ImGui::GetContentRegionAvail().x);
     ImGui::EndChild();
     ImGui::SameLine();
     ImGui::BeginChild("Portrait", ImVec2(0, 0), ImGuiChildFlags_Borders);
-    draw_preview(portrait, ImGui::GetContentRegionAvail().x);
+    draw_preview(portrait, document.layout(LauncherOrientation::Portrait), selected, ImGui::GetContentRegionAvail().x);
     ImGui::EndChild();
     ImGui::End();
 
     ImGui::SetNextWindowSize(ImVec2(300, 540), ImGuiCond_FirstUseEver);
     ImGui::Begin("Inspector");
-    ImGui::TextDisabled("Select a layout element to edit its authored data.");
-    ImGui::SeparatorText("Display");
-    ImGui::Text("Landscape  448 x 368");
-    ImGui::Text("Portrait   368 x 448");
+    ImGui::TextUnformatted(launcher_element_label(selected));
+    ImGui::TextDisabled("%s", launcher_element_id(selected));
+    ImGui::SeparatorText("Orientation");
+    if (ImGui::RadioButton("Landscape", active_orientation == LauncherOrientation::Landscape)) {
+        active_orientation = LauncherOrientation::Landscape;
+    }
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Portrait", active_orientation == LauncherOrientation::Portrait)) {
+        active_orientation = LauncherOrientation::Portrait;
+    }
+
+    LauncherLayout& layout = document.layout(active_orientation);
+    LauncherRect& rect = layout.rects[index_of(selected)];
+    ImGui::TextDisabled("Canvas %d x %d", layout.canvas_width, layout.canvas_height);
+    ImGui::SeparatorText("Rectangle");
+    if (draw_rect_editor(rect, layout)) {
+        document.mark_dirty();
+        preview_changed = true;
+    }
+
+    const std::vector<std::string> problems = document.validate();
+    ImGui::BeginDisabled(!document.dirty() || !problems.empty());
+    if (ImGui::Button("Save source")) {
+        save_requested = true;
+    }
+    ImGui::EndDisabled();
+    if (document.dirty()) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(1.0f, 0.72f, 0.35f, 1.0f), "Unsaved");
+    }
     ImGui::End();
+
+    if (save_requested) {
+        std::string error;
+        if (document.save(error)) {
+            notice = "Saved " + document.path().string();
+        } else {
+            notice = "Save failed: " + error;
+        }
+    }
 
     ImGui::SetNextWindowSize(ImVec2(950, 160), ImGuiCond_FirstUseEver);
     ImGui::Begin("Problems");
-    ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.82f, 1.0f),
-                       "Firmware runtime ready: gfx.c and Microui initialized in-process.");
-    ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.82f, 1.0f),
-                       "Current firmware launcher rendered at both device orientations.");
-    ImGui::TextDisabled("Layout validation is the next engine module.");
+    if (problems.empty()) {
+        ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.82f, 1.0f), "Layout valid in both orientations.");
+    } else {
+        for (const std::string& problem : problems) {
+            ImGui::BulletText("%s", problem.c_str());
+        }
+    }
+    if (!notice.empty()) {
+        ImGui::Separator();
+        ImGui::TextWrapped("%s", notice.c_str());
+    }
+    ImGui::TextDisabled("Saving updates authored JSON; checked-in firmware geometry is rebaked separately.");
     ImGui::End();
+
+    return preview_changed;
 }
 
 } // namespace
 
 int
 main() {
+    const std::filesystem::path layout_path =
+        std::filesystem::path(ENGINE_PROJECT_ROOT) / "launcher" / "main" / "ui" / "launcher_layout.json";
+    std::string document_error;
+    std::optional<LauncherDocument> loaded = LauncherDocument::load(layout_path, document_error);
+    if (!loaded) {
+        std::fprintf(stderr, "Launcher document failed to load: %s\n", document_error.c_str());
+        return 1;
+    }
+    LauncherDocument document = std::move(*loaded);
+
     SDL_SetMainReady();
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0) {
         std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
@@ -209,9 +329,10 @@ main() {
     ImGui_ImplSDL2_InitForSDLRenderer(window, renderer);
     ImGui_ImplSDLRenderer2_Init(renderer);
 
-    Preview landscape = {"Landscape", 448, 368, {}, nullptr};
-    Preview portrait = {"Portrait", 368, 448, {}, nullptr};
-    if (!create_preview(renderer, landscape) || !create_preview(renderer, portrait)) {
+    Preview landscape = {"Landscape", LauncherOrientation::Landscape, 448, 368, {}, nullptr};
+    Preview portrait = {"Portrait", LauncherOrientation::Portrait, 368, 448, {}, nullptr};
+    if (!create_preview(renderer, landscape, document.layout(landscape.orientation))
+        || !create_preview(renderer, portrait, document.layout(portrait.orientation))) {
         std::fprintf(stderr, "Preview texture creation failed: %s\n", SDL_GetError());
         if (portrait.texture) {
             SDL_DestroyTexture(portrait.texture);
@@ -228,6 +349,9 @@ main() {
         return 1;
     }
 
+    LauncherElement selected = LauncherElement::LastPlayed;
+    LauncherOrientation active_orientation = LauncherOrientation::Landscape;
+    std::string notice;
     bool running = true;
     while (running) {
         SDL_Event event;
@@ -243,7 +367,12 @@ main() {
         ImGui_ImplSDLRenderer2_NewFrame();
         ImGui_ImplSDL2_NewFrame();
         ImGui::NewFrame();
-        draw_editor(landscape, portrait);
+        const bool preview_changed = draw_editor(document, landscape, portrait, selected, active_orientation, notice);
+        if (preview_changed
+            && (!render_preview(landscape, document.layout(landscape.orientation))
+                || !render_preview(portrait, document.layout(portrait.orientation)))) {
+            notice = std::string("Preview update failed: ") + SDL_GetError();
+        }
         ImGui::Render();
 
         SDL_SetRenderDrawColor(renderer, 18, 18, 20, 255);
