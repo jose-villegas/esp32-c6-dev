@@ -148,7 +148,7 @@ done
 FIXER_MODEL="$LOCAL_FIXER_MODEL"
 
 BUILD_DIR="${POSITIONAL[0]:-build.dev}"
-FILE_FILTER="${POSITIONAL[1]:-*/apps/sand/*}"
+FILE_FILTER="${POSITIONAL[1]:-*/main/apps/sand/*}"
 
 # Resolve --report to an absolute path before any cd, so it's still readable
 # from inside an isolated worktree -- its own launcher/tools/results/ is
