@@ -1640,6 +1640,13 @@ void sand_host_probe_run_gunpowder_basin(void)
  * sweep's own block scan, which the settled-sand row measures too. */
 #define PLANT_IDLE_BUDGET_US     54
 
+/* PEGGED FROM THE HOST, not a device capture, and the one row here that is -
+ * COM3 was held by another round for the whole of this one. Ranked, not
+ * priced: the host ratio against the settled-garden row beside it, which does
+ * have a device number, is what this is scaled from, so treat it as a
+ * placeholder a capture should replace rather than as a measured figure. */
+#define MATURE_TREE_BUDGET_US    900
+
 /* A grown plant bed with acid eating down to its roots on one side of a wall
  * and lava burning its canopy on the other (build_plant_ruin_scene(), shared
  * with test_the_plant_ruin_scene_eats_roots_and_burns_a_canopy). The acid
@@ -1961,6 +1968,56 @@ static void test_a_settled_plant_garden_fits_in_the_frame_budget(void)
 void sand_host_probe_run_plant_idle(void)
 {
     test_a_settled_plant_garden_fits_in_the_frame_budget();
+}
+#endif
+
+/* The maintainer's own case: a tree grown from seed on damp earth, with wood,
+ * leaves and a root system, left until it has both stopped growing and drunk
+ * the ground dry. Every other plant row here is chosen for something still
+ * happening in it; this one is chosen for nothing happening, because that is
+ * what a garden does for all but the first few hundred steps of its life. */
+static void test_a_finished_tree_fits_in_the_frame_budget(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 11u);
+    sand_enable_sleeping(&real, blocks);
+    sand_set_soak(&real, SAND_SOAK_PER_MATERIAL);
+    build_plant_bed_scene(&real);
+
+    for (int i = 0; i < MATURE_TREE_SETTLE_STEPS; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+
+    const int steps = 200;
+    const int64_t start = esp_timer_get_time();
+    for (int i = 0; i < steps; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+    const int64_t per_step = (esp_timer_get_time() - start) / steps;
+
+    ESP_LOGI("device_tests", "finished tree, %dx%d: %lld us per step",
+             REAL_W, REAL_H, (long long)per_step);
+
+    free(big);
+    free(blocks);
+
+    TEST_ASSERT_LESS_THAN_MESSAGE(MATURE_TREE_BUDGET_US, (int)per_step,
+        "a tree that has stopped growing is held to a host-ranked "
+        "placeholder - see MATURE_TREE_BUDGET_US, which wants a device "
+        "capture behind it");
+}
+
+#ifdef SAND_HOST_PROBE
+/* Host-only timing probe - the finished tree (see the full-step control's own
+ * wrapper for the pattern). */
+void sand_host_probe_run_mature_tree(void)
+{
+    test_a_finished_tree_fits_in_the_frame_budget();
 }
 #endif
 
@@ -2649,6 +2706,7 @@ void run_sand_perf_suite(void)
     RUN_TEST(test_the_snowfall_scene_fits_in_the_frame_budget);
     RUN_TEST(test_pouring_the_plant_brush_fits_in_the_frame_budget);
     RUN_TEST(test_a_settled_plant_garden_fits_in_the_frame_budget);
+    RUN_TEST(test_a_finished_tree_fits_in_the_frame_budget);
 
     RUN_TEST(test_present_cost_against_a_falling_sand_scene);
     RUN_TEST(test_a_real_frame_is_sim_plus_present_on_a_falling_sand_scene);

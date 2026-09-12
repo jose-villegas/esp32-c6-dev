@@ -1972,10 +1972,14 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
             }
             continue;
         }
+        /* NEITHER THIS STAGE NOR stage_bud REPORTS FOUND_MOISTURE: both
+         * consume moisture, neither is evidence of any, and claiming it let a
+         * tree on soil it had drunk dry arm the plant stages off its own
+         * existence. Dirt alone carries `soil`, so a dirt cell still holding
+         * a drop reports itself at stage_soak_dry regardless. */
     stage_grow:
         if (r->grows != 0 && s->may_have_moisture) {
             step_one_growing_cell(s, x, y, w, h, r);
-            found |= FOUND_MOISTURE;
             continue;
         }
         /* Budding. Same gate as growing, and reached by unlit wood, which
@@ -1990,9 +1994,7 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
          * every branch above it. */
     stage_bud:
         if (r->buds != 0 && s->may_have_moisture) {
-            if (step_one_budding_cell(s, x, y, w, h, r)) {
-                found |= FOUND_MOISTURE;
-            }
+            step_one_budding_cell(s, x, y, w, h, r);
         }
     stage_end:;
     }
@@ -2080,7 +2082,13 @@ sand_step_reactions(sand_t* s) {
         s->fuse_blast_wait--;
     }
     /* Dissolving, not fire. Heat, condensation independent. */
+    /* A LIQUID WITH SOMEWHERE TO GO is the missing term. Without it this
+     * returned on a board whose water had not landed yet, and soaking and
+     * drinking - the only two ways new moisture is made - never ran again.
+     * Measured on HEAD: water dropped eight rows onto dry dirt stayed dry for
+     * 400 steps. */
     if (!s->may_have_burning && !s->may_have_dissolver && !s->may_have_temperature && !s->may_have_moisture
+        && !(s->may_have_liquid && (s->may_have_materials & wettable_mask()) != 0)
         && !(s->may_have_faller && s->faller_may_move) && !s->may_have_condenser) {
         return;
     }
@@ -2153,9 +2161,12 @@ sand_step_reactions(sand_t* s) {
     if (!(found & FOUND_TEMPERATURE)) {
         s->may_have_temperature = false;
     }
-    if (!(found & FOUND_MOISTURE)) {
-        s->may_have_moisture = false;
-    }
+    /* ARMS AS WELL AS CLEARS, unlike the three above. Cleared-only, a pour
+     * still in mid-air cleared it and the soil it landed on could never
+     * re-arm the growth stages. Losing a bit latched mid-pass is safe here,
+     * unlike for may_have_materials: whatever else latches it is a liquid,
+     * which the early return above keeps the pass alive for. */
+    s->may_have_moisture = (found & FOUND_MOISTURE) != 0;
     if ((found & FOUND_FALLER) != 0) {
         s->may_have_faller = true;
     }
