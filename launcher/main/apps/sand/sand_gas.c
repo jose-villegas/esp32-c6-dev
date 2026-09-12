@@ -302,7 +302,8 @@ static bool step_one_gas_grain(sand_t *s, uint8_t *row, uint8_t *prow,
     const uint8_t mat_id  = CELL_MATERIAL(grain);
     const uint8_t density = mat->density;
 
-    if (!tick_decay(s, row, x, y, &grain, mat, mat_id)) {
+    if (!tick_decay(s, row, x, y, &grain, mat_id,
+                    (s->decay >= 0) ? s->decay : mat->decay)) {
         return true;    /* vanished - already woken, nothing left to move */
     }
 

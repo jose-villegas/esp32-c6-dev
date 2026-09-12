@@ -671,9 +671,11 @@ tick_decay_at(sand_t* s, uint8_t* row, int x, int y, cell_t* grain, const reacti
     return true;
 }
 
+/* Takes the rate with s->decay already applied, not the material row: a
+ * caller holding it as a per-material fact must not be made to load
+ * materials[] again for it. */
 static inline bool
-tick_decay(sand_t* s, uint8_t* row, int x, int y, cell_t* grain, const material_t* mat, uint8_t mat_id) {
-    const int decay = (s->decay >= 0) ? s->decay : mat->decay;
+tick_decay(sand_t* s, uint8_t* row, int x, int y, cell_t* grain, uint8_t mat_id, int decay) {
     if (decay == 0) {
         return true;
     }
@@ -977,10 +979,10 @@ driven_by_gravity(int mx, int my, int gx, int gy, int repose) {
     return (int64_t)descent * 10 > (int64_t)lateral * repose;
 }
 
-/* RSTAGE_BURN_ANY must stay 0: material_first_stage[]/extended_first_stage[]
- * (sand_reactions.c) are zero-initialised .bss, so an unwritten slot lands
- * here - see step_one_reacting_row()'s stage_burn_any: label for why it
- * has to be this stage and not one of the other two burn stages. */
+/* RSTAGE_BURN_ANY must stay 0: the per-material burn plans (sand_reactions.c)
+ * are zero-initialised .bss, so an unwritten slot lands here - see
+ * step_one_reacting_row()'s stage_burn_any: label for why it has to be this
+ * stage and not one of the other two burn stages. */
 enum {
     RSTAGE_BURN_ANY,
     RSTAGE_BURN_ALWAYS,
@@ -1002,6 +1004,40 @@ enum {
     RSTAGE_END,
     RSTAGE_COUNT
 };
+
+/* What a burning cell is charged before it looks at a single neighbour. Every
+ * field is a property of the MATERIAL and the step's overrides, never of the
+ * cell, so a screen of one material re-derived them all per cell out of two
+ * flash tables. Rebuilt once a step beside the board-wide facts one of them
+ * folds in, so it can never be staler than those.
+ *
+ * `stage` rides along because the dispatch loop indexes a per-material table
+ * to pick a stage anyway: one index answers both. */
+#define BURN_LIT      (1u << 0) /* the reaction burns at its own rate; the material's decay stays 0 */
+#define BURN_SMOTHERS (1u << 1) /* smothered() could find something - the whole gate, board fact included */
+#define BURN_LAVA     (1u << 2) /* a liquid that quenches: the burst roll and the cool-off chain are its alone */
+
+typedef struct {
+    uint8_t stage;
+    uint8_t tick_rate;
+    uint8_t flare;
+    uint8_t flags;
+} burn_plan_t;
+
+/* A power-of-two stride keeps the dispatch loop's index a shift; the byte
+ * array of stages this replaced indexed for free, and a multiply would hand
+ * that saving straight back. */
+_Static_assert(sizeof(burn_plan_t) == 4, "burn_plan_t must stay four bytes");
+
+/* Declared rather than left static so a suite can check the shipped plan
+ * against the material and reaction rows it is derived from - every field
+ * feeds a skip or a rate, so a wrong row loses behaviour silently, and the
+ * eleven fingerprint scenes cannot reach all thirty-two of them.
+ *
+ * sand_smothering_ceiling(): the board fact BURN_SMOTHERS folds in, exposed
+ * for the same reason. Both read what the last sand_step_reactions() built. */
+const burn_plan_t* sand_burn_plan_of(cell_t c);
+uint8_t sand_smothering_ceiling(void);
 
 /* `is_acid_rain_material` gates material-specific stage, not reaction type. */
 static inline uint8_t

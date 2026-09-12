@@ -188,6 +188,117 @@ static void test_reaction_first_stage_never_dispatches_later_than_the_ladder(voi
     }
 }
 
+/* --- the per-material burn plan ---------------------------------------- */
+
+/* Written from the material and reaction rows directly rather than from
+ * fill_burn_plan() (sand_reactions.c), on purpose - if a future edit changes
+ * one and not the other, this copy is what notices. Every field feeds a rate
+ * or a skip, so a wrong row drops behaviour silently, and the fingerprint
+ * scenes between them never dispatch on all thirty-two rows. */
+static void assert_burn_plan_matches_its_rows(cell_t c, const reaction_t *r,
+    const char *owner)
+{
+    const material_t *mat = material_of(c);
+    const burn_plan_t *p = sand_burn_plan_of(c);
+    const bool lit = r->burn_decay != 0;
+    const uint8_t own_rate = lit ? r->burn_decay : mat->decay;
+    char why[128];
+
+    snprintf(why, sizeof why, "%s: tick_rate", owner);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(
+        (s.decay >= 0) ? (uint8_t)s.decay : own_rate, p->tick_rate, why);
+
+    snprintf(why, sizeof why, "%s: flare", owner);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(r->flare, p->flare, why);
+
+    snprintf(why, sizeof why, "%s: BURN_LIT", owner);
+    TEST_ASSERT_EQUAL_MESSAGE(lit, (p->flags & BURN_LIT) != 0, why);
+
+    snprintf(why, sizeof why, "%s: BURN_SMOTHERS", owner);
+    TEST_ASSERT_EQUAL_MESSAGE(
+        mat->kind != KIND_LIQUID && r->explodes == 0
+            && mat->density < sand_smothering_ceiling(),
+        (p->flags & BURN_SMOTHERS) != 0, why);
+
+    snprintf(why, sizeof why, "%s: BURN_LAVA", owner);
+    TEST_ASSERT_EQUAL_MESSAGE(mat->kind == KIND_LIQUID && r->quench_to != 0,
+        (p->flags & BURN_LAVA) != 0, why);
+}
+
+/* The plans are rebuilt inside sand_step_reactions(), so nothing is built
+ * until a board with something burning on it has taken a step. */
+static void a_burning_board_one_step_on(void)
+{
+    sand_set(&s, 3, 3, FIRE);
+    sand_set(&s, 3, 4, WOOD);
+    sand_step(&s, 0, 1000, 0);
+}
+
+static void test_every_burn_plan_row_matches_the_rows_it_folds(void)
+{
+    fixture();
+    a_burning_board_one_step_on();
+
+    for (int m = 0; m < MAT_COUNT; m++) {
+        char owner[64];
+        snprintf(owner, sizeof owner, "material_plan[%s]",
+            material_by_id((material_id_t)m)->name);
+        assert_burn_plan_matches_its_rows(CELL_MAKE((uint8_t)m, 0),
+            &reactions[m], owner);
+    }
+    for (int k = 0; k < MATERIAL_EXTENDED_CODES; k++) {
+        char owner[64];
+        snprintf(owner, sizeof owner, "extended_plan[%d]", k);
+        assert_burn_plan_matches_its_rows(
+            CELL_MAKE(MAT_EXTENDED, (uint8_t)k), &extended_reactions[k],
+            owner);
+    }
+}
+
+/* sand_set_decay() overrides every material's own rate at once, and the plan
+ * is where that override now lands - a plan built from the tables alone would
+ * pass the test above and ignore this. */
+static void test_the_burn_plan_carries_the_decay_override(void)
+{
+    fixture();
+    sand_set_decay(&s, 7);
+    a_burning_board_one_step_on();
+
+    for (int m = 0; m < MAT_COUNT; m++) {
+        char why[64];
+        snprintf(why, sizeof why, "material_plan[%s] under sand_set_decay(7)",
+            material_by_id((material_id_t)m)->name);
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(7,
+            sand_burn_plan_of(CELL_MAKE((uint8_t)m, 0))->tick_rate, why);
+    }
+}
+
+/* The dispatch loop reads the stage out of the same row, so a plan rebuilt
+ * per step must never disturb the stage built once at table-build time. */
+static void test_rebuilding_the_plan_leaves_the_dispatch_stage_alone(void)
+{
+    fixture();
+    a_burning_board_one_step_on();
+
+    for (int m = 0; m < MAT_COUNT; m++) {
+        const bool is_acid_rain = (m == MAT_GAS || m == MAT_STEAM);
+        char why[64];
+        snprintf(why, sizeof why, "material_plan[%s].stage",
+            material_by_id((material_id_t)m)->name);
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(
+            reaction_first_stage(&reactions[m], is_acid_rain),
+            sand_burn_plan_of(CELL_MAKE((uint8_t)m, 0))->stage, why);
+    }
+    for (int k = 0; k < MATERIAL_EXTENDED_CODES; k++) {
+        char why[64];
+        snprintf(why, sizeof why, "extended_plan[%d].stage", k);
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(
+            reaction_first_stage(&extended_reactions[k], false),
+            sand_burn_plan_of(CELL_MAKE(MAT_EXTENDED, (uint8_t)k))->stage,
+            why);
+    }
+}
+
 /* Acid-rain is gated on material IDENTITY, not a field -
  * reaction_first_stage() only sees it via the hand-threaded
  * is_acid_rain_material flag. Dropping the flag here stands in for a
@@ -2268,6 +2379,9 @@ void run_sand_reaction_encoding_suite(void)
     RUN_TEST(test_wood_burning_state_is_byte_identical_under_lit_from);
     RUN_TEST(test_reaction_first_stage_never_dispatches_later_than_the_ladder);
     RUN_TEST(test_dropping_the_acid_rain_identity_flag_dispatches_late);
+    RUN_TEST(test_every_burn_plan_row_matches_the_rows_it_folds);
+    RUN_TEST(test_the_burn_plan_carries_the_decay_override);
+    RUN_TEST(test_rebuilding_the_plan_leaves_the_dispatch_stage_alone);
     RUN_TEST(test_ice_cracks_hot_glass_and_stays_where_it_is_put);
     RUN_TEST(test_snow_floats_on_water);
     RUN_TEST(test_glass_conducts_heat_like_stone);
