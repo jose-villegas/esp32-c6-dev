@@ -74,6 +74,13 @@ static uint8_t  max_smothering_density = 255u;
  * output, no crash, so nothing else would catch it. */
 _Static_assert(MATERIAL_MAX <= 16, "may_have_materials is a uint16_t bit per material");
 
+/* Two tables, because the key is NOT the material nibble - MAT_EXTENDED's
+ * sixteen codes carry sixteen different reaction rows behind one nibble
+ * value. Static: a burning cell reads its row across calls that an extern
+ * would let the compiler suspect of writing it. */
+static burn_plan_t material_plan[MATERIAL_MAX];
+static burn_plan_t extended_plan[MATERIAL_EXTENDED_CODES];
+
 static uint8_t pair_bits[MATERIAL_MAX][MATERIAL_MAX];
 
 /* Reads theirs-only bits. Used by try_heat_transform(), step_one_cold_cell(),
@@ -1467,23 +1474,24 @@ spend_lit_two_by_two(sand_t* s, int x, int y, int w, int dx, int dy) {
 /* BOUNDS BURST COST PER FRAME; CADENCE OF DETONATIONS. BOARD-WIDE. */
 #define SAND_GUNPOWDER_BLAST_COOLDOWN 8
 
-/* grain/rx/row_at are the caller's: the dispatch loop already loaded row[x]
- * and decoded reaction_of() to pick the stage, and row is s->cells + y*w.
- * Re-deriving them here cost a reload, the MAT_EXTENDED branch with its
- * table-base materialisation, and a multiply, per burning cell. */
+/* grain/rx/plan/row_at are the caller's: the dispatch loop already loaded
+ * row[x] and indexed the per-material row to pick the stage, and row is
+ * s->cells + y*w. Re-deriving them here cost a reload, the MAT_EXTENDED
+ * branch with its table-base materialisation, and a multiply, per burning
+ * cell. */
 static bool
 step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cell_t grain, const reaction_t* rx,
-                      size_t row_at) {
+                      const burn_plan_t* plan, size_t row_at) {
     const material_t* mat = material_of(grain);
     const uint8_t mat_id = CELL_MATERIAL(grain);
     const size_t at = row_at + (size_t)x;
 
     /* Material burns own rate, decay stays 0, not transient. */
-    const bool lit_state = rx->burn_decay != 0;
-    const int burn_rate = (s->decay >= 0) ? s->decay : rx->burn_decay;
+    const uint8_t plan_flags = plan->flags;
+    const bool lit_state = (plan_flags & BURN_LIT) != 0;
 
-    if (lit_state ? !tick_decay_at(s, row, x, y, &grain, rx, burn_rate)
-                 : !tick_decay(s, row, x, y, &grain, mat, mat_id)) {
+    if (lit_state ? !tick_decay_at(s, row, x, y, &grain, rx, plan->tick_rate)
+                 : !tick_decay(s, row, x, y, &grain, mat_id, plan->tick_rate)) {
         if (rx->explodes != 0) {
             REACTION_DOC(
                 explodes,
@@ -1572,9 +1580,7 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cell_
      *
      * Measured: on a full screen of fire this test is reached 41216 times a
      * step and has NEVER once smothered. */
-    if (mat->kind != KIND_LIQUID && rx->explodes == 0
-        && mat->density < max_smothering_density
-        && smothered(s, x, y, w, h, mat->density)) {
+    if ((plan_flags & BURN_SMOTHERS) != 0 && smothered(s, x, y, w, h, mat->density)) {
         row[x] = lit_state ? cell_with_code(grain, 0) : CELL_EMPTY;
         mark_rows(s, y, y);
         wake_block_and_neighbors(s, x, y);
@@ -1596,16 +1602,18 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cell_
 
     /* See test_buried_lava_still_becomes_stone_with_impulses_off,
      * suite_sand_lava_burial.c */
-    const bool is_lava = mat->kind == KIND_LIQUID && rx->quench_to != 0;
-    /* Test at 255 means 'fire on every cell'; 1-in-N complicates testing. */
-    const bool burst_natural = s->lava_burst < 0;
-    const int burst_chance = burst_natural ? SAND_LAVA_BURST_CHANCE : s->lava_burst;
-    if (is_lava && burst_chance != 0 && (int)(rng_next(&s->rng) & 0xFF) < burst_chance
-        && (!burst_natural || (rng_next(&s->rng) % SAND_LAVA_BURST_GATE) == 0)
-        && covered_at(s, x, y, w, h, mat->density)) {
-        place_reacted(s, x, y, at, rx->quench_to);
-        sand_explode(s, x, y, SAND_LAVA_BURST_RADIUS);
-        return true;
+    const bool is_lava = (plan_flags & BURN_LAVA) != 0;
+    if (is_lava) {
+        /* Test at 255 means 'fire on every cell'; 1-in-N complicates testing. */
+        const bool burst_natural = s->lava_burst < 0;
+        const int burst_chance = burst_natural ? SAND_LAVA_BURST_CHANCE : s->lava_burst;
+        if (burst_chance != 0 && (int)(rng_next(&s->rng) & 0xFF) < burst_chance
+            && (!burst_natural || (rng_next(&s->rng) % SAND_LAVA_BURST_GATE) == 0)
+            && covered_at(s, x, y, w, h, mat->density)) {
+            place_reacted(s, x, y, at, rx->quench_to);
+            sand_explode(s, x, y, SAND_LAVA_BURST_RADIUS);
+            return true;
+        }
     }
 
     /* DO NOT merge with quench or conduct_heat walks - see top comment for
@@ -1617,9 +1625,8 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cell_
 
     /* TRIGGER A of cool_off_chain(): 0 short-circuits check before loop
      * starts. */
-    const int lava_cooloff = (mat->kind == KIND_LIQUID && rx->quench_to != 0)
-                                 ? ((s->lava_cooloff >= 0) ? s->lava_cooloff : SAND_LAVA_COOLOFF_CHANCE)
-                                 : 0;
+    const int lava_cooloff =
+        is_lava ? ((s->lava_cooloff >= 0) ? s->lava_cooloff : SAND_LAVA_COOLOFF_CHANCE) : 0;
     /* SKIPPED WHOLE when nothing on the board can be paired WITH. On a full
      * screen of fire that is every cell, every step: measured 41216 walks
      * all finding nothing, four bounds-checked probes each.
@@ -1681,10 +1688,10 @@ pair_done:
         acted = true;
     }
 
-    /* rx, not a second reaction_of(grain): decay only ever rewrites the code
-     * nibble, so the row is the same one and re-deriving it costs a flash
-     * dereference per burning cell for nothing. */
-    if (try_flare(s, x, y, w, h, mat, rx->flare)) {
+    /* The plan's copy, not reaction_of(grain)->flare: decay only ever rewrites
+     * the code nibble, so the row is the same one and re-deriving it costs a
+     * flash dereference per burning cell for nothing. */
+    if (try_flare(s, x, y, w, h, mat, plan->flare)) {
         acted = true;
     }
 
@@ -1792,11 +1799,6 @@ step_one_acid_rain_cell(sand_t* s, int x, int y, int w, int h) {
 /* REACTION-STAGE DISPATCH TABLE skips PREFIX rows. Water, oil, metal traverse
  * all fields. */
 
-/* Two tables: key NOT material nibble - 16 different rows for each. */
-
-static uint8_t material_first_stage[MATERIAL_MAX];
-static uint8_t extended_first_stage[MATERIAL_EXTENDED_CODES];
-
 static unsigned
 step_one_reacting_row(sand_t* s, int y, int w, int h) {
     const size_t row_at = (size_t)y * (size_t)w;
@@ -1818,27 +1820,27 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
             continue;
         }
         const reaction_t* r;
-        uint8_t stage;
+        const burn_plan_t* plan;
         if (CELL_MATERIAL(c) == MAT_EXTENDED) {
             const uint8_t variant = CELL_VARIANT(c);
             r = &extended_reactions[variant];
-            stage = extended_first_stage[variant];
+            plan = &extended_plan[variant];
         } else {
             const uint8_t mat = CELL_MATERIAL(c);
             r = &reactions[mat];
-            stage = material_first_stage[mat];
+            plan = &material_plan[mat];
         }
-        goto* stage_labels[stage];
+        goto* stage_labels[plan->stage];
 
     stage_burn_always:
         found |= FOUND_BURNING;
-        step_one_burning_cell(s, row, x, y, w, h, c, r, row_at);
+        step_one_burning_cell(s, row, x, y, w, h, c, r, plan, row_at);
         continue;
 
     stage_burn_check:
         if (cell_code(c) >= r->lit_from) {
             found |= FOUND_BURNING;
-            step_one_burning_cell(s, row, x, y, w, h, c, r, row_at);
+            step_one_burning_cell(s, row, x, y, w, h, c, r, plan, row_at);
             continue;
         }
         goto stage_dissolve;
@@ -1846,7 +1848,7 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
     stage_burn_any:
         if (cell_is_burning(c)) {
             found |= FOUND_BURNING;
-            step_one_burning_cell(s, row, x, y, w, h, c, r, row_at);
+            step_one_burning_cell(s, row, x, y, w, h, c, r, plan, row_at);
             continue;
         }
 
@@ -2067,13 +2069,39 @@ static void build_reaction_tables(void)
 
     for (int m = 0; m < MAT_COUNT; m++) {
         const bool is_acid_rain_material = (m == MAT_GAS || m == MAT_STEAM);
-        material_first_stage[m] = reaction_first_stage(&reactions[m], is_acid_rain_material);
+        material_plan[m].stage = reaction_first_stage(&reactions[m], is_acid_rain_material);
     }
     for (int k = 0; k < MATERIAL_EXTENDED_CODES; k++) {
-        extended_first_stage[k] = reaction_first_stage(&extended_reactions[k], false);
+        extended_plan[k].stage = reaction_first_stage(&extended_reactions[k], false);
     }
 
     reaction_tables_ready = true;
+}
+
+static void
+fill_burn_plan(burn_plan_t* p, const sand_t* s, const reaction_t* r, const material_t* mat) {
+    const bool lit = r->burn_decay != 0;
+    const uint8_t own_rate = lit ? r->burn_decay : mat->decay;
+    p->tick_rate = (s->decay >= 0) ? (uint8_t)s->decay : own_rate;
+    p->flare = r->flare;
+    p->flags = (uint8_t)((lit ? BURN_LIT : 0u)
+                         | ((mat->kind != KIND_LIQUID && r->explodes == 0
+                             && mat->density < max_smothering_density)
+                                ? BURN_SMOTHERS
+                                : 0u)
+                         | ((mat->kind == KIND_LIQUID && r->quench_to != 0) ? BURN_LAVA : 0u));
+}
+
+/* Indexed exactly as step_one_reacting_row() indexes it, so a suite reading a
+ * cell's plan reads the row that cell would really dispatch on. */
+const burn_plan_t*
+sand_burn_plan_of(cell_t c) {
+    return (CELL_MATERIAL(c) == MAT_EXTENDED) ? &extended_plan[CELL_VARIANT(c)] : &material_plan[CELL_MATERIAL(c)];
+}
+
+uint8_t
+sand_smothering_ceiling(void) {
+    return max_smothering_density;
 }
 
 void
@@ -2124,6 +2152,17 @@ sand_step_reactions(sand_t* s) {
             max_smothering_density = mm->density;
         }
     }
+
+    /* Built for every row, not only the present ones: a reaction can create a
+     * material this pass, and the plan it then dispatches on has to be there. */
+    for (int m = 0; m < MATERIAL_MAX; m++) {
+        fill_burn_plan(&material_plan[m], s, &reactions[m], material_of(CELL_MAKE((uint8_t)m, 0)));
+    }
+    for (int k = 0; k < MATERIAL_EXTENDED_CODES; k++) {
+        fill_burn_plan(&extended_plan[k], s, &extended_reactions[k],
+                       material_of(CELL_MAKE(MAT_EXTENDED, (uint8_t)k)));
+    }
+
     /* CLEARED HERE so a bit latch_content_flags() ORs in mid-pass survives the
      * write-back below. Assigning the walk's census there instead dropped any
      * cell this pass CREATED at its own coordinates - the walk logged the old
