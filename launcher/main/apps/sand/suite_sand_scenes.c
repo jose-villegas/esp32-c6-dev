@@ -1212,6 +1212,36 @@ void plant_bed_rain(sand_t *s)
     }
 }
 
+/* Both bands go into EMPTY cells only, so the soil threads between the
+ * standing trunks instead of replacing them, and the water starts eight rows
+ * clear of it - a pour that has to FALL before it lands, which is the case a
+ * board-wide "there is moisture" flag gets wrong, not the easy one where the
+ * brush drops water straight onto the ground. */
+#define REPLANT_SOIL_ROWS  4
+#define REPLANT_SOIL_ABOVE 12
+
+void mature_tree_replant(sand_t *s)
+{
+    const int bed_top = (REAL_H * 7) / 10;
+
+    for (int y = bed_top - REPLANT_SOIL_ABOVE;
+         y < bed_top - REPLANT_SOIL_ABOVE + REPLANT_SOIL_ROWS; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            if (CELL_IS_EMPTY(sand_at(s, x, y))) {
+                sand_set(s, x, y, CELL_SOIL(MAT_DIRT, 1, 0));
+            }
+        }
+    }
+    for (int y = bed_top - REPLANT_SOIL_ABOVE - 8;
+         y < bed_top - REPLANT_SOIL_ABOVE - 4; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            if (CELL_IS_EMPTY(sand_at(s, x, y))) {
+                sand_set(s, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+            }
+        }
+    }
+}
+
 /* The player's own brush, at the app's radius, dragged the way a hand drags
  * it - not a block dropped in, because a block has no loose face and it is
  * the loose cells that ask whether they are held up. */
@@ -2147,12 +2177,12 @@ static void snowfall_census(const sand_t *s, int *snow, int *ice, int *sand,
 }
 
 typedef struct {
-    int plant, leaf, root, dirt;
+    int plant, leaf, root, dirt, wood, moisture;
 } greenery_t;
 
 static void count_greenery(const sand_t *s, int x0, int x1, greenery_t *g)
 {
-    g->plant = g->leaf = g->root = g->dirt = 0;
+    g->plant = g->leaf = g->root = g->dirt = g->wood = g->moisture = 0;
     for (int y = 0; y < REAL_H; y++) {
         for (int x = x0; x < x1; x++) {
             const cell_t c = sand_at(s, x, y);
@@ -2165,6 +2195,9 @@ static void count_greenery(const sand_t *s, int x0, int x1, greenery_t *g)
                 else if (CELL_VARIANT(c) == MATX_ROOT) { g->root++; }
             } else if (CELL_MATERIAL(c) == MAT_DIRT) {
                 g->dirt++;
+                g->moisture += moisture_of(c, reaction_of(c));
+            } else if (CELL_MATERIAL(c) == MAT_WOOD) {
+                g->wood++;
             }
         }
     }
@@ -2285,6 +2318,97 @@ static void test_the_plant_ruin_scene_eats_roots_and_burns_a_canopy(void)
         "burning greenery leaves fire behind it - none on the board means "
         "the plants went some other way and this scene is not measuring "
         "what it claims");
+}
+
+/* Settles the bed the way the frame-budget test beside it does and hands back
+ * the board, so neither can drift from the other's idea of "finished". */
+static void mature_tree_settle(sand_t *s, uint8_t *big, uint8_t *blocks)
+{
+    sand_init(s, big, REAL_W, REAL_H, 11u);
+    sand_enable_sleeping(s, blocks);
+    sand_set_soak(s, SAND_SOAK_PER_MATERIAL);
+    build_plant_bed_scene(s);
+    for (int i = 0; i < MATURE_TREE_SETTLE_STEPS; i++) {
+        sand_step(s, 0, 1000, 0);
+    }
+}
+
+/* THE SCENE'S OWN CLAIM, and the one a cheap number here could be hiding: a
+ * tree that has stopped because the pass stopped looking is indistinguishable
+ * from a tree that has stopped because there is nothing left to drink, right
+ * up until somebody waters it. So this asserts both halves - the board really
+ * is finished and really is dry, AND fresh soil and rain start it again. */
+static void test_the_mature_tree_scene_is_finished_but_can_be_restarted(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
+                              ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t s2;
+    mature_tree_settle(&s2, big, blocks);
+
+    greenery_t grown;
+    count_greenery(&s2, 0, REAL_W, &grown);
+    const bool moisture_flag = s2.may_have_moisture;
+
+    for (int i = 0; i < 60; i++) {
+        sand_step(&s2, 0, 1000, 0);
+    }
+    greenery_t still;
+    count_greenery(&s2, 0, REAL_W, &still);
+
+    mature_tree_replant(&s2);
+    for (int i = 0; i < MATURE_TREE_REPLANT_STEPS; i++) {
+        sand_step(&s2, 0, 1000, 0);
+    }
+    greenery_t again;
+    count_greenery(&s2, 0, REAL_W, &again);
+
+    free(big);
+    free(blocks);
+
+    char why[240];
+    snprintf(why, sizeof why,
+             "the bed must have grown a real tree before it stopped - %d "
+             "wood, %d leaf, %d root, %d plant", grown.wood, grown.leaf,
+             grown.root, grown.plant);
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, grown.wood, why);
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, grown.leaf, why);
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, grown.root, why);
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, grown.plant, why);
+
+    snprintf(why, sizeof why,
+             "the ground must be drunk dry by now, or the scene is a bed "
+             "still finishing rather than one that has - %d moisture over "
+             "%d dirt cells", grown.moisture, grown.dirt);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, grown.moisture, why);
+
+    /* The flag, not the timing: a cheap step is what a wrong skip looks like
+     * too, so the row beside this one is only worth trusting if the pass is
+     * off for the stated reason. */
+    TEST_ASSERT_FALSE_MESSAGE(moisture_flag,
+        "the ground is dry, so may_have_moisture must say so - it is what "
+        "takes the growth stages off a finished tree, and a claim of "
+        "moisture on a board holding none is what this scene exists to "
+        "catch");
+
+    snprintf(why, sizeof why,
+             "nothing may grow while the ground is dry - wood %d -> %d, "
+             "leaf %d -> %d, plant %d -> %d over 60 steps", grown.wood,
+             still.wood, grown.leaf, still.leaf, grown.plant, still.plant);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(grown.wood, still.wood, why);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(grown.leaf, still.leaf, why);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(grown.plant, still.plant, why);
+
+    snprintf(why, sizeof why,
+             "soil laid against the grown wood and rained on must start the "
+             "tree again - a finished tree is finished for want of water, "
+             "not for good. wood %d -> %d, leaf %d -> %d", still.wood,
+             again.wood, still.leaf, again.leaf);
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(still.wood, again.wood, why);
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(still.leaf, again.leaf, why);
 }
 
 /* The cascade really does run end to end, so the frame-budget test beside
@@ -2534,6 +2658,7 @@ void run_sand_scenes_suite(void)
     RUN_TEST(test_the_water_over_lava_scene_reaches_the_quench_cooloff_and_burst_paths_it_claims);
     RUN_TEST(test_the_gunpowder_basin_scene_reaches_the_reactions_it_claims);
     RUN_TEST(test_the_plant_ruin_scene_eats_roots_and_burns_a_canopy);
+    RUN_TEST(test_the_mature_tree_scene_is_finished_but_can_be_restarted);
     RUN_TEST(test_the_filling_basin_scene_runs_from_the_lip_to_the_pool);
     RUN_TEST(test_the_snowfall_scene_holds_a_crusting_bank_and_a_live_fall);
     RUN_TEST(test_the_plant_pour_scene_keeps_a_loose_heap_in_the_air);

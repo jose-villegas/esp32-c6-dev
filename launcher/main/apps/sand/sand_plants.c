@@ -514,11 +514,16 @@ step_one_drinking_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* 
                                                      * nothing here roots -
                                                      * scratch values */
     const int soil_at = find_water(s, x, y, w, h, r, self, &lift, &contact_at, &root_depth, true);
+    /* FALSE, though a drink is possible: the caller reads this as "soil
+     * moisture was made", and a plant standing in water with no soil under it
+     * makes none. Saying true there kept the growth stages armed off a puddle
+     * nothing could reach. Costs no drinking - this stage is gated on liquid,
+     * not on moisture. */
     if (soil_at < 0) {
-        return true; /* thirsty, but nowhere to put it */
+        return false;
     }
     if ((int)(rng_next(&s->rng) & 0xFF) >= r->drinks) {
-        return true;
+        return false;
     }
 
     pay_quench_cost(s, lx, ly, w);
