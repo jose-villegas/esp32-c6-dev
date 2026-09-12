@@ -6,7 +6,10 @@
 # mostly noise (unresolved types make almost everything look like a 10.x
 # essential-type violation).
 #
-# This is report-only: it always exits 0. The sand app alone currently
+# Report-only about its FINDINGS: any number of them still exits 0. A refused
+# argument, a timeout or a cppcheck failure exits non-zero, so a caller like
+# scripts/fix-audited-code.sh cannot patch from a truncated report. The sand
+# app alone currently
 # turns up ~1200 MISRA style findings (dominated by 10.4, 12.1 and 15.5 -
 # see below), so gating CI on this before triage would just be a wall no
 # one reads. Flip EXIT_ON_FINDINGS below once a rule set has been chosen
@@ -125,6 +128,33 @@ fi
 
 echo "Scanning '$FILE_FILTER' against $BUILD_DIR/compile_commands.json ($JOBS jobs, ${TIMEOUT_SECONDS}s timeout)..."
 cd "$LAUNCHER_DIR"
+
+# A compile database lists the files that existed when it was generated, and
+# cppcheck only complains when the filter matches NOTHING - so a file added
+# since the last build is skipped in silence and the report reads as a clean
+# one. material_palette.c was a week old and in no build directory here.
+# Naming what will actually be analysed is the cheapest way to notice.
+matched="$(grep -o '"file": *"[^"]*"' "$COMPILE_COMMANDS" |
+    sed 's|.*"file": *"||; s|"$||; s|\\\\|/|g' | sort -u |
+    while read -r entry; do
+        case "$entry" in
+            $FILE_FILTER) basename "$entry" ;;
+        esac
+    done)"
+count="$(printf '%s' "$matched" | grep -c . || true)"
+echo "Translation units in $BUILD_DIR/compile_commands.json matching the filter: ${count:-0}"
+if [ "${count:-0}" -gt 0 ] && [ "${count:-0}" -le 20 ]; then
+    echo "$matched" | sed 's|^|  |'
+    echo "  (a source you expected and cannot see here is missing from the build - rebuild)"
+fi
+
+# Any file that stubs a macro for the analyser is analysed as stubbed, not as
+# written. Name them, so a finding count is never read as full coverage.
+stubbed="$(grep -rl --include='*.c' --include='*.h' '__CPPCHECK__' main 2>/dev/null || true)"
+if [ -n "$stubbed" ]; then
+    echo "Analysed with source-level stubs (see each __CPPCHECK__ block for scope):"
+    echo "$stubbed" | sed 's|^|  |'
+fi
 set +e
 "$TIMEOUT" --signal=TERM --kill-after=10s "${TIMEOUT_SECONDS}s" cppcheck \
     --project="$BUILD_DIR/compile_commands.json" \

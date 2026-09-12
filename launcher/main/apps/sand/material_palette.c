@@ -19,21 +19,19 @@
 #include "material_palette.h"
 #include "util/intmath.h" /* see material_set_gravity() below */
 
-#ifdef __CPPCHECK__
-/* The conversion macro repeats its argument twice; these large constant tables otherwise exhaust the MISRA addon. */
-#undef GFX_RGB
-#define GFX_RGB(rgb) ((gfx_color_t)(rgb))
-#endif
-
 /* Channel `sh` of the way from `lo` to `hi`, out of 15. */
 #define LERP_CH(lo, hi, shift, sh)                                                                                     \
     ((((((lo) >> (shift)) & 0xFF) * (15 - (sh)) + (((hi) >> (shift)) & 0xFF) * (sh)) / 15) & 0xFF)
 
+#define LERP_RGB(lo, hi, sh) ((LERP_CH(lo, hi, 16, sh) << 16) | (LERP_CH(lo, hi, 8, sh) << 8) | LERP_CH(lo, hi, 0, sh))
+
 #ifdef __CPPCHECK__
-/* Expanding every channel expression in the compile-time tables exhausts cppcheck before it reaches the code below. */
+/* The tables below expand this a few thousand times, which exhausts the MISRA
+ * addon before it reaches any code. Stubbed for the tables only: LERP goes
+ * back to LERP_RGB below them, so the functions are analysed as written. */
 #define LERP(lo, hi, sh) ((uint32_t)(lo) + (uint32_t)(hi) + (uint32_t)(sh))
 #else
-#define LERP(lo, hi, sh) ((LERP_CH(lo, hi, 16, sh) << 16) | (LERP_CH(lo, hi, 8, sh) << 8) | LERP_CH(lo, hi, 0, sh))
+#define LERP(lo, hi, sh) LERP_RGB(lo, hi, sh)
 #endif
 
 /* glass MAT_GLASS case needs small tilt for finer gradient than palette steps */
@@ -537,6 +535,12 @@ static const gfx_color_t stone_edge_speckle[MATERIAL_VARIANTS][8] = {
     STONE_EDGE_ROW(8),  STONE_EDGE_ROW(9),  STONE_EDGE_ROW(10), STONE_EDGE_ROW(11),
     STONE_EDGE_ROW(12), STONE_EDGE_ROW(13), STONE_EDGE_ROW(14), STONE_EDGE_ROW(15),
 };
+
+#ifdef __CPPCHECK__
+/* Last table is behind us - see LERP's own stub above. */
+#undef LERP
+#define LERP(lo, hi, sh) LERP_RGB(lo, hi, sh)
+#endif
 
 /* liquid_spec[mask] corrects a flat fill-level ramp: two rim cells at the
  * same fill level need different shading depending on whether their open

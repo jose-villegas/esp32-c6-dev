@@ -101,6 +101,10 @@ launcher/tools/results/
 # gitignored by the same pattern rather than listed per app.
 launcher/main/apps/*/tools/results/
 
+# Cppcheck writes its parse dumps NEXT TO THE SOURCE, not into its own output
+# directory, so a MISRA run leaves these in main/ - see tools/misra_check.sh.
+*.dump
+
 # And once more for scripts/ - trim_comments_local.py's review report and its
 # model transcript. The branch it produces is the artifact worth keeping.
 scripts/results/

@@ -157,11 +157,32 @@ shape MISRA's 10.x essential-type rules exist to flag, and `LERP` becomes
 covers the hottest colour path in the app, and nothing in the report says
 the scan was narrowed.
 
-Fix: bound the stub to the table region and restore the real macros before
-the first function, or move the tables into their own translation unit that
-the `--file-filter` excludes. Either way, have `misra_check.sh` print a line
-when the stubs are active, so a low finding count cannot be read as
-coverage.
+FIXED, and measured rather than argued. Scanning this one translation unit
+three ways, with cppcheck 2.21 and the MISRA addon:
+
+| | wall time | result |
+| --- | --- | --- |
+| stubs off entirely | >300 s | killed by the deadline, empty report |
+| stubs as committed | 11 s | 283 findings, runtime path analysed as stubs |
+| stub bounded to the tables | 67 s | 289 findings, runtime path analysed as written |
+
+So the stubs are genuinely load-bearing - removing them is not an option -
+but they only need to cover the tables. `GFX_RGB` is no longer touched at
+all: the expansion that exhausts the addon is `LERP`'s channel arithmetic,
+and with that stubbed `GFX_RGB(cheap)` costs nothing. `LERP` now goes back to
+the real `LERP_RGB` after the last table, so every function is analysed as
+written.
+
+Comparing the two finding sets by source text rather than line number (the
+edit shifts every line), what comes back is exactly the runtime colour path
+the stub was hiding: 10.1 and 12.2 on both
+`out[0] = GFX_RGB(LERP8(...))` blends, 10.1 on the leaf `LERP` at the top of
+that branch, and 10.1/10.7/12.2 on glass's
+`base = edge ? GLASS_EDGE_RGB(v) : GLASS_RGB(v)`. The cost is honest and
+small: one `#undef` traded for another, so rule 20.5 is a wash.
+
+`misra_check.sh` now also names every file it analysed with stubs, so a
+finding count cannot be mistaken for coverage.
 
 Two smaller notes on the same commit. `__CPPCHECK__` is in the
 implementation's reserved identifier space - a name like `MISRA_SCAN` avoids
@@ -170,9 +191,20 @@ cppcheck normally restricts it to that single configuration, which would
 narrow `#ifdef` coverage across every file in the scan; worth confirming,
 with `--max-configs` as the lever if it holds.
 
+While fixing #4, a second silent gap in the same script - now also fixed.
+`material_palette.c` was split out of `material.c` on 2026-09-07, after every
+build directory in this checkout was generated, so it appears in none of
+their `compile_commands.json` files. cppcheck only errors when a filter
+matches *nothing*, so the sand scan happily analysed the other ten
+translation units and reported a number, with the file the MISRA commit was
+patching silently absent. The script now prints how many translation units
+the filter actually matched and, for a small set, names them - the sand scan
+lists ten files and `material_palette.c` is visibly not among them.
+
 ## 5. `misra_check.sh` changed its contract without saying so
 
-The header still reads "This is report-only: it always exits 0."  It now
+The header comment has been corrected as part of #4; the finding is kept for
+the record. It read "This is report-only: it always exits 0."  It now
 exits 2 on a rejected file filter, a bad `MISRA_JOBS`, or a timeout, and
 otherwise propagates cppcheck's status. The caller matters:
 `scripts/fix-audited-code.sh` invokes it unguarded under `set -euo
