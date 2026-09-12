@@ -124,6 +124,27 @@ liquid_mask(void) {
     return mask;
 }
 
+/* What a liquid could still put moisture INTO: something that drinks it
+ * directly, or ground that soaks. A board holding a liquid and none of these
+ * has no way to make moisture at all, which is what lets the reaction pass
+ * skip a screen of water outright. MAT_EXTENDED is one bit over sixteen
+ * codes, so it joins if any of them qualifies - the conservative direction. */
+static inline uint16_t
+wettable_mask(void) {
+    uint16_t mask = 0;
+    for (int m = 1; m < MAT_COUNT; m++) {
+        if (reactions[m].soaks != 0 || reactions[m].drinks != 0) {
+            mask |= (uint16_t)(1u << m);
+        }
+    }
+    for (int k = 0; k < MATERIAL_EXTENDED_CODES; k++) {
+        if (extended_reactions[k].soaks != 0 || extended_reactions[k].drinks != 0) {
+            mask |= (uint16_t)(1u << MAT_EXTENDED);
+        }
+    }
+    return mask;
+}
+
 /* A full cell, a foreign material and a wall all refuse mass alike, so this
  * answers for every liquid at once without being told which one is asking.
  * Breaks on the first cell that could take mass: a span still moving costs a

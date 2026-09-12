@@ -194,6 +194,21 @@ void build_dry_plant_heap_scene(sand_t *s);
 #define PLANT_BED_RAIN_A       100
 #define PLANT_BED_RAIN_B       170
 
+/* THE SAME BED, FINISHED: no second pour, and left until the trees have both
+ * stopped growing and drunk the ground dry - the state a garden spends the
+ * rest of its life in, and the one every row above stops short of. Measured
+ * on this bed and seed: structure stops changing at 759, the last damp cell
+ * evaporates at 1,490. */
+#define MATURE_TREE_SETTLE_STEPS 1600
+
+/* Fresh soil laid over the canopy and rained on - the one thing a finished
+ * tree will still answer, and the reason a skip here has to be shown resuming
+ * rather than merely being cheap. Separate from the builder for the reason
+ * plant_bed_rain() is. */
+void mature_tree_replant(sand_t *s);
+
+#define MATURE_TREE_REPLANT_STEPS 400
+
 /* Same real device impulse budget the vent-spam scene this replaced used -
  * the app's own buffer is sized APP_IMPULSE_MAX (2048), and this scene
  * should be fighting the same memory ceiling a real device pour actually
