@@ -13,6 +13,7 @@
 #include "imgui_internal.h"
 
 #include "engine/preview_surface.h"
+#include "engine/runtime.h"
 
 namespace {
 
@@ -155,6 +156,8 @@ draw_editor(Preview& landscape, Preview& portrait) {
 
     ImGui::SetNextWindowSize(ImVec2(950, 160), ImGuiCond_FirstUseEver);
     ImGui::Begin("Problems");
+    ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.82f, 1.0f),
+                       "Firmware runtime ready: gfx.c and Microui initialized in-process.");
     ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.82f, 1.0f), "Transport ready: both RGB565 surfaces reached SDL.");
     ImGui::TextDisabled("Layout validation is the next engine module.");
     ImGui::End();
@@ -182,6 +185,14 @@ main() {
         if (window) {
             SDL_DestroyWindow(window);
         }
+        SDL_Quit();
+        return 1;
+    }
+
+    if (!engine_runtime_init()) {
+        std::fprintf(stderr, "Firmware runtime initialization failed\n");
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
     }

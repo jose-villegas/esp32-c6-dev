@@ -2,12 +2,16 @@ cmake_minimum_required(VERSION 3.24)
 
 project(engine LANGUAGES C CXX)
 
+include(CTest)
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(FetchContent)
+
+set(LAUNCHER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../launcher")
 
 set(SDL_SHARED OFF CACHE BOOL "" FORCE)
 set(SDL_STATIC ON CACHE BOOL "" FORCE)
@@ -53,15 +57,57 @@ target_include_directories(engine_imgui PUBLIC
 )
 target_link_libraries(engine_imgui PUBLIC ${ENGINE_SDL_TARGET})
 
+add_library(engine_runtime STATIC
+    runtime/runtime.c
+    ${LAUNCHER_DIR}/main/gfx/gfx.c
+    ${LAUNCHER_DIR}/components/microui/src/microui.c
+)
+target_include_directories(engine_runtime
+    PUBLIC include
+    PRIVATE
+        ${LAUNCHER_DIR}/main
+        ${LAUNCHER_DIR}/components/microui/include
+)
+target_compile_definitions(engine_runtime PRIVATE
+    CONFIG_LAUNCHER_DEVELOPMENT=0
+)
+
+if(MSVC)
+    target_compile_options(engine_runtime PRIVATE /W4)
+else()
+    # The device-only presentation statics are intentionally unused by a
+    # host build. The atlas stores byte masks in char rows, so signed-char
+    # hosts also warn on the intentional 0xff values.
+    target_compile_options(engine_runtime PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+        -Wno-overflow
+        -Wno-unused-function
+        -Wno-unused-parameter
+        -Wno-unused-variable
+    )
+endif()
+
 add_executable(engine
     editor/main.cpp
     preview/preview_surface.c
 )
 target_include_directories(engine PRIVATE include)
-target_link_libraries(engine PRIVATE engine_imgui ${ENGINE_SDL_TARGET})
+target_link_libraries(engine PRIVATE
+    engine_imgui
+    engine_runtime
+    ${ENGINE_SDL_TARGET}
+)
 
 if(MSVC)
     target_compile_options(engine PRIVATE /W4 /permissive-)
 else()
     target_compile_options(engine PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+if(BUILD_TESTING)
+    add_executable(engine_runtime_smoke tests/runtime_smoke.c)
+    target_link_libraries(engine_runtime_smoke PRIVATE engine_runtime)
+    add_test(NAME engine_runtime_smoke COMMAND engine_runtime_smoke)
 endif()

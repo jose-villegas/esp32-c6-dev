@@ -14,6 +14,8 @@ The first executable proves the durable boundary:
 
 - Dear ImGui owns editor chrome, docking and host input.
 - SDL2 owns the native window and RGB565 preview textures.
+- `engine_runtime` compiles and initializes the firmware's real `gfx.c` and
+  Microui sources directly; it is a host target, never an ESP-IDF component.
 - A C interface supplies exact 448 x 368 and 368 x 448 framebuffers.
 - The initial workspace docks hierarchy left, preview center, inspector right
   and problems below; later adjustments persist in Dear ImGui's settings.
@@ -29,9 +31,10 @@ vendored into firmware source.
 ```sh
 cmake -S engine -B engine/build -DCMAKE_BUILD_TYPE=Debug
 cmake --build engine/build --config Debug
+ctest --test-dir engine/build --output-on-failure
 ```
 
 The executable is named `engine`. The next slice is to replace
-`engine_preview_render_transport_test()` with a host adapter around the real
-renderer, then load the authored layout data described in
+`engine_preview_render_transport_test()` with pixels read from the initialized
+firmware framebuffer, then load the authored layout data described in
 `docs/plans/UI-Editor-Plan.md`.
