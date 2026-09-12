@@ -50,9 +50,9 @@ static const launcher_layout_t launcher_layout_landscape = {
     .canvas_height = 368,
     .rects = {
         [LAUNCHER_ELEMENT_STATUS_BAR] = {12, 12, 424, 34},
-        [LAUNCHER_ELEMENT_LAST_PLAYED] = {16, 98, 124, 173},
+        [LAUNCHER_ELEMENT_LAST_PLAYED] = {16, 98, 122, 171},
         [LAUNCHER_ELEMENT_LIBRARY] = {153, 98, 125, 173},
-        [LAUNCHER_ELEMENT_RENDER_LAB] = {291, 98, 125, 173},
+        [LAUNCHER_ELEMENT_RENDER_LAB] = {289, 98, 125, 173},
         [LAUNCHER_ELEMENT_PAGE_INDICATOR] = {200, 279, 48, 8},
     },
 };

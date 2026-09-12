@@ -1,15 +1,92 @@
-# Plan: a UI editor, and the layout format underneath it
+# Plan: the Engine system workspace and its UI layout format
 
-**Status**: planned 2026-09-10, not built. Written after the sand app's brush
-screen shipped and a host-side preview of it landed
-([`Sand-Brush-Screen-Plan.md`](Sand-Brush-Screen-Plan.md),
-`apps/sand/tools/brush_screen_preview.c`).
+**Status**: in progress. The launcher document, generator, native editor,
+real-renderer preview, direct manipulation, undo/redo and explicit bake path
+are built on `feat/engine-bootstrap`.
 
-The objective is a tool where a screen is **authored visually and edited
-again later** - not screenshotted and re-typed. The brush screen should open
-in it as an editable instance. It is a component of the engine direction in
-[`../Autana-Rendering-Roadmap.md`](../Autana-Rendering-Roadmap.md), sibling
-to the level editor already banked as `bd esp32c6-ems.9`.
+The current objective is the **System Workspace**: a host tool where
+firmware-owned screens are authored visually, rendered by the real device
+code, validated and baked for firmware. The launcher is its first document;
+Control Center, notifications and Settings are the next system-owned screen
+family. This is a component of the engine direction in
+[`../Autana-Rendering-Roadmap.md`](../Autana-Rendering-Roadmap.md).
+
+## Product boundary
+
+Autana is a platform stack, not one undifferentiated engine:
+
+- **System software** owns boot, launcher, Control Center, notifications,
+  Settings, app lifecycle and privileged device services.
+- **Runtime** is the device-side rendering, input, audio, storage and app
+  execution contract.
+- **SDK** will package the public headers, manifests, asset tools, build,
+  deployment and debugging flow used by external games.
+- **Engine** is the host authoring application. Its current module is the
+  System Workspace; a separate Game Workspace may arrive when external game
+  projects have a concrete format and runtime contract.
+
+The two workspaces may share docking, inspectors, previews, history and
+validation infrastructure, but they do not share ownership or document
+models. System documents write this firmware repository and may use
+privileged services. External games live in their own projects and expose
+only shell metadata such as title, icon and launch manifest. An app's own UI
+does not become a System Workspace document merely because the launcher can
+start it.
+
+### Distribution and module boundary
+
+Engine should eventually be packaged by audience rather than exposing every
+workspace to everyone:
+
+- The **internal build** contains the System Workspace and App Workspace.
+- The **external developer build** defaults to, or contains only, the App
+  Workspace.
+- The **runtime package** contains device libraries and APIs without editor
+  code.
+- The **SDK package** contains public headers, project templates, asset tools,
+  packaging, deployment and documentation.
+
+This must become a compile/package boundary, not a hidden menu item. External
+developers should not need the firmware repository or receive privileged
+system-screen adapters.
+
+The modular split follows the established console-tooling shape: system
+software and shell, platform runtime, developer SDK, engine/editor, then
+individual title projects. Autana's custom work is the constrained ESP32
+runtime, baked UI and real-renderer preview. Engine should reuse SDL2, Dear
+ImGui, CMake, JSON and compiler tooling rather than rebuild generic editor
+infrastructure.
+
+The current launcher-specific implementation is a vertical slice, not the
+final module boundary. Before the System Workspace grows substantially,
+extract a small editor core for docking, history, inspectors and preview
+infrastructure. System Workspace adapters remain internal; a future App
+Workspace can then be the only module shipped to external developers.
+
+The first extraction now covers generic history, dockspace construction and
+RGB565 preview texture ownership under `engine/editor/core/`. Inspector
+semantics remain launcher-owned until a second system document demonstrates
+which parts are genuinely common.
+
+## Test-driven development policy
+
+Engine behavior is developed red-green-refactor from this first vertical
+slice. Tests live at the narrowest useful boundary:
+
+- GoogleTest and GoogleMock cover host C++ documents and reusable editor-core
+  behavior.
+- Unity remains the device/host framework for firmware C.
+- Python `unittest` covers deterministic generators.
+- CTest is the umbrella invoked locally and by CI.
+
+Coverage is measured with gcovr on a separately instrumented GCC/Clang build.
+The initial gate is 80% lines and 70% branches across deterministic,
+Engine-owned document, history and runtime-boundary logic. SDL/ImGui window
+glue, generated output and third-party sources are outside that number; they
+need smoke, interaction or visual regression coverage instead of misleading
+unit-test percentages. Compiler-generated throw and unreachable branches are
+also excluded. The gate should expand file-by-file as new testable core
+modules land and must not be lowered to make a change pass.
 
 ---
 
@@ -33,20 +110,15 @@ That is the architecture, running, for one payload. A level editor
 | level editor (`ems.9`) | material blocks | bake to a header | real sand code on host |
 | **UI editor (this)** | **a screen's layout** | **bake to a header** | **real `gfx.c` + pure geometry on host** |
 
-They are not three tools. They are one pattern with three payloads, and the
-pattern is already proven.
+They share one authoring pattern, even when their documents belong to
+different workspaces. The pattern is already proven.
 
-## The one thing that has to change
+## The foundation now in place
 
-`brush_screen_layout()` computes rects from arithmetic over `#define`s -
-`HEADER_H`, `MODE_H`, `SIZE_H`, gaps, `UI_MARGIN`, a centred remainder. **An
-editor cannot edit arithmetic, only data.**
-
-So a screen becomes authored JSON, baked by a generator into a header that
-the same pure function consumes. Exactly the move the boot animation already
-made, and the fifth instance of the generated-file convention in CLAUDE.md
-(banner naming the regenerate command, generator validates before emitting,
-shipped artifact tested independently of the generator).
+The launcher layout is authored JSON, baked by a generator into a header that
+the same pure renderer consumes. The JSON remains human-readable source; the
+generated header remains output. The generator validates before emitting and
+the shipped artifact is tested independently.
 
 **The device never sees the editor, and never sees JSON.** It links a static
 baked table: no runtime layout engine, no solver, no allocation, no RAM
@@ -55,19 +127,16 @@ distinction is the whole reason this is affordable here and LVGL was not:
 the cost of a retained UI system is paid at build time, on a laptop, or it
 is not paid at all.
 
-## What already exists, and does not need building
+## What already exists
 
-- **The render path.** `apps/sand/tools/brush_screen_preview.c` renders the
-  screen at both orientations, on a host, through the real `gfx.c` and the
-  real `ui_style.h` / `ui_slider.h` / `gfx/icon.h` geometry. That is what a
-  `/render` endpoint needs; it is already written.
-- **Host-linkable everything.** `gfx.c` (behind its `ESP_PLATFORM` guards),
-  the pure geometry headers, the baked icon atlases, and `microui.c` - the
-  last of these linked for `suite_ui_pointer_microui.c` and available now.
-- **The validation.** `suite_brush_screen.c` already asserts, at both
-  368x448 and 448x368: everything inside the canvas, no panel overlap, equal
-  segment widths, a 44px floor on every tap target, and every fixed string
-  measured against its own rect.
+- **The document.** `launcher_layout.json` carries stable element IDs and
+  geometry for both device orientations.
+- **The render path.** `engine_runtime` links the real launcher, Microui and
+  `gfx.c` in-process; edits preview without generating or recompiling.
+- **The editor shell.** SDL2 and Dear ImGui provide the system hierarchy,
+  dual previews, inspector, history, validation and explicit save/bake flow.
+- **Independent checks.** The document, runtime bridge, generator and
+  checked-in generated header are covered by host tests.
 
 That last one matters more than it looks - see below.
 
@@ -91,6 +160,9 @@ until it is the same size as the caption above it, and the type hierarchy
 collapses. So an entry carries its string source, its scale policy and its
 box **together**. An editor that cannot say "this will not fit at this
 scale" would let you draw those same bugs, visually, and call it a design.
+
+Those defects inform future shared validation; they do not make Sand or any
+other external app a System Workspace document.
 
 ## The editor is an engine module, and renders in-process
 
@@ -136,41 +208,44 @@ and robust editor text input inside the device toolkit.
 
 **Build with CMake.** ESP-IDF already uses it, so it is not a new tool for
 anyone on any platform, and both candidate shells ship support for it. The
-editor lives under `tools/`, is never part of the firmware build, and like
+editor lives under `engine/`, is never part of the firmware build, and like
 every other host tool here is absent from `idf.py` and from
 `test/run_tests.sh`.
 
 ## Phases
 
-1. **Layout as authored data. No editor.** A screen's JSON, a generator, a
-   baked header, and `brush_screen_layout()` reading the table instead of
-   computing it.
+1. **Layout as authored data.** The launcher's JSON, generator and baked
+   header feed the same renderer used on device. **Built.**
 
-   **Acceptance: `suite_brush_screen.c` passes untouched, and the baked
-   rects are identical to what the function produces today.** Same discipline
-   the icon baker used - a generator that cannot reproduce known-good output
-   is not ready to produce new output. This phase changes no pixels.
+   **Acceptance:** baked rects reproduce the known-good launcher geometry and
+   the conversion changes no pixels.
 
 2. **Validation moves into the generator.** It refuses, at bake time and for
-   every orientation, a layout that overlaps, leaves the canvas, drops a tap
-   target below 44px, or gives a string a box it does not fit in. The host
-   suite keeps its own assertions as the independent witness - the generator
-   checking itself is not a test.
+   every orientation, geometry that overlaps, leaves the canvas or drops an
+   app target below 44px. The C++ document performs the same checks and the
+   host suite remains an independent witness. **Built for launcher geometry;
+   text-fit validation remains future work.**
 
 3. **The editor shell.** A native window that links the layout and draw code
    directly and renders both orientations side by side - that is where
    composition decisions actually get made. No server, no subprocess, no
-   recompile in the preview loop. Loading and saving the JSON is the whole
-   of its file handling at this stage.
+   recompile in the preview loop. Loading, saving and explicitly invoking the
+   canonical bake step are its file operations. **Built.**
 
 4. **Direct manipulation.** Drag and resize in the editor, writing back to
-   the JSON. Deliberately last: it is the least load-bearing part, and a
-   format that only a GUI can produce is a format nobody can review in a
-   diff.
+   the JSON. A format that only a GUI can produce is still unacceptable, so
+   authored JSON remains readable and reviewable. **Built for the launcher,
+   including undo/redo.**
 
-5. **A second screen proves the model.** The palette, or the launcher. A
-   format that has only ever expressed one screen has proven nothing about
-   being a format.
+5. **System Workspace navigation.** Add Control Center as the second
+   firmware-owned screen and model the swipe-down transition from Launcher.
+   The hierarchy becomes a system screen/state navigator, while each screen
+   keeps its own typed document adapter, renderer, validation and bake path.
+
+6. **External game workflow, later.** Define a separate Game Workspace only
+   after the runtime API, package format and app manifest are concrete. Do
+   not use an existing app such as Sand merely to make the System Workspace
+   appear generic.
 
 ## Considered and rejected
 

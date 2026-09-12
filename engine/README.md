@@ -12,6 +12,10 @@ dependencies and must never enter an ESP-IDF component graph.
 
 The first executable proves the durable boundary:
 
+- `editor/core/` owns reusable host-editor services: dockspace setup,
+  document history and RGB565 preview texture lifetime.
+- Launcher selection, geometry rules, validation and baking remain System
+  Workspace behavior rather than leaking into that core.
 - Dear ImGui owns editor chrome, docking and host input.
 - SDL2 owns the native window and RGB565 preview textures.
 - `engine_runtime` compiles the firmware's real launcher UI, Microui bridge
@@ -39,9 +43,10 @@ firmware; the device does not parse JSON or run a layout solver.
 
 The editor loads that JSON into a typed C++ document and validates canvas
 bounds, minimum card targets, card overlap and page-indicator placement. Save
-and Ctrl+S update the source JSON only when it is valid. Rebaking the generated
-firmware header remains an explicit, separate step, so preview edits cannot
-silently change a device build.
+and Ctrl+S update the source JSON only when it is valid. Bake firmware layout
+then invokes the canonical Python generator as an explicit, separate step, so
+preview edits cannot silently change a device build and the editor does not
+grow a second implementation of the bake rules.
 
 Dependencies are fetched into the untracked build directory rather than
 vendored into firmware source.
@@ -55,3 +60,30 @@ ctest --test-dir engine/build --output-on-failure
 ```
 
 The executable is named `engine`.
+
+## Tests and coverage
+
+CTest is the single test entry point. Host C++ behavior uses GoogleTest and
+GoogleMock, firmware C continues to use Unity, and layout generators use
+Python's `unittest`. New behavior should begin with a failing focused test,
+then the smallest implementation that makes it pass, followed by refactoring
+with the suite green.
+
+GoogleTest is pinned to v1.17.0. Coverage uses gcovr 8.6 and is gated at 80%
+line coverage and 70% branch coverage for deterministic Engine-owned logic:
+the launcher document, generic edit history and host runtime boundary. SDL,
+Dear ImGui, generated code and third-party dependencies are excluded from the
+numeric gate. Compiler-generated throw and unreachable branches are excluded
+as well; rendering and interaction paths require integration or visual
+regression tests instead.
+
+```sh
+python -m pip install gcovr==8.6
+cmake -S engine -B engine/build-coverage \
+  -DCMAKE_BUILD_TYPE=Debug -DENGINE_ENABLE_COVERAGE=ON
+cmake --build engine/build-coverage --target engine_coverage
+```
+
+The last command runs the tests, enforces both thresholds and writes an HTML
+report to `engine/build-coverage/coverage/index.html` plus Cobertura XML to
+`engine/build-coverage/coverage/coverage.xml`.

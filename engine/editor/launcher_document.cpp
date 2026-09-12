@@ -305,64 +305,7 @@ LauncherDocument::set_dirty(bool dirty) {
     dirty_ = dirty;
 }
 
-LauncherEditHistory::LauncherEditHistory(const LauncherDocument& document) : states_{document} {}
-
-void
-LauncherEditHistory::commit(LauncherDocument& document) {
-    if (same_geometry(states_[cursor_], document)) {
-        sync_dirty(document);
-        return;
-    }
-    if (cursor_ + 1 < states_.size()) {
-        states_.erase(states_.begin() + static_cast<std::ptrdiff_t>(cursor_ + 1), states_.end());
-        if (saved_cursor_ > cursor_) {
-            saved_cursor_ = no_saved_cursor;
-        }
-    }
-    states_.push_back(document);
-    cursor_++;
-    sync_dirty(document);
-}
-
 bool
-LauncherEditHistory::undo(LauncherDocument& document) {
-    commit(document);
-    if (cursor_ == 0) {
-        return false;
-    }
-    document = states_[--cursor_];
-    sync_dirty(document);
-    return true;
-}
-
-bool
-LauncherEditHistory::redo(LauncherDocument& document) {
-    if (cursor_ + 1 >= states_.size()) {
-        return false;
-    }
-    document = states_[++cursor_];
-    sync_dirty(document);
-    return true;
-}
-
-void
-LauncherEditHistory::mark_saved(LauncherDocument& document) {
-    commit(document);
-    saved_cursor_ = cursor_;
-    sync_dirty(document);
-}
-
-bool
-LauncherEditHistory::can_undo() const {
-    return cursor_ > 0;
-}
-
-bool
-LauncherEditHistory::can_redo() const {
-    return cursor_ + 1 < states_.size();
-}
-
-void
-LauncherEditHistory::sync_dirty(LauncherDocument& document) const {
-    document.set_dirty(cursor_ != saved_cursor_);
+LauncherDocumentGeometryEqual::operator()(const LauncherDocument& first, const LauncherDocument& second) const {
+    return same_geometry(first, second);
 }

@@ -10,23 +10,79 @@
   ],
   "orientations": {
     "portrait": {
-      "canvas": [368, 448],
+      "canvas": [
+        368,
+        448
+      ],
       "rects": {
-        "status_bar": [8, 8, 352, 34],
-        "last_played": [12, 86, 168, 150],
-        "library": [188, 86, 168, 150],
-        "render_lab": [100, 250, 168, 150],
-        "page_indicator": [160, 416, 48, 8]
+        "status_bar": [
+          8,
+          8,
+          352,
+          34
+        ],
+        "last_played": [
+          12,
+          86,
+          168,
+          150
+        ],
+        "library": [
+          188,
+          86,
+          168,
+          150
+        ],
+        "render_lab": [
+          100,
+          250,
+          168,
+          150
+        ],
+        "page_indicator": [
+          160,
+          416,
+          48,
+          8
+        ]
       }
     },
     "landscape": {
-      "canvas": [448, 368],
+      "canvas": [
+        448,
+        368
+      ],
       "rects": {
-        "status_bar": [12, 12, 424, 34],
-        "last_played": [16, 98, 124, 173],
-        "library": [153, 98, 125, 173],
-        "render_lab": [291, 98, 125, 173],
-        "page_indicator": [200, 279, 48, 8]
+        "status_bar": [
+          12,
+          12,
+          424,
+          34
+        ],
+        "last_played": [
+          16,
+          98,
+          122,
+          171
+        ],
+        "library": [
+          153,
+          98,
+          125,
+          173
+        ],
+        "render_lab": [
+          289,
+          98,
+          125,
+          173
+        ],
+        "page_indicator": [
+          200,
+          279,
+          48,
+          8
+        ]
       }
     }
   }
