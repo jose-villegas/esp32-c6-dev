@@ -375,6 +375,17 @@ static void test_a_screen_of_settled_sand_costs_almost_nothing(void)
         "rows are being examined that had no reason to be");
 }
 
+#ifdef SAND_HOST_PROBE
+/* Host-only timing probe. This row is the one the block-size sweep has
+ * always been decided on - a smaller block scans more of them on a board
+ * where nothing moves - so a candidate shape that is not ranked here has
+ * not been ranked at all. */
+void sand_host_probe_run_settled_screen(void)
+{
+    test_a_screen_of_settled_sand_costs_almost_nothing();
+}
+#endif
+
 static void test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget(void)
 {
     /* Worst case pouring: all blocks wake at once. */
@@ -2020,13 +2031,11 @@ void sand_host_probe_run_mature_tree(void)
 }
 #endif
 
-/* Every row above this point holds the board portrait, gravity down grid
- * +Y, and the block shape behind the settled-block skip was swept against
- * exactly those rows. The board is played LANDSCAPE, where down is grid +X
- * (bd esp32c6-1z6): the drop is 184 cells instead of 224, the floor is 224
- * wide instead of 184, and a ten-cell stream now runs past a block's 64-cell
- * side rather than its 32-cell one. Three rows close that, sand and water
- * first because they are the first two brushes a player touches. */
+/* Every row above holds the board portrait, and the block shape behind the
+ * settled-block skip was swept against exactly those rows. The board is
+ * played LANDSCAPE, down grid +X (bd esp32c6-1z6). Three rows close that -
+ * sand and water first, the palette's first two brushes. The geometry is
+ * in suite_sand_scenes.h, beside the builders. */
 #define LANDSCAPE_WATER_BUDGET_US      1
 #define LANDSCAPE_DEEP_WATER_BUDGET_US 1
 #define LANDSCAPE_SAND_BUDGET_US       1

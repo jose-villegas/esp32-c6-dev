@@ -57,6 +57,7 @@ tearDown(void) {}
 
 extern void sand_host_probe_run_full_step_control(void);
 extern void sand_host_probe_run_settled_flip_control(void);
+extern void sand_host_probe_run_settled_screen(void);
 extern void sand_host_probe_run_water(void);
 extern void sand_host_probe_run_mixed_flip(void);
 extern void sand_host_probe_run_settled_pool_to_landscape(void);
@@ -92,6 +93,7 @@ typedef struct {
 static const probe_scene_t SCENES[] = {
     {"full_step_control", sand_host_probe_run_full_step_control},
     {"settled_flip_control", sand_host_probe_run_settled_flip_control},
+    {"settled_screen", sand_host_probe_run_settled_screen},
     {"water", sand_host_probe_run_water},
     {"mixed_flip", sand_host_probe_run_mixed_flip},
     {"settled_pool_to_landscape", sand_host_probe_run_settled_pool_to_landscape},

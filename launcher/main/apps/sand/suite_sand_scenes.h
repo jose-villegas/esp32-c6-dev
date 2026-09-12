@@ -234,12 +234,11 @@ void build_water_over_lava_scene(sand_t *s);
 
 void build_gunpowder_basin_scene(sand_t *s);
 
-/* The landscape set. Every other scene in this file falls down grid +Y, but
- * the board is played held sideways, where physical down is grid +X (bd
- * esp32c6-1z6). That is not a relabelling: the grid is 184x224, so a
- * landscape pour drops 184 cells onto a floor 224 wide, and a block laid
- * 32 across by 64 along presents its LONG side to the stream instead of its
- * short one. These are built for it rather than transposed. */
+/* The landscape set. Every other scene here falls down grid +Y; the board
+ * is played sideways, down grid +X (bd esp32c6-1z6). Not a relabelling: the
+ * grid is 184x224, so a landscape pour drops 184 cells onto a floor 224
+ * wide, and a 32x64 block turns its long side to the stream. Built for it,
+ * not transposed. */
 #define LANDSCAPE_GX 1000
 
 /* The app's own brush - POUR_RADIUS_PX 10 at 2 px per cell - dragged along

@@ -989,6 +989,16 @@ for the full table and the two real device-only bugs that sweep found
 along the way (a stack overflow, two test fixtures that assumed the old
 size).
 
+**Those six candidates were all W ≤ 32 and H ≥ 32** - no square and no
+transpose of any of them - and every scene they were judged on poured down
+grid +Y. The board is played landscape, where down is grid +X, so the search
+space could not have found a landscape answer (bd `esp32c6-1z6`).
+`block_size_sweep.ps1`'s list is now closed under transpose plus the square,
+and `block_size_prescreen.sh` beside it ranks the same candidates on the host
+first. Only `SAND_BLOCK_W` is constrained - a power of two, for the mask in
+`dest_rows_full()`, and no narrower than `SAND_LIQUID_SIGHT` for the
+invariant above; `SAND_BLOCK_H` is only ever divided by.
+
 ## Dirty-row tracking
 
 Separate from block sleeping, and for a different purpose: block sleeping

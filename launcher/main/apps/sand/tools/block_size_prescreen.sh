@@ -19,9 +19,15 @@
 # Usage:
 #   ./block_size_prescreen.sh [-n BLOCKS] [-o OUTDIR] [scene ...]
 #
-# Default scenes are the three landscape rows plus both liquid-free
-# controls; naming scenes overrides that list. --list on any built probe
-# prints what is available.
+# Default scenes are the three landscape rows, the two settled-board rows
+# and both controls; naming scenes overrides that list. --list on any built
+# probe prints what is available.
+#
+# settled_screen is not optional. A block shape trades two things against
+# each other - a smaller block skips a busy board more finely, and scans
+# more blocks on a board where nothing moves - and that second half only
+# appears on a settled row. Rank a candidate without it and every small
+# block looks free.
 #
 # POSIX sh, same portability reasoning as launcher/test/run_tests.sh.
 
@@ -43,7 +49,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-[ -n "$SCENES" ] || SCENES="landscape_water landscape_deep_water landscape_sand full_step_control settled_flip_control"
+[ -n "$SCENES" ] || SCENES="landscape_water landscape_deep_water landscape_sand settled_screen plant_idle full_step_control settled_flip_control"
 
 # Closed under transpose, plus the square, for the reason
 # block_size_sweep.ps1's header gives. BASELINE must be the shape sand.h

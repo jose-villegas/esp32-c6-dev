@@ -2691,8 +2691,13 @@ void landscape_sand_pour(sand_t *s, int step)
     landscape_pour(s, CELL_MAKE(MAT_SAND, 0), step);
 }
 
+/* Clears the grid itself rather than trusting the caller's buffer: the pour
+ * places into empty cells only, so a board handed over dirty is a different
+ * scene, and a malloc here is not zeroed. */
 static void build_landscape_bed(sand_t *s, int steps)
 {
+    memset(s->cells, CELL_EMPTY, (size_t)s->w * (size_t)s->h);
+
     for (int i = 0; i < steps; i++) {
         for (int k = 0; k < LANDSCAPE_BED_STAMPS; k++) {
             landscape_stamp(s, CELL_MAKE(MAT_SAND, 0),
@@ -2798,7 +2803,6 @@ static void test_the_landscape_beds_sleep_against_the_landscape_floor(void)
     }
 
     landscape_fixture(&s2, big, blocks, 29u);
-    memset(big, 0, (size_t)REAL_W * REAL_H);
     build_landscape_deep_bed_scene(&s2);
 
     const int deep = sand_count(&s2);
