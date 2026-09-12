@@ -44,7 +44,7 @@ editor cannot edit arithmetic, only data.**
 
 So a screen becomes authored JSON, baked by a generator into a header that
 the same pure function consumes. Exactly the move the boot animation already
-made, and the fifth instance of the generated-file convention in CLAUDE.md
+made, and the fifth instance of the generated-file convention in docs/Launcher-Architecture.md
 (banner naming the regenerate command, generator validates before emitting,
 shipped artifact tested independently of the generator).
 

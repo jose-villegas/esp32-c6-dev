@@ -113,7 +113,7 @@ A file of deviations does lean harder on one version's defaults - which is
 an argument for the pin above, not against the cleanup, since the pin is
 what a version bump has to confront anyway.
 
-## 3. Two rules are now referred to but not written down anywhere
+## 3. Rules referred to but not written down anywhere - FIXED
 
 Keeping `AGENTS.md`, `CLAUDE.md`, `.claude/` and `.codex/` out of the
 repository is deliberate: they are personal, and `adb2028` plus `39f7f1f`
@@ -128,14 +128,31 @@ to `AGENTS.md`, and `comment-rules.yml`'s own header attributes its rules to
 so a contributor can fail CI on a rule that the repository describes only by
 pointing at a file that is not in it.
 
-The fix is to move just those two rules into `docs/`, where the shared,
-non-personal part of that material belongs: the comment policy as its own
-section of the style guide (it is a style rule, and the guide is the only
-place looking for it), and the layering rule alongside the headers section it
-qualifies. Then drop the `AGENTS.md` references from the guide and reword
-`comment-rules.yml`'s header to cite the scripts and the guide. Nothing
-personal moves into the tree - the policy those checkers already enforce is
-not personal, it is just currently unwritten.
+Two pointers was the count in the style guide. Grepping the tracked tree
+found **22 citations across 14 files** - C sources, shell scripts, Python
+tools and four docs - all naming `CLAUDE.md` as the authority for a rule:
+the generated-sources convention, the `app_*.c` naming split, "watch it fail
+before it passes", "pass time in", the DEVICE_BUILD guard, the formatting
+section, the first comment rule.
+
+Every one of those rules already had a home in `docs/`, so the work was
+repointing rather than writing: generated sources and the `app_*.c` split to
+`docs/Launcher-Architecture.md`, the testing rules to
+`docs/Testing-Guide.md`, formatting and comments to this guide. The comment
+policy itself and the comment half of the layering rule were the two with no
+home at all, and are now a **Comments** section in
+`docs/C-Style-Guide.md`, written from what the three checkers actually
+enforce rather than from the deleted file. `comment-rules.yml`'s header
+cites the guide instead of `CLAUDE.md`. Nothing personal moved into the
+tree: a policy three CI jobs enforce on every push is not personal, it was
+just unwritten.
+
+One citation was not merely dangling but false. `scripts/write-test-local.sh`
+justified formatting only its own inserted line ranges by quoting "do not
+reformat pre-existing files, .clang-format disagrees with the current style
+in places" - true when it was written, untrue since #193 made the tree
+match. The mechanism is still right (a tool should touch only what it wrote)
+so it keeps it, with the real reason and the old one marked as history.
 
 ## 4. The MISRA stubs silence findings in live code, not just in tables
 

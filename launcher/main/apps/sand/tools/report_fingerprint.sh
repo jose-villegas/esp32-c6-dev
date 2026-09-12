@@ -62,7 +62,8 @@ OUT_BIN="$BUILD_DIR/grid_fingerprint"
 
 # The portable half of the app only. app_sand.c and sand_ui.c are the
 # hardware-facing entry points (the apps/<name>/app_*.c convention in
-# CLAUDE.md) and do not belong in a host build; palette.c and row_runs.c
+# docs/Launcher-Architecture.md) and do not belong in a host build;
+# palette.c and row_runs.c
 # are draw-path concerns the grid state does not depend on.
 # shellcheck disable=SC2086
 "$CC_BIN" $CFLAGS -I "$MAIN_DIR" -I "$SAND_DIR" \

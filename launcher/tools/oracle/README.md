@@ -28,7 +28,7 @@ try QEMU" without someone re-deriving this.
 ## Route B (this one): cross-compile the portable sim, run it bare-metal on generic QEMU
 
 The sand simulation is pure portable C with zero peripherals (see the repo
-`CLAUDE.md`'s testing section: "pass time in", "pass the environment in" —
+`docs/Testing-Guide.md`: "pass time in", "pass the environment in" —
 the whole reason it's host-testable at all). It doesn't need a C6 model.
 It needs an ELF, an ISA (`rv32imac_zicsr_zifencei`/`ilp32` — the device's
 own, from the device profile), and somewhere to put a stack.

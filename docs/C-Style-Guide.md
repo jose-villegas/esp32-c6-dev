@@ -6,11 +6,12 @@ components and generated files keep their upstream or generator-owned form.
 Self-contained apps follow the guide, but do not define its conventions or
 provide its examples because they can be added or removed independently.
 
-The comment policy and the include/comment layering rule remain in
-`AGENTS.md`; this guide uses them without restating them. Cppcheck and the
-MISRA addon check semantic rules through `launcher/tools/misra_check.sh`.
-Their findings are not formatting or naming rules and are not part of this
-guide.
+The comment policy is under "Comments" below, and the layering rule comments
+obey is there with it; the include half of that rule lives in
+[`docs/Launcher-Architecture.md`](Launcher-Architecture.md), since it is
+about how the layers fit together rather than about C. Cppcheck and the MISRA
+addon check semantic rules through `launcher/tools/misra_check.sh`. Their
+findings are not formatting or naming rules and are not part of this guide.
 
 The guide deliberately takes structural ideas from
 [OpenBSD style(9)](https://man.openbsd.org/style.9), interface discipline from
@@ -97,7 +98,79 @@ that reaches `main` is a failed build, not a surprise six months later.
 ## Judgment rules
 
 These rules need a reader who understands the code. Do not add scripts that
-guess at them.
+guess at them. Comments are the one place where part of the rule *is* scored
+by a script, and the split is deliberate: a length, a cited name and an app
+name are decidable, and everything about whether a comment should exist is
+not.
+
+### Comments
+
+**A comment is the exception. Most code needs none.** Follow OpenBSD's
+balance: sparse comments, verbose code. The fix for a comment explaining a
+mechanism is nearly always a better name or an extracted function, not
+shorter prose.
+
+- **Never the HOW.** The code is the how. Needing to comment parts of a
+  function separately means the function is the problem.
+- **The WHAT is usually already in the names.** Drop it.
+- **The WHY only where it is genuinely needed** - a constraint, an external
+  fact, a measured number that is the evidence, a decision someone would
+  otherwise undo. Most of the time it is not needed.
+- **Never the journey.** git log owns "a first attempt...", "an earlier
+  version...", "was reverted". `scripts/find_narrative_comments.py` lists
+  existing cases.
+
+Keep a comment accurate or delete it - an outdated one is worse than none -
+so update it in the same edit that changes the code it describes.
+
+Shape follows OpenBSD `style(9)`: a one-line `/* ... */`, a `VERY important`
+one-liner in a three-line block, or real sentences filled like a paragraph.
+No headings inside a comment: one needing sections is a document, so put it
+in `docs/`. Nothing draws a `/*====` rule - `style(9)` has three comment
+shapes and none of them has one, and position is what marks a header.
+
+**300 characters is the aim, 500 the hard ceiling.** A run of consecutive
+own-line `//` lines, or of consecutive own-line `/* */` blocks with no code
+between them, counts as one comment for scoring, so chopping one explanation
+into adjacent blocks does not dodge the limit; length is the prose with
+markers and `*` gutters stripped, so re-wrapping never changes the score.
+
+**A file's header - its first comment - answers to height instead: 30 lines
+the aim, 50 the hard limit**, and 50 is already too long rather than a
+comfortable allowance. It says what the module IS and what was deliberately
+rejected; prose belonging beside the code it describes lives there, where the
+character rule applies to it.
+
+Two further rules a length alone cannot express. A comment may not name a
+function that does not exist - a trim that garbles a cited name leaves a
+comment pointing at nothing. And **nothing below `apps/` may name a
+particular app**: an app is a folder designed to be deleted whole, so a
+comment in a lower layer naming one is a dangling reference by construction,
+and it survives the code it described. Say what shape of caller needs the
+thing ("a checkbox toggle", "a per-tile badge") or state the rule a caller
+must follow. An app's own files may name anything below them; that direction
+cannot dangle. This is the comment half of the layering rule includes obey -
+see [`docs/Launcher-Architecture.md`](Launcher-Architecture.md).
+
+A NAME is all that is scripted. Borrowing an app's vocabulary is the same
+fault one step quieter - "an app's working grid" names no app but still
+assumes apps have grids, and `gfx` has no concept of a grain - and that one
+is read rather than checked, because the dirty tracker really does have a
+grid of cells and a font really does have a glyph cell. State the constraint
+itself instead: how large the block is, or how often the call happens.
+
+```sh
+scripts/check-comment-length.sh                 # whole repo, 20 worst listed
+scripts/check-comment-length.sh --changed main  # only comments a change touches
+scripts/check-comment-length.sh --files         # per-file counts
+```
+
+`.github/workflows/comment-rules.yml` holds the tree to all three checks on
+every push: length beside code and header height
+(`scripts/check_comment_length.py`), every cited function existing
+(`check_comment_symbols.py`), and no app named below `apps/`
+(`check_comment_layers.py`). The last two take their vocabulary from the tree
+itself, so neither needs updating when code moves.
 
 ### Names
 
@@ -164,9 +237,11 @@ implementation-only dependencies in the `.c` file.
 
 A `.c` file includes its own public header first when it has one. Follow it
 with standard-library headers, then ESP-IDF or other external headers, then
-project headers. Keep project includes layer-qualified as required by
-`AGENTS.md`. Do not expose a lower layer to a higher-layer type just to avoid
-passing a small value across the boundary.
+project headers. Keep project includes layer-qualified - `"gfx/gfx.h"`, not
+`"gfx.h"`, including between two files in the same folder; see
+[`docs/Launcher-Architecture.md`](Launcher-Architecture.md) for why. Do not
+expose a lower layer to a higher-layer type just to avoid passing a small
+value across the boundary.
 
 Keep a module's public contract small and stable. Add an exported function
 when another translation unit needs the operation, not merely to shorten the

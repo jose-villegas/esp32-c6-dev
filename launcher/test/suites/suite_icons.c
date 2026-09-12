@@ -6,8 +6,9 @@
  * transcribed BY HAND from icons.h's own icon_check_bitmap picture, not
  * read back from icons_system.h, so a match proves gen_icons.py reproduced
  * known-good pixels rather than merely round-tripping its own packer. This
- * is the independent witness CLAUDE.md's generated-file convention asks
- * for; suite_icons_system.c checks facts a scan can pin down instead.
+ * is the independent witness the generated-sources convention in
+ * docs/Launcher-Architecture.md asks for; suite_icons_system.c checks facts
+ * a scan can pin down instead.
  *
  * The two sizes exercised throughout are the module's two real callers:
  *   - 18px, a per-tile palette badge's icon size (scale 1 - see

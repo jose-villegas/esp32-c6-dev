@@ -39,7 +39,7 @@
 #include "util/fixed.h"
 #include "util/intmath.h"
 
-/* See gen_boot_anim_image.py; CLAUDE.md "Generated files". Also what
+/* See gen_boot_anim_image.py; docs/Launcher-Architecture.md "Generated sources". Also what
  * draw_image()'s own memcpy fast path below depends on being true. */
 _Static_assert(BOOT_ANIM_IMAGE_W == GFX_WIDTH && BOOT_ANIM_IMAGE_H == GFX_HEIGHT,
                "boot_anim_image.h was generated for a different panel - regenerate it: "

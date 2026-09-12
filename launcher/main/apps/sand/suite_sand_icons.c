@@ -2,8 +2,8 @@
  * Portable suite: icons_sand - structural facts about the brush screen's
  * baked artwork.
  *
- * Same reasoning as test/suites/suite_icons_system.c and CLAUDE.md's
- * generated-files convention: the expected rows below are transcribed by
+ * Same reasoning as test/suites/suite_icons_system.c and the generated-sources
+ * convention in docs/Launcher-Architecture.md: the expected rows below are transcribed by
  * hand from the artwork this app shipped before it was baked (not read back
  * from icons_sand.h itself), so a match here proves gen_icons.py reproduced
  * known-good pixels rather than merely round-tripping its own packer. Once

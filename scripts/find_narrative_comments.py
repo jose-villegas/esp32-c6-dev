@@ -3,7 +3,7 @@
 
     python scripts/find_narrative_comments.py [--min-chars 300] [--json PATH]
 
-CLAUDE.md's first comment rule: a comment states the constraint that holds
+docs/C-Style-Guide.md's first comment rule: a comment states the constraint that holds
 now, never the journey. This finds candidates for that rule by keyword, so it
 is a WORKLIST, NOT A VERDICT - "previously" can describe current behaviour and
 "failed" can be what a test asserts. Every hit still needs a person deciding

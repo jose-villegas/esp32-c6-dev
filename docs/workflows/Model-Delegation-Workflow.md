@@ -370,7 +370,7 @@ yours), and `qwen2.5:14b` (reviewed by `mistral-nemo:latest`) only renders
 that into a correctly-formatted function matching the target suite's own
 examples. The gate: the suite must not already have a test of that name,
 `run_tests.sh` must still pass afterward, and the new test must show up as
-PASS *exactly once* - CLAUDE.md's "watch it fail before it passes" turned
+PASS *exactly once* - docs/Testing-Guide.md's "watch it fail before it passes" turned
 into an automatic wiring check. `--regression-commit <SHA>` goes further
 and actually proves the test can fail, by inserting the same generated
 function into the tree as it stood at `<SHA>^` in an isolated worktree and
@@ -399,7 +399,7 @@ assumed away:
 - Formatting the whole suite file with `scripts/check-format.sh` (as
   fix-audited-code.sh does) rewrote ~18000 unrelated lines of a real
   file's house style for the sake of one new function - exactly what
-  CLAUDE.md's own formatting section warns against. Fixed by having the
+  docs/C-Style-Guide.md warns against. Fixed by having the
   insertion logic report the exact 1-based line ranges it touched, then
   calling `clang-format -i --lines=N:M` (repeatable per range) instead of
   formatting the file whole.

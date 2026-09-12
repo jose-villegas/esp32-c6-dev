@@ -38,7 +38,7 @@ wanting the same chevron have no shared place to put it.
 Four already exist, each with a generator in `launcher/tools/` and its output
 checked into the tree: `boot_anim_curve.h`, `boot_anim_timeline.h`,
 `boot_anim_image.h`, `gfx/fonts/font_lmroman_40.h`. They share a convention
-(CLAUDE.md, "Generated files"):
+(docs/Launcher-Architecture.md, "Generated sources"):
 
 - a banner naming the **exact** regenerate command;
 - the generator validates itself before emitting anything;
@@ -177,7 +177,7 @@ way is cheaper.
 
 Decided, not proposed: there is a shared system set for UI/UX vocabulary,
 and apps may also provide their own. The obvious reading of "system-wide"
-fights an existing rule, and the split is what resolves it. CLAUDE.md:
+fights an existing rule, and the split is what resolves it. docs/Launcher-Architecture.md:
 adding or removing an app touches no other file, and deleting the folder
 deletes the app, its logic and its tests cleanly. Put sand's funnel in a
 system atlas and deleting `apps/sand/` leaves artwork nothing draws.
@@ -227,7 +227,7 @@ generalizes almost unchanged.
 
 **Do not assert the baked bytes against a Python re-implementation of the
 packer.** That tests the generator twice and the artifact never — the
-failure mode CLAUDE.md's convention is written to prevent.
+failure mode docs/Launcher-Architecture.md's convention is written to prevent.
 
 ---
 

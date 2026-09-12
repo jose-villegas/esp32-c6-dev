@@ -836,7 +836,7 @@ Principles, each of which is already a repo habit:
 - **Data is baked, not parsed.** Textures, colormaps, maps, timelines and
   fonts go through generators into headers with the regenerate command
   in their banner, validated by the generator and tested independently
-  (the generated-files convention in `CLAUDE.md`).
+  (the generated-sources convention in `docs/Launcher-Architecture.md`).
 - **Allocate at `enter()`, free at `exit()`, nothing in between.**
 - **Per-target platform folders, one binary per board.** ESP-IDF picks
   the chip; `platform/<board>/` picks the bus clocks, the PSRAM policy

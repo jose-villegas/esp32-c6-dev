@@ -94,8 +94,8 @@ INCS="-I $MAIN_DIR -I $TEST_DIR -I $TEST_DIR/framework -I $TEST_DIR/stubs"
 # list minus its host-only stubs (this directory has its own, freestanding
 # ones - see README.md for why esp_timer_host.c couldn't be reused as-is).
 # app_*.c is deliberately absent: it is the hardware-facing entry point
-# (touch/gfx/app_sand.c), not portable logic - see the repo CLAUDE.md's
-# "Naming convention the test runner relies on".
+# (touch/gfx/app_sand.c), not portable logic - see the naming convention in
+# docs/Launcher-Architecture.md that the host test runner relies on.
 DEVICE_BUILD_SOURCES="
 $HERE/oracle_main.c
 $APP_SAND/tools/perf_probe/gfx_probe_stub.c

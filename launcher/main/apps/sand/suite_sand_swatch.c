@@ -4,7 +4,7 @@
  *
  * SWATCH_TEST_SPECS mirrors app_sand.c's brushes[] deliberately, not by
  * accident: that array lives in app_sand.c (an app_*.c, hardware-facing and
- * not host-linkable - see CLAUDE.md's naming convention), so a portable
+ * not host-linkable - see docs/Launcher-Architecture.md's naming convention), so a portable
  * suite cannot include it and keeps its own copy instead.
  */
 

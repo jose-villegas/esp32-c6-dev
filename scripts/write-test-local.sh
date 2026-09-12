@@ -32,7 +32,7 @@
 # 2. ./launcher/test/run_tests.sh must still pass, in full, afterward.
 # 3. The new test must show up in that output as PASS EXACTLY ONCE -- zero
 #    times means the RUN_TEST wiring didn't take; more than once means
-#    something duplicated. Either way this is CLAUDE.md's own "watch it
+#    something duplicated. Either way this is docs/Testing-Guide.md's own "watch it
 #    fail before it passes" turned into an automatic check on the wiring,
 #    not the logic.
 # 4. --regression-commit <SHA>, if given, goes one step further and
@@ -40,8 +40,8 @@
 #    into the tree as it stood at <SHA>^ (the commit BEFORE whatever fixed
 #    the bug this test is meant to guard), in an isolated worktree, and
 #    confirms it does NOT pass there. A test that already passes on the
-#    pre-fix code cannot be guarding anything -- see CLAUDE.md's Testing
-#    section on exactly this failure mode. This step is a strong warning,
+#    pre-fix code cannot be guarding anything -- see docs/Testing-Guide.md's
+#    "Prove a test can fail" on exactly this. This step is a strong warning,
 #    not a hard abort: it tells you the test may not test what you think,
 #    but the decision to keep or rewrite it is still yours.
 #
@@ -324,8 +324,8 @@ if (mode() === "insert") {
   // Where to insert the new RUN_TEST(...) line: right after the LAST
   // UNCONDITIONAL existing one inside this function (ppDepth === 0),
   // copying its indentation. This codebase guards hardware-only tests with
-  // #ifdef DEVICE_BUILD around their own RUN_TEST line (see CLAUDE.md's
-  // Testing section) - the naive "last RUN_TEST anywhere in the function"
+  // #ifdef DEVICE_BUILD around their own RUN_TEST line (see
+  // docs/Testing-Guide.md) - the naive "last RUN_TEST anywhere in the function"
   // found live landed a portable test's wiring INSIDE that guard, where a
   // host build silently compiles it back out ("defined but not used"
   // becomes the only symptom, not a test failure). #else/#elif don't
@@ -348,15 +348,11 @@ if (mode() === "insert") {
 
   // Built as flat line arrays (not one multi-line string per chunk) so the
   // exact 1-based line RANGES of what got inserted can be reported back --
-  // needed so the caller can format ONLY those lines (clang-format
-  // --lines=N:M) rather than the whole file. This codebase deliberately
-  // does not match .clang-format throughout (see CLAUDE.md's formatting
-  // section: "do not reformat pre-existing files, .clang-format disagrees
-  // with the current style in places") - confirmed live the naive
-  // whole-file `check-format.sh` rewrote all ~18000 lines of a real suite
-  // file's brace/pointer/alignment style for the sake of formatting one
-  // new function, which is exactly the mistake that rule exists to
-  // prevent.
+  // the caller then formats ONLY those lines (clang-format --lines=N:M),
+  // keeping the diff to what this script wrote. That was once a hard
+  // requirement rather than a courtesy: before the tree was formatted to
+  // .clang-format, a whole-file run rewrote ~18000 lines of a real suite
+  // file for the sake of one new function.
   const newFnLines = newFn.split("\n");
   const prefix = lines.slice(0, declLineIdx);
   const middle = lines.slice(declLineIdx, insertRunTestAfter + 1);

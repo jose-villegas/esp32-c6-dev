@@ -324,7 +324,7 @@ def find_cc():
 def find_bash():
     """build_flash_dev.sh is POSIX sh, written to run under Git Bash (see its
     own top comment) - idf.py itself cannot run under Git Bash on Windows
-    (see the project's CLAUDE.md), but build_flash.sh already routes around
+    (see docs/Testing-Guide.md), but build_flash.sh already routes around
     that itself (tools/idf.sh -> idf_shim.bat), so running the .sh under
     Git Bash's own bash.exe is the one thing this needs to get right.
 
@@ -516,7 +516,7 @@ class Renderer:
         if bash is None:
             raise RenderError(
                 500, "no bash.exe found - build_flash_dev.sh needs Git Bash "
-                "(see the project's CLAUDE.md). The timeline files were "
+                "(see docs/Testing-Guide.md). The timeline files were "
                 "still written to main/boot/ above.")
         if not os.path.isfile(BUILD_FLASH_SCRIPT):
             raise RenderError(
