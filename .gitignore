@@ -145,3 +145,7 @@ $RECYCLE.BIN/
 # Structured prompts for handing work to another session or a local model.
 # Working notes, revised per round - not part of the shipped project.
 .prompts/
+
+### Local agent instructions
+AGENTS.md
+CLAUDE.md
