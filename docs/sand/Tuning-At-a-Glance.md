@@ -1,7 +1,7 @@
 # Tuning at a Glance
 
 The visual map of [`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md)
-— seventeen numbered attempts to make a 41,216-cell falling-sand simulation
+— twenty-one numbered attempts to make a 41,216-cell falling-sand simulation
 fit its frame budgets on a 160 MHz single-core chip with no data cache. The
 prose file (now condensed to a table + negative-result lists) is the
 authority when the two disagree; this page is for a first read, a
@@ -19,60 +19,74 @@ who pegged it — do not "correct" it to × 0.9 for consistency. The three
 present-cost rows are tight regression guards on a bus-bound path, not
 reduction targets.
 
-Numbers below are one `--perf-scope` capture of `main` at `c2c672e`,
-2026-09-11, and the whole table comes from that single capture rather than
-being assembled from several. It was taken **twice on the same image** and
-every row reproduced to within 2 µs, so this instrument's run-to-run spread
-is under 0.01%: the ±1% band the campaign reads deltas against is entirely
-cross-binary (flash layout), never run-to-run. Six rows were re-pegged from
-it, marked below.
+Numbers below are one `--perf-scope` capture at block **16×32** (attempt
+21), and the whole table comes from that single capture rather than being
+assembled from several. The instrument's run-to-run spread is under 0.01%
+(an earlier capture, taken twice on one image, reproduced every row to
+within 2 µs), so the ±1% band the campaign reads deltas against is
+entirely cross-binary (flash layout), never run-to-run. Ten rows were
+re-pegged from this capture, marked below; two are **knowingly red** and
+were not.
 
 | Test | Measured | Target | To close |
 |---|---:|---:|---:|
-| Settled screen, nothing moves | 59 µs | 52 | 7 µs, but one microsecond is 1.7% at this magnitude - read this row as quantised |
-| Full-size step, all falling (control) | 5,584 µs | 5,800 | passes: 216 µs spare, and deliberately not tightened |
-| Gravity flip, settled pile (control) | 5,684 µs | 5,900 | passes: 216 µs spare, same |
-| Mixed scene flip | 9,311 µs | 8,300 | 1,011 µs · **re-pegged** from 11,700 |
-| Screen of water collapsing | 12,060 µs | 10,800 | 1,260 µs · **re-pegged** from 14,400 |
-| Filling basin | 16,077 µs | 14,400 | 1,677 µs |
-| Settled pool → landscape | 18,981 µs | 17,000 | 1,981 µs · **re-pegged** from 27,100 |
-| Boiler, sustained boil | 28,125 µs | 25,300 | 2,825 µs · **re-pegged** from 28,500 |
-| Gunpowder basin | 33,114 µs | 28,200 | 4,914 µs - left red, see below |
-| Half screen of gas, quarter turn | 47,956 µs | 46,100 | 1,856 µs |
-| Campfire on a sand bed | 56,612 µs | 51,200 | 5,412 µs |
-| Snowfall | 63,371 µs | 57,000 | 6,371 µs |
-| Growing plant bed | 68,078 µs | 65,800 | 2,278 µs |
-| Plant ruin | 83,170 µs | 74,800 | 8,370 µs |
-| Four liquids reacting | 86,920 µs | 78,200 | 8,720 µs · **re-pegged** from 89,200 |
-| Wet earth (× 0.8 row) | 91,618 µs | 80,000 | 11,618 µs |
-| Thermal shock lattice | 93,029 µs | 89,000 | 4,029 µs |
-| Full screen of fire, steady | 93,062 µs | 87,700 | 5,362 µs |
-| Every material at once | 93,696 µs | 81,600 | 12,096 µs |
-| Lava stress scene | 106,354 µs | 95,700 | 10,654 µs · **re-pegged** from 109,000 |
-| Smoke + steam screen | 110,572 µs | 103,600 | 6,972 µs |
-| Packed screen of gas, quarter turn | 138,552 µs | 128,800 | 9,752 µs |
-| Water over lava | 190,721 µs | 179,300 | 11,421 µs |
-| Fire cascade through gas | 225,190 µs | 222,700 | 2,490 µs |
+| Settled screen, nothing moves | 119 µs | 52 | 67 µs · **knowingly red** - the block-shape trade, see below |
+| Settled plant garden | 119 µs | 54 | 65 µs · **knowingly red**, same trade |
+| Gravity flip, settled pile (control) | 5,071 µs | 5,900 | passes: 829 µs spare, and deliberately not tightened |
+| Full-size step, all falling (control) | 6,128 µs | 5,800 | 328 µs - this control went **+10.1%** on the shape change and is not noise; see attempt 21 |
+| Settled pool → landscape | 9,763 µs | 8,700 | 1,063 µs · **re-pegged** from 17,000 |
+| Screen of water collapsing | 10,743 µs | 9,600 | 1,143 µs · **re-pegged** from 10,800 |
+| Landscape sand onto sand | 11,618 µs | 10,400 | 1,218 µs · **re-pegged** from 22,900 |
+| Filling basin | 12,114 µs | 10,900 | 1,214 µs · **re-pegged** from 14,400 |
+| Mixed scene flip | 18,984 µs | 8,300 | 10,684 µs |
+| Boiler, sustained boil | 21,922 µs | 25,300 | passes: 3,378 µs spare, within this pair's floor of the number it was pegged from |
+| Finished tree | 25,079 µs | 21,600 | 3,479 µs |
+| Gunpowder basin | 29,549 µs | 28,200 | 1,349 µs - left red |
+| Campfire on a sand bed | 35,963 µs | 32,300 | 3,663 µs · **re-pegged** from 51,200 |
+| Landscape water onto sand | 42,290 µs | 38,000 | 4,290 µs · **re-pegged** from 48,100 |
+| Snowfall | 46,265 µs | 41,600 | 4,665 µs · **re-pegged** from 57,000 |
+| Half screen of gas, quarter turn | 47,599 µs | 46,100 | 1,499 µs - **regressed into red** on the shape change, +3.5% |
+| Landscape water onto a deep bed | 54,458 µs | 49,000 | 5,458 µs · **re-pegged** from 64,700 |
+| Wet earth (× 0.8 row) | 59,824 µs | 47,800 | 12,024 µs · **re-pegged** from 80,000 |
+| Growing plant bed | 63,397 µs | 57,000 | 6,397 µs · **re-pegged** from 65,800 |
+| Four liquids reacting | 73,521 µs | 78,200 | passes: 4,679 µs spare |
+| Plant ruin | 79,405 µs | 74,800 | 4,605 µs |
+| Plant brush pour | 86,105 µs | 76,200 | 9,905 µs |
+| Full screen of fire, steady | 89,608 µs | 87,700 | 1,908 µs |
+| Thermal shock lattice | 94,649 µs | 89,000 | 5,649 µs |
+| Every material at once | 95,512 µs | 81,600 | 13,912 µs |
+| Lava stress scene | 98,484 µs | 95,700 | 2,784 µs |
+| Smoke + steam screen | 114,136 µs | 103,600 | 10,536 µs |
+| Packed screen of gas, quarter turn | 143,352 µs | 128,800 | 14,552 µs |
+| Water over lava | 181,715 µs | 179,300 | 2,415 µs |
+| Fire cascade through gas | 220,748 µs | 222,700 | passes: 1,952 µs spare |
 
 The three present-cost rows from the same capture, with the strip-send
-counts that are the only movable part of them:
+counts that are the only movable part of them. **These are the only rows a
+block-shape change cannot move** — their timed window holds no
+`sand_step()` at all — which is what made them attempt 21's reference when
+the two liquid-free controls could not be one:
 
 | Test | Measured | Target | Full / gathered / partial band-sends |
 |---|---:|---:|---|
-| Present, falling sand checkerboard | 9,790 µs | 9,650 | 50 / 13 / 26 over 20 frames |
-| Present, lava stress | 13,821 µs | 12,200 | 81 / 24 / 19 over 20 frames |
-| Present, thermal shock lattice | 17,850 µs | 17,450 | 70 / 0 / 0 over 10 frames |
+| Present, falling sand checkerboard | 9,793 µs | 9,650 | 50 / 13 / 26 over 20 frames |
+| Present, lava stress | 13,810 µs | 12,200 | 81 / 24 / 19 over 20 frames |
+| Present, thermal shock lattice | 18,030 µs | 17,450 | 70 / 0 / 0 over 10 frames |
 
 - Fixed RNG seeds reproduce these numbers to the microsecond on an
   identical build; what moves them *between* builds is flash layout — see
   [the layout lottery](#the-layout-lottery). `sand_step` is pinned, so
   the two control rows no longer draw a ticket; read every other swing
-  against them first.
-- **Both control rows pass their own reduction targets**, which no other
-  row does, and they stay untightened for the reason they were left alone
-  in 2026-09-10's re-peg: a control is there to be compared against, and
-  giving the two rows nobody is trying to reduce a reduction target of
-  their own costs the campaign its only stable reference.
+  against them first — **except for a change to the block geometry**,
+  which both controls walk and which therefore moves them more than it
+  moves most rows it is being measured on (attempt 21). For that one class
+  of change the present rows above are the reference.
+- **The control rows stay untightened** for the reason they were left
+  alone in 2026-09-10's re-peg: a control is there to be compared against,
+  and giving the two rows nobody is trying to reduce a reduction target of
+  their own costs the campaign its only stable reference. The settled-pile
+  one still passes with room; the all-falling one no longer does, and is
+  left at its number rather than loosened.
 - The present-cost falling-sand guard was thought to pass on a favourable
   layout roll. It does not: `gfx_present()`'s own placement was measured
   across five addresses on 2026-09-10 and moves that row by at most 1.4%
@@ -84,8 +98,10 @@ counts that are the only movable part of them:
   fails by 1 µs in one and passes by 1 µs in the other.
 - **A row that passes gets re-pegged; a row that fails does not.** The
   target is the demand, so resetting it on a row that has not met it
-  erases the demand rather than restating it — which is why nine rows
-  measured under their own anchor in this capture and none of them moved.
+  erases the demand rather than restating it. That rule is what leaves the
+  two settled rows red at 119 µs against 52 and 54: the shape change made
+  them dearer deliberately, and raising a budget to fit a cost is the one
+  move the campaign does not make.
 - One standing coverage gap: no budgeted row runs a tilted gravity, and
   attempt 14's off-axis cost (+29–37%) is therefore measured by nothing.
 - **The gunpowder basin is the one row moving the wrong way, and the scope
@@ -187,7 +203,7 @@ own table.
 | 03 | 🔴 | Thread block indices instead of dividing | Strictly less arithmetic, measured worse twice, never fully diagnosed. Two failures on one path became the signal for 04. |
 | 04 | 🟢 | Stop pushing wakes — pull them | Deleted the per-move notify machinery; the existing end-of-step pass asks instead. O(moves) → O(blocks). Flip **−26%**, water **−15%**, six functions deleted. |
 | 05 | 🔴 | Stagger the mass wake-up | Three granularities measured; each won one axis, lost another. Kept on a branch, unmerged. **Correct and bounded still isn't worth it.** |
-| 06 | 🟢 | Sweep the block size | It had shipped as a guess. Six `(W,H)` pairs on real hardware: 16×64 → **32×64**, the only pair clearing the settled-screen budget. |
+| 06 | 🟢 | Sweep the block size | It had shipped as a guess. Six `(W,H)` pairs on real hardware: 16×64 → **32×64**, the only pair clearing the settled-screen budget — on a search space of portrait shapes judged by portrait scenes. Attempt 21 reopened it and landed on 16×32. |
 | 07 | 🟠 | A fourth material vs. the inliner | Sharing movement code with gas regressed twice (un-inlined hot path +26%; 3.9 KB duplicated into flash, 2×). The split that shipped quietly planted 08's landmine. |
 | 08 | 🟠 | Three good ideas, zero effect | Force-inline, IRAM, RNG early-out: all correct, all reverted — **the failing test never calls that function.** Moving a grain costs ~3.2 ms/step more than failing to move one. |
 | 09 | 🟢 | Delete the row cache | `ROW_NO_LIQUID` cost **33,426 writes/step** to save 104 cheap row scans. The whole `row_state` buffer went. Failures **3 → 1**. |

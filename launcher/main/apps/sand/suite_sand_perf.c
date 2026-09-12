@@ -166,9 +166,9 @@ static void test_a_screen_of_water_fits_in_the_frame_budget(void)
      * rather than a cell, and takes a second sweep across the flow (the only
      * reason a tilted pool levels at all). This is the transient cost of a
      * screen-wide collapse - water at rest is 45 us; if this cost becomes
-     * sustained, argue the budget down instead of up. Re-pegged 2026-09-11,
-     * perf-scoped: measured 12060 -> target 10800, from 16043 -> 14400. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(10800, (int)per_step,
+     * sustained, argue the budget down instead of up. Re-pegged perf-scoped:
+     * measured 10743 -> target 9600. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(9600, (int)per_step,
         "a screen-wide collapse of water must still land inside a frame or "
         "two - the search across the flow is the thing to suspect");
 }
@@ -369,7 +369,10 @@ static void test_a_screen_of_settled_sand_costs_almost_nothing(void)
         "and nothing may have moved");
     /* Re-pegged at measured * 0.9 from the first capture after the sweep
      * stopped building a per-row context for a block row it was going to
-     * skip whole (esp32c6-lgc): 58 us, where the same board cost 269. */
+     * skip whole (esp32c6-lgc): 58 us, where the same board cost 269.
+     * KNOWINGLY RED at block 16x32, which measures 119: a narrower block
+     * means more of them to scan, and that was accepted because a still
+     * board has no motion for the cost to lag. Do not raise it to suit. */
     TEST_ASSERT_LESS_THAN_MESSAGE(52, (int)per_step,
         "sand that is not moving must cost almost nothing - if this fails, "
         "rows are being examined that had no reason to be");
@@ -525,10 +528,8 @@ static void test_turning_a_settled_pool_to_landscape_fits_in_the_frame_budget(vo
         "turning the board must move water, not create or destroy it - the "
         "cell COUNT changes as the pool re-levels, the mass must not");
 
-    /* MEASURED 18,981 us per step on device, 2026-09-11, perf-scoped.
-     * Budget is that x 0.9 rounded DOWN to 17,000. The 27,100 it replaces
-     * came from 30,134 measured 2026-09-10; cross-flow stopped walking
-     * rows and spans it cannot draw from between the two. */
+    /* MEASURED 9,763 us per step on device, perf-scoped, after the block
+     * narrowed to 16x32. Budget is that x 0.9 rounded DOWN to 8,700. */
 
     /* THE 14000 THIS REPLACES WAS NEVER A BUDGET - it was borrowed from
      * the water screen so the row would compile, and said so. It also
@@ -539,7 +540,7 @@ static void test_turning_a_settled_pool_to_landscape_fits_in_the_frame_budget(vo
      * never runs here at all - s->impulse_count is 0 for all 390 steps,
      * host-counted 2026-09-06 - and a host pass map puts ~48% of the cost
      * in cross-flow, ~1% reactions, ~1.5% gas. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(17000, (int)per_step,
+    TEST_ASSERT_LESS_THAN_MESSAGE(8700, (int)per_step,
         "turning the board a quarter turn with a settled pool on it must "
         "still fit in a frame or two - the pool re-levels across the whole "
         "grid width, so the cross-flow search is the thing to suspect, and "
@@ -742,8 +743,8 @@ static void test_a_growing_plant_bed_fits_in_the_frame_budget(void)
     free(blocks);
 
     /* RED ON PURPOSE, reduction target, not regression guard. Soak/dry is 28%
-     * of this step. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(65800, (int)per_step,
+     * of this step. Re-pegged perf-scoped: measured 63,397 -> target 57,000. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(57000, (int)per_step,
         "a bed of growing plants costs three frames a step - a reduction "
         "target at measured x 0.9, so failing means the work is not done yet");
 }
@@ -789,11 +790,10 @@ static void test_a_campfire_on_a_sand_bed_fits_in_the_frame_budget(void)
     free(big);
     free(blocks);
 
-    /* MEASURED 56,963 us per step on device, 2026-09-09
-     * (capture_ref_5cf243b_20260909_054... ). Budget is that x 0.9 = 51,266,
-     * rounded DOWN to 51,200 so the target is never looser than the
-     * convention. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(51200, (int)per_step,
+    /* MEASURED 35,963 us per step on device, perf-scoped, after the block
+     * narrowed to 16x32. Budget is that x 0.9 = 32,366, rounded DOWN to
+     * 32,300 so the target is never looser than the convention. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(32300, (int)per_step,
         "a small fire on a settled sand bed is the shape the app is usually "
         "in - a reduction target at measured x 0.9, so failing means the work "
         "is not done yet");
@@ -1482,7 +1482,9 @@ static void test_the_wet_earth_scene_fits_in_the_frame_budget(void)
     free(big);
     free(blocks);
 
-    TEST_ASSERT_LESS_THAN_MESSAGE(80000, (int)per_step,
+    /* Measured 59,824 perf-scoped, after the block narrowed to 16x32, x 0.8
+     * rounded down - this row's own exception to the file-wide x 0.9. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(47800, (int)per_step,
         "wet earth is held to measured x 0.8 - a deliberately tighter "
         "reduction target than the rest of the file's x 0.9, set by "
         "explicit instruction - so failing means the work is not done, "
@@ -1631,14 +1633,14 @@ void sand_host_probe_run_gunpowder_basin(void)
  * a row, and the coverage test beside it proves the scene does that inside
  * the window timed here. */
 
-/* Measured 83,173 / 16,077 / 63,371 us per step, perf-scoped, pegged at that
+/* Measured 83,173 / 12,114 / 46,265 us per step, perf-scoped, pegged at that
  * x 0.9 rounded DOWN - so all three ship RED, a reduction target rather than
  * a guard, as every row here was first set. The host ranked all three right
  * and priced none: 137x, 177x, 176x against the 179-214x its comparable rows
  * predicted. */
 #define PLANT_RUIN_BUDGET_US     74800
-#define FILLING_BASIN_BUDGET_US  14400
-#define SNOWFALL_BUDGET_US       57000
+#define FILLING_BASIN_BUDGET_US  10900
+#define SNOWFALL_BUDGET_US       41600
 
 /* 84,706 us a step, perf-scoped, pegged at that x 0.9 rounded down like the
  * three above - the third dearest scene in the suite, behind water over
@@ -1648,7 +1650,7 @@ void sand_host_probe_run_gunpowder_basin(void)
 /* 60 us, pegged the same way, and the number worth writing down: the same
  * board cost 28,362 before a landed plant stopped arming the reaction pass
  * (see may_have_faller/faller_may_move in sand.h). What is left is the
- * sweep's own block scan, which the settled-sand row measures too. */
+ * sweep's own block scan - knowingly red at 16x32, see that row. */
 #define PLANT_IDLE_BUDGET_US     54
 
 /* THE ONE ROW HERE WITH NO DEVICE CAPTURE BEHIND IT: another round held the
@@ -2034,12 +2036,12 @@ void sand_host_probe_run_mature_tree(void)
 /* Every row above holds the board portrait, and the block shape behind the
  * settled-block skip was swept against exactly those rows. The board is
  * played LANDSCAPE, down grid +X (bd esp32c6-1z6) - geometry in
- * suite_sand_scenes.h. Measured 53,513 / 71,905 / 25,546 us, perf-scoped,
- * pegged at that x 0.9 rounded down like every row above, so all three
- * ship red as reduction targets. Controls 5,564 and 5,656. */
-#define LANDSCAPE_WATER_BUDGET_US      48100
-#define LANDSCAPE_DEEP_WATER_BUDGET_US 64700
-#define LANDSCAPE_SAND_BUDGET_US       22900
+ * suite_sand_scenes.h. Measured 42,290 / 54,458 / 11,618 us, perf-scoped at
+ * block 16x32, pegged at that x 0.9 rounded down like every row above, so
+ * all three ship red as reduction targets. */
+#define LANDSCAPE_WATER_BUDGET_US      38000
+#define LANDSCAPE_DEEP_WATER_BUDGET_US 49000
+#define LANDSCAPE_SAND_BUDGET_US       10400
 
 static int64_t landscape_scene_us_per_step(sand_t *real, bool water,
                                            int64_t *worst_out)
