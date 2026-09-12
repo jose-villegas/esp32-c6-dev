@@ -1640,12 +1640,11 @@ void sand_host_probe_run_gunpowder_basin(void)
  * sweep's own block scan, which the settled-sand row measures too. */
 #define PLANT_IDLE_BUDGET_US     54
 
-/* PEGGED FROM THE HOST, not a device capture, and the one row here that is -
- * COM3 was held by another round for the whole of this one. Ranked, not
- * priced: the host ratio against the settled-garden row beside it, which does
- * have a device number, is what this is scaled from, so treat it as a
- * placeholder a capture should replace rather than as a measured figure. */
-#define MATURE_TREE_BUDGET_US    900
+/* THE ONE ROW HERE WITH NO DEVICE CAPTURE BEHIND IT: another round held the
+ * board. Ranked, not priced - 138 us on the host against the growing bed's
+ * 420 for the same board, applied to that row's device figure, then the
+ * file-wide x 0.9. Replace it with a capture rather than trusting it. */
+#define MATURE_TREE_BUDGET_US    21600
 
 /* A grown plant bed with acid eating down to its roots on one side of a wall
  * and lava burning its canopy on the other (build_plant_ruin_scene(), shared
@@ -2007,9 +2006,9 @@ static void test_a_finished_tree_fits_in_the_frame_budget(void)
     free(blocks);
 
     TEST_ASSERT_LESS_THAN_MESSAGE(MATURE_TREE_BUDGET_US, (int)per_step,
-        "a tree that has stopped growing is held to a host-ranked "
-        "placeholder - see MATURE_TREE_BUDGET_US, which wants a device "
-        "capture behind it");
+        "a tree that has stopped growing is held to a host-RANKED number, "
+        "not a measured one - see MATURE_TREE_BUDGET_US, which wants a "
+        "device capture behind it before either outcome means much");
 }
 
 #ifdef SAND_HOST_PROBE
