@@ -13,8 +13,10 @@ set(app_srcs
     "input/gesture.c"
     "input/imu.c"
     "ui/ui.c"
+    "ui/ui_control_center.c"
     "ui/ui_launcher.c"
     "ui/ui_pointer.c"
+    "ui/system_navigation.c"
     "util/device_state.c"
     "util/screenshot.c"
 )

@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "screen": "control_center",
+  "element_order": [
+    "grabber",
+    "header",
+    "wifi",
+    "bluetooth",
+    "link",
+    "volume",
+    "brightness",
+    "notifications_header",
+    "library_notification",
+    "controller_notification"
+  ],
+  "orientations": {
+    "portrait": {
+      "canvas": [368, 448],
+      "rects": {
+        "grabber": [150, 10, 68, 4],
+        "header": [16, 26, 336, 20],
+        "wifi": [16, 54, 160, 78],
+        "bluetooth": [192, 54, 160, 78],
+        "link": [16, 144, 336, 58],
+        "volume": [16, 214, 160, 52],
+        "brightness": [192, 214, 160, 52],
+        "notifications_header": [16, 280, 336, 18],
+        "library_notification": [16, 308, 336, 58],
+        "controller_notification": [16, 378, 336, 58]
+      }
+    },
+    "landscape": {
+      "canvas": [448, 368],
+      "rects": {
+        "grabber": [190, 10, 68, 4],
+        "header": [16, 26, 416, 20],
+        "wifi": [16, 54, 130, 84],
+        "bluetooth": [159, 54, 130, 84],
+        "link": [302, 54, 130, 84],
+        "volume": [16, 150, 203, 52],
+        "brightness": [229, 150, 203, 52],
+        "notifications_header": [16, 218, 416, 18],
+        "library_notification": [16, 246, 416, 50],
+        "controller_notification": [16, 306, 416, 50]
+      }
+    }
+  }
+}

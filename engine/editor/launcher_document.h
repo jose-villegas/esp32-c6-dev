@@ -1,6 +1,5 @@
 #pragma once
 
-#include <array>
 #include <cstddef>
 #include <filesystem>
 #include <optional>
@@ -8,11 +7,9 @@
 #include <vector>
 
 #include "core/edit_history.h"
+#include "core/layout.h"
 
-enum class LauncherOrientation {
-    Portrait,
-    Landscape,
-};
+using LauncherOrientation = LayoutOrientation;
 
 enum class LauncherElement : std::size_t {
     StatusBar,
@@ -23,18 +20,8 @@ enum class LauncherElement : std::size_t {
     Count,
 };
 
-struct LauncherRect {
-    int x;
-    int y;
-    int width;
-    int height;
-};
-
-struct LauncherLayout {
-    int canvas_width;
-    int canvas_height;
-    std::array<LauncherRect, static_cast<std::size_t>(LauncherElement::Count)> rects;
-};
+using LauncherRect = LayoutRect;
+using LauncherLayout = FixedLayout<static_cast<std::size_t>(LauncherElement::Count)>;
 
 class LauncherDocument {
   public:

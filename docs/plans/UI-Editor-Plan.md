@@ -1,14 +1,15 @@
 # Plan: the Engine system workspace and its UI layout format
 
-**Status**: in progress. The launcher document, generator, native editor,
-real-renderer preview, direct manipulation, undo/redo and explicit bake path
-are built on `feat/engine-bootstrap`.
+**Status**: in progress. The Launcher and Control Center documents, generators,
+native editor, real-renderer previews, direct manipulation, undo/redo, explicit
+bake paths and their firmware navigation are built on
+`feat/engine-bootstrap`.
 
 The current objective is the **System Workspace**: a host tool where
 firmware-owned screens are authored visually, rendered by the real device
-code, validated and baked for firmware. The launcher is its first document;
-Control Center, notifications and Settings are the next system-owned screen
-family. This is a component of the engine direction in
+code, validated and baked for firmware. Launcher and Control Center are its
+first two documents; Settings is the next system-owned screen family. This is
+a component of the engine direction in
 [`../Autana-Rendering-Roadmap.md`](../Autana-Rendering-Roadmap.md).
 
 ## Product boundary
@@ -115,10 +116,10 @@ different workspaces. The pattern is already proven.
 
 ## The foundation now in place
 
-The launcher layout is authored JSON, baked by a generator into a header that
-the same pure renderer consumes. The JSON remains human-readable source; the
-generated header remains output. The generator validates before emitting and
-the shipped artifact is tested independently.
+Each screen layout is authored JSON, baked by its generator into a header that
+the same pure renderer consumes. JSON remains human-readable source; generated
+headers remain output. Generators validate before emitting and shipped
+artifacts are tested independently.
 
 **The device never sees the editor, and never sees JSON.** It links a static
 baked table: no runtime layout engine, no solver, no allocation, no RAM
@@ -129,10 +130,12 @@ is not paid at all.
 
 ## What already exists
 
-- **The document.** `launcher_layout.json` carries stable element IDs and
-  geometry for both device orientations.
-- **The render path.** `engine_runtime` links the real launcher, Microui and
-  `gfx.c` in-process; edits preview without generating or recompiling.
+- **The documents.** `launcher_layout.json` and
+  `control_center_layout.json` carry stable element IDs and geometry for both
+  device orientations.
+- **The render path.** `engine_runtime` links the real Launcher and Control
+  Center renderers, Microui and `gfx.c` in-process; edits preview without
+  generating or recompiling.
 - **The editor shell.** SDL2 and Dear ImGui provide the system hierarchy,
   dual previews, inspector, history, validation and explicit save/bake flow.
 - **Independent checks.** The document, runtime bridge, generator and
@@ -234,18 +237,29 @@ every other host tool here is absent from `idf.py` and from
 
 4. **Direct manipulation.** Drag and resize in the editor, writing back to
    the JSON. A format that only a GUI can produce is still unacceptable, so
-   authored JSON remains readable and reviewable. **Built for the launcher,
-   including undo/redo.**
+   authored JSON remains readable and reviewable. **Built for Launcher and
+   Control Center, including undo/redo.**
 
 5. **System Workspace navigation.** Add Control Center as the second
    firmware-owned screen and model the swipe-down transition from Launcher.
    The hierarchy becomes a system screen/state navigator, while each screen
    keeps its own typed document adapter, renderer, validation and bake path.
+   **Initial slice built.** Firmware recognizes logical top/bottom edge swipes
+   across all rotations, and the editor can simulate both transitions.
+   Connectivity cards, volume and brightness sliders, and notification rows
+   render through the real Microui path. Live service state, notification
+   actions and transition animation remain follow-up work.
 
 6. **External game workflow, later.** Define a separate Game Workspace only
    after the runtime API, package format and app manifest are concrete. Do
    not use an existing app such as Sand merely to make the System Workspace
    appear generic.
+
+Service-backed widget state belongs in a follow-up PR so this navigation slice
+does not mix authored UI structure with hardware behavior. That follow-up
+should bind brightness and volume to testable service interfaces without
+making the authored layout own runtime data. Pull-down/push-up motion should
+likewise arrive as a renderer transition rather than a third document state.
 
 ## Considered and rejected
 

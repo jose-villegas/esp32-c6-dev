@@ -14,7 +14,7 @@ The first executable proves the durable boundary:
 
 - `editor/core/` owns reusable host-editor services: dockspace setup,
   document history and RGB565 preview texture lifetime.
-- Launcher selection, geometry rules, validation and baking remain System
+- Screen selection, geometry rules, validation and baking remain System
   Workspace behavior rather than leaking into that core.
 - Dear ImGui owns editor chrome, docking and host input.
 - SDL2 owns the native window and RGB565 preview textures.
@@ -23,11 +23,12 @@ The first executable proves the durable boundary:
 - A C interface supplies exact 448 x 368 and 368 x 448 framebuffers.
 - The workspace docks hierarchy left, preview center, inspector right and
   problems below; later adjustments persist in Dear ImGui's settings.
-- Both preview textures contain the current firmware launcher rendered through
+- Both preview textures contain the selected firmware screen rendered through
   Microui, `ui.c` and `gfx.c`, then read back from the real framebuffer.
-- The hierarchy exposes stable launcher element IDs. Selecting one outlines it
-  in both orientations, while the inspector edits its active-orientation
-  rectangle and refreshes both previews immediately.
+- The hierarchy exposes Launcher and Control Center as sibling system
+  documents with stable element IDs. Selecting one outlines it in both
+  orientations, while the inspector edits its active-orientation rectangle
+  and refreshes both previews immediately.
 - Each preview also supports direct manipulation: click an element to select
   it, drag it to move, or drag its cyan corner handle to resize it. Canvas
   bounds are enforced during the gesture; document-level problems remain
@@ -36,17 +37,26 @@ The first executable proves the durable boundary:
   numeric inspector. Dirty state follows the history cursor, so returning to
   the last saved revision clears the unsaved marker.
 
-The launcher's orientation-specific geometry is authored in
-`launcher/main/ui/launcher_layout.json` and deterministically baked into
-`launcher_layout_generated.h`. The checked-in header is the only form used by
-firmware; the device does not parse JSON or run a layout solver.
+Orientation-specific geometry is authored in
+`launcher/main/ui/launcher_layout.json` and
+`launcher/main/ui/control_center_layout.json`, then deterministically baked
+into their matching generated headers. The checked-in headers are the only
+form used by firmware; the device does not parse JSON or run a layout solver.
 
-The editor loads that JSON into a typed C++ document and validates canvas
-bounds, minimum card targets, card overlap and page-indicator placement. Save
-and Ctrl+S update the source JSON only when it is valid. Bake firmware layout
-then invokes the canonical Python generator as an explicit, separate step, so
+The editor loads each JSON file into its own typed C++ document and validates
+canvas bounds, minimum targets and overlap. Save and Ctrl+S update only the
+active source document when it is valid. Bake firmware layout then invokes
+that document's canonical Python generator as an explicit, separate step, so
 preview edits cannot silently change a device build and the editor does not
 grow a second implementation of the bake rules.
+
+Firmware navigation is explicit state rather than an editor-only simulation:
+an inward swipe from the logical top opens Control Center from Launcher, and
+an inward swipe from the logical bottom closes it. Logical edges are mapped to
+physical touch edges for all four display rotations. The first Control Center
+slice renders connectivity controls, volume and brightness sliders, and two
+notification rows; service actions and live connectivity state remain future
+integration work.
 
 Dependencies are fetched into the untracked build directory rather than
 vendored into firmware source.
@@ -73,9 +83,10 @@ GoogleTest is pinned to v1.17.0. Coverage uses gcovr 8.6 and is gated at 80%
 line coverage and 70% branch coverage for deterministic Engine-owned logic:
 the launcher document, generic edit history and host runtime boundary. SDL,
 Dear ImGui, generated code and third-party dependencies are excluded from the
-numeric gate. Compiler-generated throw and unreachable branches are excluded
-as well; rendering and interaction paths require integration or visual
-regression tests instead.
+numeric gate. The gate now covers both typed documents, generic history, the
+runtime boundary and system navigation. Compiler-generated throw and
+unreachable branches are excluded as well; rendering and interaction paths
+require integration or visual regression tests instead.
 
 ```sh
 python -m pip install gcovr==8.6

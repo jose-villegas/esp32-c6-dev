@@ -18,6 +18,7 @@
 #include "imgui_impl_sdl2.h"
 #include "imgui_impl_sdlrenderer2.h"
 
+#include "control_center_document.h"
 #include "core/dockspace.h"
 #include "core/rgb565_texture.h"
 #include "engine/preview_surface.h"
@@ -28,10 +29,10 @@ namespace {
 
 struct Preview {
     const char* name;
-    LauncherOrientation orientation;
+    LayoutOrientation orientation;
     Rgb565Texture surface;
 
-    Preview(const char* preview_name, LauncherOrientation preview_orientation, int width, int height)
+    Preview(const char* preview_name, LayoutOrientation preview_orientation, int width, int height)
         : name(preview_name), orientation(preview_orientation), surface(width, height) {}
 };
 
@@ -43,35 +44,30 @@ enum class DragMode {
 
 struct CanvasInteraction {
     DragMode mode = DragMode::None;
-    LauncherOrientation orientation = LauncherOrientation::Landscape;
-    LauncherElement element = LauncherElement::LastPlayed;
-    LauncherRect original = {};
+    LayoutOrientation orientation = LayoutOrientation::Landscape;
+    std::size_t element_index = 0;
+    LayoutRect original = {};
     ImVec2 pointer_origin = {};
 };
 
-std::size_t
-index_of(LauncherElement element) {
-    return static_cast<std::size_t>(element);
-}
-
 bool
-contains(const LauncherRect& rect, float x, float y) {
+contains(const LayoutRect& rect, float x, float y) {
     return x >= rect.x && y >= rect.y && x < rect.x + rect.width && y < rect.y + rect.height;
 }
 
-std::optional<LauncherElement>
-hit_test(const LauncherLayout& layout, float x, float y) {
-    for (std::size_t index = static_cast<std::size_t>(LauncherElement::Count); index > 0; index--) {
-        const LauncherElement element = static_cast<LauncherElement>(index - 1);
-        if (contains(layout.rects[index_of(element)], x, y)) {
-            return element;
+template <typename Layout>
+std::optional<std::size_t>
+hit_test(const Layout& layout, float x, float y) {
+    for (std::size_t index = layout.rects.size(); index > 0; index--) {
+        if (contains(layout.rects[index - 1], x, y)) {
+            return index - 1;
         }
     }
     return std::nullopt;
 }
 
 bool
-same_rect(const LauncherRect& first, const LauncherRect& second) {
+same_rect(const LayoutRect& first, const LayoutRect& second) {
     return first.x == second.x && first.y == second.y && first.width == second.width && first.height == second.height;
 }
 
@@ -89,6 +85,16 @@ runtime_layout(const LauncherLayout& source) {
     return result;
 }
 
+engine_control_center_layout_t
+runtime_layout(const ControlCenterLayout& source) {
+    engine_control_center_layout_t result = {source.canvas_width, source.canvas_height, {}};
+    for (std::size_t index = 0; index < source.rects.size(); index++) {
+        const LayoutRect& rect = source.rects[index];
+        result.rects[index] = {rect.x, rect.y, rect.width, rect.height};
+    }
+    return result;
+}
+
 bool
 render_preview(Preview& preview, const LauncherLayout& layout) {
     const engine_launcher_layout_t authored = runtime_layout(layout);
@@ -99,6 +105,14 @@ render_preview(Preview& preview, const LauncherLayout& layout) {
     };
     std::string error;
     return engine_preview_render_launcher_layout(&surface, &authored) && preview.surface.upload(error);
+}
+
+bool
+render_preview(Preview& preview, const ControlCenterLayout& layout) {
+    const engine_control_center_layout_t authored = runtime_layout(layout);
+    engine_preview_surface_t surface = {preview.surface.width(), preview.surface.height(), preview.surface.pixels()};
+    std::string error;
+    return engine_preview_render_control_center_layout(&surface, &authored) && preview.surface.upload(error);
 }
 
 std::string
@@ -119,17 +133,18 @@ shell_argument(const std::filesystem::path& path) {
 }
 
 bool
-bake_launcher_layout(const LauncherDocument& document, bool check_only, std::string& error) {
+bake_layout(const std::filesystem::path& source, const char* generator_name, const char* output_name, bool check_only,
+            std::string& error) {
 #ifndef ENGINE_PYTHON_EXECUTABLE
     error = "Python was not available when Engine was configured";
     return false;
 #else
     const std::filesystem::path project_root = ENGINE_PROJECT_ROOT;
-    const std::filesystem::path generator = project_root / "launcher" / "tools" / "gen_launcher_layout.py";
-    const std::filesystem::path output = project_root / "launcher" / "main" / "ui" / "launcher_layout_generated.h";
+    const std::filesystem::path generator = project_root / "launcher" / "tools" / generator_name;
+    const std::filesystem::path output = project_root / "launcher" / "main" / "ui" / output_name;
     const std::string python_argument = shell_argument(ENGINE_PYTHON_EXECUTABLE);
     const std::string generator_argument = shell_argument(generator);
-    const std::string source_argument = shell_argument(document.path());
+    const std::string source_argument = shell_argument(source);
     const std::string output_argument = shell_argument(output);
     if (python_argument.empty() || generator_argument.empty() || source_argument.empty() || output_argument.empty()) {
         error = "A bake path contains unsupported shell characters";
@@ -146,7 +161,7 @@ bake_launcher_layout(const LauncherDocument& document, bool check_only, std::str
     command = '"' + command + '"';
 #endif
     if (std::system(command.c_str()) != 0) {
-        error = "Launcher layout generator failed";
+        error = "Layout generator failed";
         return false;
     }
     error.clear();
@@ -155,7 +170,19 @@ bake_launcher_layout(const LauncherDocument& document, bool check_only, std::str
 }
 
 bool
-create_preview(SDL_Renderer* renderer, Preview& preview, const LauncherLayout& layout) {
+bake_launcher_layout(const LauncherDocument& document, bool check_only, std::string& error) {
+    return bake_layout(document.path(), "gen_launcher_layout.py", "launcher_layout_generated.h", check_only, error);
+}
+
+bool
+bake_control_center_layout(const ControlCenterDocument& document, bool check_only, std::string& error) {
+    return bake_layout(document.path(), "gen_control_center_layout.py", "control_center_layout_generated.h", check_only,
+                       error);
+}
+
+template <typename Layout>
+bool
+create_preview(SDL_Renderer* renderer, Preview& preview, const Layout& layout) {
     std::string error;
     if (!preview.surface.create(renderer, error)) {
         return false;
@@ -163,11 +190,13 @@ create_preview(SDL_Renderer* renderer, Preview& preview, const LauncherLayout& l
     return render_preview(preview, layout);
 }
 
-void constrain_rect(LauncherRect& rect, const LauncherLayout& layout);
+template <typename Layout>
+void constrain_rect(LayoutRect& rect, const Layout& layout);
 
+template <typename Layout>
 bool
-draw_preview(Preview& preview, LauncherLayout& layout, LauncherElement& selected,
-             LauncherOrientation& active_orientation, CanvasInteraction& interaction, float available_width) {
+draw_preview(Preview& preview, Layout& layout, std::size_t& selected, LayoutOrientation& active_orientation,
+             CanvasInteraction& interaction, float available_width) {
     ImGui::TextUnformatted(preview.name);
     ImGui::SameLine();
     ImGui::TextDisabled("%d x %d", preview.surface.width(), preview.surface.height());
@@ -175,7 +204,7 @@ draw_preview(Preview& preview, LauncherLayout& layout, LauncherElement& selected
     const float scale = std::min(1.0f, available_width / static_cast<float>(preview.surface.width()));
     const ImVec2 size(preview.surface.width() * scale, preview.surface.height() * scale);
     const ImVec2 image_position = ImGui::GetCursorScreenPos();
-    const std::string canvas_id = std::string("##canvas-") + launcher_orientation_id(preview.orientation);
+    const std::string canvas_id = std::string("##canvas-") + layout_orientation_id(preview.orientation);
     ImGui::InvisibleButton(canvas_id.c_str(), size, ImGuiButtonFlags_MouseButtonLeft);
     ImGui::GetWindowDrawList()->AddImage(reinterpret_cast<ImTextureID>(preview.surface.native_handle()), image_position,
                                          ImVec2(image_position.x + size.x, image_position.y + size.y));
@@ -184,7 +213,7 @@ draw_preview(Preview& preview, LauncherLayout& layout, LauncherElement& selected
     const ImVec2 pointer = ImGui::GetIO().MousePos;
     const float local_x = (pointer.x - image_position.x) / scale;
     const float local_y = (pointer.y - image_position.y) / scale;
-    LauncherRect& selected_rect = layout.rects[index_of(selected)];
+    LayoutRect& selected_rect = layout.rects[selected];
     const ImVec2 selected_maximum(image_position.x + (selected_rect.x + selected_rect.width) * scale,
                                   image_position.y + (selected_rect.y + selected_rect.height) * scale);
     const bool over_resize_handle = pointer.x >= selected_maximum.x - 12.0f && pointer.x <= selected_maximum.x
@@ -199,15 +228,15 @@ draw_preview(Preview& preview, LauncherLayout& layout, LauncherElement& selected
     }
 
     if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
-        const std::optional<LauncherElement> hit = hit_test(layout, local_x, local_y);
+        const std::optional<std::size_t> hit = hit_test(layout, local_x, local_y);
         if (hit) {
             const bool resize = *hit == selected && over_resize_handle;
             selected = *hit;
             active_orientation = preview.orientation;
             interaction.mode = resize ? DragMode::Resize : DragMode::Move;
             interaction.orientation = preview.orientation;
-            interaction.element = *hit;
-            interaction.original = layout.rects[index_of(*hit)];
+            interaction.element_index = *hit;
+            interaction.original = layout.rects[*hit];
             interaction.pointer_origin = pointer;
         }
     }
@@ -216,7 +245,7 @@ draw_preview(Preview& preview, LauncherLayout& layout, LauncherElement& selected
         if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
             interaction.mode = DragMode::None;
         } else {
-            LauncherRect next = interaction.original;
+            LayoutRect next = interaction.original;
             const int delta_x = static_cast<int>(std::lround((pointer.x - interaction.pointer_origin.x) / scale));
             const int delta_y = static_cast<int>(std::lround((pointer.y - interaction.pointer_origin.y) / scale));
             if (interaction.mode == DragMode::Move) {
@@ -227,7 +256,7 @@ draw_preview(Preview& preview, LauncherLayout& layout, LauncherElement& selected
                 next.height += delta_y;
             }
             constrain_rect(next, layout);
-            LauncherRect& target = layout.rects[index_of(interaction.element)];
+            LayoutRect& target = layout.rects[interaction.element_index];
             if (!same_rect(target, next)) {
                 target = next;
                 changed = true;
@@ -235,7 +264,7 @@ draw_preview(Preview& preview, LauncherLayout& layout, LauncherElement& selected
         }
     }
 
-    const LauncherRect& rect = layout.rects[index_of(selected)];
+    const LayoutRect& rect = layout.rects[selected];
     const ImVec2 minimum(image_position.x + rect.x * scale, image_position.y + rect.y * scale);
     const ImVec2 maximum(minimum.x + rect.width * scale, minimum.y + rect.height * scale);
     ImGui::GetWindowDrawList()->AddRect(minimum, maximum, IM_COL32(91, 229, 235, 255), 2.0f, 0, 2.0f);
@@ -244,8 +273,9 @@ draw_preview(Preview& preview, LauncherLayout& layout, LauncherElement& selected
     return changed;
 }
 
+template <typename Layout>
 void
-constrain_rect(LauncherRect& rect, const LauncherLayout& layout) {
+constrain_rect(LayoutRect& rect, const Layout& layout) {
     rect.width = std::clamp(rect.width, 1, layout.canvas_width);
     rect.height = std::clamp(rect.height, 1, layout.canvas_height);
     rect.x = std::clamp(rect.x, 0, layout.canvas_width - rect.width);
@@ -257,8 +287,9 @@ struct RectEditResult {
     bool committed;
 };
 
+template <typename Layout>
 RectEditResult
-draw_rect_editor(LauncherRect& rect, const LauncherLayout& layout) {
+draw_rect_editor(LayoutRect& rect, const Layout& layout) {
     bool changed = false;
     bool committed = false;
     changed |= ImGui::DragInt("X", &rect.x, 1.0f);
@@ -275,10 +306,39 @@ draw_rect_editor(LauncherRect& rect, const LauncherLayout& layout) {
     return {changed, committed};
 }
 
+enum class SystemDocumentKind {
+    Launcher,
+    ControlCenter,
+};
+
+const char*
+launcher_element_id_at(std::size_t index) {
+    return launcher_element_id(static_cast<LauncherElement>(index));
+}
+
+const char*
+launcher_element_label_at(std::size_t index) {
+    return launcher_element_label(static_cast<LauncherElement>(index));
+}
+
+const char*
+control_center_element_id_at(std::size_t index) {
+    return control_center_element_id(static_cast<ControlCenterElement>(index));
+}
+
+const char*
+control_center_element_label_at(std::size_t index) {
+    return control_center_element_label(static_cast<ControlCenterElement>(index));
+}
+
+template <typename Document, typename History>
 bool
-draw_editor(LauncherDocument& document, Preview& landscape, Preview& portrait, LauncherElement& selected,
-            LauncherOrientation& active_orientation, CanvasInteraction& interaction, LauncherEditHistory& history,
-            std::string& notice) {
+draw_editor(Document& document, Preview& landscape, Preview& portrait, std::size_t& selected,
+            LayoutOrientation& active_orientation, CanvasInteraction& interaction, History& history,
+            const char* screen_name, const char* source_name, const char* baked_name, std::size_t element_count,
+            const char* (*element_id)(std::size_t), const char* (*element_label)(std::size_t),
+            bool (*bake_document)(const Document&, bool, std::string&), SystemDocumentKind current_screen,
+            SystemDocumentKind& active_screen, std::string& notice) {
     bool reset_layout = false;
     bool save_requested = false;
     bool bake_requested = false;
@@ -333,12 +393,19 @@ draw_editor(LauncherDocument& document, Preview& landscape, Preview& portrait, L
 
     ImGui::SetNextWindowSize(ImVec2(220, 540), ImGuiCond_FirstUseEver);
     ImGui::Begin("Hierarchy");
-    ImGui::TextDisabled("launcher_layout.json");
-    if (ImGui::TreeNodeEx("Launcher", ImGuiTreeNodeFlags_DefaultOpen)) {
-        for (std::size_t index = 0; index < static_cast<std::size_t>(LauncherElement::Count); index++) {
-            const LauncherElement element = static_cast<LauncherElement>(index);
-            if (ImGui::Selectable(launcher_element_label(element), selected == element)) {
-                selected = element;
+    ImGui::TextDisabled("System Workspace");
+    if (ImGui::Selectable("Launcher", active_screen == SystemDocumentKind::Launcher)) {
+        active_screen = SystemDocumentKind::Launcher;
+    }
+    if (ImGui::Selectable("Control Center", active_screen == SystemDocumentKind::ControlCenter)) {
+        active_screen = SystemDocumentKind::ControlCenter;
+    }
+    ImGui::Separator();
+    ImGui::TextDisabled("%s", source_name);
+    if (ImGui::TreeNodeEx(screen_name, ImGuiTreeNodeFlags_DefaultOpen)) {
+        for (std::size_t index = 0; index < element_count; index++) {
+            if (ImGui::Selectable(element_label(index), selected == index)) {
+                selected = index;
             }
         }
         ImGui::TreePop();
@@ -347,18 +414,26 @@ draw_editor(LauncherDocument& document, Preview& landscape, Preview& portrait, L
 
     ImGui::SetNextWindowSize(ImVec2(950, 620), ImGuiCond_FirstUseEver);
     ImGui::Begin("Preview");
+    if (current_screen == SystemDocumentKind::Launcher) {
+        if (ImGui::Button("Simulate swipe down")) {
+            active_screen = SystemDocumentKind::ControlCenter;
+        }
+    } else if (ImGui::Button("Simulate swipe up")) {
+        active_screen = SystemDocumentKind::Launcher;
+    }
+    ImGui::SameLine();
     ImGui::TextDisabled("Click to select, drag to move, or drag the cyan corner to resize.");
     const float gap = ImGui::GetStyle().ItemSpacing.x;
     const float half = (ImGui::GetContentRegionAvail().x - gap) * 0.5f;
     const bool was_canvas_editing = interaction.mode != DragMode::None;
     ImGui::BeginChild("Landscape", ImVec2(half, 0), ImGuiChildFlags_Borders);
-    canvas_changed |= draw_preview(landscape, document.layout(LauncherOrientation::Landscape), selected,
+    canvas_changed |= draw_preview(landscape, document.layout(LayoutOrientation::Landscape), selected,
                                    active_orientation, interaction, ImGui::GetContentRegionAvail().x);
     ImGui::EndChild();
     ImGui::SameLine();
     ImGui::BeginChild("Portrait", ImVec2(0, 0), ImGuiChildFlags_Borders);
-    canvas_changed |= draw_preview(portrait, document.layout(LauncherOrientation::Portrait), selected,
-                                   active_orientation, interaction, ImGui::GetContentRegionAvail().x);
+    canvas_changed |= draw_preview(portrait, document.layout(LayoutOrientation::Portrait), selected, active_orientation,
+                                   interaction, ImGui::GetContentRegionAvail().x);
     ImGui::EndChild();
     ImGui::End();
 
@@ -373,19 +448,19 @@ draw_editor(LauncherDocument& document, Preview& landscape, Preview& portrait, L
 
     ImGui::SetNextWindowSize(ImVec2(300, 540), ImGuiCond_FirstUseEver);
     ImGui::Begin("Inspector");
-    ImGui::TextUnformatted(launcher_element_label(selected));
-    ImGui::TextDisabled("%s", launcher_element_id(selected));
+    ImGui::TextUnformatted(element_label(selected));
+    ImGui::TextDisabled("%s", element_id(selected));
     ImGui::SeparatorText("Orientation");
-    if (ImGui::RadioButton("Landscape", active_orientation == LauncherOrientation::Landscape)) {
-        active_orientation = LauncherOrientation::Landscape;
+    if (ImGui::RadioButton("Landscape", active_orientation == LayoutOrientation::Landscape)) {
+        active_orientation = LayoutOrientation::Landscape;
     }
     ImGui::SameLine();
-    if (ImGui::RadioButton("Portrait", active_orientation == LauncherOrientation::Portrait)) {
-        active_orientation = LauncherOrientation::Portrait;
+    if (ImGui::RadioButton("Portrait", active_orientation == LayoutOrientation::Portrait)) {
+        active_orientation = LayoutOrientation::Portrait;
     }
 
-    LauncherLayout& layout = document.layout(active_orientation);
-    LauncherRect& rect = layout.rects[index_of(selected)];
+    auto& layout = document.layout(active_orientation);
+    LayoutRect& rect = layout.rects[selected];
     ImGui::TextDisabled("Canvas %d x %d", layout.canvas_width, layout.canvas_height);
     ImGui::SeparatorText("Rectangle");
     const RectEditResult rect_edit = draw_rect_editor(rect, layout);
@@ -425,8 +500,8 @@ draw_editor(LauncherDocument& document, Preview& landscape, Preview& portrait, L
     }
     if (bake_requested) {
         std::string error;
-        if (bake_launcher_layout(document, false, error)) {
-            notice = "Baked launcher_layout_generated.h";
+        if (bake_document(document, false, error)) {
+            notice = std::string("Baked ") + baked_name;
         } else {
             notice = "Bake failed: " + error;
         }
@@ -448,27 +523,37 @@ draw_editor(LauncherDocument& document, Preview& landscape, Preview& portrait, L
     ImGui::TextDisabled("Save updates authored JSON; Bake explicitly regenerates firmware geometry.");
     ImGui::End();
 
-    return preview_changed;
+    return preview_changed || active_screen != current_screen;
 }
 
 } // namespace
 
 int
 main(int argument_count, char** arguments) {
-    const std::filesystem::path layout_path =
+    const std::filesystem::path launcher_path =
         std::filesystem::path(ENGINE_PROJECT_ROOT) / "launcher" / "main" / "ui" / "launcher_layout.json";
+    const std::filesystem::path control_center_path =
+        std::filesystem::path(ENGINE_PROJECT_ROOT) / "launcher" / "main" / "ui" / "control_center_layout.json";
     std::string document_error;
-    std::optional<LauncherDocument> loaded = LauncherDocument::load(layout_path, document_error);
-    if (!loaded) {
+    std::optional<LauncherDocument> loaded_launcher = LauncherDocument::load(launcher_path, document_error);
+    if (!loaded_launcher) {
         std::fprintf(stderr, "Launcher document failed to load: %s\n", document_error.c_str());
         return 1;
     }
-    LauncherDocument document = std::move(*loaded);
+    std::optional<ControlCenterDocument> loaded_control_center =
+        ControlCenterDocument::load(control_center_path, document_error);
+    if (!loaded_control_center) {
+        std::fprintf(stderr, "Control Center document failed to load: %s\n", document_error.c_str());
+        return 1;
+    }
+    LauncherDocument launcher_document = std::move(*loaded_launcher);
+    ControlCenterDocument control_center_document = std::move(*loaded_control_center);
 
     if (argument_count == 2 && std::string(arguments[1]) == "--check-bake") {
         std::string bake_error;
-        if (!bake_launcher_layout(document, true, bake_error)) {
-            std::fprintf(stderr, "Launcher layout bake check failed: %s\n", bake_error.c_str());
+        if (!bake_launcher_layout(launcher_document, true, bake_error)
+            || !bake_control_center_layout(control_center_document, true, bake_error)) {
+            std::fprintf(stderr, "System layout bake check failed: %s\n", bake_error.c_str());
             return 1;
         }
         return 0;
@@ -513,10 +598,10 @@ main(int argument_count, char** arguments) {
     ImGui_ImplSDL2_InitForSDLRenderer(window, renderer);
     ImGui_ImplSDLRenderer2_Init(renderer);
 
-    Preview landscape("Landscape", LauncherOrientation::Landscape, 448, 368);
-    Preview portrait("Portrait", LauncherOrientation::Portrait, 368, 448);
-    if (!create_preview(renderer, landscape, document.layout(landscape.orientation))
-        || !create_preview(renderer, portrait, document.layout(portrait.orientation))) {
+    Preview landscape("Landscape", LayoutOrientation::Landscape, 448, 368);
+    Preview portrait("Portrait", LayoutOrientation::Portrait, 368, 448);
+    if (!create_preview(renderer, landscape, launcher_document.layout(landscape.orientation))
+        || !create_preview(renderer, portrait, launcher_document.layout(portrait.orientation))) {
         std::fprintf(stderr, "Preview texture creation failed: %s\n", SDL_GetError());
         portrait.surface.reset();
         landscape.surface.reset();
@@ -529,10 +614,15 @@ main(int argument_count, char** arguments) {
         return 1;
     }
 
-    LauncherElement selected = LauncherElement::LastPlayed;
-    LauncherOrientation active_orientation = LauncherOrientation::Landscape;
-    CanvasInteraction interaction;
-    LauncherEditHistory history(document);
+    std::size_t launcher_selected = static_cast<std::size_t>(LauncherElement::LastPlayed);
+    std::size_t control_center_selected = static_cast<std::size_t>(ControlCenterElement::Wifi);
+    LayoutOrientation launcher_orientation = LayoutOrientation::Landscape;
+    LayoutOrientation control_center_orientation = LayoutOrientation::Landscape;
+    CanvasInteraction launcher_interaction;
+    CanvasInteraction control_center_interaction;
+    LauncherEditHistory launcher_history(launcher_document);
+    ControlCenterEditHistory control_center_history(control_center_document);
+    SystemDocumentKind active_screen = SystemDocumentKind::Launcher;
     std::string notice;
     bool running = true;
     while (running) {
@@ -549,11 +639,30 @@ main(int argument_count, char** arguments) {
         ImGui_ImplSDLRenderer2_NewFrame();
         ImGui_ImplSDL2_NewFrame();
         ImGui::NewFrame();
-        const bool preview_changed =
-            draw_editor(document, landscape, portrait, selected, active_orientation, interaction, history, notice);
-        if (preview_changed
-            && (!render_preview(landscape, document.layout(landscape.orientation))
-                || !render_preview(portrait, document.layout(portrait.orientation)))) {
+        bool preview_changed;
+        if (active_screen == SystemDocumentKind::Launcher) {
+            preview_changed = draw_editor(
+                launcher_document, landscape, portrait, launcher_selected, launcher_orientation, launcher_interaction,
+                launcher_history, "Launcher", "launcher_layout.json", "launcher_layout_generated.h",
+                static_cast<std::size_t>(LauncherElement::Count), launcher_element_id_at, launcher_element_label_at,
+                bake_launcher_layout, SystemDocumentKind::Launcher, active_screen, notice);
+        } else {
+            preview_changed = draw_editor(
+                control_center_document, landscape, portrait, control_center_selected, control_center_orientation,
+                control_center_interaction, control_center_history, "Control Center", "control_center_layout.json",
+                "control_center_layout_generated.h", static_cast<std::size_t>(ControlCenterElement::Count),
+                control_center_element_id_at, control_center_element_label_at, bake_control_center_layout,
+                SystemDocumentKind::ControlCenter, active_screen, notice);
+        }
+        bool rendered = true;
+        if (preview_changed) {
+            rendered = active_screen == SystemDocumentKind::Launcher
+                           ? render_preview(landscape, launcher_document.layout(landscape.orientation))
+                                 && render_preview(portrait, launcher_document.layout(portrait.orientation))
+                           : render_preview(landscape, control_center_document.layout(landscape.orientation))
+                                 && render_preview(portrait, control_center_document.layout(portrait.orientation));
+        }
+        if (preview_changed && !rendered) {
             notice = std::string("Preview update failed: ") + SDL_GetError();
         }
         ImGui::Render();

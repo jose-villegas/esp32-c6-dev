@@ -1,7 +1,7 @@
 #include "input/gesture.h"
 
 bool
-gesture_is_home_swipe(const input_t* input, gesture_edge_t edge, int screen_w, int screen_h) {
+gesture_is_edge_swipe(const input_t* input, gesture_edge_t edge, int screen_w, int screen_h) {
     if (!input->down) {
         return false;
     }
@@ -34,4 +34,9 @@ gesture_is_home_swipe(const input_t* input, gesture_edge_t edge, int screen_w, i
     }
 
     return started_in_zone && travelled_toward_centre >= GESTURE_HOME_SWIPE_DIST;
+}
+
+bool
+gesture_is_home_swipe(const input_t* input, gesture_edge_t edge, int screen_w, int screen_h) {
+    return gesture_is_edge_swipe(input, edge, screen_w, screen_h);
 }

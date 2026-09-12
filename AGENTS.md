@@ -241,15 +241,18 @@ identically to x86, not just that the logic is right on a laptop).
 
 ### Generated files
 
-Four generated files live in the tree, each with its own generator in
+Six generated files live in the tree, each with its own generator in
 `launcher/tools/` and its checked-in output in the tree it belongs to:
 `boot_anim_curve.h` (`gen_zeta_curve.py`), `boot_anim_timeline.h`
 (`gen_boot_anim_timeline.py`, from `boot_anim_timeline.json`),
 `boot_anim_image.h` (`gen_boot_anim_image.py`, from `design/boot/boot.png`),
-and `gfx/fonts/font_lmroman_40.h` (`gen_font.py`, from
+`gfx/fonts/font_lmroman_40.h` (`gen_font.py`, from
 `design/fonts/LatinModern/lmroman10-bold.otf` - there is no TrueType
 rasterizer on the chip, so glyphs are rendered once on a host into an 8bpp
-coverage atlas with a proportional advance table).
+coverage atlas with a proportional advance table),
+`ui/launcher_layout_generated.h` (`gen_launcher_layout.py`, from
+`ui/launcher_layout.json`), and `ui/control_center_layout_generated.h`
+(`gen_control_center_layout.py`, from `ui/control_center_layout.json`).
 The convention they all follow: banner naming the exact regenerate command,
 generator validates itself before emitting, and the shipped artifact is
 tested independently of the generator (against the underlying math where

@@ -24,7 +24,9 @@
 #include "input/gesture.h"
 #include "input/imu.h"
 #include "input/touch.h"
+#include "ui/system_navigation.h"
 #include "ui/ui.h"
+#include "ui/ui_control_center.h"
 #include "ui/ui_launcher.h"
 
 #if CONFIG_LAUNCHER_DEVELOPMENT
@@ -102,6 +104,7 @@ app_list_count(void) {
 #define DISPLAY_GRAVITY_Y(s) ((s)->ax)
 
 static display_t shell_display;
+static system_navigation_t system_navigation;
 
 int
 display_shell_quarter(void) {
@@ -121,6 +124,17 @@ exit_edge_for_quarter(int quarter) {
         GESTURE_EDGE_LEFT,   /* quarter 1: Landscape */
         GESTURE_EDGE_TOP,    /* quarter 2: Portrait upside down */
         GESTURE_EDGE_RIGHT,  /* quarter 3: Landscape upside down */
+    };
+    return edge_for_quarter[quarter];
+}
+
+static gesture_edge_t
+control_center_edge_for_quarter(int quarter) {
+    static const gesture_edge_t edge_for_quarter[4] = {
+        GESTURE_EDGE_TOP,
+        GESTURE_EDGE_RIGHT,
+        GESTURE_EDGE_BOTTOM,
+        GESTURE_EDGE_LEFT,
     };
     return edge_for_quarter[quarter];
 }
@@ -221,6 +235,16 @@ step_app(const app_t** current, input_t* input, uint32_t dt_ms) {
     const gesture_edge_t exit_edge = exit_edge_for_quarter(display_shell_quarter());
 
     if (*current == NULL) {
+        const bool system_screen_changed =
+            system_navigation_step(&system_navigation, input, control_center_edge_for_quarter(display_shell_quarter()),
+                                   exit_edge, GFX_WIDTH, GFX_HEIGHT);
+        if (system_screen_changed) {
+            ui_invalidate();
+        }
+        if (system_navigation.screen == SYSTEM_SCREEN_CONTROL_CENTER) {
+            ui_control_center_frame(input);
+            return;
+        }
         const int chosen = ui_launcher_frame(input);
         if (chosen >= 0 && chosen < apps_registered) {
             *current = apps[chosen];
@@ -273,6 +297,7 @@ report_fps(int64_t now_us, int64_t* window_start, uint32_t* frames) {
 
 void
 app_main(void) {
+    system_navigation_init(&system_navigation);
     heap_mark("boot");
 
     /* Test SD card during panel use. */

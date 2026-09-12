@@ -89,9 +89,12 @@ endif()
 add_library(engine_runtime STATIC
     runtime/runtime.c
     ${LAUNCHER_DIR}/main/gfx/gfx.c
+    ${LAUNCHER_DIR}/main/input/gesture.c
     ${LAUNCHER_DIR}/main/ui/ui.c
+    ${LAUNCHER_DIR}/main/ui/ui_control_center.c
     ${LAUNCHER_DIR}/main/ui/ui_launcher.c
     ${LAUNCHER_DIR}/main/ui/ui_pointer.c
+    ${LAUNCHER_DIR}/main/ui/system_navigation.c
     ${LAUNCHER_DIR}/components/microui/src/microui.c
 )
 target_include_directories(engine_runtime
@@ -122,7 +125,10 @@ else()
     )
 endif()
 
-add_library(engine_document STATIC editor/launcher_document.cpp)
+add_library(engine_document STATIC
+    editor/control_center_document.cpp
+    editor/launcher_document.cpp
+)
 target_include_directories(engine_document PUBLIC editor)
 target_link_libraries(engine_document PUBLIC nlohmann_json::nlohmann_json)
 
@@ -183,10 +189,22 @@ if(BUILD_TESTING)
     )
     gtest_discover_tests(engine_launcher_document_test TEST_PREFIX "engine_document.")
 
+    add_executable(engine_control_center_document_test tests/control_center_document_test.cpp)
+    target_link_libraries(engine_control_center_document_test PRIVATE engine_document GTest::gmock_main)
+    target_compile_definitions(engine_control_center_document_test PRIVATE
+        ENGINE_TEST_CONTROL_CENTER_PATH="${LAUNCHER_DIR}/main/ui/control_center_layout.json"
+    )
+    gtest_discover_tests(engine_control_center_document_test TEST_PREFIX "engine_document.")
+
     add_executable(engine_core_test tests/edit_history_test.cpp)
     target_include_directories(engine_core_test PRIVATE editor)
     target_link_libraries(engine_core_test PRIVATE GTest::gtest_main)
     gtest_discover_tests(engine_core_test TEST_PREFIX "engine_core.")
+
+    add_executable(engine_system_navigation_test tests/system_navigation_test.cpp)
+    target_include_directories(engine_system_navigation_test PRIVATE ${LAUNCHER_DIR}/main)
+    target_link_libraries(engine_system_navigation_test PRIVATE engine_runtime GTest::gtest_main)
+    gtest_discover_tests(engine_system_navigation_test TEST_PREFIX "engine_navigation.")
 
     if(Python3_Interpreter_FOUND)
         add_test(NAME engine_launcher_bake_command COMMAND engine --check-bake)
@@ -202,6 +220,19 @@ if(BUILD_TESTING)
             NAME launcher_layout_generator
             COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/launcher_layout_generator_test.py
+        )
+        add_test(
+            NAME control_center_layout_codegen
+            COMMAND ${Python3_EXECUTABLE}
+                ${LAUNCHER_DIR}/tools/gen_control_center_layout.py
+                ${LAUNCHER_DIR}/main/ui/control_center_layout.json
+                ${LAUNCHER_DIR}/main/ui/control_center_layout_generated.h
+                --check
+        )
+        add_test(
+            NAME control_center_layout_generator
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/control_center_layout_generator_test.py
         )
     endif()
 endif()
@@ -233,7 +264,9 @@ if(ENGINE_ENABLE_COVERAGE)
         engine_document
         engine_runtime
         engine_launcher_document_test
+        engine_control_center_document_test
         engine_core_test
+        engine_system_navigation_test
         engine_runtime_smoke
     )
     foreach(target IN LISTS ENGINE_COVERAGE_TARGETS)
@@ -257,8 +290,10 @@ if(ENGINE_ENABLE_COVERAGE)
             --root ${CMAKE_CURRENT_SOURCE_DIR}/..
             --gcov-object-directory ${CMAKE_BINARY_DIR}
             --filter engine/editor/launcher_document.cpp
+            --filter engine/editor/control_center_document.cpp
             --filter engine/editor/core/edit_history.h
             --filter engine/runtime/runtime.c
+            --filter launcher/main/ui/system_navigation.c
             --exclude-throw-branches
             --exclude-unreachable-branches
             --delete
@@ -269,7 +304,8 @@ if(ENGINE_ENABLE_COVERAGE)
             --fail-under-line 80
             --fail-under-branch 70
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..
-        DEPENDS engine engine_launcher_document_test engine_core_test engine_runtime_smoke
+        DEPENDS engine engine_launcher_document_test engine_control_center_document_test engine_core_test
+                engine_system_navigation_test engine_runtime_smoke
         USES_TERMINAL
         COMMENT "Running tests and enforcing Engine coverage gates"
     )

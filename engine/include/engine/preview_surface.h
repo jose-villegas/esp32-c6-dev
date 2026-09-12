@@ -18,6 +18,9 @@ typedef struct {
 
 bool engine_preview_render_launcher(engine_preview_surface_t* surface);
 bool engine_preview_render_launcher_layout(engine_preview_surface_t* surface, const engine_launcher_layout_t* layout);
+bool engine_preview_render_control_center(engine_preview_surface_t* surface);
+bool engine_preview_render_control_center_layout(engine_preview_surface_t* surface,
+                                                 const engine_control_center_layout_t* layout);
 
 #ifdef __cplusplus
 }

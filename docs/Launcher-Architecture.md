@@ -71,13 +71,18 @@ and means something different by each:
 
 ## Generated sources
 
-Four generated files live in the tree, each following the same four rules
+Six generated files live in the tree, each following the same four rules
 below: `main/boot/boot_anim_curve.h` (`tools/gen_zeta_curve.py`),
 `main/boot/boot_anim_timeline.h` (`tools/gen_boot_anim_timeline.py`, from
 `main/boot/boot_anim_timeline.json`), `main/boot/boot_anim_image.h`
 (`tools/gen_boot_anim_image.py`, from `design/boot/boot.png`), and
 `main/gfx/fonts/font_lmroman_40.h` (`tools/gen_font.py`, from
-`design/fonts/LatinModern/lmroman10-bold.otf`).
+`design/fonts/LatinModern/lmroman10-bold.otf`),
+`main/ui/launcher_layout_generated.h` (`tools/gen_launcher_layout.py`, from
+`main/ui/launcher_layout.json`), and
+`main/ui/control_center_layout_generated.h`
+(`tools/gen_control_center_layout.py`, from
+`main/ui/control_center_layout.json`).
 
 `boot_anim_curve.h` holds the zeta function evaluated along the critical
 line. That is not something to compute on a chip with no FPU, and it never
