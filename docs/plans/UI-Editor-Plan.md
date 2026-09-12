@@ -92,7 +92,7 @@ collapses. So an entry carries its string source, its scale policy and its
 box **together**. An editor that cannot say "this will not fit at this
 scale" would let you draw those same bugs, visually, and call it a design.
 
-## The editor is a native app, and renders in-process
+## The editor is an engine module, and renders in-process
 
 Two decisions, and the first one forces the second.
 
@@ -116,31 +116,23 @@ That choice also serves the web goal instead of fighting it: the same
 host-portable C compiles under Emscripten, so a browser preview later is the
 same code, not a second implementation of it.
 
-### The shell: raylib, with SDL2 + microui as the near miss
+### The shell: SDL2 + Dear ImGui
 
-Cross-platform makes the *dependency* the deciding question, not the widget
-set.
+The editor starts at `engine/`; UI authoring is its first module rather than
+its permanent product boundary. **SDL2 + Dear ImGui** is the host shell.
+SDL supplies the cross-platform window, input and framebuffer texture; Dear
+ImGui supplies the hierarchy, inspector, docking, menus and text editing an
+authoring tool needs. It links the real host-portable C renderer through a C
+boundary. The C++ toolchain is isolated to `engine/` and never enters an
+ESP-IDF component graph.
 
-**raylib + raygui** is the recommendation. Pure C11 - no C++ in a tree that
-has none - one source tree across Windows, Linux and macOS, and it brings
-the whole stack that otherwise has to be assembled: a window, input, a
-texture to blit the framebuffer into, and `raygui` as a single-header
-immediate-mode GUI for property panels. It targets Emscripten first-class,
-so the web build above costs nothing extra. The price is that it is a
-chunkier thing to depend on than the single-purpose libraries vendored in
-`components/` today, so fetch it at configure time rather than checking it
-in.
+**raylib + raygui** remains the pure-C fallback. It would make the first
+preview inexpensive, but a serious hierarchy, inspector, asset browser and
+timeline would grow editor chrome that Dear ImGui already provides.
 
-**SDL2 + microui** was the close alternative and is worth knowing about. SDL
-is packaged on every platform, microui is already vendored and already
-host-linkable, and the editor would then be built with the very toolkit it
-edits - every gap in `ui/` found by someone using it daily, which is the
-best bug-finding argument available. It loses on how much has to be written:
-microui has no real text input, no file dialogs, no docking, so the editor
-chrome becomes its own project.
-
-**cimgui + SDL** gives the best editor UX of the three and costs a C++
-toolchain on three platforms. Only worth it if the editor grows ambitious.
+**SDL2 + microui** remains useful as a runtime-input simulator, not as the
+authoring shell. Dogfooding does not repay implementing docking, file dialogs
+and robust editor text input inside the device toolkit.
 
 **Build with CMake.** ESP-IDF already uses it, so it is not a new tool for
 anyone on any platform, and both candidate shells ship support for it. The
@@ -171,7 +163,7 @@ every other host tool here is absent from `idf.py` and from
    recompile in the preview loop. Loading and saving the JSON is the whole
    of its file handling at this stage.
 
-4. **Direct manipulation.** Drag and resize in the browser, writing back to
+4. **Direct manipulation.** Drag and resize in the editor, writing back to
    the JSON. Deliberately last: it is the least load-bearing part, and a
    format that only a GUI can produce is a format nobody can review in a
    diff.

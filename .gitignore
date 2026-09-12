@@ -101,6 +101,9 @@ launcher/tools/results/
 # gitignored by the same pattern rather than listed per app.
 launcher/main/apps/*/tools/results/
 
+# Native engine tooling keeps fetched dependencies and build products local.
+/engine/build*/
+
 # And once more for scripts/ - trim_comments_local.py's review report and its
 # model transcript. The branch it produces is the artifact worth keeping.
 scripts/results/
