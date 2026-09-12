@@ -87,21 +87,31 @@ array.
 Now pinned: CI installs exactly 19.1.7, and `check-format.sh` warns when the
 local major is not 19 rather than silently accepting it.
 
-A second, slower problem in the same file. Eleven keys in `.clang-format`
-are legacy aliases that clang-format no longer echoes in `--dump-config`:
-`SpacesInParentheses`, `SpacesInConditionalStatement`,
-`SpacesInCStyleCastParentheses`, `SpaceInEmptyParentheses`,
+A second, slower problem in the same file - FIXED. `.clang-format` was an
+unedited copy of an upstream C++ config: 196 lines, 136 keys, of which
+fifteen were legacy aliases clang-format 19 no longer echoes in
+`--dump-config` (`AlwaysBreakAfterReturnType`, `SpacesInParentheses`,
 `DeriveLineEnding`, `UseCRLF`, `IndentRequires`,
-`ConstructorInitializerAllOnOneLineOrOnePerLine`,
-`AllowAllConstructorInitializersOnNextLine`, `BreakBeforeInheritanceComma`
-and `BreakConstructorInitializersBeforeComma`. They are still accepted as of
-21.1, so nothing is broken today - but an unknown key in `.clang-format` is a
-hard error, not a warning, so the day one of them is dropped upstream the
-checker stops working entirely rather than degrading. The file is an
-unedited copy of an upstream C++ config; roughly sixty of its keys describe
-C++, Objective-C and JavaScript constructs this repository does not contain.
-Worth a pass that deletes what does not apply and rewrites the legacy keys
-to their current names.
+`KeepEmptyLinesAtTheStartOfBlocks` and the rest), and dozens more described
+C++, Objective-C, Java and JavaScript constructs this repository does not
+contain. Nothing was broken by it today, since 21.1 still accepts every one
+of those spellings - but an unknown key in `.clang-format` is a hard error
+rather than a warning, so the day one is dropped upstream the checker stops
+working entirely instead of degrading.
+
+Comparing the effective config against a plain LLVM one showed what was
+actually being decided: **15 keys**. The file now states those and nothing
+else, as deviations from `BasedOnStyle: LLVM`, in 67 lines with a sentence
+of rationale per group. Equivalence was checked three ways rather than
+assumed: `--dump-config` before and after differs only in
+`BreakTemplateDeclarations` (C++ templates, of which this tree has none) and
+the order of a macro set; all 170 files remain byte-identical under
+clang-format 19; and both 19.1.2 (esp-clang) and 19.1.7 (what CI installs)
+resolve the new file to the same effective config.
+
+A file of deviations does lean harder on one version's defaults - which is
+an argument for the pin above, not against the cleanup, since the pin is
+what a version bump has to confront anyway.
 
 ## 3. Two rules are now referred to but not written down anywhere
 

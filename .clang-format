@@ -1,98 +1,63 @@
-# Language part removed. With clang-format >=20.1, the C and Cpp are separately handled,
-# so either there is no language at all, or we need to create 2 formats for C and Cpp, separately
-
+# The C format for this repository, as deviations from clang-format's LLVM
+# style. Anything absent here is that style's default, so this file lists
+# only what was actually decided - see docs/C-Style-Guide.md for the prose
+# and scripts/format-file-list.sh for which files it applies to.
+#
+# clang-format 19.1.x and no other major version. The versions disagree
+# about C on this tree (20 and 21 each reformat files 19 leaves alone), and
+# a file of deviations leans on one version's defaults, so the pin is what
+# makes it reproducible: scripts/check-format.sh enforces it and
+# .github/workflows/format.yml installs it.
+#
+# No `Language:` key, deliberately: clang-format 19 handles C and C++ under
+# one Cpp language, and every option below is one that C uses.
 ---
-# Language: Cpp
-# BasedOnStyle:  LLVM
-AccessModifierOffset: -2
-AlignAfterOpenBracket: Align
-AlignArrayOfStructures: None
+BasedOnStyle: LLVM
+
+# Four spaces, 120 columns, and `case` indented inside its switch.
+IndentWidth: 4
+ColumnLimit: 120
+IndentCaseLabels: true
+
+# `static int` on its own line above the function name, pointers bound to
+# the type (`gfx_color_t* fb`), and control-statement bodies always braced -
+# clang-format adds the braces rather than reporting them.
+BreakAfterReturnType: AllDefinitions
+PointerAlignment: Left
+InsertBraces: true
+
+# A wrapped expression breaks before the operator, so the operator starts
+# the continuation line and says what the line is doing.
+BreakBeforeBinaryOperators: NonAssignment
+
+# `{}` may stay on one line but a block with statements in it may not; a
+# one-line `case` may.
+AllowShortBlocksOnASingleLine: Empty
+AllowShortCaseLabelsOnASingleLine: true
+
+# Blank line between definitions, and never reflow a comment: the comments
+# here are wrapped by hand around what they say, and re-filling them would
+# rewrite that.
+SeparateDefinitionBlocks: Always
+ReflowComments: false
+
+# Align a run of #defines, and a run of bitfields, through blank lines and
+# comments - both are usually tables, and a table reads down its columns.
+# Declarations are not: `None` here also has to spell out that alignment
+# stays off, because clang-format's shorthand for it is not its default.
 AlignConsecutiveMacros:
   Enabled: true
   AcrossEmptyLines: true
   AcrossComments: true
-AlignConsecutiveAssignments: None
 AlignConsecutiveBitFields:
   Enabled: true
   AcrossEmptyLines: true
   AcrossComments: true
 AlignConsecutiveDeclarations: None
-AlignEscapedNewlines: Right
-AlignOperands: Align
-SortIncludes: true
-InsertBraces: true # Control statements must have curly brackets
-AlignTrailingComments: true
-AllowAllArgumentsOnNextLine: true
-AllowAllParametersOfDeclarationOnNextLine: true
-AllowShortEnumsOnASingleLine: true
-AllowShortBlocksOnASingleLine: Empty
-AllowShortCaseLabelsOnASingleLine: true
-AllowShortFunctionsOnASingleLine: All
-AllowShortLambdasOnASingleLine: All
-AllowShortIfStatementsOnASingleLine: Never
-AllowShortLoopsOnASingleLine: false
-AlwaysBreakAfterDefinitionReturnType: None
-AlwaysBreakAfterReturnType: AllDefinitions
-AlwaysBreakBeforeMultilineStrings: false
-AlwaysBreakTemplateDeclarations: Yes
-AttributeMacros:
-  - __capability
-BinPackArguments: true
-BinPackParameters: true
-BraceWrapping:
-  AfterCaseLabel: false
-  AfterClass: false
-  AfterControlStatement: Never
-  AfterEnum: false
-  AfterFunction: false
-  AfterNamespace: false
-  AfterObjCDeclaration: false
-  AfterStruct: false
-  AfterUnion: false
-  AfterExternBlock: false
-  BeforeCatch: false
-  BeforeElse: false
-  BeforeLambdaBody: false
-  BeforeWhile: false
-  IndentBraces: false
-  SplitEmptyFunction: true
-  SplitEmptyRecord: true
-  SplitEmptyNamespace: true
-BreakBeforeBinaryOperators: NonAssignment
-BreakBeforeConceptDeclarations: true
-BreakBeforeBraces: Attach
-BreakBeforeInheritanceComma: false
-BreakInheritanceList: BeforeColon
-BreakBeforeTernaryOperators: true
-BreakConstructorInitializersBeforeComma: false
-BreakConstructorInitializers: BeforeColon
-BreakAfterJavaFieldAnnotations: false
-BreakStringLiterals: true
-ColumnLimit: 120
-CommentPragmas: "^ IWYU pragma:"
-QualifierAlignment: Leave
-CompactNamespaces: false
-ConstructorInitializerIndentWidth: 4
-ContinuationIndentWidth: 4
-Cpp11BracedListStyle: true
-DeriveLineEnding: true
-DerivePointerAlignment: false
-DisableFormat: false
-EmptyLineAfterAccessModifier: Never
-EmptyLineBeforeAccessModifier: LogicalBlock
-ExperimentalAutoDetectBinPacking: false
-PackConstructorInitializers: BinPack
-BasedOnStyle: ""
-ConstructorInitializerAllOnOneLineOrOnePerLine: false
-AllowAllConstructorInitializersOnNextLine: true
-FixNamespaceComments: true
-ForEachMacros:
-  - foreach
-  - Q_FOREACH
-  - BOOST_FOREACH
-IfMacros:
-  - KJ_IF_MAYBE
-IncludeBlocks: Preserve
+
+# System headers before project headers, sorted within each block. Blocks
+# themselves are preserved (the LLVM default), which is what keeps a file's
+# own header in its own block above the rest.
 IncludeCategories:
   - Regex: "^<(.*)>"
     Priority: 0
@@ -100,97 +65,3 @@ IncludeCategories:
     Priority: 1
   - Regex: "(.*)"
     Priority: 2
-IncludeIsMainRegex: "(Test)?$"
-IncludeIsMainSourceRegex: ""
-IndentAccessModifiers: false
-IndentCaseLabels: true
-IndentCaseBlocks: false
-IndentGotoLabels: true
-IndentPPDirectives: None
-IndentExternBlock: AfterExternBlock
-IndentRequires: true
-IndentWidth: 4
-IndentWrappedFunctionNames: false
-InsertTrailingCommas: None
-JavaScriptQuotes: Leave
-JavaScriptWrapImports: true
-KeepEmptyLinesAtTheStartOfBlocks: true
-LambdaBodyIndentation: Signature
-MacroBlockBegin: ""
-MacroBlockEnd: ""
-MaxEmptyLinesToKeep: 1
-NamespaceIndentation: None
-ObjCBinPackProtocolList: Auto
-ObjCBlockIndentWidth: 2
-ObjCBreakBeforeNestedBlockParam: true
-ObjCSpaceAfterProperty: false
-ObjCSpaceBeforeProtocolList: true
-PenaltyBreakAssignment: 2
-PenaltyBreakBeforeFirstCallParameter: 19
-PenaltyBreakComment: 300
-PenaltyBreakFirstLessLess: 120
-PenaltyBreakOpenParenthesis: 0
-PenaltyBreakString: 1000
-PenaltyBreakTemplateDeclaration: 10
-PenaltyExcessCharacter: 1000000
-PenaltyReturnTypeOnItsOwnLine: 60
-PenaltyIndentedWhitespace: 0
-PointerAlignment: Left
-PPIndentWidth: -1
-ReferenceAlignment: Pointer
-ReflowComments: false
-RemoveBracesLLVM: false
-SeparateDefinitionBlocks: Always
-ShortNamespaceLines: 1
-SortJavaStaticImport: Before
-SortUsingDeclarations: true
-SpaceAfterCStyleCast: false
-SpaceAfterLogicalNot: false
-SpaceAfterTemplateKeyword: true
-SpaceBeforeAssignmentOperators: true
-SpaceBeforeCaseColon: false
-SpaceBeforeParens: ControlStatements
-SpaceBeforeParensOptions:
-  AfterControlStatements: true
-  AfterForeachMacros: true
-  AfterFunctionDefinitionName: false
-  AfterFunctionDeclarationName: false
-  AfterIfMacros: true
-  AfterOverloadedOperator: false
-  BeforeNonEmptyParentheses: false
-SpaceAroundPointerQualifiers: Default
-SpaceBeforeRangeBasedForLoopColon: true
-SpaceInEmptyBlock: false
-SpaceInEmptyParentheses: false
-SpacesBeforeTrailingComments: 1
-SpacesInAngles: Never
-SpacesInConditionalStatement: false
-SpacesInContainerLiterals: true
-SpacesInCStyleCastParentheses: false
-SpacesInLineCommentPrefix:
-  Minimum: 1
-  Maximum: -1
-SpacesInParentheses: false
-SpacesInSquareBrackets: false
-SpaceBeforeSquareBrackets: false
-BitFieldColonSpacing: Both
-Standard: Latest
-StatementAttributeLikeMacros:
-  - Q_EMIT
-StatementMacros:
-  - Q_UNUSED
-  - QT_REQUIRE_VERSION
-TabWidth: 8
-UseCRLF: false
-UseTab: Never
-WhitespaceSensitiveMacros:
-  - STRINGIZE
-  - PP_STRINGIZE
-  - BOOST_PP_STRINGIZE
-  - NS_SWIFT_NAME
-  - CF_SWIFT_NAME
-SpaceBeforeCpp11BracedList: false
-SpaceBeforeCtorInitializerColon: true
-SpaceBeforeInheritanceColon: true
----
-

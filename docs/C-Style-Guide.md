@@ -28,6 +28,10 @@ These rules are decidable. `.clang-format` is their definition and
 formatter ever disagree, fix the prose or make a separately reviewed formatter
 change; do not hand-format around the tool.
 
+`.clang-format` lists only where this repository deviates from clang-format's
+LLVM style - fifteen keys - so everything in it is a decision someone made,
+and anything absent is that style's default.
+
 - Indent with four spaces and never tabs.
 - Attach opening braces and require braces around control-statement bodies.
 - Bind `*` to the type in pointer declarations.
