@@ -28,6 +28,9 @@ The first executable proves the durable boundary:
   it, drag it to move, or drag its cyan corner handle to resize it. Canvas
   bounds are enforced during the gesture; document-level problems remain
   visible and block saving until corrected.
+- Undo and redo operate on complete layout edits from either the canvas or
+  numeric inspector. Dirty state follows the history cursor, so returning to
+  the last saved revision clears the unsaved marker.
 
 The launcher's orientation-specific geometry is authored in
 `launcher/main/ui/launcher_layout.json` and deterministically baked into

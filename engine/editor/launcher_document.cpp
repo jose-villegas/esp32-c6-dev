@@ -81,6 +81,27 @@ overlaps(const LauncherRect& first, const LauncherRect& second) {
            && second.y < first.y + first.height;
 }
 
+bool
+same_geometry(const LauncherDocument& first, const LauncherDocument& second) {
+    for (LauncherOrientation orientation : {LauncherOrientation::Landscape, LauncherOrientation::Portrait}) {
+        const LauncherLayout& first_layout = first.layout(orientation);
+        const LauncherLayout& second_layout = second.layout(orientation);
+        if (first_layout.canvas_width != second_layout.canvas_width
+            || first_layout.canvas_height != second_layout.canvas_height) {
+            return false;
+        }
+        for (std::size_t index = 0; index < first_layout.rects.size(); index++) {
+            const LauncherRect& first_rect = first_layout.rects[index];
+            const LauncherRect& second_rect = second_layout.rects[index];
+            if (first_rect.x != second_rect.x || first_rect.y != second_rect.y || first_rect.width != second_rect.width
+                || first_rect.height != second_rect.height) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 void
 validate_layout(const LauncherLayout& layout, LauncherOrientation orientation, std::vector<std::string>& problems) {
     const std::string prefix = std::string(launcher_orientation_id(orientation)) + ": ";
@@ -277,4 +298,71 @@ LauncherDocument::dirty() const {
 void
 LauncherDocument::mark_dirty() {
     dirty_ = true;
+}
+
+void
+LauncherDocument::set_dirty(bool dirty) {
+    dirty_ = dirty;
+}
+
+LauncherEditHistory::LauncherEditHistory(const LauncherDocument& document) : states_{document} {}
+
+void
+LauncherEditHistory::commit(LauncherDocument& document) {
+    if (same_geometry(states_[cursor_], document)) {
+        sync_dirty(document);
+        return;
+    }
+    if (cursor_ + 1 < states_.size()) {
+        states_.erase(states_.begin() + static_cast<std::ptrdiff_t>(cursor_ + 1), states_.end());
+        if (saved_cursor_ > cursor_) {
+            saved_cursor_ = no_saved_cursor;
+        }
+    }
+    states_.push_back(document);
+    cursor_++;
+    sync_dirty(document);
+}
+
+bool
+LauncherEditHistory::undo(LauncherDocument& document) {
+    commit(document);
+    if (cursor_ == 0) {
+        return false;
+    }
+    document = states_[--cursor_];
+    sync_dirty(document);
+    return true;
+}
+
+bool
+LauncherEditHistory::redo(LauncherDocument& document) {
+    if (cursor_ + 1 >= states_.size()) {
+        return false;
+    }
+    document = states_[++cursor_];
+    sync_dirty(document);
+    return true;
+}
+
+void
+LauncherEditHistory::mark_saved(LauncherDocument& document) {
+    commit(document);
+    saved_cursor_ = cursor_;
+    sync_dirty(document);
+}
+
+bool
+LauncherEditHistory::can_undo() const {
+    return cursor_ > 0;
+}
+
+bool
+LauncherEditHistory::can_redo() const {
+    return cursor_ + 1 < states_.size();
+}
+
+void
+LauncherEditHistory::sync_dirty(LauncherDocument& document) const {
+    document.set_dirty(cursor_ != saved_cursor_);
 }

@@ -246,25 +246,39 @@ constrain_rect(LauncherRect& rect, const LauncherLayout& layout) {
     rect.y = std::clamp(rect.y, 0, layout.canvas_height - rect.height);
 }
 
-bool
+struct RectEditResult {
+    bool changed;
+    bool committed;
+};
+
+RectEditResult
 draw_rect_editor(LauncherRect& rect, const LauncherLayout& layout) {
     bool changed = false;
+    bool committed = false;
     changed |= ImGui::DragInt("X", &rect.x, 1.0f);
+    committed |= ImGui::IsItemDeactivatedAfterEdit();
     changed |= ImGui::DragInt("Y", &rect.y, 1.0f);
+    committed |= ImGui::IsItemDeactivatedAfterEdit();
     changed |= ImGui::DragInt("Width", &rect.width, 1.0f);
+    committed |= ImGui::IsItemDeactivatedAfterEdit();
     changed |= ImGui::DragInt("Height", &rect.height, 1.0f);
+    committed |= ImGui::IsItemDeactivatedAfterEdit();
     if (changed) {
         constrain_rect(rect, layout);
     }
-    return changed;
+    return {changed, committed};
 }
 
 bool
 draw_editor(LauncherDocument& document, Preview& landscape, Preview& portrait, LauncherElement& selected,
-            LauncherOrientation& active_orientation, CanvasInteraction& interaction, std::string& notice) {
+            LauncherOrientation& active_orientation, CanvasInteraction& interaction, LauncherEditHistory& history,
+            std::string& notice) {
     bool reset_layout = false;
     bool save_requested = false;
+    bool undo_requested = false;
+    bool redo_requested = false;
     bool preview_changed = false;
+    bool canvas_changed = false;
 
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("File")) {
@@ -274,14 +288,36 @@ draw_editor(LauncherDocument& document, Preview& landscape, Preview& portrait, L
             ImGui::MenuItem("Build firmware...", nullptr, false, false);
             ImGui::EndMenu();
         }
+        if (ImGui::BeginMenu("Edit")) {
+            undo_requested = ImGui::MenuItem("Undo", "Ctrl+Z", false, history.can_undo());
+            redo_requested = ImGui::MenuItem("Redo", "Ctrl+Y", false, history.can_redo());
+            ImGui::EndMenu();
+        }
         if (ImGui::BeginMenu("View")) {
             reset_layout = ImGui::MenuItem("Reset workspace");
             ImGui::EndMenu();
         }
         ImGui::EndMainMenuBar();
     }
-    if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false) && document.dirty()) {
+    const ImGuiIO& io = ImGui::GetIO();
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false) && document.dirty()) {
         save_requested = true;
+    }
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
+        redo_requested = io.KeyShift && history.can_redo();
+        undo_requested = !io.KeyShift && history.can_undo();
+    }
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y, false) && history.can_redo()) {
+        redo_requested = true;
+    }
+
+    if (undo_requested || redo_requested) {
+        interaction.mode = DragMode::None;
+        const bool applied = undo_requested ? history.undo(document) : history.redo(document);
+        if (applied) {
+            preview_changed = true;
+            notice = undo_requested ? "Undo" : "Redo";
+        }
     }
 
     draw_dockspace(reset_layout);
@@ -305,20 +341,25 @@ draw_editor(LauncherDocument& document, Preview& landscape, Preview& portrait, L
     ImGui::TextDisabled("Click to select, drag to move, or drag the cyan corner to resize.");
     const float gap = ImGui::GetStyle().ItemSpacing.x;
     const float half = (ImGui::GetContentRegionAvail().x - gap) * 0.5f;
+    const bool was_canvas_editing = interaction.mode != DragMode::None;
     ImGui::BeginChild("Landscape", ImVec2(half, 0), ImGuiChildFlags_Borders);
-    preview_changed |= draw_preview(landscape, document.layout(LauncherOrientation::Landscape), selected,
-                                    active_orientation, interaction, ImGui::GetContentRegionAvail().x);
+    canvas_changed |= draw_preview(landscape, document.layout(LauncherOrientation::Landscape), selected,
+                                   active_orientation, interaction, ImGui::GetContentRegionAvail().x);
     ImGui::EndChild();
     ImGui::SameLine();
     ImGui::BeginChild("Portrait", ImVec2(0, 0), ImGuiChildFlags_Borders);
-    preview_changed |= draw_preview(portrait, document.layout(LauncherOrientation::Portrait), selected,
-                                    active_orientation, interaction, ImGui::GetContentRegionAvail().x);
+    canvas_changed |= draw_preview(portrait, document.layout(LauncherOrientation::Portrait), selected,
+                                   active_orientation, interaction, ImGui::GetContentRegionAvail().x);
     ImGui::EndChild();
     ImGui::End();
 
-    if (preview_changed) {
+    if (canvas_changed) {
         document.mark_dirty();
+        preview_changed = true;
         notice.clear();
+    }
+    if (was_canvas_editing && interaction.mode == DragMode::None) {
+        history.commit(document);
     }
 
     ImGui::SetNextWindowSize(ImVec2(300, 540), ImGuiCond_FirstUseEver);
@@ -338,9 +379,13 @@ draw_editor(LauncherDocument& document, Preview& landscape, Preview& portrait, L
     LauncherRect& rect = layout.rects[index_of(selected)];
     ImGui::TextDisabled("Canvas %d x %d", layout.canvas_width, layout.canvas_height);
     ImGui::SeparatorText("Rectangle");
-    if (draw_rect_editor(rect, layout)) {
+    const RectEditResult rect_edit = draw_rect_editor(rect, layout);
+    if (rect_edit.changed) {
         document.mark_dirty();
         preview_changed = true;
+    }
+    if (rect_edit.committed) {
+        history.commit(document);
     }
 
     const std::vector<std::string> problems = document.validate();
@@ -358,6 +403,7 @@ draw_editor(LauncherDocument& document, Preview& landscape, Preview& portrait, L
     if (save_requested) {
         std::string error;
         if (document.save(error)) {
+            history.mark_saved(document);
             notice = "Saved " + document.path().string();
         } else {
             notice = "Save failed: " + error;
@@ -459,6 +505,7 @@ main() {
     LauncherElement selected = LauncherElement::LastPlayed;
     LauncherOrientation active_orientation = LauncherOrientation::Landscape;
     CanvasInteraction interaction;
+    LauncherEditHistory history(document);
     std::string notice;
     bool running = true;
     while (running) {
@@ -476,7 +523,7 @@ main() {
         ImGui_ImplSDL2_NewFrame();
         ImGui::NewFrame();
         const bool preview_changed =
-            draw_editor(document, landscape, portrait, selected, active_orientation, interaction, notice);
+            draw_editor(document, landscape, portrait, selected, active_orientation, interaction, history, notice);
         if (preview_changed
             && (!render_preview(landscape, document.layout(landscape.orientation))
                 || !render_preview(portrait, document.layout(portrait.orientation)))) {

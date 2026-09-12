@@ -18,19 +18,38 @@ main() {
         return 1;
     }
 
-    const LauncherRect original = landscape.rects[static_cast<std::size_t>(LauncherElement::Library)];
-    landscape.rects[static_cast<std::size_t>(LauncherElement::Library)] = {100, 98, 125, 173};
-    if (document.validate().empty()) {
+    const int original_library_x = landscape.rects[static_cast<std::size_t>(LauncherElement::Library)].x;
+    LauncherEditHistory history(document);
+    landscape.rects[static_cast<std::size_t>(LauncherElement::Library)].x++;
+    document.mark_dirty();
+    history.commit(document);
+    if (!history.can_undo() || !document.dirty() || !history.undo(document) || document.dirty()
+        || document.layout(LauncherOrientation::Landscape).rects[static_cast<std::size_t>(LauncherElement::Library)].x
+               != original_library_x
+        || !history.can_redo() || !history.redo(document) || !document.dirty()) {
         return 1;
     }
-    landscape.rects[static_cast<std::size_t>(LauncherElement::Library)] = original;
+    history.mark_saved(document);
+    if (document.dirty() || !history.undo(document) || !document.dirty() || !history.redo(document)
+        || document.dirty()) {
+        return 1;
+    }
+    history.undo(document);
 
-    const LauncherRect original_status = landscape.rects[static_cast<std::size_t>(LauncherElement::StatusBar)];
-    landscape.rects[static_cast<std::size_t>(LauncherElement::StatusBar)].height = 100;
+    LauncherLayout& restored_landscape = document.layout(LauncherOrientation::Landscape);
+    const LauncherRect original = restored_landscape.rects[static_cast<std::size_t>(LauncherElement::Library)];
+    restored_landscape.rects[static_cast<std::size_t>(LauncherElement::Library)] = {100, 98, 125, 173};
     if (document.validate().empty()) {
         return 1;
     }
-    landscape.rects[static_cast<std::size_t>(LauncherElement::StatusBar)] = original_status;
+    restored_landscape.rects[static_cast<std::size_t>(LauncherElement::Library)] = original;
+
+    const LauncherRect original_status = restored_landscape.rects[static_cast<std::size_t>(LauncherElement::StatusBar)];
+    restored_landscape.rects[static_cast<std::size_t>(LauncherElement::StatusBar)].height = 100;
+    if (document.validate().empty()) {
+        return 1;
+    }
+    restored_landscape.rects[static_cast<std::size_t>(LauncherElement::StatusBar)] = original_status;
 
     const std::filesystem::path roundtrip_path =
         std::filesystem::temp_directory_path() / "engine-launcher-layout-test.json";
