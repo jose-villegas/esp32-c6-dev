@@ -1,0 +1,7 @@
+#!/bin/sh
+#
+# Installed by scripts/install-git-hooks.sh (which points core.hooksPath at
+# this directory). Deliberately a two-line wrapper: the logic lives in a .sh
+# file so CI's shell linting sees it.
+
+exec "$(git rev-parse --show-toplevel)/scripts/check-format-staged.sh"

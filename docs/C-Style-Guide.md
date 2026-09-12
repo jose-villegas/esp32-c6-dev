@@ -24,19 +24,26 @@ use.
 ## Mechanical rules
 
 These rules are decidable. `.clang-format` is their definition and
-`scripts/check-format.sh` is their enforcement. If this prose and the formatter
-ever disagree, fix the prose or make a separately reviewed formatter change;
-do not hand-format around the tool.
+`.github/workflows/format.yml` is their enforcement. If this prose and the
+formatter ever disagree, fix the prose or make a separately reviewed formatter
+change; do not hand-format around the tool.
 
 - Indent with four spaces and never tabs.
 - Attach opening braces and require braces around control-statement bodies.
 - Bind `*` to the type in pointer declarations.
+- Put a definition's return type on its own line, above the function name.
+  This is the most visible thing about the style and the least guessable, so
+  it is named here rather than left to the config.
 - Keep code within 120 columns where clang-format can do so without changing a
   token, string, or unflowed comment.
 - Use the formatter's spacing, continuation indentation, blank-line, and
   `case` indentation decisions.
 - Let clang-format sort each existing include block, with system headers before
-  project headers. Preserve intentional blank lines between blocks.
+  project headers. Preserve intentional blank lines between blocks. That
+  ordering is *within* a block: the own-header-first rule under "Headers and
+  module boundaries" survives only because a blank line separates it from the
+  standard-library block, so removing one of those blank lines changes which
+  rule applies.
 
 Run the checker on every first-party C or header file a change touches:
 
@@ -50,6 +57,38 @@ at vendored/generated sources:
 ```sh
 scripts/check-format.sh path/to/file.c path/to/file.h
 ```
+
+### One formatter version
+
+clang-format 19, exactly - not "19 or newer". `.clang-format` does not define
+a formatting on its own; a version of clang-format reading it does, and they
+disagree about this config on real files here. Against the reformatted tree,
+19 changes nothing, 20 reformats `suite_sand_scenes.c`, 21 also reformats
+`material.c` and `gfx.c`. So `check-format.sh` refuses any other major
+version, CI installs `clang-format==19.1.7`, and 19 is also what ESP-IDF's
+esp-clang bundles - sourcing the IDF export script is usually all it takes.
+`CLANG_FORMAT_ANY_VERSION=1` forces a one-off run on another version, at the
+cost of reformatting files you did not touch.
+
+### Where the rules are checked
+
+Three places, one file list. `scripts/format-file-list.sh` defines which files
+the rules apply to - vendored trees by path, generated files by the
+`GENERATED FILE` marker they carry - so the hook and CI cannot disagree about
+what is in scope.
+
+```sh
+scripts/install-git-hooks.sh          # opt in to the pre-commit hook
+scripts/install-git-hooks.sh --status # is it active in this clone?
+scripts/format-file-list.sh | xargs scripts/check-format.sh --check  # what CI runs
+```
+
+The pre-commit hook checks the *staged content* of the C and header files in a
+commit, so a partially staged file is judged by what is actually being
+committed. It is feedback and not a gate: `--no-verify` skips it, `.git/hooks`
+is not cloned, and it never sees a merge or a commit made by CI. The workflow
+is the gate, and it checks every file in the list on every push - so a drift
+that reaches `main` is a failed build, not a surprise six months later.
 
 ## Judgment rules
 

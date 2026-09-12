@@ -4,6 +4,7 @@
 [![Build (Release)](https://github.com/jose-villegas/esp32-c6-dev/actions/workflows/build-release.yml/badge.svg)](https://github.com/jose-villegas/esp32-c6-dev/actions/workflows/build-release.yml)
 [![Build (Diagnostics)](https://github.com/jose-villegas/esp32-c6-dev/actions/workflows/build-diagnostics.yml/badge.svg)](https://github.com/jose-villegas/esp32-c6-dev/actions/workflows/build-diagnostics.yml)
 [![Shell Scripts](https://github.com/jose-villegas/esp32-c6-dev/actions/workflows/shell-scripts.yml/badge.svg)](https://github.com/jose-villegas/esp32-c6-dev/actions/workflows/shell-scripts.yml)
+[![Format](https://github.com/jose-villegas/esp32-c6-dev/actions/workflows/format.yml/badge.svg)](https://github.com/jose-villegas/esp32-c6-dev/actions/workflows/format.yml)
 
 A custom app shell for the [Waveshare
 ESP32-C6-Touch-AMOLED-1.8](https://www.waveshare.com/) board — no PSRAM, a
@@ -79,6 +80,7 @@ this, not a tour. Start wherever your question is:
 | [`docs/Launcher-Architecture.md`](docs/Launcher-Architecture.md) | How the shell and its apps fit together; the three rules that shape everything; how to add an app; why the UI toolkit is microui, not LVGL. |
 | [`docs/sand/Sand-Simulation.md`](docs/sand/Sand-Simulation.md) | The falling-sand app in depth: materials, the water model, momentum, and the performance numbers behind every design choice. |
 | [`docs/notes/`](docs/notes/README.md) | Board-specific hardware notes: the memory budget, panel and touch gotchas, flashing and recovery. Split by topic - start at the index. |
+| [`docs/C-Style-Guide.md`](docs/C-Style-Guide.md) | The C style: what the formatter decides, what judgment decides, and how the pre-commit hook and CI keep the tree from drifting. |
 | [`docs/Testing-Guide.md`](docs/Testing-Guide.md) | How the host and on-device test suites work, and why release builds carry none of the test code. |
 | [`docs/workflows/Model-Delegation-Workflow.md`](docs/workflows/Model-Delegation-Workflow.md) | Delegating feature implementation to local Ollama models, with review and verification kept on the driving session. |
 
