@@ -68,18 +68,11 @@ __pycache__/
 *.idb
 *.pdb
 
-### Claude Code
-#
-# The CONTENTS rather than the folder, so the agent-definitions exception
-# further down can work at all: git never looks inside an excluded
-# directory, so ".claude/" followed by an un-ignore matches nothing.
-#
-# Session state, worktrees and local settings are nobody else's business.
-# An agent definition is: it is a tool the project owns, encoding things
-# about this repo anyone working here would otherwise have to rediscover -
-# untracked, it is invisible to everybody but the machine that wrote it.
-.claude/*
-!.claude/agents/
+### Agent development tools
+# Personal agent definitions, skills, settings, and session state.
+.agents/
+.claude/
+.codex/
 
 ### ESP-IDF
 build/
@@ -152,7 +145,3 @@ $RECYCLE.BIN/
 # Structured prompts for handing work to another session or a local model.
 # Working notes, revised per round - not part of the shipped project.
 .prompts/
-
-### Claude Code
-# Skills are local dev tooling, not shipped project content.
-.claude/skills/
