@@ -982,7 +982,7 @@ the invariant in full, and
 `test_water_falling_into_the_next_block_down_still_spreads` for the
 fixture that fails without the expansion.
 
-Block size (`SAND_BLOCK_W=32`, `SAND_BLOCK_H=64`, `sand.h`) was swept
+Block size (`SAND_BLOCK_W=16`, `SAND_BLOCK_H=32`, `sand.h`) was swept
 across six candidate pairs on real hardware, not guessed - see the
 "sixth attempt" in [`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md)
 for the full table and the two real device-only bugs that sweep found
@@ -998,6 +998,16 @@ and `block_size_prescreen.sh` beside it ranks the same candidates on the host
 first. Only `SAND_BLOCK_W` is constrained - a power of two, for the mask in
 `dest_rows_full()`, and no narrower than `SAND_LIQUID_SIGHT` for the
 invariant above; `SAND_BLOCK_H` is only ever divided by.
+
+That reopened sweep is what moved the shape from 32×64 to 16×32 (bd
+`esp32c6-pyv`, the "twenty-first attempt"). **W is the knob in both
+orientations** - every block-level rejection spans along X in units of it -
+so every transpose lost and every narrower block won. The trade is explicit
+and one-way: every row where something MOVES got cheaper, and the two rows
+where nothing does got dearer, which the maintainer accepted on the grounds
+that a settled board has no motion for the extra cost to lag. The shape is
+not behaviour-neutral - see that attempt for the one fingerprint cell and
+the three scene constants it moved.
 
 ## Dirty-row tracking
 

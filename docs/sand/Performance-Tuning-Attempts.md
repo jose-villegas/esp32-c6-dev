@@ -47,6 +47,7 @@ that won.
 | 18 | Counter-driven decomposition of both hot passes; mask the reaction probes' pre-roll rejects; pin `sand_step` to the cache line | `8a20c86`, `66a1e9b` | shipped |
 | 19 | The pair-matrix: a 16×16 classification table gating five probes, plus a one-load-per-neighbour cascade; a stage-list dispatcher tried and retired | `7b3273a`, `58b1f42` (shipped); `fcf329b`, `69e796e` (kept on `sand-pair-matrix`, unmerged) | mixed (stages 1–2 shipped) |
 | 20 | Three landscape frame-budget rows, a block-size search space closed under transpose, and a host pre-screen; two shapes then priced on device | `9cd384b5`, `08ad8a53`, `151d2519` | shipped (scenes + tooling); shape change deferred |
+| 21 | Take attempt 20's answer: narrow the block to 16×32, re-derive the three scene constants and the one fingerprint cell its sleeping moves, and find a reference a geometry change cannot move | `2594f6eb` | shipped (10 budgets tightened, 2 rows knowingly red) |
 
 A sha marked "not on main" lives on a feature/exploration branch that was
 never merged; `git show` still works once that branch is fetched, or
@@ -242,6 +243,26 @@ never merged; `git show` still works once that branch is fetched, or
   and −10.3%** in one capture, which the tool then reported as a 10.3%
   floor and used to mark genuine 10% wins `layout?`. For a geometry sweep,
   read the rows directly and treat the controls as measurements.
+
+  **No sand row is a control here, and that is structural rather than bad
+  luck.** `sand_init()` computes `block_cols` unconditionally and
+  `step_one_row()` always loops `bx` over it, calling `step_one_block()`
+  per block — even with sleeping off, `block_state == NULL`, `settled_bit`
+  0. So halving `SAND_BLOCK_W` doubles that loop's trip count in *every*
+  timed `sand_step()` row on the board, and there is no scene that can opt
+  out. The reproduction is exact: the same pair measured a second time
+  (attempt 21) gave **+10.1% and −10.3%**, and the two controls move in
+  *opposite* directions, which is not what a noise floor does.
+
+  **What IS immune: the three present-cost rows**, whose timed window holds
+  no `sand_step()` at all (the sim runs outside their timer). They carry
+  their own corroborating invariant — the strip-send counts printed beside
+  each one. In attempt 21's pair those counts were byte-identical on all
+  three rows (50/13/26, 81/24/19, 70/0/0) while the times moved −1.0%,
+  −0.3% and +1.1%, so the flash-layout floor for that pair was **≈1%, not
+  10.3%** — and every row that moved more than about 2% was real. Use them
+  this way only when the counts match; when they do not, the row moved for
+  a reason of its own and vouches for nothing.
 - **A smaller block trades a moving board against a still one, and the
   still half is invisible on the host.** Device, 32×64 → 16×32: wet earth
   −34.9%, campfire −35.8%, snowfall −26.7%, landscape sand −53.8%,
@@ -252,6 +273,27 @@ never merged; `git show` still works once that branch is fetched, or
   (−1.7%, −4.7%): W is what those two answer to, and 32×32 does not
   change it. Behaviour: 32×32 is fingerprint-identical on all 17 rows;
   16×32 moves `snow_crust` alone, by one cell.
+
+  **16×32 shipped** (attempt 21, bd `esp32c6-pyv`), on the maintainer's
+  judgement that a settled board has no motion for the extra 59 µs to lag.
+  A second, independent capture reproduced the trade to within a point —
+  landscape sand −54.5%, wet earth −34.9%, campfire −35.7%, snowfall
+  −26.6%, deep landscape water −24.5%, landscape water −21.2%, screen of
+  water −12.1%, turn-to-landscape −13.3%, against the two settled rows
+  60 → 119. Not everything won: the half-screen gas row went **+3.5% and
+  fell out of budget**, the packed gas and every-material rows +1.9%, and
+  the "every cell moving" control +10.1% — all above that capture's ≈1%
+  reference floor, so all real. The settled rows are left **red on
+  purpose**; they are not to be raised to fit.
+
+  Behaviour cost, beyond the one fingerprint cell: the landscape bed is
+  still moving at its old 150-step settle and stops at 158, and the mature
+  tree's last damp cell now evaporates at 1,644 rather than 1,490 — both
+  constants re-derived. A third test, the wood floor scene, turned out to
+  be **passing by arrangement**: its ignition is a coin toss the sweep
+  order decides (24 of 30 seeds light at 32×64, 23 of 30 at 16×32, with
+  seed 83 landing opposite ways), so it now asks four boards for one
+  ignition instead of one board for certainty.
 - The diagnostics image no longer runs a task watchdog. It used to charge
   its own periodic console dump to whatever benchmark's timed loop it
   landed inside — deterministically, up to 2.6× inflation, with nothing
