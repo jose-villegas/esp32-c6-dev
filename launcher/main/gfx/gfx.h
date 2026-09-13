@@ -40,7 +40,7 @@
  * leaves no software slack. Only 40 is vendor-validated; 80 corrupts the
  * START of a transfer rather than the whole frame, and 40 mA pads
  * (CONFIG_LAUNCHER_GFX_QSPI_STRONG_PADS) make that rare but not gone, so 80
- * stays opt-in - bd esp32c6-kfg. The divider resolves to exactly 40 or 80,
+ * stays opt-in. The divider resolves to exactly 40 or 80,
  * hence a bool. THE THRESHOLDS BELOW ARE FITTED TO 40 MHz. */
 #if defined(CONFIG_LAUNCHER_GFX_QSPI_80MHZ) && CONFIG_LAUNCHER_GFX_QSPI_80MHZ
 #define GFX_QSPI_HZ (80 * 1000 * 1000)

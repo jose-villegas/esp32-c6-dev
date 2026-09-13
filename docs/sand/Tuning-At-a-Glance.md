@@ -115,7 +115,7 @@ the two liquid-free controls could not be one:
   as a target rather than being re-pegged around.
 - **Vent spam dropped from this table, not re-pegged.** The mechanism it
   measured (lava venting through a covering) was removed and replaced by
-  a covered-lava burst (bd esp32c6-0f2/esp32c6-mqt); its scene was
+  a covered-lava burst; its scene was
   rebuilt as a plain water-over-lava pour and awaits its own first device
   capture before it can rejoin this table. Its old, retired number lives
   in git history, not here - it is not a claim about the new scene's
@@ -155,8 +155,8 @@ of it.
 The wet-earth row was added by attempt 18 (host, best of 10, same stub
 method, validated by reproducing the water/mixed columns above first),
 reactions-owned. A vent-spam row sat here too, from the same attempt -
-dropped along with the vent mechanism it measured (bd esp32c6-0f2); its
-replacement scene (water over lava, bd esp32c6-mqt) has not yet had this
+dropped along with the vent mechanism it measured; its
+replacement scene (water over lava) has not yet had this
 same pass-attribution analysis run against it. ¹ Wet earth's −100% main-sweep
 column is a settle-phase confound — its 35 pre-window settle steps use
 the same stubbed `sand_step`, so nothing ever gains the adjacency its
@@ -308,7 +308,7 @@ these rows are bus-bound, ~2,550 µs per full band, and their cost tracks
 how many bands the scene's dirty pattern produces, not where the code
 sits. A present-cost row that jumps tens of percent is reporting a
 behaviour change, not a layout roll - read the strip-send counts in its
-log line. See bd esp32c6-ai8.
+log line.
 
 **The lava-stress present row is the worked example, and it has been
 climbing.** Its full-band count across the captures on disk reads 66 → 73

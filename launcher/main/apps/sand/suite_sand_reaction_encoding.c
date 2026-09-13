@@ -2,7 +2,7 @@
  * Portable suite: the falling-sand automaton - reaction encoding - no
  * reaction may mint an ambiguous byte.
  *
- * Split out of suite_sand.c (bd esp32c6 test-suite-refactor), which had grown
+ * Split out of suite_sand.c, which had grown
  * past 32,000 lines across 500+ tests. Shared fixtures and assertion helpers
  * live in suite_sand_common.{c,h} - see that header.
  */
@@ -1595,8 +1595,8 @@ test_a_lava_pool_in_a_dry_stone_bowl_does_not_freeze_itself(void) {
     sand_set(&s, W / 2, H / 2, CELL_MAKE(MAT_LAVA, MASS_MAX));
     sand_set_lava_cooloff(&s, 255);
     /* Same reasoning as test_lava_buried_in_stone_is_not_deleted's own
-     * addition: this scene is covered enough to be burst-eligible (bd
-     * esp32c6-mqt), and this test's job is trigger A/cool_off_chain's own
+     * addition: this scene is covered enough to be burst-eligible,
+     * and this test's job is trigger A/cool_off_chain's own
      * ALWAYS-ON-DRAIN guard, not the unrelated burst roll. */
     sand_set_lava_burst(&s, 0);
     const int before = liquid_mass_of(MAT_LAVA);

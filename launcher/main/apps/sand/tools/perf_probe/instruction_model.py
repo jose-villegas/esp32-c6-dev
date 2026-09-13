@@ -3,7 +3,7 @@
 
 The C6's own L1 counters settled that the sim is instruction-bound: 89 fetch
 misses and no data misses in a 2.3 million cycle water step, with the fetch
-unit busy 0.89 cycles in every one (bd esp32c6-vk4, docs/sand/Perf-
+unit busy 0.89 cycles in every one (docs/sand/Perf-
 Instruments.md). So a pass costs what it executes, and the useful question
 about any hot loop is how many instructions it runs - which needs two halves
 that this script joins:

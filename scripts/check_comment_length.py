@@ -25,10 +25,10 @@ Options:
   --exit-zero   always exit 0, even with violations
 
   --comments-only REF   check nothing about length: assert instead that every
-                        changed file differs from REF in COMMENTS ALONE. The
-                        safety net for a bulk trim, delegated or not - a diff
-                        of thousands of reflowed comments cannot be read, but
-                        it can be proved to have moved no code.
+                        changed file differs from REF in COMMENTS ALONE. Proves
+                        a comment-only change moved no code - a diff of
+                        thousands of reflowed comments cannot be read, but it
+                        can be checked instead.
 """
 
 import os

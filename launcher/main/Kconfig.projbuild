@@ -102,8 +102,7 @@ menu "Launcher"
                 suite_sand_perf.c plus the scene builders it calls. Nothing
                 else is compiled, so their .bss and .text are gone from the
                 image - which is what buys back the static-RAM headroom a
-                round needs for its own pass gates and probe rows (bd
-                esp32c6-iqx).
+                round needs for its own pass gates and probe rows.
 
                 It is also a build closer to release layout in the 32 KB
                 instruction cache. That is a better instrument on a
@@ -177,7 +176,7 @@ menu "Launcher"
 
             IF YOU TURN THIS ON, the dirty-band thresholds in gfx.h were fitted
             to 40 MHz timings and are wrong until re-measured - some of the win
-            leaks back otherwise. See bd esp32c6-kfg.
+            leaks back otherwise.
 
     config LAUNCHER_GFX_QSPI_STRONG_PADS
         bool "Drive the QSPI pads at 40 mA instead of the 20 mA default"

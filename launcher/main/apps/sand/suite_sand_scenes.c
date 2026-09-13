@@ -3,7 +3,7 @@
  * four-liquid, lava-stress, smoke-and-steam, thermal-shock, boiler, wet-
  * earth, plant-ruin, filling-basin and snowfall.
  *
- * Split out of suite_sand.c (bd esp32c6 test-suite-refactor), which had grown
+ * Split out of suite_sand.c, which had grown
  * past 32,000 lines across 500+ tests. Shared fixtures and assertion helpers
  * live in suite_sand_common.{c,h} - see that header.
  */
@@ -791,7 +791,7 @@ test_the_thermal_shock_scene_shatters_in_both_directions(void) {
                                              "meltwater from ice and snow must still be showing at the end of "
                                              "the window");
     /* LOWERED FROM 800 when cold gained the ability to conduct through a
-     * medium (bd esp32c6-tov): the payload's glass now chills faster and
+     * medium: the payload's glass now chills faster and
      * further, so less meltwater reaches it still hot, and this scene settled
      * at 774. That is a real consequence of the feature, not a regression -
      * and this floor exists to catch a scene that has gone QUIET, which 774
@@ -1726,7 +1726,7 @@ test_the_wet_earth_scene_keeps_percolating_across_the_window(void) {
  * the burst gate, so a regression in any shows up here.
  *
  * DO NOT compare these numbers to an older capture under this name: a
- * removed vent-spam mechanism (bd esp32c6-0f2) measured a different,
+ * removed vent-spam mechanism measured a different,
  * costlier scene here. */
 
 /* One full-width seam, not many small sealed pockets: nothing here needs to
@@ -1827,7 +1827,7 @@ test_the_water_over_lava_scene_reaches_the_quench_cooloff_and_burst_paths_it_cla
 }
 
 /* --- gunpowder basin: a brush-drawn vessel of gunpowder, lit once ------
- * Closes half of bd esp32c6-4d9: a lit pile chain-detonating via
+ * A lit pile chain-detonating via
  * find_lit_two_by_two()/sand_explode() (sand_reactions.c) has never been
  * profiled on device, unlike the gas-pocket and covered-lava bursts it
  * mirrors. */

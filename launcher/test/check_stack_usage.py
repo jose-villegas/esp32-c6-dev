@@ -34,8 +34,8 @@ than absorbed by a higher ceiling is what the worst of them turned out to
 be: an on-stack `unsigned depth[92 * 112]`, 42,848 bytes, nearly twelve
 times the whole device stack, the same species of bug as both historical
 panics. Raising the ceiling to fit what already existed would have hidden
-it; listing each frame instead surfaced it on the gate's first run (bd
-esp32c6-3h9, fixed in 4a17e07).
+it; listing each frame instead surfaced it on the gate's first run
+(fixed in 4a17e07).
 
 This gate is only worth anything if a frame that fits on x86 cannot secretly
 be larger on the target, so that was measured rather than assumed. Compiling
@@ -93,8 +93,8 @@ STACK_FRAME_TOOLCHAIN_TOLERANCE = 0.25
 # value there would licence it to grow all the way back. That has already
 # happened once: this list's worst entry was
 # test_a_submerged_obstacle_casts_a_gravity_aligned_shadow at 42,848 bytes,
-# an on-stack `unsigned depth[92 * 112]` and a genuine device risk (bd
-# esp32c6-3h9, the first thing this gate caught). It was moved to the heap
+# an on-stack `unsigned depth[92 * 112]` and a genuine device risk (the
+# first thing this gate caught). It was moved to the heap
 # in 4a17e07 and now measures 1,632.
 PRE_EXISTING_STACK_DEBT = {
     ("suite_sand_liquid_depth.c",

@@ -1,7 +1,7 @@
 #!/bin/sh
 #
 # Build the host attribution probe - the canonical DEVICE_BUILD-on-host
-# harness for sand's frame-budget scenes (bd esp32c6-o2s). Compiles the
+# harness for sand's frame-budget scenes. Compiles the
 # repo's own suite_sand.c (unmodified except for the SAND_HOST_PROBE
 # wrapper functions living right beside the real test bodies they call -
 # see suite_sand.c itself) with -DDEVICE_BUILD, so the actual official
@@ -22,7 +22,7 @@
 #   ./build_probe.sh out/probe
 #
 # A round needing host-only call counters reaches for
-# tools/perf_probe/compare_counters.py (bd esp32c6-8zx) instead of this probe
+# tools/perf_probe/compare_counters.py instead of this probe
 # - it injects SAND_WORK_COUNT() calls into a scratch copy of sand_liquid.c
 # at verified text anchors, rather than this binary carrying counters of its
 # own. See sand_work_counters.h (this directory) and compare_counters.py's
@@ -54,7 +54,7 @@
 # A/B over the reaction scenes found no consistent magnitude change either,
 # which is exactly what that disassembly predicts. This is insurance that
 # costs nothing today: it starts mattering the moment a dense switch lands -
-# the pair-matrix dispatcher (bd esp32c6-iu5) being the obvious candidate,
+# the pair-matrix dispatcher being the obvious candidate,
 # and the one whose device regression started this.
 #
 # POSIX sh, same portability reasoning as launcher/test/run_tests.sh.
@@ -117,8 +117,8 @@ $APP_SAND/tilt.c
 "
 
 # suite_sand.c grew past 32,000 lines and was split by topic into
-# suite_sand_common.c/suite_sand_scenes.c/suite_sand_motion.c/... (bd esp32c6
-# test-suite-refactor) - this probe needs all of them, the same as it needed
+# suite_sand_common.c/suite_sand_scenes.c/suite_sand_motion.c/...
+# - this probe needs all of them, the same as it needed
 # the one file before the split, since the scene builders and the
 # sand_host_probe_run_*() wrappers this probe calls now live in different
 # pieces of what used to be one file. suite_sand_ui.c is excluded - it was

@@ -110,7 +110,7 @@ occasion to relitigate what belongs where.
   workflow's badge URL - the README badges section needs updating in the
   same change, not as an afterthought.
 - **A memory-layout view belongs in Settings, and the display-mode toggles
-  hang off it** (`bd esp32c6-rpt`). Resolution and colour mode are being
+  hang off it.** Resolution and colour mode are being
   planned as system settings, and each moves a different line of the RAM
   ledger: a half-resolution framebuffer returns ~240 KB (the panel has no
   scaler, so it buys memory, not bus time), RGB444 returns 25% of both.
@@ -132,6 +132,6 @@ occasion to relitigate what belongs where.
 
 ## Non-goals
 
-Nothing here is being built now. This is a placeholder for a future
-session - the two-part shape and the open questions above are the
-handoff, not a commitment to any answer among them yet.
+Nothing here is being built now. The two-part shape and the open
+questions above are a starting point, not a commitment to any answer
+among them yet.

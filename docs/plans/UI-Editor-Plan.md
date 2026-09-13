@@ -9,7 +9,7 @@ The objective is a tool where a screen is **authored visually and edited
 again later** - not screenshotted and re-typed. The brush screen should open
 in it as an editable instance. It is a component of the engine direction in
 [`../Autana-Rendering-Roadmap.md`](../Autana-Rendering-Roadmap.md), sibling
-to the level editor already banked as `bd esp32c6-ems.9`.
+to the level editor already banked in that roadmap.
 
 ---
 

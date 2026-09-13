@@ -2,7 +2,7 @@
  * Portable suite: the falling-sand automaton - gas, fire, wood/embers/steam,
  * bubbles, oil/lava, and acid.
  *
- * Split out of suite_sand.c (bd esp32c6 test-suite-refactor), which had grown
+ * Split out of suite_sand.c, which had grown
  * past 32,000 lines across 500+ tests. Shared fixtures and assertion helpers
  * live in suite_sand_common.{c,h} - see that header.
  */
@@ -416,7 +416,7 @@ test_gas_decaying_away_marks_its_row_dirty(void) {
                                     "mark_rows() the same way its tick-down branch already does");
 }
 
-/* bd esp32c6-uc9: the packed-row equalise skip (row_is_packed(), see
+/* The packed-row equalise skip (row_is_packed(), see
  * sand_gas.c) generalised from py == 0 to tilted gravity via a running count
  * of packed rows already behind the sweep. Row 2 here is packed and has only
  * ONE packed row behind it when the sweep reaches it - nowhere near
@@ -954,7 +954,7 @@ test_cold_conducts_deep_into_a_slab(void) {
 /* WET SOIL MELTS SNOW, DRY SOIL DOES NOT. The thaw check reads a
  * neighbour's KIND, and dirt carries its water as a moisture nibble
  * instead - so a soaked bank and a dry one look identical to it unless
- * threaded through (bd esp32c6-bl4). The dry bed is the control: it
+ * threaded through. The dry bed is the control: it
  * proves the melt is about the WATER in the soil, not about dirt, and
  * pins the floor, since the rate scales with moisture and is meant to
  * reach zero well before bone dry. */
@@ -1186,7 +1186,7 @@ test_a_snowbank_crusts_on_its_faces_and_thickens_slowly_inward(void) {
      * third assertion below stops being true of any window at all. This is
      * where the second layer is well under way and the fifth has barely
      * started - measured, and it moved when the crust rate stopped riding an
-     * unrelated wake (bd esp32c6-8ce). */
+     * unrelated wake. */
     for (int i = 0; i < 8000; i++) {
         sand_step(&g, 0, 1000, 0);
     }
@@ -1318,7 +1318,7 @@ test_a_settled_snowbank_crusts_to_ice(void) {
  *
  * The test above makes cell_settled() the gate on crusting, which hands the
  * crust RATE to whatever else clears BLOCK_SETTLED - and waking on heat
- * traffic moved the balance ceiling 9x with COLD_REWARM_PERIOD (esp32c6-8ce).
+ * traffic moved the balance ceiling 9x with COLD_REWARM_PERIOD.
  *
  * STONE UNDERNEATH IS THE POINT - the heat_ramp material snow can chill. On
  * an inert floor there is no traffic and this passes with the wakes back in. */
@@ -1383,8 +1383,7 @@ test_a_resting_snowbank_stays_settled_over_a_floor_it_chills(void) {
 }
 
 /* BURYING A FIRE PUTS IT OUT - one of only two ways fire ends, and asserted
- * nowhere until now: the whole suite passed with smothering disabled outright
- * (bd esp32c6-dxj).
+ * nowhere until now: the whole suite passed with smothering disabled outright.
  *
  * Stone, because sand falls and the arrangement must still be one when the
  * reactions pass arrives. THE OILED CELL IS THE POINT: without a control this
@@ -1436,7 +1435,7 @@ test_a_fire_buried_on_all_four_sides_goes_out(void) {
  * The reactions walk logs a cell's material, then a stage may convert that
  * same cell: saturated gunpowder becomes oil at the walk's OWN (x, y). It
  * logged MAT_EXTENDED and never returns, so its census cannot hold MAT_OIL -
- * only latch_content_flags() knows (bd esp32c6-cxx).
+ * only latch_content_flags() knows.
  *
  * NOT VISIBLE TO THE FINGERPRINT: the dropped bit only changes an outcome
  * where a skip fires, so every scene hashes identically either way. */

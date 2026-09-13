@@ -141,7 +141,8 @@ gate checks test code only, one function at a time — it does not sum a call
 chain, so it bounds the worst single frame rather than the deepest path.
 The arena models one process's allocations from a clean start, so it cannot
 show fragmentation inherited from the rest of a real boot: the known
-device-side allocation failures (`esp32c6-e82`) do **not** reproduce here,
+device-side allocation failures — block-indices tests that cannot
+allocate under low free memory — do **not** reproduce here,
 which locates their cause outside the fixtures themselves. Neither gate
 replaces a device capture. They make a whole class of bug cost a second on
 a laptop instead of a capture cycle, which is the entire claim.
@@ -196,7 +197,7 @@ and pays for all of it — in run time, in build time, and in static RAM, where
 the suites' own `.bss` had left `tools/check_static_ram.py`'s "one grid fits
 after POST" gate 64 bytes of headroom. One added decomposition row costs 272
 bytes and fails the build outright, so a round could no longer instrument
-itself (bd esp32c6-iqx).
+itself.
 
 `CONFIG_LAUNCHER_SELFTEST` says whether the suites are compiled in;
 `CONFIG_LAUNCHER_SELFTEST_SCOPE_*` says **which**. Excluding a suite removes
@@ -571,7 +572,7 @@ against.
    finding out from a pull request.
 
    Two traps make a local measurement lie, and both cost a day in
-   September 2026 (beads `esp32c6-bix`). First, **`check_static_ram.py
+   September 2026. First, **`check_static_ram.py
    --self-test` is not the gate** — it exercises the script's own parser
    and arithmetic against a synthetic map, and passes on a tree the real
    gate rejects. The gate runs inside `idf.py build`. Second, **a local

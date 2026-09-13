@@ -2,7 +2,7 @@
 #
 # Cross-compile one bare-metal oracle image: the portable sand simulation
 # plus suite_sand_perf.c's SAND_HOST_PROBE scenes, for QEMU's generic riscv32
-# "virt" machine (bd oracle spike - see this directory's README.md for why
+# "virt" machine (see this directory's README.md for why
 # this route exists and what it still needs to actually run).
 #
 # Usage:
@@ -117,8 +117,8 @@ $APP_SAND/tilt.c
 "
 
 # suite_sand.c grew past 32,000 lines and was split by topic into
-# suite_sand_common.c/suite_sand_scenes.c/suite_sand_motion.c/... (bd esp32c6
-# test-suite-refactor) - this oracle needs all of them, the same as
+# suite_sand_common.c/suite_sand_scenes.c/suite_sand_motion.c/...
+# - this oracle needs all of them, the same as
 # perf_probe/build_probe.sh does, since the scene builders and the
 # sand_host_probe_run_*() wrappers this oracle calls now live in different
 # pieces of what used to be one file. suite_sand_ui.c is excluded - it was

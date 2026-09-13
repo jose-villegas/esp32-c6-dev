@@ -1,11 +1,11 @@
 /*
  * counters_scene_main - the "current probe support file" compare_counters.py
  * (this directory) carries unmodified into every scratch tree it extracts
- * with `git archive` (bd esp32c6-8zx).
+ * with `git archive`.
  *
  * probe_main.c cannot fill this role: it drives a scene through a
  * SAND_HOST_PROBE wrapper declared beside the real test body in
- * suite_sand*.c, and that convention (bd esp32c6-o2s) postdates several
+ * suite_sand*.c, and that convention postdates several
  * commits this tool needs to reach - ef87042, the very regression bisected
  * to prove this counter set works, has no such wrapper. Reusing suite_sand.c
  * at all would also mean matching its Unity/timing.h scaffolding version for

@@ -8,7 +8,7 @@
  * water and acid draining faster on stone and glass - live entirely at a read
  * site in sand_reactions.c with no reaction_t field to walk, so a human
  * documents those by hand outside the markers and an overwrite would delete
- * them on every regenerate (bd esp32c6-3mu). See
+ * them on every regenerate. See
  * docs/plans/Reaction-Doc-Generator-Plan.md for the design.
  *
  * A program and not a script over the text because material.c's tables are
@@ -1158,9 +1158,9 @@ emit_ignite(const reaction_t* r, uint8_t self_id) {
      * default drops "becoming Fire" as redundant. Self (wood) - burning
      * is a STATE not a transformation, so the sentence avoids "becoming
      * Wood". A third material - unused today but a real shape (ash/coal).
-     * Wording targets an early-elementary reader (child-reader persona);
-     * each extra fact gets its own sentence, not a trailing "and", so
-     * reading does not blur by the end. */
+     * Wording targets an early-elementary reader; each extra fact gets its
+     * own sentence, not a trailing "and", so reading does not blur by the
+     * end. */
     if (r->ignites_to == 0 || r->ignites_to == MAT_FIRE) {
         printf("- *Catches* %s%s from %s.\n", mat_span_v(MAT_FIRE), rate_gap(adv), heat_sources);
     } else if (r->ignites_to == self_id) {
@@ -1705,7 +1705,7 @@ emit_pairwise_table(void) {
         }
     }
 
-    /* Acid|Water and Acid|Oil (bd esp32c6-c3r): neither is a dissolve past
+    /* Acid|Water and Acid|Oil: neither is a dissolve past
      * the shared gate above, so hand-written here rather than walked - but
      * every number comes from sand.h's own #defines, not typed twice. */
     {

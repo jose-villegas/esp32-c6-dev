@@ -68,12 +68,6 @@ __pycache__/
 *.idb
 *.pdb
 
-### Agent development tools
-# Personal agent definitions, skills, settings, and session state.
-.agents/
-.claude/
-.codex/
-
 ### ESP-IDF
 build/
 # Variant build directories, e.g. build.diag from test/run_device_tests.sh.
@@ -104,10 +98,6 @@ launcher/main/apps/*/tools/results/
 # Cppcheck writes its parse dumps NEXT TO THE SOURCE, not into its own output
 # directory, so a MISRA run leaves these in main/ - see tools/misra_check.sh.
 *.dump
-
-# And once more for scripts/ - trim_comments_local.py's review report and its
-# model transcript. The branch it produces is the artifact worth keeping.
-scripts/results/
 
 # Captured .bmp files from tools/screenshot.sh - scratch output, not
 # something to commit.
@@ -140,16 +130,6 @@ $RECYCLE.BIN/
 # Built Visual Studio Code Extensions
 *.vsix
 
-### Beads (bd issue tracker) — local backlog DB, not versioned
-.beads/
 # scripts/perf-loop.sh working area: logs, per-candidate reports and the
 # quarantine pile. Regenerated per run, never worth committing.
 .perf-loop/
-
-# Structured prompts for handing work to another session or a local model.
-# Working notes, revised per round - not part of the shipped project.
-.prompts/
-
-### Local agent instructions
-AGENTS.md
-CLAUDE.md

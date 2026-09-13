@@ -1,5 +1,5 @@
 /*
- * oracle_main - bare-metal driver, one scene per image (bd oracle spike).
+ * oracle_main - bare-metal driver, one scene per image.
  *
  * Modelled on launcher/main/apps/sand/tools/perf_probe/probe_main.c's own
  * SCENES table (kept in sync by hand, the same way that file's own table

@@ -23,7 +23,7 @@ static const char* TAG = "post";
 /* Below this the board is starved and later contiguous allocations
  * start failing confusingly, worth catching here where the message is
  * clear. Checked against heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
- * not total free heap - see esp32c6-8h2. DELIBERATELY WELL BELOW what an
+ * not total free heap. DELIBERATELY WELL BELOW what an
  * app's largest buffer needs, and this is not the check that guards that:
  * pegging it there would false-alarm a healthy development image only a
  * kilobyte or so above it, and the fit is checked precisely elsewhere. */
@@ -189,7 +189,7 @@ check_memory(void) {
      * contiguous with the main heap, so comparing it against
      * heap_caps_get_largest_free_block()'s single-region answer invents
      * a "fragmentation" gap that was never real. Both sides here are
-     * MALLOC_CAP_DMA. See beads esp32c6-8h2. */
+     * MALLOC_CAP_DMA. */
     const size_t free_dma = heap_caps_get_free_size(MALLOC_CAP_DMA);
     const size_t largest_dma = heap_caps_get_largest_free_block(MALLOC_CAP_DMA);
 

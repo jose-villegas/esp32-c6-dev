@@ -19,8 +19,8 @@
 # hash can still show a human which scene changed and whether the material
 # counts moved with it (they should not, for a pure reordering).
 #
-# --update rewrites the baseline and is DELIBERATELY not something the
-# optimisation loop may call. A loop that can re-record its own baseline
+# --update rewrites the baseline and is DELIBERATELY not something an
+# automated script may call. A loop that can re-record its own baseline
 # has no baseline; recording one is a human act, done when a behavioural
 # change has been reviewed and accepted.
 

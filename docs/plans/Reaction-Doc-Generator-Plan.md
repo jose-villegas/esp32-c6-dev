@@ -59,10 +59,9 @@ reads `material.c`'s tables by linking them; it does not edit them.
 
 That is worth protecting rather than treating as a happy accident. The
 simulation is under active change — weathering landed and was reverted
-inside a single session — so anything that edits `material.h` or
-`sand_reactions.c` buys merge conflicts for no benefit. It also means phase
-1 belongs in **its own worktree**: it cannot break the sim, so it need not
-wait on it.
+within a day — so anything that edits `material.h` or `sand_reactions.c`
+buys merge conflicts for no benefit. It also means phase 1 **can land
+independently**: it cannot break the sim, so it need not wait on it.
 
 Two items that DO touch source are therefore *not* phase 1, and get their
 own small change: the `material.h` comment-order fix below, and the

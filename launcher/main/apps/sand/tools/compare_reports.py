@@ -117,8 +117,8 @@ def find_raw(path: str):
     """The `*_raw.txt` beside a report.
 
     By timestamp, not by the report's own `Source:` line: that line records an
-    absolute path from whichever worktree took the capture, and a report read
-    on another machine - or moved out of the capture worktree, which is the
+    absolute path from whichever checkout took the capture, and a report read
+    on another machine - or moved out of the capture checkout, which is the
     normal way one is kept - would send this looking in a directory that does
     not exist here. The stamp in the two filenames is the same by
     construction (capture_ref_<ref>_<stamp>.md next to

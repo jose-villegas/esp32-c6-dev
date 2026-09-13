@@ -1,8 +1,8 @@
 # Shading and Colour
 
 How a cell's material and variant become a pixel and what has gone wrong
-doing that - written so a fresh session (yours, or another agent's) can
-pick up shading or colour work on *any* material without re-discovering
+doing that - written so anyone can pick up shading or colour work on *any*
+material without re-discovering
 any of this from scratch. Read
 [`Sand-Simulation.md`](Sand-Simulation.md) first if you have not; this
 assumes you already know what a cell byte and a material row are.
@@ -53,7 +53,7 @@ one costs to produce:
   is *projected* onto gravity's own direction and the larger of the two is
   taken - see "Liquid depth is now gravity-continuous" below for why. See
   the local-depth lessons generally; this is the one signal that has been
-  rebuilt the most times this session.
+  rebuilt the most times.
 - **`out[3]`** - body / diagonal-line / crossing colour. A flat or
   speckled material sets all three the same; `MATERIAL_HATCHED` (glass) is
   the only pattern that uses all three for real.
@@ -379,8 +379,8 @@ code the comments were describing; the reasoning had been accurate for an
 *earlier* version of the mechanism and simply never got re-verified against
 the version that replaced it. A comment describing intent, once written, is
 never automatically re-checked against the code it sits beside - only a
-human (or an agent) actually reading both side by side catches the drift,
-and nothing about this file's structure forced that to happen.
+reader comparing both side by side catches the drift, and nothing about
+this file's structure forced that to happen.
 
 **The test mirrors had the same disease, one level up.** The host-side
 mirrors of this mechanism (`mirror_local_depth_column()`/
@@ -1095,8 +1095,8 @@ pairs), `test_the_blend_has_no_jump_crossing_45_degrees`,
   per-frame setup. Verified directly by tracing the call sequence, not
   assumed - there is exactly one gravity source reaching shading, and it
   already goes through the tilt filter.
-- Magnitude: `IMU_COUNTS_PER_G` is 4096; this session's own host-side test
-  fixtures use gravity pairs of magnitude ~1000 (e.g. `(500, 866)` for 30
+- Magnitude: `IMU_COUNTS_PER_G` is 4096; the host-side test fixtures use
+  gravity pairs of magnitude ~1000 (e.g. `(500, 866)` for 30
   degrees) as "the same order of magnitude," not an exact unit match -
   close enough that overflow/precision reasoning transfers, not so close
   that a test result should be read as a device-calibrated number.

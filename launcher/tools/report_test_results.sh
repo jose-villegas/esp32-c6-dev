@@ -10,8 +10,8 @@
 #   COM_PORT        serial port the device is on. Default: COM3.
 #   OUT.md          markdown report path. Default:
 #                   tools/results/test_results_<timestamp>.md
-#   IDF_EXPORT_PS1  path to ESP-IDF's export.ps1. Default: this
-#                   project's usual install location.
+#   IDF_EXPORT_PS1  path to ESP-IDF's export.ps1. Default: the ESP-IDF
+#                   Windows installer's path.
 #
 # Restores build.release afterward, regardless of outcome, in a trap -
 # same discipline the sweep scripts already use, so the device is never
@@ -62,7 +62,7 @@ cleanup() {
     # `exit "$status"` below is what actually decides the exit code now,
     # so a real failure still propagates regardless of what happens here.
     # See launcher/main/apps/sand/tools/report_performance.sh, the sibling
-    # this cleanup() was copied from - same bug, same fix, bd esp32c6-s3z.
+    # this cleanup() was copied from - same bug, same fix.
     read -r -p "Press Enter to close..." _ || true
     exit "$status"
 }

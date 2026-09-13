@@ -153,8 +153,7 @@ static inline __attribute__((always_inline)) bool try_heat_transform_given(sand_
  * MATERIAL, through place_cell(), which still wakes.
  *
  * Waking shook a solid ice block out of its column, and put snow's crust rate
- * under COLD_REWARM_PERIOD: at a period of 1 the balance ceiling moved 9x
- * (bd esp32c6-8ce). */
+ * under COLD_REWARM_PERIOD: at a period of 1 the balance ceiling moved 9x. */
 
 #define HEAT_FLAW_CLUMP 5
 
@@ -488,8 +487,7 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
                 /* SIGNED ON PURPOSE, unlike the three halvings above: a
                  * WETTER neighbour makes this negative and the lines below
                  * depend on it, moving moisture the other way. Casting it
-                 * unsigned turns a small negative into a huge positive
-                 * (bd esp32c6-pz7). */
+                 * unsigned turns a small negative into a huge positive. */
                 give = (held - moisture_of(n, nr)) / 2;
                 if (give == 0) {
                     continue; /* already even with this one */
@@ -665,8 +663,8 @@ step_one_warming_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
  * unrealistic in play - a third of it does not. */
 #define COLD_REACH         (CONDUCT_REACH / 3)
 
-/* Cells the cold crosses per attenuation roll - THE ONE PLACE COLD BEATS HEAT,
- * which is what bd esp32c6-tov asked for. The heat walk rolls at every cell,
+/* Cells the cold crosses per attenuation roll - THE ONE PLACE COLD BEATS HEAT.
+ * The heat walk rolls at every cell,
  * so at glass's conducts of 220 it clears CONDUCT_REACH about once in a
  * hundred; once per run of four makes that nearer one in three.
  *
@@ -2149,7 +2147,7 @@ sand_step_reactions(sand_t* s) {
     /* CLEARED HERE so a bit latch_content_flags() ORs in mid-pass survives the
      * write-back below. Assigning the walk's census there instead dropped any
      * cell this pass CREATED at its own coordinates - the walk logged the old
-     * material and never returns (bd esp32c6-cxx).
+     * material and never returns.
      *
      * The other five may_have_* bools are live per-cell gates for stage_warm
      * and the plant stages, so they keep the clear-at-the-end rule below. The

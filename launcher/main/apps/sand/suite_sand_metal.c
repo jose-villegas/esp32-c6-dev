@@ -2,7 +2,7 @@
  * Portable suite: the falling-sand automaton - metal - dirt smelted by
  * sustained heat.
  *
- * Split out of suite_sand.c (bd esp32c6 test-suite-refactor), which had grown
+ * Split out of suite_sand.c, which had grown
  * past 32,000 lines across 500+ tests. Shared fixtures and assertion helpers
  * live in suite_sand_common.{c,h} - see that header.
  */
@@ -678,7 +678,7 @@ test_the_rod_terminates_at_conduct_reach_not_the_far_wall(void) {
     sand_set_mobility(&rod, 0);
     sand_set_conduction(&rod, 255);
     /* The lava source sits boxed in on 3-4 sides for the whole run - more
-     * than enough cover to be burst-eligible (bd esp32c6-mqt) over 6000
+     * than enough cover to be burst-eligible over 6000
      * steps. Pinned off: this test's job is the rod's own growth/cap
      * mechanism, not the unrelated chance of the source itself bursting
      * away mid-growth. */

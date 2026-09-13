@@ -9,7 +9,7 @@
  * selftest image, not the host runner - see each test's own #ifdef
  * DEVICE_BUILD guard and RUN_TEST line.
  *
- * Split out of suite_sand.c (bd esp32c6 test-suite-refactor), which had grown
+ * Split out of suite_sand.c, which had grown
  * past 32,000 lines across 500+ tests. Shared fixtures and assertion helpers
  * live in suite_sand_common.{c,h}; the scene builders these frame-budget
  * tests measure live in suite_sand_scenes.{c,h} - see those headers.
@@ -354,7 +354,7 @@ test_a_screen_of_settled_sand_costs_almost_nothing(void) {
     TEST_ASSERT_EQUAL_INT_MESSAGE(REAL_W * REAL_H, grains, "and nothing may have moved");
     /* Re-pegged at measured * 0.9 from the first capture after the sweep
      * stopped building a per-row context for a block row it was going to
-     * skip whole (esp32c6-lgc): 58 us, where the same board cost 269.
+     * skip whole: 58 us, where the same board cost 269.
      * KNOWINGLY RED at block 16x32, which measures 119: a narrower block
      * means more of them to scan, and that was accepted because a still
      * board has no motion for the cost to lag. Do not raise it to suit. */
@@ -1550,7 +1550,7 @@ sand_host_probe_run_water_over_lava(void) {
 /* The gunpowder basin scene (build_gunpowder_basin_scene(),
  * suite_sand_scenes.c), shared with the coverage test that proves the
  * chain-detonation really spans several bursts and reaches fuel
- * outside the vessel. Closes half of bd esp32c6-4d9. */
+ * outside the vessel. */
 
 /* NINETY STEPS, NO SETTLING - matching the coverage test exactly, so
  * this times the same run already proved to reach every path it
@@ -2025,7 +2025,7 @@ sand_host_probe_run_mature_tree(void) {
 
 /* Every row above holds the board portrait, and the block shape behind the
  * settled-block skip was swept against exactly those rows. The board is
- * played LANDSCAPE, down grid +X (bd esp32c6-1z6) - geometry in
+ * played LANDSCAPE, down grid +X - geometry in
  * suite_sand_scenes.h. Measured 42,290 / 54,458 / 11,618 us, perf-scoped at
  * block 16x32, pegged at that x 0.9 rounded down like every row above, so
  * all three ship red as reduction targets. */
@@ -2480,7 +2480,7 @@ test_present_cost_against_the_lava_stress_scene(void) {
                                                       1000, 0, 30, measured_steps, &full_bands, &gathered,
                                                       &partial_bands, &sim_us, &mark_us, &present_us);
 
-    /* THE WHOLE FRAME, not just the bus. bd esp32c6-e6c: every other
+    /* THE WHOLE FRAME, not just the bus: every other
      * row here times sand_step() with no drawing, and the present rows
      * time the bus alone, so nothing measured the frame a user actually
      * sees. The helper already separates these three - this row was
@@ -2543,7 +2543,7 @@ test_present_cost_against_the_thermal_shock_scene(void) {
                                                       1000, 0, 0, measured_steps, &full_bands, &gathered,
                                                       &partial_bands, &sim_us, &mark_us, &present_us);
 
-    /* THE WHOLE FRAME, not just the bus. bd esp32c6-e6c: every other
+    /* THE WHOLE FRAME, not just the bus: every other
      * row here times sand_step() with no drawing, and the present rows
      * time the bus alone, so nothing measured the frame a user actually
      * sees. The helper already separates these three - this row was

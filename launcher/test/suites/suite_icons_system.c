@@ -259,7 +259,7 @@ test_content_bbox_centring_uses_a_specific_expected_origin(void) {
 }
 
 /* home.svg was excluded by RUN_COUNT_CAP (gen_icons.py) while it still
- * tracked ui_draw_bitmap()'s 48-slot stack buffer - see bd esp32c6-k2u.
+ * tracked ui_draw_bitmap()'s 48-slot stack buffer.
  * Baking and walking it at 50 runs is the case that cap made impossible. */
 static void
 test_home_bakes_and_walks_at_fifty_runs(void) {

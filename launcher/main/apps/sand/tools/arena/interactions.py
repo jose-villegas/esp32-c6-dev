@@ -1,4 +1,4 @@
-"""Which material-to-material INTERACTION is slowest (bd esp32c6-l5z).
+"""Which material-to-material INTERACTION is slowest.
 
 A raw ranking of pairings does not answer this. Wood-settled is dear against
 everything, so every Wood row lands near the top whether or not the partner

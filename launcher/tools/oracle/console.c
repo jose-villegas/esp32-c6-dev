@@ -1,6 +1,6 @@
 /*
  * console - the newlib syscall floor a freestanding link demands, plus one
- * byte-banged UART, for the QEMU riscv "virt" machine (bd oracle spike).
+ * byte-banged UART, for the QEMU riscv "virt" machine.
  *
  * WHY THESE EXACT SYMBOLS: linking against newlib's libc.a (this project's
  * own cross toolchain, C:/Users/.../riscv32-esp-elf/) pulls in printf/malloc/

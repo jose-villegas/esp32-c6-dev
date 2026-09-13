@@ -1,8 +1,8 @@
 /*
  * probe_main - host driver for every frame-budget scene that has a
- * SAND_HOST_PROBE wrapper in suite_sand.c (bd esp32c6-o2s: the canonical
+ * SAND_HOST_PROBE wrapper in suite_sand.c - the canonical
  * host attribution probe, replacing the per-round copies this tree
- * accumulated - see this directory's own build_probe.sh for the history).
+ * accumulated - see this directory's own build_probe.sh for the history.
  *
  * Deliberately NOT suites_run_all(): that would also compile and run every
  * other DEVICE_BUILD scene in suite_sand.c (fire, gas, boiler, thermal

@@ -124,7 +124,7 @@ refuses to link an image whose statics would leave no room for the
 framebuffer plus one grid, for exactly that reason — see
 `launcher/tools/check_static_ram.py`.
 
-A device heap trace on 2026-09-06 (beads esp32c6-8h2) mapped the DMA-capable
+A device heap trace on 2026-09-06 mapped the DMA-capable
 memory precisely: one main region of 404 KiB, plus a second, physically
 separate ~11 KiB region (the ROM-stack area, handed back by `heap_init` at
 startup) that is never contiguous with the main one and so can never serve a

@@ -41,7 +41,7 @@ DP_LARGEST_ALLOC_SOURCE="one sand grid, docs/sand/Perf-Round-Guide.md free-heap 
 
 # --- toolchain and codegen -------------------------------------------------
 DP_TOOLCHAIN_PREFIX=riscv32-esp-elf
-DP_TOOLCHAIN_SOURCE="C:/Users/ville/.espressif/tools/riscv32-esp-elf/esp-14.2.0_20260121"
+DP_TOOLCHAIN_SOURCE="ESP-IDF v5.5 tools, riscv32-esp-elf esp-14.2.0_20260121"
 
 # ISA-targeting flags. These are for a cross build ONLY and must never be
 # copied onto a host compile - that is the whole distinction this file draws.

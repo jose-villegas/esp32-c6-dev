@@ -1,7 +1,7 @@
 # The instruction-count oracle: feasibility spike, addressed to whoever picks this up next
 
 Read this before touching anything else in this directory. It is a working
-note from one time-boxed spike (bd oracle spike), not a tour.
+note from one time-boxed spike, not a tour.
 
 **The prize, restated**: exact per-benchmark RISC-V *instruction counts* and
 modelled i-cache misses for sand's frame-budget scenes — a deterministic
@@ -85,7 +85,7 @@ anywhere in the function:
 80031222: 02f89b63   bne   a7,a5,80031258 <material_colours+0x6a>
 ```
 
-Whenever the pair-matrix work (bd esp32c6-iu5, see "Validation case (b)"
+Whenever the pair-matrix work (see "Validation case (b)"
 below) lands a `switch` back into `sand_reactions.c`, re-run this same check
 against it specifically — that's the one place a jump-table regression
 would actually matter for this project's own history (attempt 19).

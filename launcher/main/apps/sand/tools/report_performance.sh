@@ -13,8 +13,8 @@
 #   COM_PORT        serial port the device is on. Default: COM3.
 #   OUT.md          markdown report path. Default:
 #                   main/apps/sand/tools/results/performance_<timestamp>.md
-#   IDF_EXPORT_PS1  path to ESP-IDF's export.ps1. Default: this
-#                   project's usual install location.
+#   IDF_EXPORT_PS1  path to ESP-IDF's export.ps1. Default: the ESP-IDF
+#                   Windows installer's path.
 #   --no-restore    skip rebuilding/reflashing build.release afterward -
 #                   the device is left on build.diag. Restoring costs a
 #                   ~3-4 minute build+flash plus a second ~90s ESP-IDF
@@ -23,7 +23,7 @@
 #   --perf-scope    build the PERF-SCOPED diag image: only suite_sand_perf
 #                   and the scene builders it calls are compiled in, so the
 #                   run is shorter and the freed static RAM is available for
-#                   a round's own pass gates and probe rows (bd esp32c6-iqx,
+#                   a round's own pass gates and probe rows (see
 #                   docs/Testing-Guide.md). Its numbers are NOT comparable
 #                   with an unscoped capture's - the layout differs - so
 #                   scope every capture of a round the same way.

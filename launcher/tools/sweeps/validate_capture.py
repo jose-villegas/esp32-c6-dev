@@ -2,12 +2,11 @@
 """Answers exactly one question about a raw device self-test capture: is it
 worth reading at all?
 
-A long sand performance-optimisation session wasted repeated cycles acting
-on captures that looked plausible but measured nothing - a timeout with no
-SELFTEST_COMPLETE, a crash loop, or (worst, because it produced a clean-
+A capture can look plausible and measure nothing - a timeout with no
+SELFTEST_COMPLETE, a crash loop, or (worst, because it produces a clean-
 looking report) an image where the suites never actually ran and the device
-just sat in the launcher printing its idle frame rate. Each of those burned
-a full build+flash+capture cycle before anyone noticed. This tool runs
+just sat in the launcher printing its idle frame rate. Each of those burns
+a full build+flash+capture cycle before anyone notices. This tool runs
 straight after the capture step and before report_performance.py, so a
 worthless capture is rejected with a specific reason instead of turning into
 a plausible-looking table.

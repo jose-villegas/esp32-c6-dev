@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""compare_counters.py - two-ref counter bisection driver (bd esp32c6-8zx).
+"""compare_counters.py - two-ref counter bisection driver.
 
 Attributes a device regression by COUNTING, not timing: host wall-clock
 comparisons across two separately-linked binaries carry a 7-15% cross-binary
@@ -8,7 +8,7 @@ swamped the very question this tool was built to answer. Work counters
 (sand_work_counters.h) are exact and deterministic instead - two builds of
 byte-identical source produce byte-identical counts - so a real change shows
 up as a real difference and a no-op window shows up as EXACT equality
-(bd esp32c6-8zx's own signature for "nothing happened here": twelve counters
+(this tool's own signature for "nothing happened here": twelve counters
 landing on the same digit is not noise, it is proof the window was wrong).
 
 WHAT THIS SCRIPT DOES

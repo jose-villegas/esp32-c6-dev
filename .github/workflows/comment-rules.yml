@@ -4,8 +4,7 @@ name: Comment Rules
 # argued: nothing beside code over 500 characters, no file header over 50
 # lines, no comment naming a function that does not exist, and none below
 # apps/ naming an app.
-# The PostToolUse hook already refuses some of these on an edit's own new text,
-# but a hook only binds an agent that has it configured - this holds the tree.
+# Enforced here so the rules hold for every commit, however it was made.
 #
 # Own workflow file, like the other four, purely so it gets its own badge -
 # GitHub exposes whole-workflow badges and never per-job ones. See

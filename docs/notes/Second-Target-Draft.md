@@ -44,8 +44,9 @@ mechanisms in one trade: the read stops missing, and it stops evicting the
 loop. On the S3 those two mechanisms separate. §2 works it through.
 
 **The ISA changes.** Every disassembly-derived finding in this campaign
-(`bd esp32c6-fs7`, `esp32c6-jin`, the round-6 register-pressure control) was
-read off `riscv32-esp-elf-objdump` of rv32imac. Xtensa has shift-add
+(the neighbour-walk reload finding, the fire-scene chemistry cost, the
+round-6 register-pressure control) was read off `riscv32-esp-elf-objdump`
+of rv32imac. Xtensa has shift-add
 (`addx2/4/8`), PC-relative literal loads (`l32r`), zero-overhead loops and
 windowed register calls. Those are four different codegen shapes for exactly
 the constructs this campaign has been reading. **Not one disassembly finding
@@ -53,7 +54,7 @@ transfers; all of them must be re-read.** The *conclusions* they support may
 still hold — see §2 — but the evidence does not.
 
 **Two cores at 240 MHz.** 1.5× the clock, and a place to put
-`gfx_present()`. `bd esp32c6-91i` (present pipelining) exists only because
+`gfx_present()`. Present pipelining exists only because
 the C6 has no second core; on the S3 the 17.6 ms present leaves the frame
 budget outright.
 
@@ -67,9 +68,9 @@ budget outright.
 
 | Finding | Source | Why it transfers |
 |---|---|---|
-| Not doing the work at all beats doing it cheaper — cross-flow level-block skip, **50.8%** off a settled basin (10737 → 5285 us); packed-row gas skip 9.6% | `28b931a`, `bd esp32c6-0t7` | Removes *N cells × per-cell cost*. Both terms scale together on any core, so the **percentage** is roughly microarchitecture-invariant even though the microseconds are not |
-| Which pass owns a scene inverts by scene — fire is gas 56% + reactions 43%, sweep+cross-flow 0.09%; water is the exact opposite | `bd esp32c6-dp8`, `esp32c6-2u7` | A property of the automaton, not the chip |
-| Reactions cost what they *do* (bodies 55%, dispatch 4%); cross-flow costs what it *looks at* | `bd esp32c6-jin`, `esp32c6-61h` | Same |
+| Not doing the work at all beats doing it cheaper — cross-flow level-block skip, **50.8%** off a settled basin (10737 → 5285 us); packed-row gas skip 9.6% | `28b931a` | Removes *N cells × per-cell cost*. Both terms scale together on any core, so the **percentage** is roughly microarchitecture-invariant even though the microseconds are not |
+| Which pass owns a scene inverts by scene — fire is gas 56% + reactions 43%, sweep+cross-flow 0.09%; water is the exact opposite | — | A property of the automaton, not the chip |
+| Reactions cost what they *do* (bodies 55%, dispatch 4%); cross-flow costs what it *looks at* | — | Same |
 | The row form of a skip is a benchmark artefact unless the scene has air beside the pool | `28b931a`, memory `test-basins-are-clean...` | Scene design, not hardware |
 | No 64-bit divide, no signed `/ 2^n` in a hot loop | Playbook 7 & 11 | **Survives verbatim.** The S3's FPU is *single-precision*: `__divdi3` is still a call and `double` is still soft-float |
 | Statics tax the heap because DIRAM is one pool | Board-and-Memory.md | Same on S3, and **worse** — cache size comes out of that pool too |
@@ -78,13 +79,13 @@ budget outright.
 
 | Finding | Why it is the C6's |
 |---|---|
-| **"~29–36 cycles per bounds-checked neighbour probe"** (`bd esp32c6-fs7`) | Not the same question on S3. That figure is `lui/addi/lw/lw/mul/lw/add/lbu` on rv32imac with no data cache. On Xtensa the address materialises with `l32r`, the index folds into `addx2`, and the table sits in a 32 KB **data** cache. Re-derive from a real S3 objdump before quoting a cycle count at all |
+| **"~29–36 cycles per bounds-checked neighbour probe"** | Not the same question on S3. That figure is `lui/addi/lw/lw/mul/lw/add/lbu` on rv32imac with no data cache. On Xtensa the address materialises with `l32r`, the index folds into `addx2`, and the table sits in a 32 KB **data** cache. Re-derive from a real S3 objdump before quoting a cycle count at all |
 | "A plain call costs ~27 cycles here" | Xtensa windowed calls price differently, and a register-window overflow spills eight registers to the stack. **Variance is worse, not better** |
-| Host understates device by **2.0×–6.6×** (`bd esp32c6-vk4`) | Per-board. Expect it to **narrow** on the S3 — which is itself a measurement (§5) |
+| Host understates device by **2.0×–6.6×** | Per-board. Expect it to **narrow** on the S3 — which is itself a measurement (§5) |
 | The ±6.7% flash-layout spread (Perf-Round-Guide) | Mechanism exists on both (code is flash-resident behind a cache), geometry does not: 16 KB/8-way default vs 32 KB/4-way. Re-derive from two identical-source builds |
 | Free heap 63,952 / grid 41,216 / `check_static_ram.py`'s literals | This chip, this build, this boot |
 | Every `suite_sand_perf.c` budget (`measured × 0.9`) | Wall-clock, pegged from C6 captures at 160 MHz |
-| QSPI 40 MHz, 17.6 ms present, 80 MHz corner corruption (`bd esp32c6-kfg`) | Panel and board wiring — the sibling S3 board carries the same panel, so this is the one number that might survive, and only by coincidence |
+| QSPI 40 MHz, 17.6 ms present, 80 MHz corner corruption | Panel and board wiring — the sibling S3 board carries the same panel, so this is the one number that might survive, and only by coincidence |
 
 ### The one that needs its own argument: the SRAM-mask trade
 
@@ -112,7 +113,7 @@ nothing".**
 
 Three caveats that keep it honest, and they matter:
 
-1. The **skip-work** wins (`bd esp32c6-vk4`'s open question) are about not
+1. The **skip-work** wins are about not
    *fetching code bytes* — the **i**cache, not the d-cache. The S3's icache
    defaults to **16 KB, half the C6's**. If the fetch hypothesis is right,
    those wins get **larger** at IDF defaults on the S3, not smaller.
@@ -211,21 +212,18 @@ it stands on the C6.
 **Unchanged from the previous draft — the roadmap already answers this.**
 [`../Autana-Rendering-Roadmap.md`](../Autana-Rendering-Roadmap.md) §5 states
 "per-target platform folders, one binary per board", with `platform/<board>/`
-owning bus clocks, PSRAM policy and input wiring, and Phase 6
-(`bd esp32c6-ems.7`) *is* the S3 port, already written, already scoped.
+owning bus clocks, PSRAM policy and input wiring, and Phase 6 *is* the S3
+port, already written, already scoped.
 
 Recommendation: **rename the repo to `autana` when the `platform/` split in
 §5 actually lands, not before** — the name should follow the shape, and
-today the shape is one board's firmware. **Leave the `esp32c6-` beads prefix
-alone regardless.** Issue ids are opaque keys; they are cited by the hundred
-across `docs/` and `git log`, and re-keying to match a directory name breaks
-every reference for no gain.
+today the shape is one board's firmware.
 
 ---
 
 ## 5. What it would take
 
-Align with Phase 6 (`bd esp32c6-ems.7`); do not invent a parallel plan. Its
+Align with Phase 6; do not invent a parallel plan. Its
 acceptance criteria already cover the platform split, the PSRAM double
 buffer, present on core 1, and FPU/PIE paths behind the same interfaces.
 What follows is the *smallest-useful-first* ordering underneath it.
@@ -248,7 +246,7 @@ been hiding.
 **C — the measurement that pays, and it is not the same one the C3 offered.**
 The C3 would have been a cache-*halved control*. The S3 is a
 **cache-*separated* control**, which is a sharper instrument for the same
-question (`bd esp32c6-vk4`):
+question:
 
 ```
   run one known SRAM-mask win (sweep kind mask) and one known
@@ -256,7 +254,8 @@ question (`bd esp32c6-vk4`):
 
   mask win shrinks on S3, skip win holds or grows
         -> the mask wins were DATA-cache/contention effects
-           and the skip wins are FETCH effects.  vk4 answered.
+           and the skip wins are FETCH effects. The open question
+           above is answered.
 
   both shrink together
         -> both were execution effects the C6's 160 MHz exaggerated
@@ -265,8 +264,8 @@ question (`bd esp32c6-vk4`):
         -> the mechanism is neither cache; go read counters
 ```
 
-Cheaper and less invasive than vk4's route 3 (padding the skipped span,
-which perturbs the code it measures). Caveats up front: two ISAs, two
+Cheaper and less invasive than the alternative route (padding the skipped
+span, which perturbs the code it measures). Caveats up front: two ISAs, two
 compilers and two clocks move at once, so this is a **sign** test, never a
 magnitude one, and each board needs the within-capture discipline of §2
 applied separately. The S3 also exposes cache hit/miss counters — if those
@@ -309,9 +308,9 @@ it would have on a C3. Stated without softening:**
 
 The second half of the premise is right and undersold. The S3 opens three
 paths the C6 structurally cannot: a **second core** for present (which
-deletes `bd esp32c6-91i` as a workaround and hands ~17 ms back), **1.5× the
-clock**, and **PSRAM** — with the caveat that PSRAM is a streaming resource,
-not a scratchpad (§3).
+removes the need for present pipelining as a workaround and hands ~17 ms
+back), **1.5× the clock**, and **PSRAM** — with the caveat that PSRAM is
+a streaming resource, not a scratchpad (§3).
 
 One thing to hold onto: **the S3 makes the C6 more interesting, not less.**
 The C6 is the constrained target that forces the fixed-point, no-allocation,
@@ -326,10 +325,9 @@ the desk.
 ## Related
 
 - [`../Autana-Rendering-Roadmap.md`](../Autana-Rendering-Roadmap.md) — §2's
-  hardware table and §5/Phase 6 already carry the S3 plan; `bd esp32c6-ems.7`
+  hardware table and §5/Phase 6 already carry the S3 plan
 - [`Board-and-Memory.md`](Board-and-Memory.md) — the C6 memory budget §3
   compares against
 - [`../sand/Perf-Round-Guide.md`](../sand/Perf-Round-Guide.md) — the four
   measurement rules classified in §2
 - `launcher/tools/device_profiles/esp32s3.sh` — the skeleton §5 phase A fills
-- `bd esp32c6-vk4` — the question §5 phase C is shaped to answer
