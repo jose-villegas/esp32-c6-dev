@@ -74,6 +74,10 @@ __pycache__/
 .claude/
 .codex/
 
+# Personal dev tooling (local model pipelines, agent/worktree helpers,
+# process docs) - its own plain git repo, not a submodule.
+.dev/
+
 ### ESP-IDF
 build/
 # Variant build directories, e.g. build.diag from test/run_device_tests.sh.
@@ -105,8 +109,8 @@ launcher/main/apps/*/tools/results/
 # directory, so a MISRA run leaves these in main/ - see tools/misra_check.sh.
 *.dump
 
-# And once more for scripts/ - trim_comments_local.py's review report and its
-# model transcript. The branch it produces is the artifact worth keeping.
+# And once more for scripts/ - local tools run from the repo root write
+# their reports here.
 scripts/results/
 
 # Captured .bmp files from tools/screenshot.sh - scratch output, not

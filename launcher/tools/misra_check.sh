@@ -7,8 +7,8 @@
 # essential-type violation).
 #
 # Report-only about its FINDINGS: any number of them still exits 0. A refused
-# argument, a timeout or a cppcheck failure exits non-zero, so a caller like
-# scripts/fix-audited-code.sh cannot patch from a truncated report. The sand
+# argument, a timeout or a cppcheck failure exits non-zero, so a report
+# consumer cannot patch from a truncated report. The sand
 # app alone currently turns up ~1200 MISRA style findings (dominated by
 # 10.4, 12.1 and 15.5 - see below), so gating CI on this before triage
 # would just be a wall no one reads. Flip EXIT_ON_FINDINGS below once a
