@@ -50,9 +50,8 @@
 #include "row_runs.h"
 #include "soc/extmem_reg.h"
 #include "soc/soc.h"
-#define REAL_BLOCK_COLS ((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
-#define REAL_BLOCK_ROWS ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
-#include "suite_sand_split.h"
+#define REAL_BLOCK_COLS     ((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
+#define REAL_BLOCK_ROWS     ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
 
 /* The worst case: every cell on the screen moving at once. Cross-build
  * risk: the same code has measured a 3.2-3.9 ms swing purely from the
@@ -105,13 +104,6 @@ test_a_full_size_step_fits_in_the_frame_budget(void) {
     TEST_ASSERT_LESS_THAN_MESSAGE(FULL_STEP_BUDGET_US, (int)per_step,
                                   "the simulation no longer fits in its share of the frame");
 }
-
-#ifdef SAND_HOST_PROBE
-void
-sand_host_probe_run_full_step_control(void) {
-    test_a_full_size_step_fits_in_the_frame_budget();
-}
-#endif
 
 static void
 build_water_scene(sand_t* real, uint8_t* big, uint8_t* blocks) {
@@ -267,15 +259,6 @@ build_fire_scene(sand_t* real, uint8_t* big, uint8_t* blocks) {
 #define FIRE_REPEATS      2
 #endif /* DEVICE_BUILD */
 
-#ifdef SAND_HOST_PROBE
-/* Host-only timing probe (see the full-step control's own wrapper above,
- * and main/apps/sand/tools/perf_probe/). */
-void
-sand_host_probe_run_water(void) {
-    test_a_screen_of_water_fits_in_the_frame_budget();
-}
-#endif
-
 #endif /* DEVICE_BUILD */
 
 #ifdef DEVICE_BUILD
@@ -363,17 +346,6 @@ test_a_screen_of_settled_sand_costs_almost_nothing(void) {
                                   "rows are being examined that had no reason to be");
 }
 
-#ifdef SAND_HOST_PROBE
-/* Host-only timing probe. This row is the one the block-size sweep has
- * always been decided on - a smaller block scans more of them on a board
- * where nothing moves - so a candidate shape that is not ranked here has
- * not been ranked at all. */
-void
-sand_host_probe_run_settled_screen(void) {
-    test_a_screen_of_settled_sand_costs_almost_nothing();
-}
-#endif
-
 static void
 test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget(void) {
     /* Worst case pouring: all blocks wake at once. */
@@ -424,15 +396,6 @@ test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget(void) {
                                   "reversing gravity on a settled pile must still fit in a frame or "
                                   "two - this is the real worst case pouring and tilting produces");
 }
-
-#ifdef SAND_HOST_PROBE
-/* Host-only timing probe - the other liquid-free control (see the
- * full-step control's own wrapper for the pattern). */
-void
-sand_host_probe_run_settled_flip_control(void) {
-    test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget();
-}
-#endif
 
 /* Mass invariant for liquid scenes; water cell variant holds 1..15, diffusion
  * model adjusts amounts without changing cell count. */
@@ -736,15 +699,6 @@ test_a_growing_plant_bed_fits_in_the_frame_budget(void) {
                                   "target at measured x 0.9, so failing means the work is not done yet");
 }
 
-#ifdef SAND_HOST_PROBE
-/* Host-only timing probe - the growing plant bed (see the full-step control's
- * own wrapper for the pattern). */
-void
-sand_host_probe_run_plant_bed(void) {
-    test_a_growing_plant_bed_fits_in_the_frame_budget();
-}
-#endif
-
 static void
 test_a_campfire_on_a_sand_bed_fits_in_the_frame_budget(void) {
     uint8_t* big = malloc(REAL_W * REAL_H);
@@ -784,15 +738,6 @@ test_a_campfire_on_a_sand_bed_fits_in_the_frame_budget(void) {
                                   "in - a reduction target at measured x 0.9, so failing means the work "
                                   "is not done yet");
 }
-
-#ifdef SAND_HOST_PROBE
-/* Host-only timing probe - the campfire scene (see the full-step control's
- * own wrapper for the pattern). */
-void
-sand_host_probe_run_campfire(void) {
-    test_a_campfire_on_a_sand_bed_fits_in_the_frame_budget();
-}
-#endif
 
 /* A tilted board is a different path, not a rotation of the same one:
  * equalise_gas() takes its spread direction from ring_dir(i_stable + 2), and
@@ -891,15 +836,6 @@ test_turning_a_half_screen_of_gas_fits_in_the_frame_budget(void) {
                                   "means the work is not done yet");
 }
 
-#ifdef SAND_HOST_PROBE
-/* Host-only timing probe (see the full-step control's own wrapper for the
- * pattern). */
-void
-sand_host_probe_run_settled_pool_to_landscape(void) {
-    test_turning_a_settled_pool_to_landscape_fits_in_the_frame_budget();
-}
-#endif
-
 static void
 test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget(void) {
     uint8_t* big = malloc(REAL_W * REAL_H);
@@ -974,15 +910,6 @@ test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget(void) {
                                   "down to this - a target to optimize toward, not yet the reality");
 }
 
-#ifdef SAND_HOST_PROBE
-/* Host-only timing probe (see the full-step control's own wrapper for the
- * pattern). */
-void
-sand_host_probe_run_mixed_flip(void) {
-    test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget();
-}
-#endif
-
 /* Board banded with every material, reactive pairs touch, gravity inverted.
  * Catches combination costs. THE ASSERTION BELOW IS NOT A BUDGET. Replace
  * with real figure from `run_device_tests.sh`. */
@@ -1049,15 +976,6 @@ test_a_gravity_flip_on_every_material_at_once_stays_sane(void) {
                                   "measured number as a reduction target - failing means the work "
                                   "is not done, not that something broke");
 }
-
-#ifdef SAND_HOST_PROBE
-/* Host-only timing probe - the every-material flip scene (see the
- * full-step control's own wrapper for the pattern). */
-void
-sand_host_probe_run_every_material_flip(void) {
-    test_a_gravity_flip_on_every_material_at_once_stays_sane();
-}
-#endif
 
 static void
 test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget(void) {
@@ -1150,15 +1068,6 @@ test_a_full_screen_of_fire_fits_in_the_frame_budget(void) {
                                   "real regression guard");
 }
 
-#ifdef SAND_HOST_PROBE
-/* Host-only timing probe - the full_fire scene (see the full-step control's
- * own wrapper for the pattern). */
-void
-sand_host_probe_run_full_fire(void) {
-    test_a_full_screen_of_fire_fits_in_the_frame_budget();
-}
-#endif
-
 /* Four liquids of different density painted upside down
  * (build_four_liquid_scene(), shared with test_the_four_liquid_scene_
  * keeps_reacting_after_settling) so lava, acid, water and oil migrate past
@@ -1214,15 +1123,6 @@ test_four_liquids_reacting_at_once_fits_in_the_frame_budget(void) {
                                   "broke");
 }
 
-#ifdef SAND_HOST_PROBE
-/* Host-only timing probe - the four-liquids scene (see the full-step
- * control's own wrapper for the pattern). */
-void
-sand_host_probe_run_four_liquids(void) {
-    test_four_liquids_reacting_at_once_fits_in_the_frame_budget();
-}
-#endif
-
 static void
 test_the_lava_stress_scene_fits_in_the_frame_budget(void) {
     uint8_t* big = malloc(REAL_W * REAL_H);
@@ -1262,15 +1162,6 @@ test_the_lava_stress_scene_fits_in_the_frame_budget(void) {
                                   "number, as a reduction target - failing means the work is not "
                                   "done, not that something broke");
 }
-
-#ifdef SAND_HOST_PROBE
-/* Host-only timing probe - the lava stress scene (see the full-step
- * control's own wrapper for the pattern). */
-void
-sand_host_probe_run_lava_stress(void) {
-    test_the_lava_stress_scene_fits_in_the_frame_budget();
-}
-#endif
 
 static void
 test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget(void) {
@@ -1323,15 +1214,6 @@ test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget(void) {
                                   "measured number, as a reduction target - failing means the work "
                                   "is not done, not that something broke");
 }
-
-#ifdef SAND_HOST_PROBE
-/* Host-only timing probe - the smoke+steam scene (see the full-step
- * control's own wrapper for the pattern). */
-void
-sand_host_probe_run_smoke_and_steam(void) {
-    test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget();
-}
-#endif
 
 /* 480 glass compartments (build_thermal_shock_scene(), shared with
  * test_the_thermal_shock_scene_shatters_in_both_directions). No settling
@@ -1420,15 +1302,6 @@ test_the_boiler_scene_fits_in_the_frame_budget(void) {
                                   "done, not that something broke");
 }
 
-#ifdef SAND_HOST_PROBE
-/* Host-only timing probe - the boiler (see the full-step control's own
- * wrapper for the pattern). */
-void
-sand_host_probe_run_boiler(void) {
-    test_the_boiler_scene_fits_in_the_frame_budget();
-}
-#endif
-
 /* Sand and dirt poured in equal amounts, water dropped over both until
  * it settles (build_wet_earth_scene(), shared with test_the_wet_earth_
  * scene_keeps_percolating_across_the_window). First benchmark to put
@@ -1481,15 +1354,6 @@ test_the_wet_earth_scene_fits_in_the_frame_budget(void) {
                                   "not that something broke");
 }
 
-#ifdef SAND_HOST_PROBE
-/* Host-only timing probe - the wet earth scene (see the full-step
- * control's own wrapper for the pattern). */
-void
-sand_host_probe_run_wet_earth(void) {
-    test_the_wet_earth_scene_fits_in_the_frame_budget();
-}
-#endif
-
 /* The water-over-lava scene from this file's own section above, run as a
  * frame-budget test. TWENTY STEPS, NO SETTLING - matching test_the_water_
  * over_lava_scene_reaches_the_quench_cooloff_and_burst_paths_it_claims
@@ -1538,15 +1402,6 @@ test_the_water_over_lava_scene_fits_in_the_frame_budget(void) {
                                   "done, not that something broke");
 }
 
-#ifdef SAND_HOST_PROBE
-/* Host-only timing probe - the water-over-lava scene (see the full-step
- * control's own wrapper for the pattern). */
-void
-sand_host_probe_run_water_over_lava(void) {
-    test_the_water_over_lava_scene_fits_in_the_frame_budget();
-}
-#endif
-
 /* The gunpowder basin scene (build_gunpowder_basin_scene(),
  * suite_sand_scenes.c), shared with the coverage test that proves the
  * chain-detonation really spans several bursts and reaches fuel
@@ -1558,9 +1413,8 @@ sand_host_probe_run_water_over_lava(void) {
  * (suite_sand_scenes.c) for the timeline that window came from. */
 
 /* MEASURED 31,399 us per step on device, 2026-09-06, first clean run of
- * this row (capture_ref_gunpowder-basin-benchmark_20260906_213221.md).
- * Budget is that x 0.9 = 28,259, rounded DOWN to 28,200 so the target is
- * never looser than the convention. */
+ * this row. Budget is that x 0.9 = 28,259, rounded DOWN to 28,200 so the
+ * target is never looser than the convention. */
 
 /* SO THIS ROW FAILS BY DESIGN, like every other budget in this section:
  * a reduction target, not a regression guard. Re-peg only from a fresh
@@ -1604,15 +1458,6 @@ test_the_gunpowder_basin_scene_fits_in_the_frame_budget(void) {
                                   "reduction target at measured x 0.9, so failing means the work "
                                   "is not done yet, not that something broke");
 }
-
-#ifdef SAND_HOST_PROBE
-/* Host-only timing probe - the gunpowder basin scene (see the
- * full-step control's own wrapper for the pattern). */
-void
-sand_host_probe_run_gunpowder_basin(void) {
-    test_the_gunpowder_basin_scene_fits_in_the_frame_budget();
-}
-#endif
 
 /* --- the interaction round's three scenes -------------------------------
  *
@@ -1715,15 +1560,6 @@ test_the_plant_ruin_scene_fits_in_the_frame_budget(void) {
                                   "work is not done, not that something broke");
 }
 
-#ifdef SAND_HOST_PROBE
-/* Host-only timing probe - the plant ruin scene (see the full-step
- * control's own wrapper for the pattern). */
-void
-sand_host_probe_run_plant_ruin(void) {
-    test_the_plant_ruin_scene_fits_in_the_frame_budget();
-}
-#endif
-
 /* Water running down a ramp into a pool (build_filling_basin_scene(), shared
  * with test_the_filling_basin_scene_runs_from_the_lip_to_the_pool) - the
  * companion to the free-falling slab above, on the same board and with a
@@ -1787,15 +1623,6 @@ test_the_filling_basin_scene_fits_in_the_frame_budget(void) {
                                   "done, not that something broke");
 }
 
-#ifdef SAND_HOST_PROBE
-/* Host-only timing probe - the filling basin scene (see the full-step
- * control's own wrapper for the pattern). */
-void
-sand_host_probe_run_filling_basin(void) {
-    test_the_filling_basin_scene_fits_in_the_frame_budget();
-}
-#endif
-
 /* Snow falling onto a bank that has already crusted, over sand and dirt
  * (build_snowfall_scene(), shared with test_the_snowfall_scene_holds_a_
  * crusting_bank_and_a_live_fall). Forced crust - see the builder's own
@@ -1853,15 +1680,6 @@ test_the_snowfall_scene_fits_in_the_frame_budget(void) {
                                   "something broke");
 }
 
-#ifdef SAND_HOST_PROBE
-/* Host-only timing probe - the snowfall scene (see the full-step control's
- * own wrapper for the pattern). */
-void
-sand_host_probe_run_snowfall(void) {
-    test_the_snowfall_scene_fits_in_the_frame_budget();
-}
-#endif
-
 /* The plant brush poured onto damp earth (build_plant_pour_scene()), which no
  * other row reaches: every plant scene here grows a garden, and a grown tree
  * is anchored, so its support walk returns on the first neighbour.
@@ -1913,15 +1731,6 @@ test_pouring_the_plant_brush_fits_in_the_frame_budget(void) {
                                   "something broke");
 }
 
-#ifdef SAND_HOST_PROBE
-/* Host-only timing probe - the plant pour (see the full-step control's own
- * wrapper for the pattern). */
-void
-sand_host_probe_run_plant_pour(void) {
-    test_pouring_the_plant_brush_fits_in_the_frame_budget();
-}
-#endif
-
 /* The same heap once it has stopped: the state a poured garden spends almost
  * all of its life in, and the one no other row measures. Every plant here is
  * landed or anchored, so the reaction pass has nothing it can do and the
@@ -1965,15 +1774,6 @@ test_a_settled_plant_garden_fits_in_the_frame_budget(void) {
                                   "not that something broke");
 }
 
-#ifdef SAND_HOST_PROBE
-/* Host-only timing probe - the settled garden (see the full-step control's
- * own wrapper for the pattern). */
-void
-sand_host_probe_run_plant_idle(void) {
-    test_a_settled_plant_garden_fits_in_the_frame_budget();
-}
-#endif
-
 /* The maintainer's own case: a tree grown from seed on damp earth, with wood,
  * leaves and a root system, left until it has both stopped growing and drunk
  * the ground dry. Every other plant row here is chosen for something still
@@ -2013,15 +1813,6 @@ test_a_finished_tree_fits_in_the_frame_budget(void) {
                                   "not a measured one - see MATURE_TREE_BUDGET_US, which wants a "
                                   "device capture behind it before either outcome means much");
 }
-
-#ifdef SAND_HOST_PROBE
-/* Host-only timing probe - the finished tree (see the full-step control's own
- * wrapper for the pattern). */
-void
-sand_host_probe_run_mature_tree(void) {
-    test_a_finished_tree_fits_in_the_frame_budget();
-}
-#endif
 
 /* Every row above holds the board portrait, and the block shape behind the
  * settled-block skip was swept against exactly those rows. The board is
@@ -2100,15 +1891,6 @@ test_pouring_water_into_a_landscape_sand_bed_fits_in_the_frame_budget(void) {
                                   "than in any portrait row, so that is the thing to suspect");
 }
 
-#ifdef SAND_HOST_PROBE
-/* Host-only timing probe - water into a landscape bed (see the full-step
- * control's own wrapper for the pattern). */
-void
-sand_host_probe_run_landscape_water(void) {
-    test_pouring_water_into_a_landscape_sand_bed_fits_in_the_frame_budget();
-}
-#endif
-
 /* The same pour onto a bed holding 65% of the board rather than 40%: a
  * shorter drop, far more settled mass for the skip to win or lose, and the
  * arena's other priced landscape depth. */
@@ -2143,15 +1925,6 @@ test_pouring_water_into_a_deep_landscape_bed_fits_in_the_frame_budget(void) {
                                   "this row and the shallow one ever move in opposite directions, the "
                                   "skip's geometry is what changed");
 }
-
-#ifdef SAND_HOST_PROBE
-/* Host-only timing probe - water into a deep landscape bed (see the
- * full-step control's own wrapper for the pattern). */
-void
-sand_host_probe_run_landscape_deep_water(void) {
-    test_pouring_water_into_a_deep_landscape_bed_fits_in_the_frame_budget();
-}
-#endif
 
 /* The liquid-free landscape row. Without it a geometry change that moved
  * the two rows above could not be told apart from one that moved the liquid
@@ -2188,15 +1961,6 @@ test_pouring_sand_onto_a_landscape_sand_bed_fits_in_the_frame_budget(void) {
                                   "liquid passes");
 }
 
-#ifdef SAND_HOST_PROBE
-/* Host-only timing probe - sand onto a landscape bed (see the full-step
- * control's own wrapper for the pattern). */
-void
-sand_host_probe_run_landscape_sand(void) {
-    test_pouring_sand_onto_a_landscape_sand_bed_fits_in_the_frame_budget();
-}
-#endif
-
 /* --- gfx_present() cost against real sand scenes ------------------------
  *
  * Every frame-budget test above times sand_step() alone, with no drawing
@@ -2215,7 +1979,7 @@ sand_host_probe_run_landscape_sand(void) {
 /* REPRODUCING, NOT CALLING: draw_dirty_rows()/draw_one_row()/paint_row()
  * (app_sand.c) are static, inlined at their one call site - sharing a hot
  * per-call function across a translation-unit boundary previously cost a
- * measured 26% regression elsewhere (Performance-Tuning-Attempts.md).
+ * measured 26% regression elsewhere.
  * Duplicates draw_dirty_rows()'s ~15-line policy instead (same row_runs
  * calls, same order, same dirty gate); paints no pixels, since
  * gfx_present()'s cost depends only on marked regions, never colour. */

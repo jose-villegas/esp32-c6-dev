@@ -981,8 +981,8 @@ step_one_block(const sweep_ctx_t* ctx, int bx) {
         }
         /* Accumulated in a register and stored once per block, same shape as
          * moved_here. BLOCK_HAS_LIQUID keeps it true at O(blocks) per step
-         * instead of O(moves). Docs/Sand/Performance-Tuning-Attempts.md ninth
-         * attempt advises questioning skip structures before implementation. */
+         * instead of O(moves) - a skip structure earns its cost only when it
+         * is questioned before it is built. */
         saw_liquid |= (unsigned)(ctx->is_liquid >> CELL_MATERIAL(c)) & 1u;
         if (step_one_grain(ctx->s, ctx->row, ctx->prow, ctx->arow, ctx->brow, x, ctx->y, ctx->w, ctx->dx, ctx->dy,
                            ctx->slide_a, ctx->slide_b, ctx->load_dx, ctx->load_dy, ctx->jostle, ctx->driven, &dest)) {

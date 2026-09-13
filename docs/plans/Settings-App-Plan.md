@@ -1,7 +1,7 @@
 # Plan: split Diagnostics into a Settings app, then unify SELFTEST/diagnostics naming
 
 **Status**: planned, not built. Written 2026-08-30, out of the conversation
-that added `tools/build_flash_dev.sh` (see [Testing-Guide.md](Testing-Guide.md)
+that added `tools/build_flash_dev.sh` (see [Testing-Guide.md](../Testing-Guide.md)
 and `main/Kconfig.projbuild`) and noticed the seam this plan closes.
 
 **2026-09-02 update**: step 1 below did not land as written. The maintainer's

@@ -30,8 +30,8 @@ ordinary benchmark's one-line result.
 
 THE CAVEAT IS PRINTED, NOT JUST DOCUMENTED. Absolute microseconds do not
 compare across differently-scoped builds, and barely compare across builds
-whose flash layout moved much (Perf-Round-Guide.md, "Only within-capture
-comparisons are trustworthy"). The clearest machine-readable signature of the
+whose flash layout moved much - only within-capture comparisons are
+trustworthy. The clearest machine-readable signature of the
 first mistake is the total run time: a perf-scoped capture runs 39 timed
 tests in ~2m and a full one 952 in ~7m, so a large gap between the two
 reports' totals means the two tables are not comparable at all. That check
@@ -121,7 +121,7 @@ def find_raw(path: str):
     on another machine - or moved out of the capture checkout, which is the
     normal way one is kept - would send this looking in a directory that does
     not exist here. The stamp in the two filenames is the same by
-    construction (capture_ref_<ref>_<stamp>.md next to
+    construction (any report named *_<stamp>.md sits next to
     performance_<stamp>_raw.txt), so it survives the move."""
     directory = os.path.dirname(os.path.abspath(path))
     base = os.path.basename(path)

@@ -129,7 +129,3 @@ $RECYCLE.BIN/
 
 # Built Visual Studio Code Extensions
 *.vsix
-
-# scripts/perf-loop.sh working area: logs, per-candidate reports and the
-# quarantine pile. Regenerated per run, never worth committing.
-.perf-loop/

@@ -215,7 +215,7 @@ Three things fall out of that table:
    interlacing, no runtime allocation, spans: the C6 can run all of it.
 
 The historical breakdown in
-[Display-and-Rendering.md](notes/Display-and-Rendering.md#the-cube) says
+[Display-and-Rendering.md](notes/Display-and-Rendering.md#measured-performance) says
 the same thing in numbers: clear 5.2 ms, rasterize 28.1 ms, blit 25.0 ms,
 15.5 fps. Those figures predate `-O2` and the 40 MHz retune and have never
 been re-measured; `suite_cube_perf.c` exists to produce the current ones
@@ -937,59 +937,31 @@ cheapest path to something that is unmistakably a game.
 
 ---
 
-## 9. Working from this document
+## 9. Engineering rules
 
-The workflow here is that a planning model writes the issue, an
-implementing model builds it, and a reviewing model checks it, each in a
-fresh session with no memory of this conversation. So the document and
-the issue are the whole contract. Rules for each role:
+Rules that apply to any change against this roadmap, independent of who or
+what is making it:
 
-**Implementer (one issue at a time):**
-
-1. Read the issue in full, including its notes, then only the
-   sections of this document it names, the three rules in
-   [Launcher-Architecture.md](Launcher-Architecture.md), and
-   [Optimization-Playbook.md](notes/Optimization-Playbook.md). Nothing
-   else is required reading.
-2. The issue's acceptance criteria are the definition of done. If a
-   criterion cannot be met, say so in the issue notes and stop; do not
-   redefine it.
-3. Write the failing test first (`docs/Testing-Guide.md`): a host test for
-   pure logic, a `DEVICE_BUILD` row for anything timed. A test never seen
-   red proves nothing. Sand's byte-identical fingerprint rule applies to
-   anything that touches the sand app.
-4. Measure on the device with the script the issue names, and check the
-   report in under that tool's `results/`. A host number is a hypothesis
-   (playbook item 9). Verify inlining with `objdump`, not the attribute
-   (item 3), and diff `.bss` for every build variant (item 8).
-5. Fixed point only in the reference path. No `float`, no `double`, no
-   64-bit divide, no signed divide by a power of two in a hot loop.
-6. Do not reopen a settled decision (section 8). If the work shows one is
-   wrong, append the evidence to the issue and stop; changing it is the
-   planner's call. Do not widen scope into a neighbouring phase.
-7. Leave the trail: record what was measured, what was tried and
-   rejected, and what the next issue needs to know. Update the docs the
-   change makes wrong in the same commit.
-
-**Reviewer:**
-
-- Every number in the PR is either measured on the device with its source
-  named, or explicitly marked as an estimate. No "should be faster".
-- The issue's acceptance criteria are met literally, and the gate in the
-  phase table (section 6) is met or the shortfall is stated.
-- The three rules hold: one framebuffer (or the band ring, as a gfx-owned
-  mode), one frame loop owned by the shell, apps as callbacks that draw
-  and return.
-- No new file-scope `static` buffer in any build variant without a
-  `.bss` diff in the PR; malloc at `enter()`, free at `exit()`.
-- Nothing floating point reached the reference path; any S3-only fast
-  path sits behind the same interface as the C6 path.
-- The hot functions the issue names still inline (`objdump -t`), and the
-  hot loop is under the 32 KB icache.
-- Anything graduated out of an app or the boot animation has a second
+- Fixed point only in the reference path — no `float`, no `double`, no
+  64-bit divide, no signed divide by a power of two in a hot loop. Any
+  S3-only fast path sits behind the same interface as the C6 path.
+- A failing test comes before the fix: a host test for pure logic, a
+  `DEVICE_BUILD` row for anything timed (`docs/Testing-Guide.md`). A test
+  never seen red proves nothing. Sand's byte-identical fingerprint rule
+  applies to anything that touches the sand app.
+- A performance claim is measured on the device with its source named, or
+  explicitly marked an estimate — no "should be faster". Verify inlining
+  with `objdump`, not the attribute, and diff `.bss` for every build
+  variant before trusting a static buffer's size.
+- No new file-scope `static` buffer in any build variant without a `.bss`
+  diff; allocate at `enter()`, free at `exit()`.
+- The three shell rules hold for any change: one framebuffer (or the band
+  ring, as a gfx-owned mode), one frame loop owned by the shell, apps as
+  callbacks that draw and return ([Launcher-Architecture.md](Launcher-Architecture.md)).
+- Anything graduated out of an app or the boot animation needs a second
   consumer and a reference test, or it stays where it was.
-- Docs updated alongside the code, and the issue notes carry the
-  measurements, not just the PR description.
+- Update the docs a change makes wrong in the same change that makes them
+  wrong.
 
 ---
 

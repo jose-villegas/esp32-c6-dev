@@ -3,7 +3,7 @@
 The falling-sand app's own documentation folder, referenced by name from
 [`../notes/README.md`](../notes/README.md) since this folder split out of
 the platform notes once there was enough sand-specific material to justify
-its own set. Ten files, three jobs:
+its own set. Eight files, two jobs:
 
 **How it works today:**
 
@@ -22,29 +22,11 @@ its own set. Ten files, three jobs:
   only material that moves heat a long way.
 - **[Shading-and-Colour.md](Shading-and-Colour.md)** — how a cell's
   material and variant become a pixel, and the traps specific to that.
-- **[Tuning-At-a-Glance.md](Tuning-At-a-Glance.md)** — sand constants and
-  their current values, as a scoreboard rather than prose.
 
 **How to change it:**
 
 - **[Adding-a-Material.md](Adding-a-Material.md)** — the checklist for
   adding a whole new material.
-- **[Perf-Round-Guide.md](Perf-Round-Guide.md)** — the entry point for a
-  fresh session told to run a sand performance round. Read this first,
-  not the two files below.
-- **[Perf-Instruments.md](Perf-Instruments.md)** — the toolbox that guide
-  uses: what each instrument measures and what it cannot say. Reach for it
-  when a number needs explaining, not to start a round.
-
-**Discovery narratives** (how the above got the way it is, not a
-reference for it):
-
-- **[Simulation-Lessons.md](Simulation-Lessons.md)** — the bugs found and
-  the reasoning behind each fix, from the first performance pass through
-  the sleeping/friction/timestep design that shipped.
-- **[Performance-Tuning-Attempts.md](Performance-Tuning-Attempts.md)** —
-  the chronological record of every real-hardware performance attempt
-  since, numbered in the order they happened.
 
 ## Related
 

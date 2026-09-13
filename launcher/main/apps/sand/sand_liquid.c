@@ -389,7 +389,7 @@ equalise_liquids(sand_t* s, const xflow_t* f, int sight, int dx, int dy) {
     const int x_step = (px > 0) ? -1 : 1;
 
     /* See equalise_one_row(). BLOCK_HAS_LIQUID → BLOCK_LIQUID_NEAR. No move
-     * cost. Docs/Sand/Performance-Tuning-Attempts.md. */
+     * cost. */
     for (int y = y_from; y != y_to; y += y_step) {
         if (equalise_one_row(s, y, w, x_step, f, dx, dy, sight, is_liquid)) {
             found_any = true;

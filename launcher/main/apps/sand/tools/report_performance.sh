@@ -22,11 +22,10 @@
 #                   captures only need it once, at the end of a session.
 #   --perf-scope    build the PERF-SCOPED diag image: only suite_sand_perf
 #                   and the scene builders it calls are compiled in, so the
-#                   run is shorter and the freed static RAM is available for
-#                   a round's own pass gates and probe rows (see
-#                   docs/Testing-Guide.md). Its numbers are NOT comparable
-#                   with an unscoped capture's - the layout differs - so
-#                   scope every capture of a round the same way.
+#                   run is shorter and static RAM is freed up. Its numbers
+#                   are NOT comparable with an unscoped capture's - the
+#                   layout differs - so scope every capture of a round the
+#                   same way.
 #   --baseline REPORT.md
 #                   after generating the report, run compare_reports.py
 #                   --verdict against this earlier report and print its
@@ -172,13 +171,12 @@ extract_measured() {
     ' "$report" 2>/dev/null || true
 }
 
-# The four-command ritual from docs/sand/Perf-Round-Guide.md's "Reading a
-# capture" section, run here instead of left to the operator - it was
-# already being typed by hand five times in two days. Free heap first
-# (a short heap means every frame-budget fixture failed to allocate and
-# the whole capture measured nothing, see the guide's table), then the
-# two liquid-free controls (their value-pair tells a real regression from
-# ordinary flash-layout noise before reading anything else).
+# Run here instead of left to the operator - it was already being typed
+# by hand five times in two days. Free heap first (a short heap means
+# every frame-budget fixture failed to allocate and the whole capture
+# measured nothing), then the two liquid-free controls (their value-pair
+# tells a real regression from ordinary flash-layout noise before reading
+# anything else).
 print_summary() {
     local raw="$1" report="$2"
     echo "=== Summary ==="
@@ -198,7 +196,7 @@ print_summary() {
         if [ -n "$heap" ] && [ "$heap" -lt 50000 ]; then
             echo "WARNING: free heap ($heap bytes) is below ~50,000 - frame-budget"
             echo "fixtures likely failed to allocate their grids and measured"
-            echo "nothing this run. See docs/sand/Perf-Round-Guide.md's free-heap table."
+            echo "nothing this run."
         fi
     fi
     local ctrl v

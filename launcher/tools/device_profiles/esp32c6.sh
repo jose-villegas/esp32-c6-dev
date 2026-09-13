@@ -32,12 +32,12 @@ DP_TEST_FRAME_CEILING_SOURCE="derived from DP_MAIN_TASK_STACK_BYTES; see check_s
 # Free heap once gfx.c's single framebuffer (368*448*2 = 322 KiB) is carved
 # out. This is the number every device fixture is actually competing for.
 DP_FREE_HEAP_BYTES=63952
-DP_FREE_HEAP_SOURCE="free heap after framebuffer, device capture 2026-09-01 (docs/sand/Perf-Round-Guide.md)"
+DP_FREE_HEAP_SOURCE="free heap after framebuffer, device capture, diag build, 2026-09-01"
 
 # One sand grid, for scale: a single contiguous request this size is why
 # fragmentation - not just total bytes - decides whether a fixture runs.
 DP_LARGEST_ALLOC_BYTES=41216
-DP_LARGEST_ALLOC_SOURCE="one sand grid, docs/sand/Perf-Round-Guide.md free-heap table"
+DP_LARGEST_ALLOC_SOURCE="one sand grid, device capture, diag build, 2026-09-01"
 
 # --- toolchain and codegen -------------------------------------------------
 DP_TOOLCHAIN_PREFIX=riscv32-esp-elf

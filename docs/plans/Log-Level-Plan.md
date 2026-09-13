@@ -142,6 +142,6 @@ tracked separately. This is a placeholder for future work.
 
 ## Related
 
-- [Testing-Guide.md](Testing-Guide.md) — "Development-only instrumentation
+- [Testing-Guide.md](../Testing-Guide.md) — "Development-only instrumentation
   is its own flag, not SELFTEST": the rule this plan complements rather than
   replaces.

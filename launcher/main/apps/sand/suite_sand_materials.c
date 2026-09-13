@@ -834,8 +834,7 @@ test_water_falling_onto_water_also_queues_a_small_displacement(void) {
      * queue_outward_impulse()'s thinning and can queue nothing even on a
      * correctly firing trigger. HEAP, not the stack: impulse_t is 6 bytes,
      * so 4096 of them is 24 KB against this device's 3,584-byte main task
-     * stack - see docs/sand/Performance-Tuning-Attempts.md for the stack
-     * overflow this avoids. */
+     * stack - on the stack, that overflows it. */
     impulse_t* drop_impulse_buf = malloc(4096 * sizeof *drop_impulse_buf);
     TEST_ASSERT_NOT_NULL_MESSAGE(drop_impulse_buf, "the splash impulse queue must fit in what the framebuffer leaves");
     uint8_t* splash_cells = malloc((size_t)SPLASH_W * SPLASH_H);

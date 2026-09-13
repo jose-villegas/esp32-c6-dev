@@ -61,16 +61,16 @@ rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 
 # -ffreestanding because there is no target libc startup involved here: this
-# only ever compiles, never links. DEVICE_BUILD and SAND_HOST_PROBE match
-# what the device selftest and the oracle compile the suites with, so the
-# frames measured are the ones that actually run on the board.
+# only ever compiles, never links. DEVICE_BUILD matches what the device
+# selftest compiles the suites with, so the frames measured are the ones
+# that actually run on the board.
 for f in "$MAIN_DIR"/apps/*/suite_*.c; do
     [ -e "$f" ] || continue
     base=$(basename "$f" .c)
     # shellcheck disable=SC2086
     "$CC_BIN" $STD_FLAG $ARCH_FLAGS $CODEGEN_FLAGS -ffreestanding \
         -Wall -Wextra -Wno-unused-parameter -g \
-        -DDEVICE_BUILD -DSAND_HOST_PROBE -DCONFIG_LAUNCHER_DEVELOPMENT=1 \
+        -DDEVICE_BUILD -DCONFIG_LAUNCHER_DEVELOPMENT=1 \
         -I "$MAIN_DIR" -I "$TEST_DIR" -I "$TEST_DIR/framework" \
         -I "$TEST_DIR/stubs" \
         -I "$TEST_DIR/../components/microui/include" \

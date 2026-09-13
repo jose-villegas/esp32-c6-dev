@@ -696,11 +696,7 @@ tick_decay(sand_t* s, uint8_t* row, int x, int y, cell_t* grain, uint8_t mat_id,
     return true;
 }
 
-/* Per-pass volatile gates (sand.c), default enabled,
- * opt-in via CONFIG_LAUNCHER_SAND_PASS_GATES (dev-only). SCAFFOLDING,
- * removed by scripts/strip-pass-gates.py - volatile is load-bearing: an
- * #if would let the compiler delete the walk it guards.
- * sand_step_reactions() (sand_reactions.c): a step's fire chemistry,
+/* sand_step_reactions() (sand_reactions.c): a step's fire chemistry,
  * called after sand_step_gas(), before finalize_settling(). Gated on
  * may_have_burning alone; takes only `s` - boiling happens at the heat
  * source, no interest in gravity. */
@@ -764,8 +760,7 @@ void step_impulses(sand_t* s, int dx, int dy);
  * reason as dest_row()/mark_rows(): hottest path, called once per grain
  * per step. sand_gas.c calls thin non-inline wrappers in sand.c instead
  * of un-static-ing these or duplicating the chain - both regressed a
- * frame-budget test (lost inlining, or duplicated flash). See
- * docs/sand/Simulation-Lessons.md. */
+ * frame-budget test (lost inlining, or duplicated flash). */
 
 /* Static materials never yield regardless of density, so a wall stays a
  * wall - the general "yields to denser" rule below has this one

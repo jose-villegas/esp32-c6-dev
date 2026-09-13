@@ -897,8 +897,7 @@ material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_col
                 return MATERIAL_SPECKLED;
             }
 
-            /* Guard-plus-ternary: switch costs 14%, unhinted branch 26% - see
-             * Tuning-At-a-Glance.md. */
+            /* Guard-plus-ternary: switch costs 14%, unhinted branch 26%. */
             if (v == MATX_PLANT || v == MATX_ICE || v == MATX_ROOT) {
                 out[0] = (v == MATX_PLANT) ? plant_grain[hash & 7u]
                          : (v == MATX_ICE) ? ice_grain[hash & 7u]

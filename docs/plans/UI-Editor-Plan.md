@@ -214,6 +214,5 @@ every other host tool here is absent from `idf.py` and from
 ## Related
 
 - [`../Building-a-Screen.md`](../Building-a-Screen.md) - how a screen is built by hand today
-- [`../UI-Lessons.md`](../UI-Lessons.md) - what the constraints above cost to learn
 - [`Icon-Baker-Plan.md`](Icon-Baker-Plan.md) - the same authored-data-to-baked-header pattern, for artwork
 - [`../Autana-Rendering-Roadmap.md`](../Autana-Rendering-Roadmap.md) - the engine direction this serves
