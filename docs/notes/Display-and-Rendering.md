@@ -292,8 +292,7 @@ Two smaller things fell out of it:
 On the simulation side the same dirty information answers "what needs
 redrawing" as well as "what needs sending", which is the point of the
 [dirty-rect approach](https://80.lv/articles/noita-a-game-based-on-falling-sand-simulation)
-Noita uses. `sand_track_dirty_rows()` records every row a grain left or entered
-- see [`../sand/Simulation-Lessons.md`](../sand/Simulation-Lessons.md).
+Noita uses. `sand_track_dirty_rows()` records every row a grain left or entered.
 
 **A development-only visualizer** makes this concrete on real hardware
 instead of only in synthetic tests, as two fully independent layers, each
@@ -558,173 +557,26 @@ kept here so the reasoning survives to whoever picks one up.
 - Skipping the launcher's redraw when nothing changed, which would let its bands
   go unsent too.
 
-### The cap sweeps: `LEAF_REFINE_MAX_RUNS`, `ROW_MAX_RUNS`, `GATHER_MAX_PIXELS`
+### The dirty-region caps: swept, and mostly inert
 
-Three tunables this whole layer runs on - two flagged above as never
-measured, one ("tuned against the 40 MHz numbers") measured once but
-never systematically swept the way a later investigation into the sand
-simulation's own block-size constant started doing on real hardware.
-Same question applied here: is the shipped default actually right, or
-just the first value that happened to work?
-
-**`LEAF_REFINE_MAX_RUNS`/`ROW_MAX_RUNS` (both 2) swept to 3 and 4
-together** - they mirror each other by design (`row_runs.h`'s own
-comment). Needed a new device test first: the obvious one (three marks
-in three different cells) turned out to test nothing, because
-`collect_dirty_runs()` separates cells with its own cap
-(`GRID_COLS`, effectively unlimited at 4) - these two caps only govern
-splitting a single *already-merged* run further via the leaf layer.
-Fixed by placing three marks inside three *adjacent* cells instead, so
-`collect_dirty_runs()` merges them into one run before leaf refinement
-(`refine_run()`/`plan_run()`) ever sees it. Measured:
-
-| Cap | two far corners | three far-apart marks (merged run) |
-|---|---|---|
-| 2 (shipped) | 1916us | **872us** |
-| 3 | 1916us | **2881us** |
-| 4 | 1914us | **2870us** |
-
-Raising the cap makes the case it exists to help **3x worse**, not
-better. At cap 2, `refine_run()` gives up (three isolated leaf runs,
-cap of 2 - the same "too fragmented" case `collect_runs_from_mask()`
-already handles) and falls back to `run_box()`'s coarse union - not the
-whole band, just the union of each cell's own already-tight box, still
-skipping whatever is genuinely untouched. That fallback measured
-cheaper than three separately gathered pieces would have: each QSPI
-transaction costs a fixed ~118us regardless of size (see "The blit is
-bus-bound" above), so three small sends pay that fixed cost three times
-over, while one wider merged send pays it once. **Verdict: both stay at
-2.** Nothing here was broken; the guess just happened to already be
-right, for a reason (fixed per-transaction cost) nobody had measured
-against before.
-
-**`GATHER_MAX_PIXELS` (8192) swept to 4096/6144/8192/9216.** The first
-attempt at this one measured nothing real: both existing device tests
-(15x15 and 10x10 marks) are so far under any of these budgets that none
-of them ever approached the actual rejection boundary - a flat result
-across all four values that looked like "no effect" but was really "no
-test exercised the mechanism at all." Needed a new device test sized
-*at* the boundary: a small mark plus a wide one in the same run, the
-wide one's leaf-refined piece landing at a fixed 7360px (5 whole 23px
-leaf columns x 64px strip height - refine_run() reports whole-leaf
-pieces, not a mark's exact width) regardless of which candidate budget
-is active. That piece is over budget at 4096/6144 and under it at
-8192/9216 by construction, giving a genuine reject-vs-accept
-comparison instead of four copies of the same unaffected number:
-
-| Budget | near-budget split (7360px piece) |
-|---|---|
-| 4096 | 2714us (over budget - falls back) |
-| 6144 | 2714us (over budget - falls back) |
-| **8192 (shipped)** | **1716us (under budget - gathers)** |
-| 9216 | 1715us (under budget - gathers) |
-
-Gathering this piece is ~37% cheaper than the coarse-box fallback it
-would otherwise take. 8192 already sits on the correct side of that
-line for a piece this size; raising it further changes nothing here
-(1716 vs 1715 is noise), and the sweep did not test a piece bigger than
-9216 to see if going higher ever helps a larger one. **Verdict: 8192
-stays.** Confirmed rather than assumed, this time - the original "tuned
-against the 40 MHz numbers" claim turned out to be right, but had never
-actually been checked against a case built to sit exactly on the
-boundary it enforces.
-
-Both sweeps automated the same way as the sand block-size one: a
-PowerShell script edits the `#define`, runs the host suite as a gate,
-builds, flashes, captures the self-test output, and restores everything
-in a `finally` block regardless of outcome - see the sand simulation's
-own [`../sand/Simulation-Lessons.md`](../sand/Simulation-Lessons.md) for the sweep-
-tooling bugs that surfaced building the first one (all equally relevant
-here, since it is the same script pattern).
-
-### The re-sweep, 2026-08-28: two of the three caps are inert
-
-Both sweeps above were run against synthetic device tests. Two years of
-app work later - fire flicker, an animated shine, plants, drifting
-smoke and steam, 480-ring thermal scenes - they were re-run against the
-three REAL sand scenes the present-cost tests measure, and the answer
-changed shape completely.
-
-The re-sweep did not need hardware. `gfx_dirty.h` is header-only and
-free of ESP-IDF by design, and `send_one_row()`'s choice is pure logic
-over its state, so the whole decision replays on a host: include the
-real header, reimplement only the twelve-line choice with the two
-`draw_bitmap()` calls replaced by counters, and drive it with
-`suite_sand_scenes.c`'s own scenes, its own `sand_step()` and its own
-`mirror_app_sand_marking()`. It reproduces the device's strip-send
-counters exactly - 76/13, 100/4, 70/0 - which is the only reason to
-trust anything it says about values nobody has flashed.
-
-**`ROW_MAX_RUNS` at 2, 3, 4, 6, 8 crossed with `LEAF_REFINE_MAX_RUNS`
-at 2, 3, 4 - fifteen builds - produced byte-identical counters on all
-three scenes.** Not close: identical. Both have a structural reason,
-not a "the value happens to be right" reason:
-
-- `ROW_MAX_RUNS` cannot matter because a checkerboard row needs 92 runs
-  (so every cap in that range falls back to the full-row span) and a
-  slab row needs one. Real scenes are not in between.
-- `LEAF_REFINE_MAX_RUNS` cannot matter because refinement first needs
-  `run_is_leaf_eligible()`, and a cell marked at its full column width
-  and full strip height is never eligible - which is every cell here.
-
-**`GATHER_MAX_PIXELS` was swept again and declined again, for a
-different reason than last time.** Pixels sent per frame:
-
-| Cap | `gather_buf` | falling sand | lava stress | thermal shock |
-|---:|---:|---:|---:|---:|
-| **8,192** (shipped) | 16 KB | 92,552 | 117,950 | 164,864 |
-| 11,776 | 23 KB | 89,240 | 117,361 | 164,864 |
-| 14,336 | 28 KB | 87,694 | 107,425 | 164,864 |
-| 16,384 | 32 KB | 86,112 | 107,425 | 164,864 |
-| 20,480 | 40 KB | 83,536 | 106,873 | 163,150 |
-| 23,552 (a band) | 46 KB | 83,168 | 105,769 | 161,041 |
-
-Raising it does buy pixels, and it is still the wrong trade: every
-pixel it saves is bought by *gathering* it - a `memcpy` out of the
-framebuffer into a DMA buffer the bus then waits on, where a full band
-is read in place - and `gather_buf` has to grow to match.
-`gfx_init()` logs 67,568 bytes of heap free after the framebuffer and
-the sand app then takes about 41.5 KB for its grid, so 12 KB more is a
-large fraction of what is left, to buy 5-9%. **Verdict: 8192 stays, for
-the second time.** The first sweep kept it because its tests never
-reached the boundary; this one kept it because something else gets more
-for nothing.
-
-### The tracker is at its ceiling, and the win was a missing path
-
-The sharper question is not what the caps buy but what is left to buy.
-An **oracle** - the exact set of cells whose byte changed this frame,
-diffed against a snapshot, marked with no cap of any kind, which no
-implementation can beat - sends 92,552 px/frame against the shipped
-marking's 92,552 on the falling-sand scene, 114,416 against 117,950 on
-lava (-3.0%), and 164,864 against 164,864 on the thermal lattice. The
-dirty-region tracking is **at its ceiling**, not failing: the thermal
-scene's seventy-out-of-seventy whole-band sends are the correct answer
-to a lattice that really does dirty every strip full width and full
-height, every frame.
-
-What was actually missing was a third send path. There were two -
-gather into the fixed buffer, or send the whole 64-row band - and a box
-that spans the **full panel width** needs neither: it is already
-contiguous in the framebuffer, row-major at `GFX_WIDTH` stride, so it
-goes straight out of `fb` at its own height. A full-width box 23 rows
-tall (368x23 is just past `GATHER_MAX_PIXELS`) was being sent as 64.
-`send_partial_band()` in `gfx.c`, and a third strip-send counter beside
-the other two so it is visible in a capture:
-
-| scene | before | after | |
-|---|---:|---:|---:|
-| falling sand | 92,552 px/frame | 83,168 | **-10.1%** |
-| lava stress | 117,950 px/frame | 105,769 | **-10.3%** |
-| thermal shock | 164,864 px/frame | 164,864 | 0.0% |
-
-Zero extra memory, nothing copied - and the same pixel totals the
-extreme row of the `GATHER_MAX_PIXELS` table reaches for 46 KB of DMA
-buffer and a full-frame `memcpy`. It works only because the box carries
-a real sub-strip Y extent, which comes from the per-cell
-`cell_y0`/`cell_y1` boxes `dirty_mark()` narrows through
-`union_cell_y()`, unioned across the run by `run_box()` - the cell
-layer, not the leaf layer, which only refines x.
+`ROW_MAX_RUNS`/`LEAF_REFINE_MAX_RUNS` (2 and 2) and `GATHER_MAX_PIXELS`
+(8192) were swept against both synthetic device tests and the three real
+sand scenes the present-cost tests measure. All three stay at their
+shipped values: the run caps are structurally inert against real scenes
+(a checkerboard row needs the full-row fallback regardless of the cap, a
+slab row needs one run either way, and no real scene falls between those
+two shapes), and raising the pixel cap buys a further 5-9% only by
+growing the DMA gather buffer to match, against roughly 67 KB of free
+heap once the framebuffer and the sand grid are accounted for. The
+dirty-region tracker itself is at its ceiling against an uncapped oracle
+- within 3% of the exact changed-cell ideal on every scene measured - so
+the one real win left was a missing third send path: a box spanning the
+full panel width is already contiguous in the framebuffer and can go out
+directly, rather than through the fixed gather buffer or a full 64-row
+band. That path (`send_partial_band()` in `gfx.c`) cut falling-sand and
+lava-stress present cost by about 10% for zero extra memory; the
+thermal-shock scene, which really does dirty every strip full width and
+full height every frame, was unaffected.
 
 ### A full band has two prices
 
@@ -758,7 +610,5 @@ the ESP32-P4 has the PPA, PSRAM, *and* a real SDMMC host.
 
 - [Board-and-Memory.md](Board-and-Memory.md) — the SPI2 wiring and
   time-multiplexing this all sits on top of.
-- [`../sand/Simulation-Lessons.md`](../sand/Simulation-Lessons.md) — how the sand app makes use
-  of `gfx_mark_dirty()` and the dirty-row machinery.
 - [Flashing-and-Toolchain.md](Flashing-and-Toolchain.md) — the -O2 build-flag
   history referenced above.

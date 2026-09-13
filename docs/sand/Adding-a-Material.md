@@ -574,8 +574,8 @@ a second place, measure whether that second place is hot enough to *need*
 its own inlined copy before giving it one - a plain function call across
 translation units is often the right default, not the fallback.
 
-Full numbers in [`Simulation-Lessons.md`](Simulation-Lessons.md)'s gas
-section and `sand_priv.h`'s comments above `try_fall_or_scatter_impl()`.
+Full numbers live in `sand_priv.h`'s comments above
+`try_fall_or_scatter_impl()`.
 
 ### Lesson: a cost bound must never decide whether a feature works
 
@@ -989,16 +989,11 @@ pass makes the two existing fire budgets worth re-measuring.
 
 - [`Sand-Simulation.md`](Sand-Simulation.md) — how the simulation works
   today, including the gas, fire-chemistry and boiler sections.
-- [`Simulation-Lessons.md`](Simulation-Lessons.md) — the full discovery
-  narrative, including the exact numbers behind the inlining lesson.
 - [`Architecture.md`](Architecture.md) — both material tables as
   reference tables, the `kind` decision diagram, the step pipeline, and
   the exact device build/flash/verify commands.
 - [`Shading-and-Colour.md`](Shading-and-Colour.md) — the deeper dive on
   painting an *existing* material once it has a palette block: the
   pipeline, the recurring shading mistakes, and the one item still open.
-- [`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md) /
-  [`Tuning-At-a-Glance.md`](Tuning-At-a-Glance.md) — what has already
-  been tried, measured and rejected. Read before optimising anything.
 - `docs/Testing-Guide.md` — the host/device test split this guide's
   testing section assumes.

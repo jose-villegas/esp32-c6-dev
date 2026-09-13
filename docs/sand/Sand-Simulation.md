@@ -9,9 +9,7 @@ This document is the "why" behind it - the material encoding, the movement
 rules, the water model, and the performance discipline that shaped all of
 them. For the app-registration mechanics (how `main/apps/*` plugs into the
 shell), see `docs/Launcher-Architecture.md`. For the hardware constraints
-underneath everything here, see `docs/notes/README.md`. The discovery
-narrative behind the fixes below - the bugs found and the reasoning at the
-time - lives in `docs/sand/Simulation-Lessons.md`.
+underneath everything here, see `docs/notes/README.md`.
 
 ---
 
@@ -223,9 +221,7 @@ reached by different rays are not the same distance along "down" even when
 they hold equal mass. Two guard tests exist for this pair of concerns on
 purpose: `test_a_settled_pool_does_not_flicker` holds the original fix, and
 `test_a_pool_settles_at_the_angle_it_is_tilted_to` holds its cost. Neither
-alone is enough - see the fourteenth attempt in
-[`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md) for the
-full derivation and what it cost to buy back.
+alone is enough.
 
 ## Gas: a biased random walk
 
@@ -920,8 +916,7 @@ framebuffer measures **16,998 us of bus time against 18,147 us for a full
 6%, and the frame is **94% bus-bound**. 80 MHz would halve it but
 produces visual artifacts on this panel, so 17 ms is the floor.
 
-Water, not sand, is the bottleneck whenever a body of it is moving - see
-`docs/sand/Simulation-Lessons.md`'s "A note on measurement noise".
+Water, not sand, is the bottleneck whenever a body of it is moving.
 
 Three techniques account for most of the gap between "walk every cell every
 step" and the numbers above:
@@ -930,9 +925,9 @@ step" and the numbers above:
   gravity direction, and none of whose neighbours moved either, is skipped
   entirely next step (`block_state`, in `sand.c`). Motionless sand costs
   roughly 1,000x less than the same sand while it is actually falling. See
-  [Performance-Tuning-Attempts.md](Performance-Tuning-Attempts.md) for why
-  it is block-shaped rather than row-shaped, and how the block dimensions
-  were chosen.
+  [Architecture.md](Architecture.md#block-and-row-sleeping) for why it is
+  block-shaped rather than row-shaped, and how the block dimensions were
+  chosen.
 - **Not every skip structure earns its keep.** The liquid pass had one of
   its own for a long time - `ROW_NO_LIQUID`, a per-row "scanned and found
   dry" flag - and it was deleted in the ninth attempt after the device
@@ -942,9 +937,9 @@ step" and the numbers above:
   step to 13,130 just from removing it. Worth reading before adding another
   one.
 - **Bitmasks over flash-table reads, inside a hot loop.** Asking
-  `materials[id].kind` per cell is a flash read and a likely cache miss (the
-  32 KB code/constant cache on this chip, not a data cache - see
-  `docs/sand/Simulation-Lessons.md`). Precomputing a 16-bit "is this id a
+  `materials[id].kind` per cell is a flash read and a likely cache miss
+  (the 32 KB code/constant cache on this chip, not a data cache).
+  Precomputing a 16-bit "is this id a
   liquid" bitmask once per pass, instead of once per cell, measurably
   mattered: it alone was the difference between a settled screen of sand
   costing 17 us and costing 5.5 ms.
@@ -1054,8 +1049,6 @@ several small functions instead of one large one.
 - `docs/notes/` - the hardware constraints underneath all of this: the
   memory budget, the flash/RAM cache distinction, panel and touch gotchas.
   Start at `docs/notes/README.md`.
-- `docs/sand/Simulation-Lessons.md` - this app's own discovery narrative,
-  in the same folder as this file.
 - `docs/sand/Adding-a-Material.md` - the practical how-to for adding a
   new material, worked through end to end against a real one (gas).
 - `docs/sand/Shading-and-Colour.md` - how an existing material's variant

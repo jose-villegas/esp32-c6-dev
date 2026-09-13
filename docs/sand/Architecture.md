@@ -2,10 +2,8 @@
 
 A single-page map of `main/apps/sand/`: the shapes, not the reasoning.
 [`Sand-Simulation.md`](Sand-Simulation.md) is the "why" behind every rule
-here; [`Simulation-Lessons.md`](Simulation-Lessons.md) and
-[`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md) are the
-discovery narratives behind the numbers; [`Adding-a-Material.md`](Adding-a-Material.md)
-is the checklist for extending any of this. This page exists for a
+here; [`Adding-a-Material.md`](Adding-a-Material.md) is the checklist for
+extending any of this. This page exists for a
 narrower job those don't do well as prose: showing the *shape* of the
 system at a glance, and writing down - in one place, precisely - every
 hop between "I changed a `.c` file" and "I have a real number from the
@@ -550,7 +548,7 @@ The costs, stated plainly rather than left implicit:
 | --- | --- | --- |
 | extended statics | 16 codes, 5 used, 11 spare | 8 codes, 5 used, **3 spare** |
 | `materials[]` (hot table) | 16 rows, 192 B of flash | 32 rows, **384 B** of flash |
-| control frame-budget rows | believed pinned (`sand_step`, `aligned(32)`) - it was not, see [`Tuning-At-a-Glance.md`](Tuning-At-a-Glance.md#the-layout-lottery) | **unmeasured** against the doubled table - a flash-layout-lottery question, not a logic one |
+| control frame-budget rows | believed pinned (`sand_step`, `aligned(32)`) - it was not, see [the layout lottery](../notes/Optimization-Playbook.md#the-layout-lottery) | **unmeasured** against the doubled table - a flash-layout-lottery question, not a logic one |
 
 Half of what was left of the extended range's own doorway, spent on one
 material, is a real price - three spare static codes is not much room for
@@ -924,9 +922,8 @@ that the marshalling cost was never worth a second check -
 when heat conduction's boiler needed a gravity direction, and two ints
 is still nowhere near sand_step_gas()'s nine, so the reasoning held
 without needing to move the check. Getting this
-gating wrong in the wrong direction is a real, shipped bug class - see
-"the else-if ordering bug" in
-[`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md).
+gating wrong in the wrong direction is a real, shipped bug class: a
+mis-ordered conditional has silently skipped a pass that should have run.
 
 ## Block and row sleeping
 
@@ -983,24 +980,21 @@ the invariant in full, and
 fixture that fails without the expansion.
 
 Block size (`SAND_BLOCK_W=16`, `SAND_BLOCK_H=32`, `sand.h`) was swept
-across six candidate pairs on real hardware, not guessed - see the
-"sixth attempt" in [`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md)
-for the full table and the two real device-only bugs that sweep found
-along the way (a stack overflow, two test fixtures that assumed the old
-size).
+across several candidate pairs on real hardware, not guessed, and the
+sweep found two real device-only bugs along the way (a stack overflow,
+two test fixtures that assumed the old size).
 
-**Those six candidates were all W ≤ 32 and H ≥ 32** - no square and no
+**The first round of candidates were all W ≤ 32 and H ≥ 32** - no square and no
 transpose of any of them - and every scene they were judged on poured down
 grid +Y. The board is played landscape, where down is grid +X, so the search
-space could not have found a landscape answer.
-`block_size_sweep.ps1`'s list is now closed under transpose plus the square,
-and `block_size_prescreen.sh` beside it ranks the same candidates on the host
-first. Only `SAND_BLOCK_W` is constrained - a power of two, for the mask in
-`dest_rows_full()`, and no narrower than `SAND_LIQUID_SIGHT` for the
-invariant above; `SAND_BLOCK_H` is only ever divided by.
+space could not have found a landscape answer. The candidate list was
+later closed under transpose plus the square, and ranked on the host
+before spending a device round on it. Only `SAND_BLOCK_W` is constrained -
+a power of two, for the mask in `dest_rows_full()`, and no narrower than
+`SAND_LIQUID_SIGHT` for the invariant above; `SAND_BLOCK_H` is only ever
+divided by.
 
-That reopened sweep is what moved the shape from 32×64 to 16×32 (the
-twenty-first attempt). **W is the knob in both
+That reopened sweep is what moved the shape from 32×64 to 16×32. **W is the knob in both
 orientations** - every block-level rejection spans along X in units of it -
 so every transpose lost and every narrower block won. The trade is explicit
 and one-way: every row where something MOVES got cheaper, and the two rows
@@ -1121,111 +1115,11 @@ plan this shipped from and what else it deferred.
 
 ## Verifying performance on real hardware
 
-### Use the scripts in `launcher/tools/`
-
-| Want to... | Run | Produces |
-|---|---|---|
-| flash the current code | `tools/build_flash.sh [PORT]` | release firmware on the board |
-| performance numbers | `tools/report_performance.sh [PORT]` | `tools/results/performance_<ts>.md` |
-| pass/fail for every suite | `tools/report_test_results.sh [PORT]` | `tools/results/test_results_<ts>.md` |
-| raw console capture | `python tools/sweeps/capture_selftest.py OUT.txt --port PORT` | unparsed self-test output |
-
-**They are `.sh` files that shell out to PowerShell, and that is all they
-are for**: `idf.py` cannot run under Git Bash, so anything that builds or
-flashes has to cross into PowerShell first. The next section is that
-problem in detail, and the rest of this one is what the scripts are doing
-on your behalf.
-
-The two `report_*` scripts also restore `build.release` afterwards, so
-they are safe to run against a board you then want to use. Their output
-is generated from a real capture and the current source, which makes it
-the authority over the hand-maintained table further down this page - and
-a new budget test appears in it automatically, with no tooling change.
-
-### The trap: `idf.py` cannot run from Git Bash, at all
-
-ESP-IDF's own `export.sh`/`idf_tools.py` refuses outright if
-`MSYSTEM` is set in the environment - it prints "MSys/Mingw is not
-supported" and exits non-zero. Git Bash on Windows always sets
-`MSYSTEM=MINGW64`. Worse: this isn't only a bash-vs-PowerShell problem -
-`MSYSTEM` rides along even into a `powershell.exe` **child process**
-launched from bash (confirmed directly: `env -u MSYSTEM powershell.exe`
-still sees it set inside). The only place clearing it actually sticks is
-*inside* the PowerShell process itself, before it sources `export.ps1`:
-
-```mermaid
-flowchart LR
-    subgraph GitBash["Git Bash (MSYSTEM=MINGW64)"]
-        A["bash spawns powershell.exe"]
-    end
-    A -->|"MSYSTEM survives\nthe handoff regardless"| B["powershell.exe\n(still sees MSYSTEM set)"]
-    B -->|"Remove-Item Env:\\MSYSTEM\n(run from INSIDE PowerShell)"| C["powershell.exe\n(MSYSTEM now gone,\nfor real)"]
-    C --> D["export.ps1 / idf.py\nnow work"]
-
-    style B fill:#8a3d3d,color:#fff
-    style C fill:#4a7c59,color:#fff
-```
-
-`launcher/tools/build_flash.sh` already does this correctly - read it as
-the reference implementation, or just call it.
-
-### Building/flashing the release firmware (interactive use)
-
-One command, works from Git Bash directly:
-
-```bash
-./tools/build_flash.sh COM3
-```
-
-Delegates to PowerShell internally (the `Remove-Item Env:\MSYSTEM` dance
-above), builds `build.release`, flashes it. This is what to run before
-handing the device back for interactive/manual testing.
-
-### Building/flashing the diagnostics firmware (self-tests)
-
-No wrapper script exists for this one yet - run it as a single
-PowerShell block (copy-paste verbatim, it's the exact sequence used
-throughout this session):
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
-    Remove-Item Env:\MSYSTEM -ErrorAction SilentlyContinue
-    & 'C:\Espressif\esp-idf-v5.5\export.ps1' | Out-Null
-    Set-Location 'C:\Users\ville\Projects\esp32-c6\launcher'
-    idf.py -B build.diag build
-    if (`$LASTEXITCODE -ne 0) { exit `$LASTEXITCODE }
-    idf.py -B build.diag -p COM3 flash
-"
-```
-
-`build.diag` and `build.release` are separate build directories on
-purpose - each keeps its own `sdkconfig`, and neither overwrites the
-other's cache.
-
-### Collecting the self-test results
-
-`tools/sweeps/capture_selftest.py` does **not** need `idf.py` at all -
-it's pure `pyserial`, resets the device via an RTS pulse, and reads
-serial until `SELFTEST_COMPLETE` appears. This one *does* work directly
-from Git Bash:
-
-```bash
-python tools/sweeps/capture_selftest.py /path/to/output.txt --port COM3
-```
-
-(`pip install pyserial` first if the environment doesn't have it -
-`ModuleNotFoundError: No module named 'serial'` means exactly that, not
-a real error.)
-
-`test/run_device_tests.sh --no-flash` works here too, and collects the
-same way: its collection step is this same plain-Python path, not
-`idf.py`. Only its build/flash half needs ESP-IDF.
-
-(That was not always true in practice. The script used to check for
-`idf.py` on PATH *before* looking at `--no-flash`, so collecting failed
-for want of a tool it never runs - which read as "this script needs
-ESP-IDF for everything" and is why this page once said so. The check is
-scoped to the flash path now.)
+Build, flash and capture commands live in
+[`../Testing-Guide.md`](../Testing-Guide.md) and the `report_*.sh` scripts
+under `launcher/tools/` and `launcher/main/apps/sand/tools/` - see
+`report_performance.sh` for the sand-specific capture. The rest of this
+section is what a capture actually shows once you have one.
 
 ### Reading the result
 
@@ -1293,9 +1187,7 @@ stale capture's report said 300,000 because the build that was flashed
 *asserted* 300,000 at the time - the tool was reading the assertion
 correctly, and the source had simply changed since. A report is a
 measurement of a tree too; "the tool is wrong" was diagnosed from a
-report generated against different source. See the twelfth tuning
-attempt in
-[`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md).
+report generated against different source.
 
 It was `failures=3` for a long time, and all three came off without a
 single budget moving, which is the part worth knowing. The settled-pile
@@ -1304,7 +1196,6 @@ which found that per-move row bookkeeping was 40% of the flip and then
 that the cache it protected (`ROW_NO_LIQUID`) cost more than it saved and
 deleted it outright. The mixed scene came in during the tenth, which gave
 the cross-flow pass a block-shaped skip for the cells that hold no liquid.
-See [`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md).
 
 ## The thirteen device frame-budget tests
 
@@ -1365,11 +1256,9 @@ purely by moving where things land in flash - it has crossed twice in this
 project's history for exactly that reason. If a capture ever shows a
 failure, check whether the number that moved actually moved *much* (not the
 ordinary ~2-5%, occasionally more, flash-layout noise this project has
-already characterised - see
-[`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md)) before
-assuming a real regression. The tenth attempt measured a 14% swing on the
-water benchmark from a restructuring that changed no semantics at all, so
-"much" has a wide floor here.
+already characterised) before assuming a real regression. A restructuring
+that changed no semantics at all has measured a 14% swing on the water
+benchmark from flash layout alone, so "much" has a wide floor here.
 
 The two fire rows were new territory when they were written, not a
 template that existed before: there was no gas- or fire-specific
@@ -1394,15 +1283,8 @@ says.
 - [`Sand-Simulation.md`](Sand-Simulation.md) - the "why" behind every
   rule sketched here: movement, the water model, gas, the performance
   discipline.
-- [`Simulation-Lessons.md`](Simulation-Lessons.md) - the original
-  build-out discovery narrative.
-- [`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md) -
-  the chronological tuning campaign, including the block-size sweep and
-  the three-attempt inlining saga referenced above.
 - [`Adding-a-Material.md`](Adding-a-Material.md) - the practical
   checklist for extending any of this with a new material.
 - [`Shading-and-Colour.md`](Shading-and-Colour.md) - how an existing
   material's variant becomes a pixel, the recurring shading mistakes and
   their fixes, and the one item still open.
-- `launcher/tools/sweeps/README.md` - the sweep tooling this page's
-  device-verification section builds on.

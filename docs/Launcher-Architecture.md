@@ -378,11 +378,10 @@ main/apps/sand/
 the one above. An app's `tools/` folder holds tools that reference ONLY that
 app; anything spanning app *and* shell code (a sweep that touches a
 shell-owned header alongside an app one, say) stays in the shared
-`launcher/tools/` instead. `main/apps/sand/tools/block_size_sweep.ps1` is the
-first tenant - it only ever touches `sand.h` - while
-`launcher/tools/sweeps/row_leaf_sweep.ps1`, which sweeps a sand constant
-*and* a `launcher/main/gfx/gfx_dirty.h` constant together, stays shared for exactly that
-reason.
+`launcher/tools/` instead. `main/apps/sand/tools/report_reactions.sh` is one
+tenant - it only ever touches the sand app's own reaction table - while a
+sweep that touched a sand constant *and* a `launcher/main/gfx/gfx_dirty.h`
+constant together would stay shared for exactly that reason.
 
 See `docs/sand/Sand-Simulation.md` for how the pieces above fit together - the
 material system, the water model, and why the liquid logic is split into its

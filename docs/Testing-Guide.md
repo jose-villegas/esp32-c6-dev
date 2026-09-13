@@ -58,6 +58,43 @@ Requires a **host** compiler, not the ESP32 toolchain:
 
 ---
 
+## Measuring sand performance
+
+`report_performance.sh` (above) captures the sand app's frame-budget suite
+on device and writes a markdown table; `compare_reports.py` diffs two such
+reports, and `report_performance.sh --baseline <report>.md`/`--no-restore`
+run that comparison as part of a capture. Three rules keep a reading
+honest:
+
+- **Only within-capture comparisons are trustworthy.** Two separately
+  linked images of identical source can disagree by several percent
+  purely from where things land in flash. Never read a delta between two
+  different captures' numbers for the same row as real without checking
+  that the pair's own noise floor (`compare_reports.py` derives one from
+  the two control rows in the pair actually being compared) is smaller
+  than the delta.
+- **Check the control rows before reading anything else.** Every capture
+  carries at least one movement-free control row alongside the timed
+  scenes. If a change that should only touch one material moves a
+  control row too, the capture's flash layout shifted, and every other
+  delta in that capture needs to be read against that shift rather than
+  treated as real on its own.
+- **Free heap is a precondition, not a detail.** Every frame-budget scene
+  mallocs its grid, so when free heap is short the suite still runs,
+  still prints completion, and still produces a report-shaped capture -
+  with no timings in it at all. Grep the raw capture for `free heap
+  after framebuffer` before trusting any number in the generated table:
+
+  | Free heap | What you get |
+  |---|---|
+  | ~64-67 KB | every scene allocates; numbers are real |
+  | below ~43 KB | fixture allocations fail; the capture completes with zero timings |
+
+  One grid alone is about 41 KB, so a heap short by even a few KB below
+  that produces a clean-looking, worthless report.
+
+---
+
 ## Two runners, one set of suites
 
 The suites in `test/suites/` are compiled into **both** runners. Nothing is
@@ -209,7 +246,6 @@ its `.text` *and* its `.bss`, which is what buys the headroom back.
 | Perf | `sdkconfig.defaults.diag_perf` | `suite_sand_perf.c` + `suite_sand_scenes.c` + `suite_sand_common.c` | a sand frame-budget capture |
 
 ```sh
-sh scripts/capture_ref.sh <ref> --perf-scope                        # ref -> scoped capture
 bash launcher/main/apps/sand/tools/report_performance.sh --perf-scope
 # by hand, the fragment simply appends to the usual three:
 idf.py -B build.diag.<yours> \
@@ -242,8 +278,7 @@ Four things hold this together:
 
 A perf-scoped build is **not a gate**: it drops behaviour coverage on purpose.
 Never take a merge decision from one, and never diff its numbers against an
-unscoped capture's — different scope, different layout. See
-[`sand/Perf-Round-Guide.md`](sand/Perf-Round-Guide.md).
+unscoped capture's — different scope, different layout.
 
 ### Development-only instrumentation is its own flag, not SELFTEST
 

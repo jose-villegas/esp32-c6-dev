@@ -254,7 +254,5 @@ Two things this cost, worth knowing:
 
 ## Related
 
-- [`../sand/Simulation-Lessons.md`](../sand/Simulation-Lessons.md) — how the sand app consumes
-  these readings, including free-fall detection and the flat-device throttle.
 - [Board-and-Memory.md](Board-and-Memory.md) — where the IMU and buttons sit
   in the board's hardware inventory.

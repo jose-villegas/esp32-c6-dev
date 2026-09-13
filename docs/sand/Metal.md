@@ -95,5 +95,4 @@ reaction docs; 0 would read as "immune" and drop the row.
 ---
 
 Related: [`Reaction-Table.md`](Reaction-Table.md) for the generated
-per-material rules, [`Tuning-At-a-Glance.md`](Tuning-At-a-Glance.md) for
-the constants.
+per-material rules.

@@ -50,8 +50,7 @@ the falling-sand app's own discovery narrative, moved out to
 - [`../Launcher-Architecture.md`](../Launcher-Architecture.md) — how the
   shell and its apps are built on top of the hardware facts here.
 - [`../sand/README.md`](../sand/README.md) — the falling-sand app: how it
-  works today (`Sand-Simulation.md`), the discovery narrative behind it
-  (`Simulation-Lessons.md`), and how to add a material
+  works today (`Sand-Simulation.md`) and how to add a material
   (`Adding-a-Material.md`). Its performance numbers and memory choices
   are shaped directly by the constraints here.
 - [`../Testing-Guide.md`](../Testing-Guide.md) — how any of this gets

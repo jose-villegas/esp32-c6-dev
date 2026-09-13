@@ -22,7 +22,7 @@ is condensed into this page's "Lessons worth keeping" section below.
 
 ## It is a picture of a physics, not a physics
 
-Same rule [`Sand-Simulation.md`](Sand-Simulation.md#momentum) sets for
+Same rule [`Sand-Simulation.md`](Sand-Simulation.md#momentum-and-the-wall-rebound-splash) sets for
 tilt momentum: there is no per-cell velocity, because a byte-per-cell grid
 at 41,216 cells can't afford a second field just for things that are
 usually standing still. A "flying" grain is a caller-provided list of
@@ -209,61 +209,3 @@ path - a real divergence, not a stale detail:
   displacement-based version (radius 5, always-fires, capped per step)
   is gone; nothing in the tree still calls it that way.
 
----
-
-## Lessons worth keeping
-
-Everything below is a discovery neither file's own code comments capture,
-because it's about a decision or a dead end, not a shipped rate or
-formula:
-
-- **Budget a malloc against the largest CONTIGUOUS free block, never
-  total free heap.** Three device captures at three very different grid
-  sizes reported an *identical* largest-free-block figure, completely
-  unmoved by an allocation that itself varied 4x - proof that total free
-  heap was describing something the rest of the firmware left behind, not
-  this app's own allocation.
-- **Reordering allocations does not create space; it only decides who
-  picks first.** Tried once, on the theory that a smaller request going
-  first might leave more room - it didn't, and made things measurably
-  worse by starving the one allocation (the grid) that actually needs the
-  single largest run. Not worth trying again without a fresh capture
-  showing a real reason to.
-- **Size a shared buffer's "room left" against what's actually still in
-  flight, not the buffer's total capacity.** Two near-simultaneous
-  explosions computed their seeding density against the whole buffer each,
-  so the second one aimed for a density the buffer no longer had room for
-  and lost entries to truncation one by one - the exact lopsided bias the
-  ring-seeding scheme exists to prevent, reintroduced via contention
-  between two callers instead of bias within one.
-- **To stop a bounce cascade, decay whether the trigger fires, not how
-  hard it hits.** A decaying *force* still lets every echo do something,
-  just progressively weaker, so a splash chain visibly outlives what it
-  should. A decaying *chance to fire at all* means most echoes do nothing,
-  which is both the visually correct behaviour and cheaper on average - a
-  failed roll skips the whole displacement call.
-- **Mask a splash to its own material.** An unmasked `sand_displace()`
-  throws whatever is within its radius, which is right for an explosion
-  and wrong for a liquid splashing itself - it will fling whatever solid
-  happens to be sitting underneath, too.
-- **A mechanical side effect can force a real balance change, not a
-  workaround.** Acid's own splash flinging it away from what it was
-  actively dissolving broke an existing acid-vs-metal-vs-stone ordering
-  test on numbers that were always close. The fix was revising the
-  balance itself (`MATX_METAL`'s `dissolvable` down from 110 to 1,
-  matching the new intent) and rewriting the test to the new intended
-  ordering, not patching around the side effect.
-
----
-
-## What's still banked
-
-- **A game-facing caller for `sand_impulse_dislodge()`.** The primitive
-  is built and fully tested; nothing in the app triggers it yet.
-- **Explosion triggers wired into more reactions** - a bursting sealed
-  vessel, a confined gas pocket - `sand_explode()`/`sand_displace()`
-  already support this, only the reaction-table hookup is missing.
-- **Confined steam cracking a stone shield via pressure, not heat** - the
-  exact case `sand_displace()` was split out of `sand_explode()` for
-  (steam must not ignite anything just because it pushed a wall), not yet
-  wired to a trigger.

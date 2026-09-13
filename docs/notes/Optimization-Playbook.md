@@ -6,10 +6,9 @@ Part of the platform notes for the Waveshare ESP32-C6-Touch-AMOLED-1.8 — see
 Everything else in this folder is specific to this board. This file is not —
 it is the general-purpose techniques that came out of optimizing on it,
 written so they travel to a different chip, project, or person. Each one is
-grounded in a real measurement, mostly from
-[`../sand/Performance-Tuning-Attempts.md`](../sand/Performance-Tuning-Attempts.md)
-and [Display-and-Rendering.md](Display-and-Rendering.md), but the lesson
-itself is not about falling sand or this particular display.
+grounded in a real measurement, mostly from this project's sand-simulation
+performance work and [Display-and-Rendering.md](Display-and-Rendering.md),
+but the lesson itself is not about falling sand or this particular display.
 
 The one rule everything below serves: **a plausible-sounding explanation for
 where the time goes is not the same as a measured one.**
@@ -46,6 +45,37 @@ layout. Treat differences under ~20% as noise unless they reproduce. Check
 which memory a chip actually has before applying "typical CPU" wisdom — a
 datasheet-advertised secondary region here turned out to be a *slower* one
 meant for deep-sleep wake stubs, not a performance tier.
+
+---
+
+## The layout lottery
+
+Flash layout is not a smooth, continuous source of noise — it is
+quantised. A hot function's own compiled bytes can stay byte-identical
+build to build while its *address* moves, pushed across cache-line
+boundaries by unrelated code earlier in the same file growing or
+shrinking. On one target this produced a small number of distinct,
+repeatable value-pairs for a pair of control benchmarks — never a
+continuum — including two different binaries landing the identical pair
+to the microsecond. Reading which pair a control landed in is a sharper
+test than asking whether a delta cleared some percentage threshold.
+
+The fix, where it is worth the cost: pin the hot function's start with an
+alignment attribute — but confirm the object actually links (an
+over-large alignment can collide with a linker script's own section
+start) and confirm the pin is bound to the function and not to some
+unrelated symbol declared between the attribute and its target, which is
+invisible in a source diff and only shows up in `objdump`'s own section
+table. A pin is not free: re-pinning at a coarser line size can cost more
+than it recovers once the surrounding hot path has grown large enough
+that where it starts no longer decides most of its own traffic.
+
+Not every hot path draws this ticket. A separate, bus-bound call boundary
+measured across five different padding-induced addresses moved by at
+most a point and a fraction — fixed per-transfer cost is far less
+sensitive to where its own code starts than a tight, branch-heavy loop
+is. Measure before assuming a function is on the sensitive side of that
+line.
 
 ---
 
@@ -224,6 +254,20 @@ not necessarily innocent on the target, which may be paying for a different
 line in the same window — confirm the attributed commit against the target
 before trusting it.
 
+A stronger version of the same trap: a change that stops the CPU from
+*executing* work at all — not just reshapes it — can read as an exact
+zero on a host with instruction-level parallelism and still cost several
+percent on an in-order target that spends cycles nearly linearly with
+instruction count. Measured directly with a probe built for the question:
+two builds differing only in whether a block of per-cell work executed at
+all, gated on a `volatile` so both compiled identically apart from one
+data initialiser, showed the host understating the executed cost by
+roughly 2-6x depending on the surrounding workload — a sign error's
+neighbour, not just a magnitude one. Don't retire a candidate that
+demonstrably removes executed work on the strength of a host measurement
+reading zero; that reading means the host's own execution model hides
+the cost, not that the work was free.
+
 ---
 
 ## A benchmark sharing a console with a watchdog is measuring the console
@@ -357,10 +401,6 @@ where the three crossfade dips had sat at 12–14 (2026-09-04, measured via
 
 ## Related
 
-- [`../sand/Performance-Tuning-Attempts.md`](../sand/Performance-Tuning-Attempts.md)
-  — the campaign several of the techniques above were extracted from.
-- [`../sand/Tuning-At-a-Glance.md`](../sand/Tuning-At-a-Glance.md) — the
-  visual map of that campaign.
 - [Display-and-Rendering.md](Display-and-Rendering.md) — the dirty-region
   tracking system, another case of the skip-structure lesson above.
 - [Board-and-Memory.md](Board-and-Memory.md) — the memory budget these

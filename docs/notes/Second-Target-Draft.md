@@ -82,7 +82,7 @@ budget outright.
 | **"~29–36 cycles per bounds-checked neighbour probe"** | Not the same question on S3. That figure is `lui/addi/lw/lw/mul/lw/add/lbu` on rv32imac with no data cache. On Xtensa the address materialises with `l32r`, the index folds into `addx2`, and the table sits in a 32 KB **data** cache. Re-derive from a real S3 objdump before quoting a cycle count at all |
 | "A plain call costs ~27 cycles here" | Xtensa windowed calls price differently, and a register-window overflow spills eight registers to the stack. **Variance is worse, not better** |
 | Host understates device by **2.0×–6.6×** | Per-board. Expect it to **narrow** on the S3 — which is itself a measurement (§5) |
-| The ±6.7% flash-layout spread (Perf-Round-Guide) | Mechanism exists on both (code is flash-resident behind a cache), geometry does not: 16 KB/8-way default vs 32 KB/4-way. Re-derive from two identical-source builds |
+| The ±6.7% flash-layout spread (measured across the sand performance campaign) | Mechanism exists on both (code is flash-resident behind a cache), geometry does not: 16 KB/8-way default vs 32 KB/4-way. Re-derive from two identical-source builds |
 | Free heap 63,952 / grid 41,216 / `check_static_ram.py`'s literals | This chip, this build, this boot |
 | Every `suite_sand_perf.c` budget (`measured × 0.9`) | Wall-clock, pegged from C6 captures at 160 MHz |
 | QSPI 40 MHz, 17.6 ms present, 80 MHz corner corruption | Panel and board wiring — the sibling S3 board carries the same panel, so this is the one number that might survive, and only by coincidence |
@@ -127,7 +127,7 @@ Three caveats that keep it honest, and they matter:
 
 ### Measurement method — the four rules
 
-| Rule (Perf-Round-Guide, "Instrumenting a round") | Survives? |
+| Rule (measurement discipline from the sand performance campaign) | Survives? |
 |---|---|
 | Only within-capture comparisons are trustworthy | **Rule yes, number no.** ±6.7% is C6; re-derive |
 | Only size-neutral changes attribute cleanly | **Yes.** Same mechanism, any flash-resident-code target |
@@ -328,6 +328,4 @@ the desk.
   hardware table and §5/Phase 6 already carry the S3 plan
 - [`Board-and-Memory.md`](Board-and-Memory.md) — the C6 memory budget §3
   compares against
-- [`../sand/Perf-Round-Guide.md`](../sand/Perf-Round-Guide.md) — the four
-  measurement rules classified in §2
 - `launcher/tools/device_profiles/esp32s3.sh` — the skeleton §5 phase A fills
