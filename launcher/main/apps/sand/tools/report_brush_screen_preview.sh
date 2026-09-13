@@ -70,11 +70,11 @@ OUT_BIN="$BUILD_DIR/brush_screen_preview"
 
 "$OUT_BIN" "$BUILD_DIR"
 
-# pyserial lives in ESP-IDF's environment (and, on this machine, the system
-# interpreter too) - screenshot.py imports it at module scope even though
-# bmp_bytes_to_png() itself never touches a serial port, so the search below
-# mirrors tools/screenshot.sh's own: prefer whatever's on PATH, but let the
-# ESP-IDF env win if the bare PATH lookup has no pyserial.
+# pyserial lives in ESP-IDF's environment - screenshot.py imports it at
+# module scope even though bmp_bytes_to_png() itself never touches a serial
+# port, so the search below mirrors tools/screenshot.sh's own: prefer
+# whatever's on PATH, but let the ESP-IDF env win if the bare PATH lookup has
+# no pyserial.
 PYTHON=$(command -v python3 || command -v python || true)
 for candidate in "$HOME/.espressif/python_env"/idf*_env/bin/python \
                  "$HOME/.espressif/python_env"/idf*_env/Scripts/python.exe; do

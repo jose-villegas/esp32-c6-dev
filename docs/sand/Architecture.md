@@ -9,8 +9,8 @@ is the checklist for extending any of this. This page exists for a
 narrower job those don't do well as prose: showing the *shape* of the
 system at a glance, and writing down - in one place, precisely - every
 hop between "I changed a `.c` file" and "I have a real number from the
-device," so a future session (yours, or another agent's) doesn't have to
-rediscover the Git Bash/`idf.py` trap this repo already paid for once.
+device," so nobody has to rediscover the Git Bash/`idf.py` trap this repo
+already paid for once.
 
 ---
 

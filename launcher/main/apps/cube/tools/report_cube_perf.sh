@@ -14,8 +14,8 @@
 #   COM_PORT        serial port the device is on. Default: COM3.
 #   OUT.md          markdown report path. Default:
 #                   main/apps/cube/tools/results/cube_perf_<timestamp>.md
-#   IDF_EXPORT_PS1  path to ESP-IDF's export.ps1. Default: this
-#                   project's usual install location.
+#   IDF_EXPORT_PS1  path to ESP-IDF's export.ps1. Default: the ESP-IDF
+#                   Windows installer's path.
 #
 # Restores build.release afterward, regardless of outcome - see
 # tools/report_test_results.sh's own top comment for why.

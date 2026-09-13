@@ -13,8 +13,8 @@
 #   COM_PORT        serial port the device is on. Default: COM3.
 #   OUT.md          markdown report path. Default:
 #                   main/apps/sand/tools/results/performance_<timestamp>.md
-#   IDF_EXPORT_PS1  path to ESP-IDF's export.ps1. Default: this
-#                   project's usual install location.
+#   IDF_EXPORT_PS1  path to ESP-IDF's export.ps1. Default: the ESP-IDF
+#                   Windows installer's path.
 #   --no-restore    skip rebuilding/reflashing build.release afterward -
 #                   the device is left on build.diag. Restoring costs a
 #                   ~3-4 minute build+flash plus a second ~90s ESP-IDF

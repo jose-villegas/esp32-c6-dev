@@ -1158,9 +1158,9 @@ emit_ignite(const reaction_t* r, uint8_t self_id) {
      * default drops "becoming Fire" as redundant. Self (wood) - burning
      * is a STATE not a transformation, so the sentence avoids "becoming
      * Wood". A third material - unused today but a real shape (ash/coal).
-     * Wording targets an early-elementary reader (child-reader persona);
-     * each extra fact gets its own sentence, not a trailing "and", so
-     * reading does not blur by the end. */
+     * Wording targets an early-elementary reader; each extra fact gets its
+     * own sentence, not a trailing "and", so reading does not blur by the
+     * end. */
     if (r->ignites_to == 0 || r->ignites_to == MAT_FIRE) {
         printf("- *Catches* %s%s from %s.\n", mat_span_v(MAT_FIRE), rate_gap(adv), heat_sources);
     } else if (r->ignites_to == self_id) {

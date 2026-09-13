@@ -15,8 +15,8 @@
 #   check-comment-length.sh --changed main      # vs a branch point
 #   check-comment-length.sh --staged            # what is about to be committed
 #
-# Proving a bulk trim moved no code (a diff of thousands of reflowed comments
-# is unreadable; this is checkable instead):
+# Proving a comment-only change moved no code (a diff of thousands of
+# reflowed comments is unreadable; this is checkable instead):
 #   check-comment-length.sh --comments-only main
 #
 # See check_comment_length.py --help for the full option list.

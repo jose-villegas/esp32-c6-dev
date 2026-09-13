@@ -22,7 +22,7 @@ set -eu
 TEST_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 MAIN_DIR=$(CDPATH= cd -- "$TEST_DIR/../main" && pwd)
 # Overridable so two runs cannot clobber each other: the build dir holds one
-# host_tests binary, so concurrent runs (parallel agents, a sweep script
+# host_tests binary, so concurrent runs (two terminals, a sweep script
 # running beside a manual run) otherwise race to compile and execute the
 # same file, and a result can end up attributed to a source state that never
 # existed. Defaults to the old path, so nothing that does not set it changes.

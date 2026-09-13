@@ -5,7 +5,7 @@
 #   . "$(dirname "$0")/idf.sh"
 #   idf_init "/path/to/launcher" "C:\\Espressif\\esp-idf-v5.5\\export.bat"
 #   idf -B build.release build       || exit $?
-#   idf -B build.release -p COM3 flash || exit $?
+#   idf -B build.release -p <PORT> flash || exit $?
 #
 # WHY THIS EXISTS
 #

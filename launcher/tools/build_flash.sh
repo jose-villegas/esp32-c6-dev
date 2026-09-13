@@ -21,7 +21,8 @@
 #               laptop instead of on a pull request.
 #   COM_PORT    serial port the device is on. Default: COM3.
 #   IDF_EXPORT  path to ESP-IDF's export script - export.bat on Windows,
-#               export.sh elsewhere. Default: this project's usual install.
+#               export.sh elsewhere. Default: the ESP-IDF Windows
+#               installer's path.
 #
 # Run from anywhere (it cds to launcher/ itself); double-click from Explorer
 # if .sh is associated with Git Bash, or right-click launcher/tools/ ->

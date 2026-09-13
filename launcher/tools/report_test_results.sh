@@ -10,8 +10,8 @@
 #   COM_PORT        serial port the device is on. Default: COM3.
 #   OUT.md          markdown report path. Default:
 #                   tools/results/test_results_<timestamp>.md
-#   IDF_EXPORT_PS1  path to ESP-IDF's export.ps1. Default: this
-#                   project's usual install location.
+#   IDF_EXPORT_PS1  path to ESP-IDF's export.ps1. Default: the ESP-IDF
+#                   Windows installer's path.
 #
 # Restores build.release afterward, regardless of outcome, in a trap -
 # same discipline the sweep scripts already use, so the device is never

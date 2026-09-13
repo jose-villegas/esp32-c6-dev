@@ -15,11 +15,10 @@ icon_system_*.
 STANDARD LIBRARY ONLY - NO PILLOW
 
 Unlike gen_font.py and gen_boot_anim_image.py, this generator does not import
-Pillow even lazily: Pillow is not installed in this environment (confirmed by
-tools/screenshot.py, which used to carry a Pillow-conditional PNG branch that
-never once fired on this machine and was rewritten to encode with zlib +
-struct alone), and icon art has no proportional-advance or antialiasing need
-that would justify the dependency. `read_png()` below decodes a PNG by hand:
+Pillow even lazily: nobody should have to install it for icon art alone,
+and icon art has no proportional-advance or antialiasing need that would
+justify the dependency. `read_png()` below
+decodes a PNG by hand:
 walk the chunks, zlib.decompress() the IDAT stream, and unfilter every
 scanline (all five PNG filter types, even though this repo's own bootstrapped
 artwork only ever emits filter 0 - a PNG a paint program exports will not be

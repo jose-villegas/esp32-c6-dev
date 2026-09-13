@@ -27,7 +27,7 @@ That forces the ROM bootloader regardless of firmware state. Confirm you are in
 download mode with:
 
 ```bash
-esptool.py --chip esp32c6 -p COM3 --before no_reset flash_id
+esptool.py --chip esp32c6 -p <PORT> --before no_reset flash_id
 ```
 
 Connecting almost instantly (a few dots) means the chip is sitting in the

@@ -1,6 +1,6 @@
 # Building a Screen
 
-The entry point for a session told to build or change a UI screen in this
+Start here to build or change a UI screen in this
 shell. Read this start to finish before writing anything. For how the UI
 works see [`Launcher-Architecture.md`](Launcher-Architecture.md); for the
 *record* of what each rule below cost to learn, see

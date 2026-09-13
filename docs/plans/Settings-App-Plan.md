@@ -132,6 +132,6 @@ occasion to relitigate what belongs where.
 
 ## Non-goals
 
-Nothing here is being built now. This is a placeholder for a future
-session - the two-part shape and the open questions above are the
-handoff, not a commitment to any answer among them yet.
+Nothing here is being built now. The two-part shape and the open
+questions above are a starting point, not a commitment to any answer
+among them yet.

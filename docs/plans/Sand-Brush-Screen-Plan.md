@@ -1,7 +1,7 @@
 # Plan: the sand app's brush screen, and the UI primitives it needs
 
-**Status**: built 2026-09-10. Branch `claude/sand-app-second-screen-990ad2`,
-phases 1-6 plus this doc pass, all seven landing on the branch before merge.
+**Status**: built 2026-09-10. Phases 1-6 plus this doc pass, all seven
+landing on the branch before merge.
 Two divergences from the plan below, both found during implementation, not
 predicted by it:
 
@@ -120,8 +120,8 @@ Two constraints bound every answer below:
 
 Each phase is one PR, lands green, and is useful on its own. Phases 1–4 all
 touch `launcher/main/ui/`, so they are **run one at a time** — concurrent
-agents share this working tree and can compile each other's half-finished
-edits.
+changes to `ui/` would conflict, each compiling against the other's
+half-finished edits.
 
 ### Phase 1 — a pointer that stays down
 
