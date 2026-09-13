@@ -177,10 +177,10 @@ UNITY_OBJ="$BUILD_DIR/unity.o"
 #
 # --wrap routes the suite's own allocations into heap_arena.c's device-sized
 # arena, so a fixture that asks for more than the board has fails HERE
-# rather than after a flash. Only this runner defines HOST_HEAP_ARENA: the
-# firmware and perf_probe compile the same timing.c with every arena line
-# preprocessed out, which is why the hooks had to be behind one macro rather
-# than merely unused. Note that libc-internal allocations do not route
+# rather than after a flash. Only this runner defines HOST_HEAP_ARENA: any
+# other build compiling the same timing.c gets every arena line preprocessed
+# out, which is why the hooks had to be behind one macro rather than merely
+# unused. Note that libc-internal allocations do not route
 # through --wrap at all (a pointer from strdup() arrives at __wrap_free
 # never having been seen by __wrap_malloc), which is why the arena forwards
 # pointers it does not own instead of trusting every free().
@@ -281,8 +281,7 @@ fi
 if [ -z "$(find "$SU_DIR" -maxdepth 1 -name '*.su' -print -quit)" ]; then
     echo "no .su stack-usage files were produced by $CC_BIN - it may not" >&2
     echo "support -fstack-usage. This gate exists to catch test fixtures" >&2
-    echo "that would panic-loop the device (see docs/sand/" >&2
-    echo "Performance-Tuning-Attempts.md); refusing to silently pass." >&2
+    echo "that would panic-loop the device; refusing to silently pass." >&2
     exit 1
 fi
 

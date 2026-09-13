@@ -236,9 +236,9 @@ void sand_clear(sand_t* s);
 void sand_track_dirty_rows(sand_t* s, uint8_t* rows);
 
 /* Skip settled BLOCKS entirely - without this, a settled grain still fails
- * its gravity-ward move and both slides, every step, to conclude nothing;
- * see docs/sand/Simulation-Lessons.md. `blocks` is caller-owned,
- * ceil(w/SAND_BLOCK_W) * ceil(h/SAND_BLOCK_H) bytes, one flag per block.
+ * its gravity-ward move and both slides, every step, to conclude nothing.
+ * `blocks` is caller-owned, ceil(w/SAND_BLOCK_W) * ceil(h/SAND_BLOCK_H)
+ * bytes, one flag per block.
  * NULL disables sleeping. A shake, a gravity change, or sand landing in a
  * block wakes it. */
 void sand_enable_sleeping(sand_t* s, uint8_t* blocks);

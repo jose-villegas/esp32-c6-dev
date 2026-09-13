@@ -5,8 +5,8 @@
  * Everything here (and everything in heap_arena.c) is compiled in ONLY when
  * HOST_HEAP_ARENA is defined - see heap_arena.c's own top comment for why.
  * That means this header is safe to include unconditionally, but timing.c
- * still guards the #include itself: it costs nothing and keeps the device
- * build and perf_probe from ever resolving this path at all.
+ * still guards the #include itself: it costs nothing and keeps any other
+ * build compiling timing.c from ever resolving this path at all.
  */
 #ifdef HOST_HEAP_ARENA
 
