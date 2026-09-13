@@ -23,8 +23,8 @@ the sections they point to.
 
 ### The work and what blocks what
 
-Beads issue ids in brackets; solid arrows are dependencies, dotted ones
-are "helps but does not block". Phase numbers match section 6.
+Solid arrows are dependencies, dotted ones are "helps but does not
+block". Phase numbers match section 6.
 
 ```mermaid
 flowchart LR
@@ -37,55 +37,55 @@ flowchart LR
   classDef side fill:#adb5bd,color:#000,stroke:none
 
   subgraph P0["Phase 0 - attribution"]
-    e6c["Frame-time row<br/>sim + draw + present [e6c]"]:::p0
-    ems1["Cube perf at -O2,<br/>cycles per covered pixel [ems.1]"]:::p0
+    frameTime["Frame-time row<br/>sim + draw + present"]:::p0
+    cubePerf["Cube perf at -O2,<br/>cycles per covered pixel"]:::p0
   end
   subgraph P1["Phase 1 - bus and overlap"]
-    kfg["80 MHz QSPI<br/>root cause [kfg]"]:::p1
-    i91["Present pipelining<br/>for sand [91i]"]:::p1
-    ems2["Band-mode framebuffer:<br/>2-band ring, per-band z,<br/>mode request at enter() [ems.2]"]:::p1
-    rpt["Resolution / colour<br/>system settings [rpt]"]:::p1
+    busRoot["80 MHz QSPI<br/>root cause"]:::p1
+    presentPipe["Present pipelining<br/>for sand"]:::p1
+    bandMode["Band-mode framebuffer:<br/>2-band ring, per-band z,<br/>mode request at enter()"]:::p1
+    resSettings["Resolution / colour<br/>system settings"]:::p1
   end
   subgraph P2["Phase 2 - r3d"]
-    xnq["Extract S3L transform<br/>from boot_anim [xnq]"]:::side
-    ems3["Span rasterizer, binning,<br/>ordering table, colormap [ems.3]"]:::p2
+    s3lExtract["Extract S3L transform<br/>from boot_anim"]:::side
+    rasterizer["Span rasterizer, binning,<br/>ordering table, colormap"]:::p2
   end
   subgraph G["Phases 3-5 - the games"]
-    ems4["Raycaster + FPS [ems.4]"]:::game
-    ems5["Rolling ball [ems.5]"]:::game
-    ems6["Platformer: sand world first,<br/>tiles + sim windows next [ems.6]"]:::game
+    raycaster["Raycaster + FPS"]:::game
+    rollingBall["Rolling ball"]:::game
+    platformer["Platformer: sand world first,<br/>tiles + sim windows next"]:::game
   end
-  ems7["S3 port [ems.7]"]:::port
-  ems8["Host render harness<br/>frame -> .bmp diff [ems.8]"]:::side
-  ems9["Level editor: material<br/>blocks, bake [ems.9]"]:::side
-  ems10["Materials + reactions<br/>as baked data [ems.10]"]:::side
-  ems11["Sand core as an instance:<br/>any size, several alive [ems.11]"]:::side
-  iu5["Reaction pair-matrix [iu5]"]:::side
-  v10["Tilt / shake library [1v0]"]:::side
-  fyq["Sand perf round 5 [fyq]"]:::side
+  s3Port["S3 port"]:::port
+  hostHarness["Host render harness<br/>frame -> .bmp diff"]:::side
+  levelEditor["Level editor: material<br/>blocks, bake"]:::side
+  materialData["Materials + reactions<br/>as baked data"]:::side
+  sandInstance["Sand core as an instance:<br/>any size, several alive"]:::side
+  reactionMatrix["Reaction pair-matrix"]:::side
+  tiltShake["Tilt / shake library"]:::side
+  sandPerf5["Sand perf round 5"]:::side
 
-  e6c --> kfg
-  e6c --> i91
-  e6c --> ems2
-  rpt --> ems2
-  ems2 --> ems3
-  xnq --> ems3
-  ems2 --> ems4
-  v10 --> ems4
-  ems3 --> ems5
-  v10 --> ems5
-  ems9 --> ems6
-  ems10 --> ems6
-  ems11 --> ems6
-  v10 --> ems6
-  iu5 --> ems10
-  ems2 -.->|scrolling track| ems6
-  ems3 --> ems7
-  fyq --> v10
-  ems8 -.-> ems3
-  ems8 -.-> ems9
-  kfg -.-> ems4
-  i91 -.-> ems6
+  frameTime --> busRoot
+  frameTime --> presentPipe
+  frameTime --> bandMode
+  resSettings --> bandMode
+  bandMode --> rasterizer
+  s3lExtract --> rasterizer
+  bandMode --> raycaster
+  tiltShake --> raycaster
+  rasterizer --> rollingBall
+  tiltShake --> rollingBall
+  levelEditor --> platformer
+  materialData --> platformer
+  sandInstance --> platformer
+  tiltShake --> platformer
+  reactionMatrix --> materialData
+  bandMode -.->|scrolling track| platformer
+  rasterizer --> s3Port
+  sandPerf5 --> tiltShake
+  hostHarness -.-> rasterizer
+  hostHarness -.-> levelEditor
+  busRoot -.-> raycaster
+  presentPipe -.-> platformer
 ```
 
 ### Where a frame's time goes, today and in band mode
@@ -304,9 +304,8 @@ The two numbers to carry in your head for the C6:
 
 Nothing measures the frame a user sees: every sand budget row times
 `sand_step()` alone, the present-cost rows time the bus alone, and the cube
-has no checked-in numbers at all. The existing issue **esp32c6-e6c** ("a
-real frame-time row: sim + draw + present") is the prerequisite for
-everything in this document, and it says so itself. Add to it:
+has no checked-in numbers at all. A real frame-time row — sim + draw +
+present — is the prerequisite for everything in this document. Add to it:
 
 - Run `suite_cube_perf.c` on the device under the current `-O2` build and
   check the report in (all four variants: baseline, no HUD, no partial,
@@ -316,7 +315,7 @@ everything in this document, and it says so itself. Add to it:
   The `frame_x0..y1` bbox already accumulated in `shade_pixel()` is a
   coarse proxy; a counter behind `CONFIG_LAUNCHER_DEVELOPMENT` is exact.
 
-### 3.2 Halve the bus (esp32c6-kfg)
+### 3.2 Halve the bus
 
 At 40 MHz a full frame is 17.6 ms; at 80 MHz it measured 9.6 ms before the
 corner corruption sent it back. The open issue lists the untried knobs:
@@ -331,10 +330,10 @@ risk, and the single largest fixed cost on the board goes from 17.6 to
 
 Today `gfx_present()` is synchronous: `main.c` calls `frame()`, then
 present, which drains every queued DMA transfer before returning
-(`gfx.c:1794-1796`). The CPU idles for the whole 17.6 ms. Issue
-**esp32c6-91i** proposes overlapping the next sim step with the transfer
-for the sand app. For a 3D renderer the same idea goes further, and it is
-the one architectural change this roadmap asks for:
+(`gfx.c:1794-1796`). The CPU idles for the whole 17.6 ms. Overlapping the
+next sim step with the transfer fixes this for the sand app. For a 3D
+renderer the same idea goes further, and it is the one architectural
+change this roadmap asks for:
 
 **Band-mode rendering.** Transform and light the scene once, bin triangles
 into the seven 64-row bands (or fourteen 32-row ones), then rasterize band
@@ -363,9 +362,9 @@ The transaction overhead of more bands is known: ~118 µs per
 frame against ~180 KB of extra RAM — worth it for a 3D app, measure it.
 
 **What this does to rule 1 ("exactly one framebuffer").** The rule stays,
-its *shape* becomes a mode owned by gfx, which is exactly where issue
-**esp32c6-rpt** (resolution and colour mode as system settings) already
-lands: the framebuffer's geometry and pixel format become runtime state,
+its *shape* becomes a mode owned by gfx, which is exactly where
+resolution and colour mode as system settings already lands: the
+framebuffer's geometry and pixel format become runtime state,
 an app declares what it needs at `enter()` (layout: full-fb or bands;
 resolution: full or half), gfx grants it subject to the system-wide
 maximum-resolution setting and reallocates, and `exit()` restores. Sand
@@ -451,9 +450,8 @@ bake-time work:
   the per-span start values and deltas), then fill spans in a tight loop
   the compiler can see whole. small3dlib's design is a callback per pixel
   with barycentrics recomputed per pixel — good for a teaching library,
-  wrong for this budget. Keep its transform half (issue **esp32c6-xnq**
-  extracts exactly that family out of `boot_anim.h`); replace the
-  rasterizer.
+  wrong for this budget. Keep its transform half (extracting exactly
+  that family out of `boot_anim.h`); replace the rasterizer.
 - **Step, don't interpolate.** Gouraud becomes three adds per pixel (or
   one add on a packed 5-6-5 accumulator with guard bits) instead of nine
   multiplies. Affine texture mapping becomes two adds and one load.
@@ -505,12 +503,12 @@ bake-time work:
 
 All from the playbook and the sand campaign, restated because a new
 renderer will hit every one of them: verify inlining with `objdump`, never
-trust the attribute (issue **esp32c6-e72** automates it); keep the hot loop
-under the 32 KB icache and pin it with `aligned(32)`; no 64-bit divides,
-no signed divides by powers of two; a unity build for cross-file inlining
-(**esp32c6-pm6**) if the rasterizer spans files; host numbers predict
+trust the attribute (an automated check for this is worth adding); keep
+the hot loop under the 32 KB icache and pin it with `aligned(32)`; no
+64-bit divides, no signed divides by powers of two; a unity build for
+cross-file inlining if the rasterizer spans files; host numbers predict
 code-shape changes well and work-quantity changes badly; and the RTOS tick
-and input tasks are a small, measurable tax (**esp32c6-bsc**). Allocate
+and input tasks are a small, measurable tax. Allocate
 everything an app needs once at `enter()` and free it at `exit()` — the
 repo's "app exclusivity" convention and every MCU renderer's "allocate at
 startup, never again" advice are the same rule.
@@ -541,8 +539,8 @@ buys at 60 fps:
 - Floor and ceiling casting is the expensive optional: per-pixel affine
   on horizontal spans. Start with flat colours and a dithered distance
   gradient; add real floor texturing once the numbers say there is room.
-- Gyro drives look (the tilt/shake library extraction, **esp32c6-1v0**,
-  is the prerequisite); the two buttons move and act. Touch can be an
+- Gyro drives look (the tilt/shake library extraction is the
+  prerequisite); the two buttons move and act. Touch can be an
   on-screen stick if two buttons prove too few.
 
 Band mode fits a raycaster naturally: columns are independent, so
@@ -629,19 +627,19 @@ keeps every present cheap in a fixed-camera room.
   flash. A level editor draws the rectangles, previews through the *real*
   compiled sand code on the host — the boot animation editor already does
   exactly this — and bakes the level to a header with the regenerate
-  command in its banner (esp32c6-ems.9). Entity spawns and event
-  triggers are records in the same list.
+  command in its banner. Entity spawns and event triggers are records in
+  the same list.
 - **Materials and reactions are data, not scripts.** A script per cell
   per step is two orders of magnitude over budget, and a Lua-sized VM
   does not fit beside the framebuffer. The form that works is the one the
-  sand app is already converging on: the reaction pair matrix
-  (esp32c6-iu5) is a table, and density, flags, palettes, coverage ramps
-  and reaction entries are all table rows. A material definition is a
-  declarative record the editor writes and a generator bakes into those
-  tables, referencing a fixed set of C behaviours by id; a new behaviour
-  is one C case plus its exposure to the editor (esp32c6-ems.10).
-  Level logic (triggers, doors, spawns) is a small event table the same
-  way, never a general interpreter.
+  sand app is already converging on: the reaction pair matrix is a
+  table, and density, flags, palettes, coverage ramps and reaction
+  entries are all table rows. A material definition is a declarative
+  record the editor writes and a generator bakes into those tables,
+  referencing a fixed set of C behaviours by id; a new behaviour is one
+  C case plus its exposure to the editor. Level logic (triggers, doors,
+  spawns) is a small event table the same way, never a general
+  interpreter.
 - **Rooms, not smooth scrolling.** One screen of cells is 41 KB; the
   automaton runs over whatever is visible. Fixed rooms (Celeste-style
   screens) keep one grid, keep dirty tracking working, and match the
@@ -733,7 +731,7 @@ both, for different jobs:
 - **Compositing.** Scrolling: every frame is full, so the draw is
   `draw(instance, band, clip, offset)` per band for each overlapping
   window — the band pipeline of 3.3. Rooms: the row-run dirty path as
-  today. Same instance type, two draw paths (esp32c6-ems.11).
+  today. Same instance type, two draw paths.
 - **Budget, estimates.** A 48×48 window is ~2,300 cells: from the sand
   app's ~5.5 ms worst case for 41,216 cells, ~0.3 ms per step fully
   active and near zero asleep, so a dozen live windows are a few
@@ -778,8 +776,8 @@ offset, scale)` taking it as a parameter, several instances alive at
 once, and the boundary supplied by the host (a room's edges, a tile
 mask). The host test grids already run at other sizes, so the core is
 closer to this than the app is; the work is making it explicit and
-keeping the byte-identical fingerprint for the sand app itself
-(esp32c6-ems.11). Once that exists, Track B is one full-screen instance,
+keeping the byte-identical fingerprint for the sand app itself. Once
+that exists, Track B is one full-screen instance,
 Track C is many small ones, and the same materials, reactions, editor
 and baked data serve both.
 
@@ -805,15 +803,15 @@ platform/   board bring-up, display bus, input devices, timers, memory caps
 gfx/        framebuffer or band buffers, present, primitives, dirty tracking
             (today's gfx.c minus the driver, plus band mode)
 core/       fixed.h, intmath.h, rng.h, tween.h, an arena allocator,
-            the authored-timeline system graduated from boot_anim (esp32c6-do5)
+            the authored-timeline system graduated from boot_anim
 sim/        the sand automaton as an instance: any size, several alive, host
             boundary mask; materials and reactions as baked data; block
             sleeping (today: apps/sand/ minus app_sand.c)
 render/     r2d: tiles, line scroll, sprites, blits, sim-window compositing,
             collision against tiles or a sim grid, colormap lighting
-            r3d: transform/clip (from small3dlib via esp32c6-xnq), bin, spans, z
+            r3d: transform/clip (from small3dlib), bin, spans, z
             rc:  raycaster
-game/       physics, entities, tilt/shake (esp32c6-1v0), level/event tables
+game/       physics, entities, tilt/shake, level/event tables
 tools/      editors that render through the real C on the host and bake
             (boot anim today; levels and materials next)
 apps/       the games, each a folder, APP_REGISTER, no other file touched
@@ -848,20 +846,18 @@ Principles, each of which is already a repo habit:
 ## 6. Phases, with the gate each one has to pass
 
 Each phase ends when its number is measured on the device and checked
-in. The tracker side is beads epic **esp32c6-ems** ("Autana rendering
-roadmap"), whose children are the phases that had no issue before this
-document; pre-existing issues are named where they apply.
+in.
 
 | Phase | Work | Gate (measured, on device) |
 |---|---|---|
-| **0. Attribution** | esp32c6-e6c frame-time row; esp32c6-ems.1 re-run `suite_cube_perf` at `-O2` and check the report in, plus a cycles-per-covered-pixel counter | A table replacing the stale 15.5 fps figures |
-| **1. Bus and overlap** | esp32c6-kfg (80 MHz root cause); esp32c6-91i (present pipelining) for sand; esp32c6-ems.2 **band mode** in gfx with a 2-band ring + optional per-band z; the mode switch from esp32c6-rpt | Full-frame present ≤ 10 ms; cube in band mode at ≥ 50 fps or bus-capped, whichever is lower |
-| **2. r3d v1** | esp32c6-ems.3 own span rasterizer: flat, Gouraud, affine texture, colormap lighting; transform/clip via esp32c6-xnq; triangle binning; half-res mode | ≥ 60 fps on a 500-triangle textured scene at half-res (bus permitting: needs 80 MHz or interlace), ≥ 30 at full; cycles/pixel ≤ 16 for flat, ≤ 24 textured |
-| **3. Raycaster and the FPS prototype** | esp32c6-ems.4 `render/rc`, column-major textures, per-column depth sprites, gyro look via esp32c6-1v0, buttons move | 60 fps full-res walls + sprites, playable on the glass |
-| **4. Rolling ball** | esp32c6-ems.5 heightfield mesh on r3d, lit-disc ball, 2.5D fixed-point physics, gyro gravity | 30+ fps full-res, physics stable at dt 16–33 ms |
-| **5. Platformer, two tracks and the mix** | esp32c6-ems.11 sand core as an instance (size-agnostic, several alive, host-supplied boundary); esp32c6-ems.6 Track B first: sprite + collision layer over the automaton, rooms, per-block lighting; esp32c6-ems.9 level editor; esp32c6-ems.10 materials as baked data; then Track A tiles + line scroll in band mode and Track C sim windows over tiles | Track B: ≥ 30 fps in a playable room with the automaton live, zero bands sent when nothing moves. Track A/C: 60 fps scrolling with three layers and a dozen live sim windows |
-| **6. S3 port** | esp32c6-ems.7 `platform/esp32s3`, PSRAM full-frame double buffer, present on core 1, FPU/PIE fast paths behind the same interfaces | Same three games, same tests, on the second board |
-| **Throughout** | graduate boot-anim tech (esp32c6-do5, esp32c6-xnq); esp32c6-ems.8 host render harness; inlining-cliff gate (esp32c6-e72) | Every graduated piece has a second consumer and a reference test |
+| **0. Attribution** | Real frame-time row (sim + draw + present); re-run `suite_cube_perf` at `-O2` and check the report in, plus a cycles-per-covered-pixel counter | A table replacing the stale 15.5 fps figures |
+| **1. Bus and overlap** | 80 MHz QSPI root cause; present pipelining for sand; **band mode** in gfx with a 2-band ring + optional per-band z; the mode switch from resolution/colour system settings | Full-frame present ≤ 10 ms; cube in band mode at ≥ 50 fps or bus-capped, whichever is lower |
+| **2. r3d v1** | Own span rasterizer: flat, Gouraud, affine texture, colormap lighting; transform/clip extracted from boot_anim; triangle binning; half-res mode | ≥ 60 fps on a 500-triangle textured scene at half-res (bus permitting: needs 80 MHz or interlace), ≥ 30 at full; cycles/pixel ≤ 16 for flat, ≤ 24 textured |
+| **3. Raycaster and the FPS prototype** | `render/rc`, column-major textures, per-column depth sprites, gyro look via the tilt/shake library, buttons move | 60 fps full-res walls + sprites, playable on the glass |
+| **4. Rolling ball** | Heightfield mesh on r3d, lit-disc ball, 2.5D fixed-point physics, gyro gravity | 30+ fps full-res, physics stable at dt 16–33 ms |
+| **5. Platformer, two tracks and the mix** | Sand core as an instance (size-agnostic, several alive, host-supplied boundary); Track B first: sprite + collision layer over the automaton, rooms, per-block lighting; level editor; materials as baked data; then Track A tiles + line scroll in band mode and Track C sim windows over tiles | Track B: ≥ 30 fps in a playable room with the automaton live, zero bands sent when nothing moves. Track A/C: 60 fps scrolling with three layers and a dozen live sim windows |
+| **6. S3 port** | `platform/esp32s3`, PSRAM full-frame double buffer, present on core 1, FPU/PIE fast paths behind the same interfaces | Same three games, same tests, on the second board |
+| **Throughout** | Graduate boot-anim tech (the authored-timeline system, the S3L transform extraction); host render harness; inlining-cliff gate | Every graduated piece has a second consumer and a reference test |
 
 Phase 0 is a week of measurement and no shipping code. Phases 1 and 2 are
 the investment: they are where the architecture changes, and every game
@@ -896,7 +892,7 @@ cheapest path to something that is unmistakably a game.
 1. ~~Half-res as the default for 3D apps?~~ **Decided 2026-09-04: a
    per-app choice, under a system-wide maximum.** Each app declares the
    resolution it wants at `enter()`; the shell carries a configurable
-   "max resolution" setting (Settings app, esp32c6-rpt) that caps what
+   "max resolution" setting (Settings app) that caps what
    any app gets, so the same firmware can be dialled down for battery or
    heat without touching an app. gfx resolves the effective mode as
    min(app request, system max) and pixel-doubles on the way out when
@@ -915,8 +911,8 @@ cheapest path to something that is unmistakably a game.
 4. ~~Own rasterizer vs. deeper small3dlib configuration.~~ **Decided
    2026-09-04: own rasterizer.** The seam: copy small3dlib's vector,
    matrix, projection and clipping routines into `render/r3d` under this
-   repo's fixed-point conventions (the same move esp32c6-xnq makes for
-   the boot animation's helpers), and write the rasterizer, binning and
+   repo's fixed-point conventions (the same move made for the boot
+   animation's helpers), and write the rasterizer, binning and
    ordering table fresh. Everything in `S3L_drawTriangle` that fights the
    budget is structural, not a knob: barycentrics computed for every
    pixel even when flat, a per-pixel callback bound at include time (one
@@ -937,7 +933,7 @@ cheapest path to something that is unmistakably a game.
    A (tiles, scrolling, line scroll) stays a full option; Track C (the
    automaton as windowed VFX and destructible terrain over tiles) is the
    direction to explore. All three need the sand core to become an
-   instance (section 4.3, esp32c6-ems.11).
+   instance (section 4.3).
 
 ---
 
@@ -946,11 +942,11 @@ cheapest path to something that is unmistakably a game.
 The workflow here is that a planning model writes the issue, an
 implementing model builds it, and a reviewing model checks it, each in a
 fresh session with no memory of this conversation. So the document and
-the beads issues are the whole contract. Rules for each role:
+the issue are the whole contract. Rules for each role:
 
 **Implementer (one issue at a time):**
 
-1. Read the issue's `bd show` in full, including its notes, then only the
+1. Read the issue in full, including its notes, then only the
    sections of this document it names, the three rules in
    [Launcher-Architecture.md](Launcher-Architecture.md), and
    [Optimization-Playbook.md](notes/Optimization-Playbook.md). Nothing
@@ -971,9 +967,9 @@ the beads issues are the whole contract. Rules for each role:
 6. Do not reopen a settled decision (section 8). If the work shows one is
    wrong, append the evidence to the issue and stop; changing it is the
    planner's call. Do not widen scope into a neighbouring phase.
-7. Leave the trail: a `bd update --append-notes` with what was measured,
-   what was tried and rejected, and what the next issue needs to know.
-   Update the docs the change makes wrong in the same commit.
+7. Leave the trail: record what was measured, what was tried and
+   rejected, and what the next issue needs to know. Update the docs the
+   change makes wrong in the same commit.
 
 **Reviewer:**
 
@@ -1007,5 +1003,5 @@ the beads issues are the whole contract. Rules for each role:
   code-shape rules a new renderer will hit.
 - [notes/Board-and-Memory.md](notes/Board-and-Memory.md) — the memory
   budget band mode is designed against.
-- [Settings-App-Plan.md](plans/Settings-App-Plan.md) and beads esp32c6-rpt — the
+- [Settings-App-Plan.md](plans/Settings-App-Plan.md) — the
   mode switch the framebuffer geometry lands in.

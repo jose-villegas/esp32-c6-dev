@@ -267,5 +267,3 @@ formula:
   exact case `sand_displace()` was split out of `sand_explode()` for
   (steam must not ignite anything just because it pushed a wall), not yet
   wired to a trigger.
-
-See the beads tracker for current status on these.

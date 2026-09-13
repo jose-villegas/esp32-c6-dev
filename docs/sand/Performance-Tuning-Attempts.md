@@ -96,8 +96,8 @@ never merged; `git show` still works once that branch is fetched, or
   19.3% of cells were provably skippable and skipping them measured
   −0.1%, because the cells were already cheap to fall through. It also
   went stale mid-pass against flags armed during the same pass.
-  **The −0.1% is a HOST number and this entry is now in doubt** (bd
-  esp32c6-vk4, 2026-09-07): the host was measured understating executed
+  **The −0.1% is a HOST number and this entry is now in doubt**
+  (2026-09-07): the host was measured understating executed
   work by 2–6.6×, and round 6 shipped a change the host called +1% that
   the device paid −7.4% for. The staleness objection stands on its own
   and is reason enough not to rebuild this *as designed* — but "skipping
@@ -274,7 +274,7 @@ never merged; `git show` still works once that branch is fetched, or
   change it. Behaviour: 32×32 is fingerprint-identical on all 17 rows;
   16×32 moves `snow_crust` alone, by one cell.
 
-  **16×32 shipped** (attempt 21, bd `esp32c6-pyv`), on the maintainer's
+  **16×32 shipped** (attempt 21), on the maintainer's
   judgement that a settled board has no motion for the extra 59 µs to lag.
   A second, independent capture reproduced the trade to within a point —
   landscape sand −54.5%, wet earth −34.9%, campfire −35.7%, snowfall

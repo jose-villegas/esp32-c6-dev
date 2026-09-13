@@ -27,7 +27,7 @@ Two rules cut across all of them:
 ## Turning the gates on
 
 Gates are **scaffolding**. They go in to answer one question, the answer goes
-in bd and the commit message, and they come out before the round ships — see
+in the commit message, and they come out before the round ships — see
 "Retiring the instrumentation" below. What is permanent is this section.
 
 ### And skip the restore, which is most of the wait
@@ -63,7 +63,7 @@ it as a normal board again.
 
 A full diagnostics image compiles all 48 suites, and their static RAM had
 left the "one grid fits after POST" gate 64 bytes of headroom — one added
-decomposition row costs 272 bytes and fails the build (bd esp32c6-iqx). Take
+decomposition row costs 272 bytes and fails the build. Take
 every capture of a round perf-scoped and the instrumentation has somewhere to
 live:
 
@@ -82,7 +82,7 @@ It is also a *better* instrument, not merely a roomier one: a smaller image
 sits closer to release layout, so its numbers carry less of the ±6.7% link
 spread. It is **not** because the sim is fetch-bound — that claim stood here
 until the cache counters below measured 89 instruction misses in a 2.3
-million cycle water step (bd esp32c6-vk4).
+million cycle water step.
 
 **Scope every capture of one round the same way.** A scoped and an unscoped
 image are different layouts, so the within-capture rule below does not merely
@@ -162,7 +162,7 @@ how many instructions it runs.
 every other instrument reports are cycles / 160 with no correction.
 
 The counters also attribute a candidate where wall-clock cannot. Handing
-cross-flow's probes their rows (PR for bd `esp32c6-61h`) moved water by −581
+cross-flow's probes their rows moved water by −581
 µs; the counters on the same pair of images read −93,120 cycles, which is
 −582 µs, and −85,680 fetches. Cycles fell 1.09 per fetch removed. A layout
 accident cannot produce that agreement.
@@ -315,8 +315,9 @@ if (!found) { barren++; }      /* it looked, and there was nothing */
 **It says WHETHER, never HOW MUCH.** Acid rain's quad test was entered 204,247
 times in a run and found nothing every single time; removing all of it
 measured **1.6%** on device. The counter was right that the work was
-removable and silent on what it was worth. Third time measured — see bd
-`esp32c6-u2g`, where counters halved and the device gave 2.5%. Use it to
+removable and silent on what it was worth. Third time measured — the
+cross-flow alternating-sweep removal, where counters halved and the
+device gave 2.5%. Use it to
 choose *what* to build, never to claim a number.
 
 Run a scene on the host and read the ratio.
@@ -363,7 +364,7 @@ block-size sweep has always been decided on: a smaller block skips a busy board
 more finely and scans more blocks on a still one, and only the still board
 carries the second half. So the half of the trade that argues AGAINST a small
 block is exactly the half the host cannot see, and a shape ranked on the host
-alone will always come back "smaller is better" (bd `esp32c6-1z6`).
+alone will always come back "smaller is better".
 
 Any row whose device figure is in the tens of microseconds belongs on the
 device, not in a host ranking.
@@ -512,14 +513,13 @@ Nor is smaller faster. `step_one_reacting_row` went from 9,340 to 8,410 bytes
 hardest measured 0.5–1.4% **slower**, on boards holding none of the materials
 the change touched. Instruction count, register pressure and gross layout were
 all excluded; what moved was the function's offset within a 32-byte cache
-line. Size is not the variable (bd `esp32c6-vk4`).
+line. Size is not the variable.
 
 **An identical fingerprint proves nothing until the oracle reaches the new
 path.** Mutate the grid *inside* the new branch and confirm `--check` moves. It
 did not for a `conduct_heat` guard, nor for the tilted row skip — in the second
 case because `grid_fingerprint.c` pins gravity to `(0, 1000)` for all six of
-its scenes, so no fingerprint scene can reach `py != 0` at all (bd
-esp32c6-rhu).
+its scenes, so no fingerprint scene can reach `py != 0` at all.
 
 ## Retiring the instrumentation
 

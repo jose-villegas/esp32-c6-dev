@@ -207,7 +207,7 @@ When checking memory live rather than at link time, compare
 `heap_caps_get_free_size(MALLOC_CAP_DMA)`, never against
 `esp_get_free_heap_size()` — that sums a second, physically separate DMA
 region no large allocation can ever use, manufacturing a "fragmentation"
-gap that was actually 12 bytes (beads esp32c6-8h2).
+gap that was actually 12 bytes.
 
 ---
 

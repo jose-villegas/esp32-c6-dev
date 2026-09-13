@@ -121,7 +121,7 @@ Two constraints bound every answer below:
 Each phase is one PR, lands green, and is useful on its own. Phases 1–4 all
 touch `launcher/main/ui/`, so they are **run one at a time** — concurrent
 agents share this working tree and can compile each other's half-finished
-edits (bd `esp32c6-trf`).
+edits.
 
 ### Phase 1 — a pointer that stays down
 

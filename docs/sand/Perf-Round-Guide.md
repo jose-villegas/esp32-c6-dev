@@ -150,7 +150,8 @@ fed from the device profile) and gates test-code stack frames against the
 before a capture is ever spent on them - see the Testing Guide's "The host
 runner enforces two of the device's limits". Supposed to: the arena starts
 from a clean process, so it does not model fragmentation inherited from the
-rest of a real boot, and `bd esp32c6-e82`'s device allocation failures do
+rest of a real boot, and the known device allocation failures — block-
+indices tests that cannot allocate under low free memory — do
 not reproduce on it. Still check the free-heap line in the capture.
 
 **A healthy suite is SLOW, and that is the correct sign.** While the
@@ -183,7 +184,7 @@ host can see is flash placement against the 32 KB instruction cache. The
 route to that number, once a QEMU with TCG plugins exists, is sketched and
 half-built in `launcher/tools/oracle/`.
 
-### The one class where a host null means nothing (bd esp32c6-vk4)
+### The one class where a host null means nothing
 
 **A change that stops EXECUTING work can measure zero on the host and win
 several percent on the device.** Not a magnitude error - a sign error. The
@@ -253,8 +254,8 @@ python launcher/main/apps/sand/tools/perf_probe/run_probe.py out/probe \
 ```
 
 This is the one host harness - do not build another one. Two per-round
-copies of this already accumulated in this tree days apart (bd
-esp32c6-o2s) before being merged back into this single directory; if a
+copies of this already accumulated in this tree days apart
+before being merged back into this single directory; if a
 scene you need isn't in `--list`, add a `SAND_HOST_PROBE` wrapper next to
 its test body in the relevant `suite_sand_*.c` file and a row in
 `perf_probe/probe_main.c`'s own scene table, rather than standing up a new
@@ -274,7 +275,8 @@ does not get read as a win.
 
 Host wall-clock timing carries a 7-15% cross-binary noise floor - two
 separately-linked host binaries of the SAME source disagree by that much
-before either one has changed anything. bd esp32c6-8zx hit this chasing a
+before either one has changed anything. The 2026-09-06 baseline-regression
+chase hit this chasing a
 sub-20% water regression: the liquid-free control moved MORE between two
 builds than the effect being chased, so no amount of extra host timing
 rounds could ever resolve the question. Counting the actual work instead -
@@ -310,8 +312,9 @@ answer that exactly. They do not answer *what it costs*. They count work
 items; the device charges cycles, and the exchange rate between the two is
 not something a count can tell you.
 
-bd esp32c6-u2g is the worked example. Restoring cross-flow's pre-attempt-14
-sweep order restored its counters to the digit - `find_shallowest` iterations
+The cross-flow sweep-order case is the worked example. Restoring
+cross-flow's pre-attempt-14 sweep order restored its counters to the
+digit - `find_shallowest` iterations
 89,734 -> 47,980, transfers 8,535 -> 4,190, exactly the old figures - against
 a scene where the pass decomposition had put cross-flow at 48.4% of device
 cost. That was written up as the water regression recovered. The device then
@@ -322,7 +325,7 @@ hiding under noise. Those iterations are simply cheap on this chip.
 
 Two things follow. The write-up rule: say "work halved, time unknown until
 measured", and do not name a cause in an issue until a capture has priced it -
-that mis-attribution sat on bd esp32c6-8zx for a day. The instrument rule:
+that mis-attribution sat on the baseline-regression chase for a day. The instrument rule:
 when the question is *where the time goes*, reach for
 `CONFIG_LAUNCHER_SAND_PASS_GATES` (`main/Kconfig.projbuild`) instead - one
 binary, five configurations, one capture, no layout difference between
@@ -332,10 +335,10 @@ price it.
 ### Verify both endpoints of a bisect window are actually measured
 
 Before spending anything INSIDE a window, confirm both ends of it were
-freshly measured rather than assumed. bd esp32c6-8zx picked an old bisect
-endpoint on the assumption a scene's cost was still what an earlier
-capture said, never re-verified it, and spent a full day attributing a
-window that turned out to contain no change at all - the real regression
+freshly measured rather than assumed. The baseline-regression chase
+picked an old bisect endpoint on the assumption a scene's cost was still
+what an earlier capture said, never re-verified it, and spent a full day
+attributing a window that turned out to contain no change at all - the real regression
 was in a different six-day span nobody had looked at yet.
 
 The counters caught this before anyone thought to question the window: a
@@ -384,7 +387,7 @@ bash launcher/main/apps/sand/tools/perf_probe/build_probe.sh out/probe
 RUN THE STATIC-RAM GATE TOO, whenever a round adds a scene or a suite.
 Every scene costs `.bss` in the full-scope diagnostics build, and the
 margin between that build and the "one real grid still fits" cliff has
-been as thin as 432 bytes (beads `esp32c6-bix`). Two things make a local
+been as thin as 432 bytes. Two things make a local
 reading lie: `check_static_ram.py --self-test` tests the script, not this
 tree, and a `build.diag` left configured for `--perf-scope` compiles one
 suite instead of all of them and reports thousands of bytes of headroom
@@ -457,7 +460,7 @@ sh scripts/verify-gate-strip.sh <gated-ref> <stripped-ref>
   has cost this campaign real time twice in one session; name the ref you
   expect and confirm the artifact actually says so before trusting it.
 - **The present-cost rows are far noisier than the frame-budget rows, and
-  the controls do not vouch for them.** In the esp32c6-u2g pair, whose two
+  the controls do not vouch for them.** In the cross-flow sweep-order pair, whose two
   frame-budget controls were byte-identical, the present-cost rows still
   swung -28.2%, -4.9% and +4.8% - on rows containing no liquid at all,
   against a one-file change to the liquid sweep. Read a present-cost delta
@@ -525,8 +528,8 @@ pass owns more than 44% of it). Build a pass-decomposition map like that
 one before designing anything, on any new failing scene — it has caught a
 wrong-pass experiment every time it's been skipped.
 
-Do this with the four `sand_step_gate_*` volatiles (`sand_priv.h`, bd
-esp32c6-8zx), not four separately-built stub-each-pass images: one binary,
+Do this with the four `sand_step_gate_*` volatiles (`sand_priv.h`),
+not four separately-built stub-each-pass images: one binary,
 five configurations (all passes on, then each disabled in turn) in ONE
 device capture, so there is zero layout difference between configurations
 to confound the comparison — the failure mode four separate images cannot
@@ -544,8 +547,7 @@ Open items, as of this file's writing:
 
 - **The dispatcher rung of the pair-matrix is unshipped** — the loop+switch
   shape is in the never-retry list; a different shape, plus the ordering
-  sweep that waits on it, lives on the `sand-pair-matrix` branch
-  (`bd esp32c6-iu5`).
+  sweep that waits on it, lives on the `sand-pair-matrix` branch.
 - **Water's remaining gap (−44%) is call volume, not code shape** —
   attempt 19's counters and null closed the layout line; the next water
   idea has to reduce the double touch (~11k grains × sweep + equalise per

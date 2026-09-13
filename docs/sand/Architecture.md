@@ -954,7 +954,7 @@ no new move. Anything that does change how a cell moves changes its
 instead was not free: it shook a solid ice block out of its column, and it
 put snow's crust rate - gated on `cell_settled()` - under
 `COLD_REWARM_PERIOD`, an unrelated thermal constant, moving the balance
-ceiling 9x (bd esp32c6-8ce).
+ceiling 9x.
 
 A settled block costs one comparison per step (`BLOCK_ACTIVE` check in
 `finalize_settling()`) instead of a full grain-by-grain sweep - this is
@@ -992,15 +992,15 @@ size).
 **Those six candidates were all W ≤ 32 and H ≥ 32** - no square and no
 transpose of any of them - and every scene they were judged on poured down
 grid +Y. The board is played landscape, where down is grid +X, so the search
-space could not have found a landscape answer (bd `esp32c6-1z6`).
+space could not have found a landscape answer.
 `block_size_sweep.ps1`'s list is now closed under transpose plus the square,
 and `block_size_prescreen.sh` beside it ranks the same candidates on the host
 first. Only `SAND_BLOCK_W` is constrained - a power of two, for the mask in
 `dest_rows_full()`, and no narrower than `SAND_LIQUID_SIGHT` for the
 invariant above; `SAND_BLOCK_H` is only ever divided by.
 
-That reopened sweep is what moved the shape from 32×64 to 16×32 (bd
-`esp32c6-pyv`, the "twenty-first attempt"). **W is the knob in both
+That reopened sweep is what moved the shape from 32×64 to 16×32 (the
+twenty-first attempt). **W is the knob in both
 orientations** - every block-level rejection spans along X in units of it -
 so every transpose lost and every narrower block won. The trade is explicit
 and one-way: every row where something MOVES got cheaper, and the two rows
