@@ -213,7 +213,7 @@ gfx_init(void) {
 
 #if CONFIG_LAUNCHER_DEVELOPMENT
     /* Framebuffer state post SD probe & panel bring-up; paired with HEAPMARK
-     * in main.c. See heap_mark() comment and bd esp32c6-8h2. */
+     * in main.c. See heap_mark() comment. */
     ESP_LOGI(TAG, "HEAPMARK %-18s free %6u largest %6u", "before framebuffer",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));

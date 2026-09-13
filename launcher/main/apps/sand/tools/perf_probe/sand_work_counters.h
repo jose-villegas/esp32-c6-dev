@@ -1,13 +1,13 @@
 /*
  * sand_work_counters - exact, deterministic per-pass work counts for the
- * liquid cross-flow path (bd esp32c6-8zx). Counting, not timing: a full day
+ * liquid cross-flow path. Counting, not timing: a full day
  * was lost attributing a device regression because host wall-clock timing
  * carries a 7-15% cross-binary noise floor that swamped the effect being
  * chased, while these counters proved bit-for-bit reproducible between two
  * builds of the same source and needed no device at all - see
  * docs/sand/Perf-Round-Guide.md's "Count, do not time" section.
  *
- * One field per counter named in bd esp32c6-8zx's attribution comments - the
+ * One field per counter named in this file's own attribution comments - the
  * set that actually separated a real regression from the noise, there. Every
  * field is a TOTAL across however many sand_step() calls the caller made,
  * not a per-step average: reset once before a scene and dump once after: the

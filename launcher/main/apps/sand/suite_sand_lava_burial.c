@@ -2,7 +2,7 @@
  * Portable suite: the falling-sand automaton - lava buried in stone - burial,
  * venting, and bursting.
  *
- * Split out of suite_sand.c (bd esp32c6 test-suite-refactor), which had grown
+ * Split out of suite_sand.c, which had grown
  * past 32,000 lines across 500+ tests. Shared fixtures and assertion helpers
  * live in suite_sand_common.{c,h} - see that header.
  */
@@ -46,7 +46,7 @@ test_lava_buried_in_stone_is_not_deleted(void) {
         }
     }
     sand_set(&s, W / 2, H / 2, CELL_MAKE(MAT_LAVA, MASS_MAX));
-    /* This scene puts a complete lid over the lava (bd esp32c6-mqt) -
+    /* This scene puts a complete lid over the lava -
      * pinned off so this test still isolates smothered()'s
      * own exemption, the thing it actually names, rather than flickering
      * on the unrelated burst roll every step this cell stays covered. */
@@ -65,7 +65,7 @@ test_lava_buried_in_stone_is_not_deleted(void) {
                                   "burning anything");
 }
 
-/* bd esp32c6-mqt: a lava cell with a complete gravity-relative lid
+/* A lava cell with a complete gravity-relative lid
  * (covered_at(), sand_priv.h) gets a tiny per-step chance to convert to
  * MAT_STONE and burst, reopening a sealed pool's crust so a pour keeps
  * reaching lava (cool_off_chain(), sand_reactions.c). sand_explode() fills
@@ -303,7 +303,7 @@ test_cover_primitive_matches_the_exhaustive_shape_table(void) {
     }
 }
 
-/* THE HEADLINE CASE - bd esp32c6-a2j: an INTERIOR cell of a lava pool
+/* THE HEADLINE CASE: an INTERIOR cell of a lava pool
  * wider than one cell and deeper than one cell, sealed only by a crust
  * directly above it, must still burst. Its left, right and below
  * neighbours are all more lava (KIND_LIQUID, which neighbor_smothers()

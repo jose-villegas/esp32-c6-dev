@@ -28,8 +28,8 @@
  * step_impulses(), because nothing has yet needed to drive one in isolation
  * - despite being equally pure, and despite a documented history of their
  * own two call sites disagreeing about what they compute (see
- * impulse_gravity_candidates()'s own comment in sand_impulse.c; bd
- * esp32c6-w2h), exactly what a direct test would have caught sooner. Move a
+ * impulse_gravity_candidates()'s own comment in sand_impulse.c),
+ * exactly what a direct test would have caught sooner. Move a
  * helper here when something actually needs to test it directly.
  */
 #pragma once
@@ -696,7 +696,7 @@ tick_decay(sand_t* s, uint8_t* row, int x, int y, cell_t* grain, uint8_t mat_id,
     return true;
 }
 
-/* Per-pass volatile gates (bd esp32c6-8zx, sand.c), default enabled,
+/* Per-pass volatile gates (sand.c), default enabled,
  * opt-in via CONFIG_LAUNCHER_SAND_PASS_GATES (dev-only). SCAFFOLDING,
  * removed by scripts/strip-pass-gates.py - volatile is load-bearing: an
  * #if would let the compiler delete the walk it guards.

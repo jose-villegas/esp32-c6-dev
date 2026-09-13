@@ -28,7 +28,7 @@
 #                   and applied to --build-only's build too: the diag image
 #                   carries only suite_sand_perf and the scene builders it
 #                   calls. Shorter run, and the static RAM a round's own
-#                   pass gates and probe rows need (bd esp32c6-iqx). Its
+#                   pass gates and probe rows need. Its
 #                   numbers compare only with other perf-scoped captures, so
 #                   scope every capture of one round the same way.
 #   COM_PORT        serial port the device is on. Default: COM3. Ignored
@@ -36,8 +36,8 @@
 #
 # This is glue, not a reimplementation: the whole validate+summarize+
 # verdict pipeline (free-heap check, the two control rows, compare_reports
-# --verdict) already lives in report_performance.sh - see bd esp32c6-s3z,
-# which added --baseline and --no-restore for exactly this caller. This
+# --verdict) already lives in report_performance.sh, whose --baseline and
+# --no-restore exist for this caller. This
 # script's only job is turning a git ref into a warm, ready checkout that
 # script can build+flash+capture from, and it calls that script rather
 # than duplicating any part of what it already does.
@@ -55,14 +55,13 @@
 #
 # WHERE: "$REPO_ROOT/.claude/capture-worktree", where REPO_ROOT is the
 # checkout that owns THIS script (two levels up: scripts/ -> repo root) -
-# deliberately NOT centralised at the primary checkout the way
-# launcher/tools/build_flash_select.sh places branch worktrees it creates.
-# That script centralises on purpose: it is routing to a checkout that
-# corresponds to one particular branch, and wants every session to find
-# the same one. This worktree corresponds to no branch at all - it is a
-# scratch build cache that gets re-detached to a different ref on every
-# call - and this project already runs most work inside per-session agent
-# worktrees that are sandboxed from touching files outside themselves (a
+# deliberately NOT centralised at the primary checkout the way a per-branch
+# worktree is. That placement makes sense when routing to a checkout that
+# corresponds to one particular branch, so every session finds the same one.
+# This worktree corresponds to no branch at all - it is a scratch build
+# cache that gets re-detached to a different ref on every call - and this
+# project already runs most work inside per-session agent worktrees that
+# are sandboxed from touching files outside themselves (a
 # real constraint, hit while writing this script: a worktree add outside
 # the invoking checkout was refused outright). A path relative to
 # REPO_ROOT keeps the cache inside whatever checkout is doing the work, so

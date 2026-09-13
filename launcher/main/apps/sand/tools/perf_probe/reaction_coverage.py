@@ -8,7 +8,7 @@ reporting fired slots against M - the total the material tables define.
 Built to answer a concrete question this session hit while attributing a
 perf round: the benchmark set turned out to cover 60 of 80 slots, and 16 of
 the missing 20 were the entire plant lifecycle - evidence a plants perf pass
-(bd esp32c6-71g) had been waiting for. It also proved the gunpowder fuse
+had been waiting for. It also proved the gunpowder fuse
 could never fire in the benchmark set, which turned out to be a missing
 sand_enable_impulses() call rather than scene geometry.
 

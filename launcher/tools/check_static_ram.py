@@ -9,7 +9,7 @@ Wired into launcher/CMakeLists.txt as a POST_BUILD step on the ELF target,
 so it runs for every variant (release, dev, diag) on every `idf.py build`,
 on a laptop, before anything is flashed.
 
-WHY THIS EXISTS (beads esp32c6-14a)
+WHY THIS EXISTS
 
 DIRAM is one pool behind .data/.bss AND the heap (see docs/notes/
 Board-and-Memory.md, "Static growth taxes the heap too"). The single
@@ -72,8 +72,8 @@ THE ARITHMETIC
   serve a large allocation (see APP_USABLE_DRAM_END above). Real
   fragmentation inside the main heap region, measured directly from a heap
   block map at the framebuffer moment, was 12 bytes - not the ~20 KiB this
-  constant used to be called "fragmentation" for (beads esp32c6-8h2,
-  closed as disproved). Re-peg by flashing a dev image and reading the
+  constant used to be called "fragmentation" for (closed as disproved).
+  Re-peg by flashing a dev image and reading the
   "HEAPMARK shell ready" line's largest-block figure against the usable
   heap and FRAMEBUFFER_BYTES.
 
@@ -321,7 +321,7 @@ def _fmt(n):
 
 
 def print_summary(gates):
-    print("static RAM gate (tools/check_static_ram.py, beads esp32c6-14a):")
+    print("static RAM gate (tools/check_static_ram.py):")
     print("  .dram0.data              %10s bytes" % _fmt(gates["dram_data_size"]))
     print("  .dram0.bss               %10s bytes" % _fmt(gates["dram_bss_size"]))
     print("  _heap_start              0x%08x" % gates["heap_start"])
@@ -531,7 +531,7 @@ def main(argv):
                     "framebuffer plus one sand grid still fit in the "
                     "device's contiguous DRAM heap. See this script's "
                     "module docstring for the full arithmetic and its "
-                    "provenance (beads esp32c6-14a).")
+                    "provenance.")
     parser.add_argument("--map", help="path to launcher.map")
     parser.add_argument("--self-test", action="store_true",
                          help="run the parser/arithmetic self-test on an "

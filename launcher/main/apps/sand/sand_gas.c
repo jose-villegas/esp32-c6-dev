@@ -335,8 +335,8 @@ step_one_gas_grain(sand_t* s, uint8_t* row, uint8_t* prow, uint8_t* arow, uint8_
          * static inline; the wrappers are extern in sand.c and exist for the
          * suite, which cannot reach a static. Calling them from here made every
          * gas grain pay a cross-translation-unit call with thirteen arguments -
-         * and the gas rise sweep is 49% of the app's most expensive scene
-         * (bd esp32c6-dp8). The main sweep already calls the _impl directly. */
+         * and the gas rise sweep is 49% of the app's most expensive scene.
+         * The main sweep already calls the _impl directly. */
         if (try_fall_or_scatter_impl(s, row, prow, arow, brow, x, y, w, rdx, rdy, rslide_a, rslide_b, grain, density,
                                      scatter)) {
             moved = true;

@@ -8,7 +8,7 @@
  * water and acid draining faster on stone and glass - live entirely at a read
  * site in sand_reactions.c with no reaction_t field to walk, so a human
  * documents those by hand outside the markers and an overwrite would delete
- * them on every regenerate (bd esp32c6-3mu). See
+ * them on every regenerate. See
  * docs/plans/Reaction-Doc-Generator-Plan.md for the design.
  *
  * A program and not a script over the text because material.c's tables are
@@ -1705,7 +1705,7 @@ emit_pairwise_table(void) {
         }
     }
 
-    /* Acid|Water and Acid|Oil (bd esp32c6-c3r): neither is a dissolve past
+    /* Acid|Water and Acid|Oil: neither is a dissolve past
      * the shared gate above, so hand-written here rather than walked - but
      * every number comes from sand.h's own #defines, not typed twice. */
     {

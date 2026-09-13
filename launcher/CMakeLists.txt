@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(launcher)
 
-# Static-RAM gate (beads esp32c6-14a): predicts, from the just-linked map
+# Static-RAM gate: predicts, from the just-linked map
 # file, whether the framebuffer and then one sand grid still fit in the
 # device's contiguous DRAM heap - the failure this catches previously
 # only showed up as a boot hang or dozens of on-device "Expected Non-NULL"

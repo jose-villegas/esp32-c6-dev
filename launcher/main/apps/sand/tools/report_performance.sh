@@ -23,7 +23,7 @@
 #   --perf-scope    build the PERF-SCOPED diag image: only suite_sand_perf
 #                   and the scene builders it calls are compiled in, so the
 #                   run is shorter and the freed static RAM is available for
-#                   a round's own pass gates and probe rows (bd esp32c6-iqx,
+#                   a round's own pass gates and probe rows (see
 #                   docs/Testing-Guide.md). Its numbers are NOT comparable
 #                   with an unscoped capture's - the layout differs - so
 #                   scope every capture of a round the same way.

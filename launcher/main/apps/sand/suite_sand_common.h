@@ -32,7 +32,7 @@ extern uint8_t cells[W * H];
 
 /* DIRAM on-device is one pool for .data/.bss AND the heap, so every static
  * byte here is a byte the heap never gets, against a largest free DMA block
- * of ~37-38 KiB (bd esp32c6-e82). Safe to union because only one fixture is
+ * of ~37-38 KiB. Safe to union because only one fixture is
  * ever live at a time and each test's own helper re-inits it with
  * sand_init().
  *

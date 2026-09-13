@@ -587,8 +587,7 @@ step_impulses(sand_t* s, int dx, int dy) {
             /* HEAT-RAMPING MATERIALS FIRST, CHECK POSITION ONLY. VARIANT
              * NIBBLE DRIFTS NEAR HEAT. BLOCKED ENTRIES DON'T MOVE, CAUSING
              * MISMATCH. TRYING MOVEMENT FIRST MAY CAUSE FALSE POSITIVES,
-             * ESPECIALLY WITH COVERED LAVA (bd esp32c6-mqt,
-             * sand_reactions.c). */
+             * ESPECIALLY WITH COVERED LAVA (see sand_reactions.c). */
             const uint8_t lost_mat = CELL_MATERIAL(entry.cell);
             /* reaction_of(entry.cell), not reactions[lost_mat] - lost_mat is
              * high nibble shared by statics and gunpowder in MAT_EXTENDED
@@ -607,7 +606,7 @@ step_impulses(sand_t* s, int dx, int dy) {
             /* THE SAME THREE CANDIDATES impulse_gravity_candidates() (above)
              * already builds for the gravity-drift move and the settled
              * check further down this loop - hand-rolled here before an
-             * adversarial review (bd esp32c6-w2h) pointed out this was the
+             * adversarial review pointed out this was the
              * exact duplication that helper exists to prevent. */
             int cand[3][2];
             impulse_gravity_candidates(ox, oy, dx, dy, cand);

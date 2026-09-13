@@ -10,7 +10,7 @@
 # exists, a byproduct table in Sand-Simulation.md nobody re-derives by
 # hand).
 #
-# A SPLICE, NOT A WHOLE-FILE OVERWRITE (bd esp32c6-3mu)
+# A SPLICE, NOT A WHOLE-FILE OVERWRITE
 #
 # Some real sand mechanics - lava's cool-off chaining, the covered-lava
 # burst that replaced the deleted vent code, water/acid draining stone and

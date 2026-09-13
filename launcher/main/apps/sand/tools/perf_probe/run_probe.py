@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Interleaved best-of-N runner for the host attribution probe (bd
-esp32c6-o2s).
+"""Interleaved best-of-N runner for the host attribution probe.
 
 Every earlier attribution round hand-rolled its own version of this loop -
 run each candidate scene several times, round-robin rather than back-to-back,
@@ -32,7 +31,7 @@ COMPARING TWO BUILDS: --compare <other-binary>
 Comparing two probe binaries (a candidate against a baseline) is something
 this campaign does constantly, and everyone who has needed it has hand-
 rolled a one-off driver rather than touch this file - the same accumulation
-`bd esp32c6-o2s` already happened once for the probe binary itself
+already happened once for the probe binary itself
 (build_probe.sh's own comment tells that history). Extend the one runner
 instead of adding a second one.
 

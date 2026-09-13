@@ -177,7 +177,7 @@ arena_take_block(arena_block_t* b, size_t need) {
 }
 
 /* First-fit search plus, on failure, the same story a device OOM would
- * give (bd esp32c6-e82: "41.2 KiB needed, 38 KiB largest free block") -
+ * give ("41.2 KiB needed, 38 KiB largest free block") -
  * printed here rather than left for the caller to reconstruct from a bare
  * NULL. */
 static void*

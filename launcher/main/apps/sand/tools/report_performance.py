@@ -136,8 +136,8 @@ def make_slow_tests_section(capture: dict, total_ms, top_n: int = 15) -> list:
     frame-budget ones. A test with no declared budget (the sand suite's own
     statistical vent-cap correctness test used to be exactly this: no budget
     of its own, ~7.7 minutes, and the single biggest cost in the whole run,
-    until the mechanism it tested was removed along with it - bd
-    esp32c6-0f2) is otherwise invisible to this report: it never enters
+    until the mechanism it tested was removed along with it) is otherwise
+    invisible to this report: it never enters
     `known`, and the "measured in this capture" table above only lists tests
     with a device_tests log line, which most tests don't print. This is the
     only place that ranks the whole suite.

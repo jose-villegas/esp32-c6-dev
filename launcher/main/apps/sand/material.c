@@ -470,7 +470,7 @@ const reaction_t reactions[MATERIAL_MAX] = {
                             * steps, about five minutes of play. This field
                             * only governs that rate now - it used to share it
                             * with how often a thermal wake happened to
-                            * unsettle the bank (bd esp32c6-8ce). */
+                            * unsettle the bank. */
             .crusts_to = MATX(MATX_ICE),
         },
 

@@ -234,7 +234,7 @@ void build_water_over_lava_scene(sand_t* s);
 void build_gunpowder_basin_scene(sand_t* s);
 
 /* The landscape set. Every other scene here falls down grid +Y; the board
- * is played sideways, down grid +X (bd esp32c6-1z6). The grid is 184x224,
+ * is played sideways, down grid +X. The grid is 184x224,
  * so a landscape pour drops 184 cells onto a floor 224 wide and settles
  * into a different shape - built for that, not transposed. */
 #define LANDSCAPE_GX               1000

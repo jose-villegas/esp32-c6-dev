@@ -1,4 +1,4 @@
-/* Material-vs-material ratio arena for bd esp32c6-l5z.
+/* Material-vs-material ratio arena.
  *
  * Pours material A to a target share of the board, lets it settle, then pours
  * material B over it and times every step OF THE POUR - the transient, which

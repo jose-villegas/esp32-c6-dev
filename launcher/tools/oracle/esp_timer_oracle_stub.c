@@ -1,6 +1,6 @@
 /*
  * esp_timer_oracle_stub - always-zero esp_timer_get_time() for the oracle
- * image (bd oracle spike).
+ * image.
  *
  * perf_probe's own esp_timer_host.c (a REAL host implementation, see that
  * file's header) pulls in <windows.h> or POSIX <time.h> - neither exists

@@ -202,8 +202,8 @@ scene_fire_gas(sand_t* s) {
     }
 }
 
-/* Scene 5: lava sealed under a stone lid, lava-burst chance (bd
- * esp32c6-mqt) forced to 255 so every covered cell converts within this
+/* Scene 5: lava sealed under a stone lid, lava-burst chance
+ * forced to 255 so every covered cell converts within this
  * scene's step budget. Standing lesson for anyone extending this file: a
  * fingerprint only covers the mechanisms its scenes actually reach - to
  * find out which, break a mechanism on purpose and check this tool goes
@@ -294,7 +294,7 @@ scene_plant_bed(sand_t* s) {
 /* ACID, which appeared nowhere in this file - every scene above ran without
  * one acid cell, so any change to the dissolver or acid rain got "identical
  * to baseline" from a gate that never executed it. The cullet fix
- * (esp32c6-75e) shipped on exactly that; deleting it again takes this
+ * shipped on exactly that; deleting it again takes this
  * scene's MAT_SAND from 20 to 0 and moves no other row.
  *
  * One band per outcome, because what the dissolver does interestingly is
@@ -340,8 +340,8 @@ scene_acid_bath(sand_t* s) {
     }
 
     /* Alternating rows put exactly two steam in every 2x2, which is what
-     * step_one_acid_rain_cell() demands - so the 4x4 scan bd esp32c6-va6
-     * wants to optimise actually runs here. */
+     * step_one_acid_rain_cell() demands - so its 4x4 scan actually runs
+     * here. */
     for (int y = 6; y < 18; y++) {
         for (int x = 4; x < 44; x++) {
             sand_set(s, x, y, (y & 1) ? FP_STEAM : FP_GAS);
@@ -350,13 +350,13 @@ scene_acid_bath(sand_t* s) {
 }
 
 /* SNOW, which no scene placed and none produced either - unlike smoke, which
- * fire at least makes in scene_fire_gas. Three issues are queued against it
- * (esp32c6-bl4, -tov, -l4s), all changing melting, cold reach or conversion,
- * and today each would get "identical to baseline" and mean nothing by it.
+ * fire at least makes in scene_fire_gas. Without a snow scene, any change to
+ * melting, cold reach or conversion gets "identical to baseline" and means
+ * nothing by it.
  *
  * Four bays under one smoke band, walled off in stone so they cannot pour
- * into each other. Each pending change targets a bay that is INERT today -
- * which is what lets this scene fail when they land. */
+ * into each other. Each bay is INERT today under one of those
+ * mechanisms - which is what lets this scene fail when one changes. */
 static void
 scene_snow_thaw(sand_t* s) {
     sand_set_soak(s, SAND_SOAK_PER_MATERIAL);
@@ -375,13 +375,13 @@ scene_snow_thaw(sand_t* s) {
             sand_set(s, x, y, FP_WATER); /* thaws=4 - melts today */
         }
         for (int x = 16; x < 31; x++) {
-            sand_set(s, x, y, FP_WET_DIRT); /* inert today; bd esp32c6-bl4 */
+            sand_set(s, x, y, FP_WET_DIRT); /* inert today */
         }
     }
 
     /* Heat held FIVE cells from the snow through a conductor, because today
-     * chilling only ever reaches an immediate neighbour - bd esp32c6-tov
-     * would let the cold travel, and that shows up here as a different row.
+     * chilling only ever reaches an immediate neighbour - letting the cold
+     * travel further shows up here as a different row.
      * Lava rather than a hot pane alone so the source is still hot at 300. */
     for (int x = 32; x < 47; x++) {
         sand_set(s, x, FP_H - 2, FP_LAVA);
@@ -391,8 +391,8 @@ scene_snow_thaw(sand_t* s) {
         }
     }
 
-    /* Settled snow resting ON something convertible: inert today, and what
-     * bd esp32c6-l4s would turn to ice. Ice below it covers MATX_ICE's own
+    /* Settled snow resting ON something convertible: inert today, so turning it to
+     * ice shows up as a different row. Ice below it covers MATX_ICE's own
      * chills and thaws, which nothing else here reaches. */
     for (int x = 48; x < FP_W; x++) {
         for (int y = FP_H - 4; y < FP_H - 1; y++) {
@@ -594,7 +594,7 @@ static const struct {
 
     /* SLEEPING ON, which every row above leaves OFF though the app runs with it
      * ON. cell_settled() answers false when block_state is NULL, so no
-     * settled-gated rule could fire anywhere here (bd esp32c6-1x9).
+     * settled-gated rule could fire anywhere here.
      *
      * EXTRA rows, not switched originals, so no existing hash moves - and the
      * pair is the point: block sleep claims to change nothing, and two rows

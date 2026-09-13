@@ -5,7 +5,7 @@
 #
 # It compiles in only what a sand frame-budget capture reads: suite_sand_perf
 # plus the scene builders it calls. That frees the static RAM a round needs
-# for its own pass gates and probe rows (bd esp32c6-iqx), cuts the on-device
+# for its own pass gates and probe rows, cuts the on-device
 # run, and puts the image closer to release layout in the instruction cache.
 #
 # BEHAVIOUR COVERAGE IS DELIBERATELY ABSENT HERE. This is an instrument, not a

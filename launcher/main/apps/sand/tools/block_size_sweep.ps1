@@ -17,7 +17,7 @@
     Background and the bugs this pattern hit before it worked cleanly:
     docs/sand/Simulation-Lessons.md, "The sixth attempt" section.
 
-    WHY THE CANDIDATE LIST CHANGED (bd esp32c6-1z6). Every shape this script
+    WHY THE CANDIDATE LIST CHANGED. Every shape this script
     used to try was W <= 32 and H >= 32 - six tall blocks, no square, no
     transpose of any of them. 32x64 won that as the best of six, judged on
     scenes that all pour down grid +Y, while the board is played landscape,

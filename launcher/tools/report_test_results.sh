@@ -62,7 +62,7 @@ cleanup() {
     # `exit "$status"` below is what actually decides the exit code now,
     # so a real failure still propagates regardless of what happens here.
     # See launcher/main/apps/sand/tools/report_performance.sh, the sibling
-    # this cleanup() was copied from - same bug, same fix, bd esp32c6-s3z.
+    # this cleanup() was copied from - same bug, same fix.
     read -r -p "Press Enter to close..." _ || true
     exit "$status"
 }
